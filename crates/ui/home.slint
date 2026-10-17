@@ -1235,13 +1235,13 @@ component FeaturedShowcase inherits Rectangle {
     // this page remounts after Detail. Both ramps reach the canvas colour
     // before the artwork edge to keep rows and the navigation rail seamless.
     Image {
-        source: Theme.true_black ? @image-url("../../assets/home-bottom-scrim-black.svg") : @image-url("../../assets/home-bottom-scrim.svg");
+        source: Theme.home_bottom_scrim;
         image-fit: fill;
         width: 100%;
         height: 100%;
     }
     if !root.narrow: Image {
-        source: Theme.true_black ? @image-url("../../assets/home-side-scrim-black.svg") : @image-url("../../assets/home-side-scrim.svg");
+        source: Theme.home_side_scrim;
         image-fit: fill;
         width: 100%;
         height: 100%;

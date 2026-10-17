@@ -242,6 +242,73 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
             );
         }
     }
+    app.set_background_style_index(1);
+    let mut canvases = Vec::new();
+    for index in 0..8 {
+        app.set_accent_color(index);
+        nova_ui::apply_theme(&app, false);
+        let global = app.global::<nova::Theme>();
+        let tinted = global.get_current();
+        assert!(global.get_accent_tinted());
+        assert_ne!(tinted.canvas, original.canvas);
+        assert_eq!(tinted.canvas, tinted.artwork_canvas);
+        assert_eq!(tinted.canvas, tinted.artwork_backdrop);
+        assert_eq!(tinted.canvas, tinted.nav_rail);
+        assert_eq!(tinted.canvas, tinted.nav_bottom);
+        assert_eq!(tinted.scrim_artwork, tinted.artwork_canvas);
+        assert_eq!(tinted.scrim_episode_card, tinted.episode_card);
+        assert_ne!(tinted.card, Brush::from(tinted.canvas));
+        assert_ne!(tinted.popup, tinted.canvas);
+        assert_eq!(tinted.scrim_player, original.scrim_player);
+        assert_eq!(tinted.scrim_settings, original.scrim_settings);
+        assert_eq!(tinted.text_error, original.text_error);
+        for (shape, image) in [
+            global.get_home_bottom_scrim(),
+            global.get_home_side_scrim(),
+            global.get_detail_bottom_scrim(),
+            global.get_detail_side_scrim(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!((image.size().width, image.size().height), (1024, 1024));
+            let pixels = image.to_rgba8().expect("baked fade pixels are readable");
+            let pixel = pixels.as_slice()[if shape % 2 == 0 {
+                1023 * 1024 + 512
+            } else {
+                512 * 1024
+            }];
+            for (actual, expected) in [
+                (pixel.r, tinted.canvas.red()),
+                (pixel.g, tinted.canvas.green()),
+                (pixel.b, tinted.canvas.blue()),
+            ] {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "fade edge matches its canvas for accent {index}"
+                );
+            }
+            assert!(pixel.a >= 239);
+        }
+        for background in [
+            tinted.canvas,
+            tinted.popup,
+            tinted.control,
+            tinted.episode_card,
+        ] {
+            assert!(contrast(tinted.text_primary, background) >= 4.5);
+        }
+        theme.set_current(tinted.clone());
+        assert_eq!(harness.get_nav_fill(), Brush::from(tinted.nav_rail));
+        canvases.push(tinted.canvas);
+        nova_ui::apply_theme(&app, true);
+        assert!(!global.get_accent_tinted());
+        assert_eq!(global.get_current().canvas, black);
+    }
+    for pair in canvases.windows(2) {
+        assert_ne!(pair[0], pair[1]);
+    }
+    app.set_background_style_index(0);
     app.set_accent_color(0);
     nova_ui::apply_theme(&app, false);
     assert_eq!(app.global::<nova::Theme>().get_current(), original);

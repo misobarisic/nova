@@ -370,3 +370,15 @@ msgstr "Automatic"
 
 msgid "Details"
 msgstr "Details"
+
+msgid "Background style"
+msgstr "Background style"
+
+msgid "Use the default palette, a subtle accent tint, or pure black backgrounds."
+msgstr "Use the default palette, a subtle accent tint, or pure black backgrounds."
+
+msgid "Default"
+msgstr "Default"
+
+msgid "Accent-tinted"
+msgstr "Accent-tinted"

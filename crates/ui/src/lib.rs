@@ -78,6 +78,9 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         &mut palette,
         nova_config::AccentColor::from_index(app.get_accent_color()),
     );
+    if !true_black && app.get_background_style_index() == 1 {
+        apply_background_tint(&mut palette);
+    }
     if true_black {
         let black = slint::Color::from_rgb_u8(0, 0, 0);
         palette.canvas = black;
@@ -134,7 +137,86 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
     theme.set_detail_backdrop_size(app.get_detail_backdrop_size().clamp(0, 2));
     theme.set_hero_title_alignment(app.get_hero_title_alignment().clamp(0, 2));
     theme.set_true_black(true_black);
+    theme.set_accent_tinted(!true_black && app.get_background_style_index() == 1);
+    theme.set_accent_color_index(
+        nova_config::AccentColor::from_index(app.get_accent_color()).index(),
+    );
     theme.set_current(palette);
+}
+
+/// Derive a restrained surface ramp from the accent's hue. Equal peak channel
+/// values keep the presets similarly dark; lightness steps keep cards and menus
+/// distinct. Video scrims, semantic badges, text and artwork stay neutral/intact.
+fn apply_background_tint(palette: &mut ThemePalette) {
+    use i_slint_core::graphics::{GradientStop, LinearGradientBrush};
+    use slint::{Brush, Color};
+    let accent = palette.accent;
+    let peak = u16::from(accent.red().max(accent.green()).max(accent.blue())).max(1);
+    let surface = |level: u8| {
+        let channel = |value: u8| level + (u16::from(value) * 12 / peak) as u8;
+        Color::from_rgb_u8(
+            channel(accent.red()),
+            channel(accent.green()),
+            channel(accent.blue()),
+        )
+    };
+    let canvas = surface(12);
+    let card = surface(22);
+    let popup = surface(28);
+    let control = surface(32);
+    let hover = surface(42);
+    palette.canvas = canvas;
+    palette.artwork_canvas = canvas;
+    palette.artwork_backdrop = canvas;
+    palette.nav_bottom = canvas;
+    palette.nav_rail = canvas;
+    palette.scrim_artwork = canvas;
+    palette.card = card.into();
+    palette.popup = popup;
+    palette.popup_divider = surface(45);
+    palette.category_panel = popup;
+    palette.control = control;
+    palette.settings_control = control;
+    palette.hero_control = control;
+    palette.hero_metadata_badge = card;
+    palette.stream_card = card;
+    palette.season_card = card;
+    palette.episode_card = card;
+    palette.scrim_episode_card = card;
+    palette.episode_placeholder = card;
+    palette.episode_toolbar = card;
+    palette.episode_search = popup;
+    palette.episode_empty_panel = card;
+    palette.home_artwork_placeholder = card;
+    palette.calendar_control = control;
+    palette.tracking_control = control;
+    palette.tracking_mapping = card;
+    palette.tracking_panel = popup;
+    palette.tracking_service_control = control;
+    palette.player_menu = popup;
+    palette.control_hover = hover;
+    palette.input_hover = hover;
+    palette.settings_control_hover = hover;
+    palette.hero_control_hover = hover;
+    palette.detail_filter_hover = hover;
+    palette.episode_search_hover = hover;
+    palette.tracking_control_hover = hover;
+    palette.control_border = surface(55);
+    palette.step_border = surface(55);
+    palette.slider_track = surface(42);
+    palette.season_scrim = Brush::LinearGradient(LinearGradientBrush::new(
+        180.0,
+        [
+            GradientStop {
+                position: 0.0,
+                color: Color::from_argb_u8(0, canvas.red(), canvas.green(), canvas.blue()),
+            },
+            GradientStop {
+                position: 1.0,
+                color: Color::from_argb_u8(192, canvas.red(), canvas.green(), canvas.blue()),
+            },
+        ],
+    ));
 }
 
 /// Accent roles are deliberately separate from status badges, service branding

@@ -631,6 +631,12 @@ pub(super) fn shared_setting_value(
     records: &[(String, String)],
     field: &str,
 ) -> Option<serde_json::Value> {
+    if field == "background_style" && !records.iter().any(|(name, _)| name == field) {
+        let raw = &records.iter().find(|(name, _)| name == "true_black")?.1;
+        return serde_json::from_str::<bool>(raw)
+            .ok()
+            .map(|black| serde_json::json!(nova_config::BackgroundStyle::from_true_black(black)));
+    }
     let key = settings_group_of(field).unwrap_or(field);
     let raw = &records.iter().find(|(name, _)| name == key)?.1;
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
@@ -668,6 +674,19 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
     };
     for (name, json) in fields {
         if UNSYNCED_SETTINGS_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        // New style records take precedence over the retired boolean, even
+        // when record iteration order differs between paired devices.
+        if name == "true_black" {
+            if !fields.iter().any(|(key, _)| key == "background_style")
+                && let Ok(black) = serde_json::from_str::<bool>(json)
+            {
+                map.insert(
+                    "background_style".into(),
+                    serde_json::json!(nova_config::BackgroundStyle::from_true_black(black)),
+                );
+            }
             continue;
         }
         if let Some(allowed) = settings_group_fields(name) {
@@ -2907,30 +2926,50 @@ mod tests {
         assert!(fields.contains_key("default_audio_language"));
         assert!(fields.contains_key("default_subtitle_language"));
         assert!(!fields.contains_key("android_auto_continue"));
-        assert_eq!(fields.get("true_black").map(String::as_str), Some("false"));
+        assert_eq!(fields["background_style"], "\"default\"");
         let base = CacheSettings {
-            true_black: true,
+            background_style: nova_config::BackgroundStyle::TrueBlack,
             ..Default::default()
         };
-        let merged = merge_settings_fields(&base, &[("true_black".into(), "false".into())]);
-        assert!(
-            !merged.true_black,
-            "remote settings update the synced theme"
+        let legacy = [("true_black".into(), "false".into())];
+        let merged = merge_settings_fields(&base, &legacy);
+        assert_eq!(
+            merged.background_style,
+            nova_config::BackgroundStyle::Default
         );
+        let remote = [("background_style".into(), "\"accent_tinted\"".into())];
+        let merged = merge_settings_fields(&base, &remote);
+        assert_eq!(
+            merged.background_style,
+            nova_config::BackgroundStyle::AccentTinted
+        );
+        for both in [
+            vec![legacy[0].clone(), remote[0].clone()],
+            vec![remote[0].clone(), legacy[0].clone()],
+        ] {
+            assert_eq!(
+                merge_settings_fields(&base, &both).background_style,
+                nova_config::BackgroundStyle::AccentTinted
+            );
+        }
         let mut overridden = base;
         overridden
             .sync_overrides
-            .insert("true_black".into(), serde_json::json!(false));
-        let merged = merge_settings_fields(&overridden, &[("true_black".into(), "false".into())]);
-        assert!(
-            merged.true_black,
-            "a device theme override survives remote changes"
+            .insert("background_style".into(), serde_json::json!("default"));
+        let merged = merge_settings_fields(&overridden, &remote);
+        assert_eq!(
+            merged.background_style,
+            nova_config::BackgroundStyle::TrueBlack
+        );
+        assert_eq!(
+            merged.sync_overrides["background_style"],
+            serde_json::json!("accent_tinted")
         );
         let published: HashMap<_, _> = settings_fields(&merged)
             .into_iter()
             .map(|(k, v, _)| (k, v))
             .collect();
-        assert_eq!(published["true_black"], "false");
+        assert_eq!(published["background_style"], "\"accent_tinted\"");
         let home_sources: serde_json::Value = serde_json::from_str(
             fields
                 .get("home_catalog_sources")
@@ -3054,7 +3093,7 @@ mod tests {
         assert_eq!(merged["quality"], 60);
         assert_eq!(merged["future"], true);
         assert!(setting_can_override("language"));
-        assert!(setting_can_override("true_black"));
+        assert!(setting_can_override("background_style"));
         assert!(!setting_can_override("not_a_setting"));
     }
 

@@ -118,6 +118,14 @@ pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings
         return None;
     }
     let mut current = serde_json::to_value(CacheSettings::default()).ok()?;
+    if !source.contains_key("background_style")
+        && let Some(black) = source
+            .get("true_black")
+            .and_then(serde_json::Value::as_bool)
+    {
+        current["background_style"] =
+            serde_json::json!(nova_config::BackgroundStyle::from_true_black(black));
+    }
     // Recovery starts from a fully populated default object. Preserve the
     // deserializer's legacy rule by restoring the historical player size only
     // when the old key is true and the newer field was absent in the source.
@@ -169,6 +177,15 @@ impl Bridge {
             let b = self.clone();
             let callback_schedule = schedule.clone();
             app.on_settings_edited(move |field| {
+                // Onboarding retains its compact Dark/True black choice.
+                let field = if field == "true_black" {
+                    if let Some(app) = b.app() {
+                        app.set_background_style_index(if app.get_true_black() { 2 } else { 0 });
+                    }
+                    SharedString::from("background_style")
+                } else {
+                    field
+                };
                 if field == "interface_mode" {
                     if let Some(app) = b.app() {
                         let mode =
@@ -279,7 +296,10 @@ impl Bridge {
                 EpisodeStartBehavior::Resume => 1,
                 EpisodeStartBehavior::Ask => 2,
             });
-            app.set_true_black(settings.true_black);
+            app.set_background_style_index(settings.background_style.index());
+            app.set_true_black(
+                settings.background_style == nova_config::BackgroundStyle::TrueBlack,
+            );
             app.set_accent_color(settings.accent_color.index());
             app.set_button_corner_radius(settings.button_corner_radius.min(24) as f32);
             app.set_card_corner_radius(settings.card_corner_radius.min(24) as f32);
@@ -316,7 +336,10 @@ impl Bridge {
     /// Apply the effective palette to all mounted pages.
     pub(super) fn apply_theme(&self, settings: &CacheSettings) {
         if let Some(app) = self.app() {
-            nova_ui::apply_theme(&app, settings.true_black);
+            nova_ui::apply_theme(
+                &app,
+                settings.background_style == nova_config::BackgroundStyle::TrueBlack,
+            );
         }
     }
 
@@ -508,7 +531,9 @@ impl Bridge {
                     _ => EpisodeStartBehavior::Resume,
                 },
                 sync_overrides: state.cache_settings.sync_overrides.clone(),
-                true_black: app.get_true_black(),
+                background_style: nova_config::BackgroundStyle::from_index(
+                    app.get_background_style_index(),
+                ),
                 accent_color: nova_config::AccentColor::from_index(app.get_accent_color()),
                 button_corner_radius: app.get_button_corner_radius().round().clamp(0.0, 24.0)
                     as u32,
@@ -1235,6 +1260,26 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(explicit_value.player_episode_backdrop_max_side, Some(720));
+        let legacy = recover_settings(
+            serde_json::json!({"true_black":true,"sync_overrides":{"true_black":false}}),
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.background_style,
+            nova_config::BackgroundStyle::TrueBlack
+        );
+        assert_eq!(
+            legacy.sync_overrides["background_style"],
+            serde_json::json!("default")
+        );
+        let explicit = recover_settings(
+            serde_json::json!({"true_black":true,"background_style":"accent_tinted"}),
+        )
+        .unwrap();
+        assert_eq!(
+            explicit.background_style,
+            nova_config::BackgroundStyle::AccentTinted
+        );
     }
 
     #[test]
@@ -1383,16 +1428,19 @@ mod tests {
             slint::Color::from_rgb_u8(0, 0, 0)
         );
         bridge.persist_settings();
-        assert!(read_settings().true_black);
+        assert_eq!(
+            read_settings().background_style,
+            nova_config::BackgroundStyle::TrueBlack
+        );
         assert_eq!(
             owner
                 .lock()
                 .unwrap()
-                .record(DOMAIN_SETTINGS, "true_black")
+                .record(DOMAIN_SETTINGS, "background_style")
                 .unwrap()
                 .value
                 .as_deref(),
-            Some("true"),
+            Some("\"true_black\""),
             "theme edits publish a synced preference"
         );
         app.set_true_black(false);

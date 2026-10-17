@@ -1,6 +1,6 @@
 import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
 
-import { PillButton, ToggleSwitch, Segmented, AddonIconButton, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
+import { PillButton, Segmented, AddonIconButton, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
 
 import { IcCheck } from "../ui/icons.slint";
 
@@ -56,6 +56,14 @@ export component SettingsThemeModule inherits Window {
             SettingsContent.content_preferred_height = root.measured_preferred;
         }
     }
+    function pick_background_style(index: int) {
+        SettingsBridge.background_style_index = index;
+        SettingsBridge.true_black = index == 2;
+        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+        SettingsBridge.kb_zone = 17;
+        SettingsContent.kb_theme = 1;
+        SettingsContent.schedule_setting("background_style");
+    }
     body_layout := VerticalLayout {
         width: 100%; height: 100%; spacing: 0px;
         VerticalLayout {
@@ -80,18 +88,28 @@ export component SettingsThemeModule inherits Window {
                 }
             } }
             SettingsCard { SettingsRow {
-                setting-key: "true_black";
-                row-title: @tr("True black");
-                row-desc: @tr("Use pure black backgrounds and artwork fades.");
-                ToggleSwitch {
-                    name: @tr("True black");
-                    checked <=> SettingsBridge.true_black;
+                setting-key: "background_style";
+                row-title: @tr("Background style");
+                row-desc: @tr("Use the default palette, a subtle accent tint, or pure black backgrounds.");
+                if !SettingsContent.narrow: Segmented {
+                    labels: [@tr("Default"), @tr("Accent-tinted"), @tr("True black")];
+                    current_index: SettingsBridge.background_style_index;
                     focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
-                    toggled => {
-                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                        SettingsBridge.kb_zone = 17;
-                        SettingsContent.kb_theme = 1;
-                        SettingsContent.schedule_setting("true_black");
+                    picked(index) => { root.pick_background_style(index); }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    Segmented {
+                        labels: [@tr("Default"), @tr("Accent-tinted")];
+                        current_index: SettingsBridge.background_style_index < 2 ? SettingsBridge.background_style_index : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
+                        picked(index) => { root.pick_background_style(index); }
+                    }
+                    Segmented {
+                        labels: [@tr("True black")];
+                        current_index: SettingsBridge.background_style_index == 2 ? 0 : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
+                        picked(index) => { root.pick_background_style(2); }
                     }
                 }
             } }

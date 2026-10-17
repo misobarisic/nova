@@ -85,6 +85,9 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Default" => "Zadano",
+        "Accent-tinted" => "Ton naglaska",
+        "True black" => "Prava crna",
         "Purple" => "Ljubičasta",
         "Orange" => "Narančasta",
         "Blue" => "Plava",
@@ -1548,6 +1551,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "background_style" => match value.as_str() {
+            Some("accent_tinted") => tr("Accent-tinted").into(),
+            Some("true_black") => tr("True black").into(),
+            _ => tr("Default").into(),
+        },
         "accent_color" => match value.as_str() {
             Some("orange") => tr("Orange").into(),
             Some("blue") => tr("Blue").into(),

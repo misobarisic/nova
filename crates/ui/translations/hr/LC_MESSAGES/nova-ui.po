@@ -3112,3 +3112,15 @@ msgstr "Automatski"
 
 msgid "Details"
 msgstr "Pojedinosti"
+
+msgid "Background style"
+msgstr "Stil pozadine"
+
+msgid "Use the default palette, a subtle accent tint, or pure black backgrounds."
+msgstr "Upotrijebite zadanu paletu, blagu nijansu naglaska ili potpuno crnu pozadinu."
+
+msgid "Default"
+msgstr "Zadano"
+
+msgid "Accent-tinted"
+msgstr "Ton naglaska"

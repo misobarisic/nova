@@ -764,7 +764,7 @@ export component DetailPage {
             y: 0px;
             width: 100%;
             height: root.backdrop_height + 60px;
-            source: Theme.true_black ? @image-url("../../assets/detail-bottom-scrim-black.svg") : @image-url("../../assets/detail-bottom-scrim.svg");
+            source: Theme.detail_bottom_scrim;
             image-fit: fill;
         }
         if !root.narrow: Image {
@@ -772,7 +772,7 @@ export component DetailPage {
             y: 0px;
             width: 100%;
             height: root.backdrop_height + 60px;
-            source: Theme.true_black ? @image-url("../../assets/detail-side-scrim-black.svg") : @image-url("../../assets/detail-side-scrim.svg");
+            source: Theme.detail_side_scrim;
             image-fit: fill;
         }
 

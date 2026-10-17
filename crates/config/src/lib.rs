@@ -229,6 +229,42 @@ impl AccentColor {
     }
 }
 
+/// Shared surface palette, independent of the accent used for actions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundStyle {
+    #[default]
+    Default,
+    AccentTinted,
+    TrueBlack,
+}
+
+impl BackgroundStyle {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::AccentTinted,
+            2 => Self::TrueBlack,
+            _ => Self::Default,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Default => 0,
+            Self::AccentTinted => 1,
+            Self::TrueBlack => 2,
+        }
+    }
+
+    pub fn from_true_black(enabled: bool) -> Self {
+        if enabled {
+            Self::TrueBlack
+        } else {
+            Self::Default
+        }
+    }
+}
+
 /// Horizontal title logo/text alignment on narrow Home and Detail layouts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -683,9 +719,9 @@ cache_settings_type! {
     /// Syncs by default; `sync_overrides` can retain a different device language.
     #[serde(default)]
     pub language: Language,
-    /// Pure black backgrounds (Settings → Theme), synced unless overridden.
+    /// Background surfaces (Settings → Theme), synced unless overridden.
     #[serde(default)]
-    pub true_black: bool,
+    pub background_style: BackgroundStyle,
     /// Main interface accent (Settings → Theme), synced unless overridden.
     #[serde(default)]
     pub accent_color: AccentColor,
@@ -722,6 +758,27 @@ impl<'de> Deserialize<'de> for CacheSettings {
         let object = value
             .as_object_mut()
             .ok_or_else(|| serde::de::Error::custom("settings must be an object"))?;
+        if !object.contains_key("background_style") {
+            let black = object
+                .get("true_black")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            object.insert(
+                "background_style".into(),
+                serde_json::json!(BackgroundStyle::from_true_black(black)),
+            );
+        }
+        if let Some(overrides) = object
+            .get_mut("sync_overrides")
+            .and_then(serde_json::Value::as_object_mut)
+            && let Some(legacy) = overrides
+                .remove("true_black")
+                .and_then(|value| value.as_bool())
+        {
+            overrides
+                .entry("background_style")
+                .or_insert_with(|| serde_json::json!(BackgroundStyle::from_true_black(legacy)));
+        }
         let legacy_player =
             if object.get("downscale").and_then(serde_json::Value::as_bool) == Some(true) {
                 serde_json::json!(1024)
@@ -818,7 +875,7 @@ impl Default for CacheSettings {
             anim_player: true,
             anim_nav_slide: true,
             language: Language::English,
-            true_black: false,
+            background_style: BackgroundStyle::default(),
             accent_color: AccentColor::default(),
             button_corner_radius: default_button_corner_radius(),
             card_corner_radius: default_card_corner_radius(),
@@ -1429,14 +1486,36 @@ mod tests {
     }
 
     #[test]
-    fn true_black_defaults_off_and_round_trips() {
-        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
-        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
-        assert!(!settings.true_black);
-        settings.true_black = true;
-        let restored: CacheSettings =
-            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
-        assert!(restored.true_black);
+    fn background_style_migrates_legacy_black_and_preserves_explicit_choices() {
+        let legacy = serde_json::json!({"enabled":false,"format":"webp","quality":85,"true_black":true,
+            "sync_overrides":{"true_black":false}});
+        let mut settings: CacheSettings = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(settings.background_style, BackgroundStyle::TrueBlack);
+        assert_eq!(
+            settings.sync_overrides["background_style"],
+            serde_json::json!("default")
+        );
+        assert!(!settings.sync_overrides.contains_key("true_black"));
+        for index in 0..3 {
+            settings.background_style = BackgroundStyle::from_index(index);
+            let encoded = serde_json::to_value(&settings).unwrap();
+            assert!(encoded.get("true_black").is_none());
+            let restored: CacheSettings = serde_json::from_value(encoded).unwrap();
+            assert_eq!(restored.background_style.index(), index);
+        }
+        let mut explicit = legacy;
+        explicit["background_style"] = serde_json::json!("accent_tinted");
+        explicit["sync_overrides"]["background_style"] = serde_json::json!("true_black");
+        let explicit: CacheSettings = serde_json::from_value(explicit).unwrap();
+        assert_eq!(explicit.background_style, BackgroundStyle::AccentTinted);
+        assert_eq!(
+            explicit.sync_overrides["background_style"],
+            serde_json::json!("true_black")
+        );
+        assert_eq!(
+            CacheSettings::default().background_style,
+            BackgroundStyle::Default
+        );
     }
 
     #[test]

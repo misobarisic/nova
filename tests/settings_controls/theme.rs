@@ -74,7 +74,7 @@ fn theme_search_toggle_resize_and_android_back() {
     settle(&app);
     assert!(app.get_true_black());
     assert!(app.global::<nova::Theme>().get_true_black());
-    assert_eq!(edits.borrow().as_slice(), ["true_black"]);
+    assert_eq!(edits.borrow().as_slice(), ["background_style"]);
     app.window().set_size(slint::PhysicalSize::new(1280, 900));
     settle(&app);
     assert_eq!(app.get_settings_selected_id(), 14);
@@ -87,6 +87,19 @@ fn theme_search_toggle_resize_and_android_back() {
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
+    let tint = ElementHandle::find_by_accessible_label(&app, "Accent-tinted")
+        .last()
+        .unwrap();
+    tint.mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert_eq!(app.get_background_style_index(), 1);
+    assert!(app.global::<nova::Theme>().get_accent_tinted());
+    key(&app, slint::platform::Key::RightArrow.into());
+    assert!(app.get_true_black());
+    key(&app, slint::platform::Key::LeftArrow.into());
+    assert_eq!(app.get_background_style_index(), 1);
+    key(&app, slint::platform::Key::LeftArrow.into());
+    assert_eq!(app.get_background_style_index(), 0);
     // Wide Settings uses the extra width for its detail pane, rather than
     // leaving a capped column beside unused space. Sticky controls still mask
     // rows at a fixed size when the independent navigation pane scrolls.
@@ -199,7 +212,7 @@ fn theme_search_toggle_resize_and_android_back() {
     assert_eq!(
         &edits.borrow()[edits.borrow().len() - 9..],
         [
-            "true_black",
+            "background_style",
             "card_corner_radius",
             "button_corner_radius",
             "card_spacing",
