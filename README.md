@@ -32,7 +32,8 @@ cargo test -p nova-sync --lib   # fast sync-crate unit tests
 Android Cargo builds use `--no-default-features --features android,update-check`. Enter
 `nix develop .#android` before using Android Make targets; Make assumes the
 required toolchain is already active. See `docs/project-structure.md` for all
-targets.
+targets. The Android and Windows Nix shells build minimal mpv/FFmpeg dependencies
+from pinned sources and reuse cached results. Linux uses system libraries.
 
 ## Versions and updates
 

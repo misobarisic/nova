@@ -105,6 +105,7 @@ export component SettingsPage {
     // 1 = HW, 2 = SW). Decoder preferences are separate on Android, Windows and Linux.
     in property <bool> is_android: false;
     in property <bool> desktop_decoder_available: false;
+    in property <bool> hw_plus_available: true;
     in-out property <int> android_hwdec_index: 0;
     in-out property <int> desktop_hwdec_index: 0;
     in-out property <int> player_backend_index: 0;
@@ -1316,7 +1317,7 @@ export component SettingsPage {
                 root.schedule_setting("screenshot_webp_quality");
             }
         } else if (root.desktop_decoder_available && root.player_backend_index == 0 && root.kb_pr == 2) {
-            root.desktop_hwdec_index = Math.clamp(root.desktop_hwdec_index + d, 0, 2);
+            root.desktop_hwdec_index = Math.clamp(root.desktop_hwdec_index + d, root.hw_plus_available ? 0 : 1, 2);
             root.schedule_save();
         } else if (root.is_android) {
             root.android_hwdec_index = Math.max(0, Math.min(2, root.android_hwdec_index + d));

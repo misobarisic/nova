@@ -24,7 +24,7 @@ client. A recent feature adds **cross-device sync** over
 # Dev shell (Nix) — provides Rust, Slint, mpv, native dependencies, and Linux cargo-sweep
 nix develop              # Linux desktop toolchain
 nix develop .#android    # + NDK/SDK/JDK/cargo-apk2
-nix develop .#windows    # MinGW cross-build tools + pinned libmpv
+nix develop .#windows    # MinGW cross-build tools + source-built mpv/FFmpeg
 
 # Build / check
 cargo check              # whole workspace (desktop default features)
@@ -124,14 +124,30 @@ also provides `cargo-apk2` (packaged by the flake) and unsets `CPATH` (the
 stdenv's host include path, which the NDK clang would otherwise pick up).
 Target-specific `BINDGEN_EXTRA_CLANG_ARGS_*` also pass the NDK sysroot and API
 26 target to host libclang when generating Android bindings.
-The Android shell supplies Rust standard libraries for ARM64, ARMv7 and x86_64;
-the matching pinned `full` mpv libraries and checksums live under
-`vendor/android-libs/` (see `SOURCES`).
-`nova-player` enables `libmpv2-sys/use-bindgen` on 32-bit Android so the mpv
-bindings use target-correct layouts instead of upstream's 64-bit assertions.
-ARMv7 builds compile Skia from source because upstream's prebuilt Android
-artifacts cover ARM64/x86_64 only. The shell supplies Python, GN, Ninja, Git, curl
-and the NDK path required by this fallback; tagged builds allow extra time.
+The Android shell supplies Rust standard libraries for ARM64, ARMv7 and x86_64.
+`nix/native-media/` builds minimal mpv and six shared FFmpeg libraries from the
+locked Nixpkgs sources for those ABIs and Windows x86_64. `androidMedia` and
+`windowsMedia` are development-shell build inputs; unchanged derivations reuse
+Nix's store/cache. Native binaries are not committed or fetched from a separate
+vendor repository. Linux retains system mpv/FFmpeg.
+
+Android exports `NOVA_ANDROID_LIBS` for both `build.rs` and the shell's
+cargo-apk2 runtime-library override, avoiding mutable staging directories.
+`NOVA_NATIVE_CA_BUNDLE` embeds the built dependency's Mozilla CA roots;
+`nova-player` installs them into `<cache>/native-media/cacert.pem` and enables
+TLS verification. FFmpeg 9's JavaVM registration is linked from `libavcodec`.
+`libmpv2-sys/use-bindgen` remains enabled on 32-bit Android for target-correct
+layouts. ARMv7 Skia still builds from source because upstream's Android binary
+cache covers ARM64/x86_64 only; the shell supplies its Python/GN/Ninja/Git tools.
+
+The Windows shell exports `MPV_SOURCE` with import libraries/DLLs in `64/`,
+configurations in `metadata/` and native licenses in `licenses/`. Both target
+shells provide `NOVA_NATIVE_NOTICES`, generated from the built dependency's
+sources/configuration and original license files, for About. APK verification
+requires mpv and all six FFmpeg libraries for every ABI and checks their actual
+ELF architecture. Windows ZIPs include media DLLs, configurations and licenses.
+The native recipe's README and RESULTS document selected playback/subtitle and
+packet-copy remux features, build times, sizes and the separate native probes.
 
 The workspace's `dev` profile disables debug information and strips symbols;
 the default `test` profile inherits these settings. Incremental compilation
@@ -172,7 +188,8 @@ nova/
 ├── build.rs                  # version identity, license catalog; native link directives
 ├── build-support/version.rs  # Git tag/commit resolution, shared with app unit tests
 ├── .cargo/config.toml        # `cargo dev` alias; Android linker notes
-├── flake.nix                 # devShells: default, android, windows cross-build
+├── flake.nix                 # devShells: default, Android/Windows source-built native media
+├── nix/native-media/         # minimal mpv/FFmpeg derivations, notices, native probes and measurements
 ├── Makefile                  # Linux and Android build/run targets (use active shell)
 ├── android/                  # Android source, signing key, and resources
 │   ├── java/                 # Java services and activities compiled to DEX by cargo-apk2
@@ -182,11 +199,9 @@ nova/
 │   └── res/                  # Android launcher icon mipmaps
 ├── assets/                   # App logo, fonts, backdrop scrim, onboarding concepts, and in-app license/vendor catalog templates
 │   └── onboarding/           # Generated first-run onboarding screen concepts
-├── vendor/                   # pinned native libraries and local Slint patches
-│   ├── android-libs/         # prebuilt libmpv.so per ABI + SOURCES provenance
+├── vendor/                   # local Slint patches
 │   ├── i-slint-backend-android-activity/ # Slint 1.18 window-lifecycle patch + NOVA_PATCH.md
-│   ├── i-slint-compiler/      # Slint 1.18 compiled-root embedding patch + NOVA_PATCH.md
-│   └── windows-libs/         # Windows libmpv archive pin and SOURCES provenance
+│   └── i-slint-compiler/      # Slint 1.18 compiled-root embedding patch + NOVA_PATCH.md
 ├── src/                      # root app crate `nova`
 ├── crates/                   # leaf crates (see below)
 │   ├── ui/src/backend_text.rs # Rust-side UI text formatting/translations, owned by nova-ui
@@ -1020,7 +1035,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | System bars / safe areas | Window chrome remains outside the app content | Catalog and player retain edge-to-edge drawing from startup; visible status bars are transparent, captions and controls use Slint safe-area insets, and immersive playback hides the bars. Restoring bars keeps Home’s artwork behind them (`crates/player/src/external.rs`). |
 | App icon | `assets/logo.png` is the Slint window icon | Density-specific `android/res/mipmap-*/ic_launcher.png` resources from the same source image |
 | Renderer | `winit` + `femtovg` (mpv composites under the Slint scene) | Slint android-activity backend (Skia/GLES); mpv composites into same framebuffer |
-| Video | mpv via `libmpv2`, X11; external app per Settings → Player (VLC / mpv / `xdg-open`) | prebuilt `vendor/android-libs/<abi>/libmpv.so` (media-kit `full` flavor, so HDMV PGS / bitmap subtitles decode), JNI for MediaCodec/EGL; external-player `ACTION_VIEW` (Settings → Player backend choice, or fallback). Volume starts pinned to 100% (no volume UI; a vertical swipe adjusts it after) and the transport (⏪10 ▶/⏸ ⏩10) floats centered over the video. |
+| Video | mpv via `libmpv2`, X11; external app per Settings → Player (VLC / mpv / `xdg-open`) | source-built mpv/FFmpeg libraries from the Android Nix shell (PGS and bitmap subtitle decoding enabled), JNI for MediaCodec/EGL; external-player `ACTION_VIEW` (Settings → Player backend choice, or fallback). Volume starts pinned to 100% (no volume UI; a vertical swipe adjusts it after) and the transport (⏪10 ▶/⏸ ⏩10) floats centered over the video. |
 | Remote playback | Paired foreground receiver uses native mpv; controllers show a separate controls page and cannot start local playback until disconnected. Fullscreen commands affect the receiver window. | Same protocol and role guard; controller volume uses the receiver's normalized music-stream volume (`android_player.rs` / `PlayerFx.java`), brightness remains session-scoped, and background readiness follows activity lifecycle. |
 | HTTP | `reqwest` blocking (+ addon `client` feature) | `reqwest` rustls stack (`default-features=false`) |
 | Tracker browser sign-in | Loopback OAuth listener with a five-minute approval window. | `NovaAuthService` (`dataSync`) enters foreground before the browser opens, holds a bounded wake lock through credential persistence and stops when the last login lease ends. Independent of downloads; pending OAuth state remains process-local. |
@@ -1046,7 +1061,10 @@ HW (the unchanged Windows default) requests `auto-copy`; HW+ (the Linux default)
 requests `auto,auto-copy` to try compatible direct decoding before
 copy-back/software fallbacks; SW requests
 `no`. Direct decoding still depends on the host graphics context and driver;
-choosing HW+ does not promise direct interop. The OSD decoder submenu changes
+choosing HW+ on Linux does not promise direct interop. Windows greys out HW+
+in Settings and the OSD via the shared `hw_plus_available` mount input; keyboard
+navigation skips it, and `DesktopHwdec::supported` resolves older HW+ preferences
+to HW before display or playback. The OSD decoder submenu changes
 mpv for the current stream only, with live `hwdec-current` feedback; every new
 `play` reapplies the saved preference. Windows/Linux switch in place through mpv,
 which reinitializes the decoder and seeks within the existing source, retaining
@@ -1462,7 +1480,8 @@ unit/documentation coverage.
 | Shared local/remote player commands / pending Stop / native EOF cleanup | `src/app/playback_actions.rs`, callback/tick wiring in `src/app/run.rs`, `crates/player/src/lib.rs`; local relative seek/volume and preview-end callbacks pass through `PlayerOsdBridge`, `player-osd-module.slint` and AppWindow. Android system-volume and brightness adapters live in `src/app/android_player.rs` and `android/java/dev/misob/nova/PlayerFx.java`. |
 | Touch playback / player menus / OSD fade artifacts | `crates/player/src/lib.rs`, `crates/player/src/track_preferences.rs`, `crates/config/src/playback_preferences.rs`, `src/app/{playback,playback_preferences}.rs`, `crates/ui/player.slint`; title-specific audio/subtitle/speed choices, subtitle appearance/timing patches, global-default resets, and transient hold-to-2× behavior; tap/seek timing and hold-to-speed without waking the OSD (headless coverage in `tests/player/{gestures,double_tap,hold_motion,settings_scroll}.rs`), desktop single-click pause independent of OSD visibility and Space/K shortcuts; responsive popup placement and track rows live in `player.slint`; subtitle sliders hand vertical swipes to the popup without editing values, while horizontal adjustments retain ownership; native touch regressions cover portrait/landscape and release/cancel. Popup/page changes and player teardown release shared slider ownership so reopened Android menus keep scrolling, shared speed controls in `crates/ui/speedcontrol.slint`; the full-viewport `osd_scrim` dims playing video and loading artwork uniformly, with loading/error text above it; title captions fade out/in for gesture feedback without unmounting or changing geometry; `PlayerOsdBridge.header_bottom` carries measured header clearance to the party badge, and subtitle clearance includes the next-episode banner even with the OSD hidden; `Player::wait_for_source` mounts the loading overlay for deferred addon resolution; `source_failed` retains errors without mpv timeouts, and `playback.rs` keeps cancellation, resume prompts and private source policy tied to the request; top gesture feedback uses viewport/safe-area coordinates (`tests/player/osd_header.rs` covers portrait, short landscape and asymmetric insets) |
 | Windows console window on launch / executable subsystem | `src/main.rs` sets `windows_subsystem = "windows"` for the desktop executable on Windows. |
-| Desktop decoder choices / Windows decoder artifacts / shared GL state | `crates/player/src/{lib,desktop_decoder}.rs` (`configure_desktop_decoder`, Windows/Linux session choices/live decoder classification, render notifier), `crates/player/src/gl_state.rs` (scoped save/prepare/restore; Linux headless EGL upload/readback regression), `.github/workflows/build-release.yml`, `flake.nix`; [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
+| Android/Windows native media builds, sizes and notices | `nix/native-media/` (source-built shell dependencies), its `nix/native-media/{README,RESULTS}.md`, per-platform `SOURCES`/`SHA256SUMS`, `build.rs`, `flake.nix`, `.github/scripts/package-{android.py,windows.sh}`; shell entry builds uncached native dependencies; Linux uses system libraries |
+| Desktop decoder choices / Windows decoder artifacts / shared GL state | `crates/player/src/{lib,desktop_decoder}.rs` (`configure_desktop_decoder`, Windows/Linux session choices/live decoder classification, Windows HW+ availability, render notifier), `crates/player/src/gl_state.rs` (scoped save/prepare/restore; Linux headless EGL upload/readback regression), `.github/workflows/build-release.yml`, `flake.nix`; [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
 | Android pause on Home/screen-off / return preference | `crates/player/src/{lib,android_recovery}.rs`, `CacheSettings.android_auto_continue`, `src/app/settings.rs`, `crates/ui-settings-player/player-module.slint`, AppWindow `android_auto_continue`, `src/app/run.rs` (paused OSD); [player behavior](player-behavior.md) |
 | Bottom-right next-episode strip / next episode streams | `src/app/next_episode.rs` (policy/session tests), `src/app/detail.rs::episode_streams_by_id`, `src/app/playback.rs`, `src/app/run.rs`, AppWindow `next_episode_*`, `crates/ui/player.slint`, `tests/shared_layout/next_episode_banner.rs`; [player behavior](player-behavior.md) |
 | Filter selection / Downloads chevrons / Detail tab and save motion | `crates/ui/{filter-chip,downloads-page,detail,anim}.slint`; existing Look and feel → Hover effects controls pill fades and the local save-button pulse, while Page transitions controls download chevrons and tab indicators; the master switch disables these animations. Episode-list toggles are always immediate. `tests/filter_pill_touch.rs`, `tests/downloads/page.rs` (headless immediate episode-list toggles and header containment, plus an opt-in native GPU test of painted intermediate chevron angles), `tests/detail_layout/{opening,topbar}.rs` |
@@ -1502,5 +1521,5 @@ unit/documentation coverage.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop) |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/{tracking,tracking-panel}.slint` (account setup and title episode mapping review) |
-| CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `vendor/android-libs/SOURCES`, `.github/workflows/build-release.yml` (`check-linux`, `check-windows`, ARM64-only `check-android` on PRs/main source pushes), `.github/scripts/{package-android,test_package_android}.py` (universal plus ARM64/ARMv7/x86_64 APKs; payload and ABI regressions), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
+| CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `nix/native-media/`, `.github/workflows/build-release.yml` (`check-linux`, `check-windows`, ARM64-only `check-android` on PRs/main source pushes), `.github/scripts/{package-android,test_package_android}.py` (universal plus ARM64/ARMv7/x86_64 APKs; payload and ABI regressions), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |

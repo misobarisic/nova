@@ -3178,3 +3178,6 @@ msgstr "Instalirana verzija"
 
 msgid "Later"
 msgstr "Kasnije"
+
+msgid "HW uses copy-back decoding with a software fallback. SW uses software decoding."
+msgstr "HW koristi hardversko dekodiranje uz kopiranje u radnu memoriju i po potrebi softversko dekodiranje. SW koristi softversko dekodiranje."

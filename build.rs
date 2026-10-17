@@ -31,7 +31,7 @@ fn main() {
         println!("cargo:rustc-link-lib=X11");
     }
 
-    // Windows: link to the pinned MinGW import library for libmpv. The matching
+    // Windows: link to the source-built MinGW import library for libmpv. The matching
     // DLL is staged next to nova.exe by the tag-release packaging script.
     if target_os == "windows" {
         println!("cargo:rerun-if-env-changed=MPV_SOURCE");
@@ -44,29 +44,41 @@ fn main() {
         let import_library = lib_dir.join("libmpv.dll.a");
         if !import_library.is_file() {
             panic!(
-                "Windows libmpv import library not found at {}; see vendor/windows-libs/SOURCES",
+                "Windows libmpv import library not found at {}; see nix/native-media/README.md",
                 import_library.display()
             );
         }
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
     }
 
-    // Android: `libmpv2-sys` emits a bare `cargo:rustc-link-lib=mpv`, so the
-    // per-ABI search path has to come from here. It points at the prebuilt
-    // libmpv.so vendored in vendor/android-libs/<android_abi>/ — the same files
-    // cargo-apk packs into lib/<abi>/ of the APK (Cargo.toml `runtime_libs`;
-    // provenance and hashes in vendor/android-libs/SOURCES). The ABI directory names
-    // are Gradle's, not the Rust target triples, hence the mapping.
+    // The shell and cargo-apk2 use the same immutable Nix build output. FFmpeg
+    // is shared separately, including avcodec's JavaVM registration API.
     if target_os == "android" {
-        println!("cargo:rerun-if-changed=vendor/android-libs");
-        let target = std::env::var("TARGET").unwrap_or_default();
-        match android_lib_dir(&target) {
-            Some(dir) => println!("cargo:rustc-link-search=native=vendor/android-libs/{dir}"),
-            None => println!(
-                "cargo:warning=nova: no vendored libmpv.so for {target} — linking will fail; \
-                 see vendor/android-libs/SOURCES for the vendored ABIs"
-            ),
+        println!("cargo:rerun-if-env-changed=NOVA_ANDROID_LIBS");
+        let source = env::var_os("NOVA_ANDROID_LIBS").map(PathBuf::from).expect(
+            "NOVA_ANDROID_LIBS must point to the built Android media directory (use nix develop .#android)",
+        );
+        let target = env::var("TARGET").unwrap_or_default();
+        let abi =
+            android_abi(&target).unwrap_or_else(|| panic!("unsupported Android target: {target}"));
+        let directory = source.join(abi);
+        for name in [
+            "mpv",
+            "avcodec",
+            "avformat",
+            "avfilter",
+            "avutil",
+            "swscale",
+            "swresample",
+        ] {
+            let library = directory.join(format!("lib{name}.so"));
+            assert!(
+                library.is_file(),
+                "missing native library {}",
+                library.display()
+            );
         }
+        println!("cargo:rustc-link-search=native={}", directory.display());
     }
 }
 
@@ -169,6 +181,19 @@ fn generate_license_catalog() {
     ));
     catalog.push_str("\n\n");
     catalog.push_str(include_str!("assets/open_source_vendors.txt"));
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "windows")
+    ) {
+        println!("cargo:rerun-if-env-changed=NOVA_NATIVE_NOTICES");
+        let path = env::var_os("NOVA_NATIVE_NOTICES").expect(
+            "NOVA_NATIVE_NOTICES must point to the native notice file (use the target Nix shell)",
+        );
+        println!("cargo:rerun-if-changed={}", Path::new(&path).display());
+        let notices = fs::read_to_string(&path).expect("could not read native dependency notices");
+        catalog.push_str("\n\n");
+        catalog.push_str(&notices);
+    }
     catalog.push_str("\n\n===== Nova project license: GPL-3.0-or-later =====\n\n");
     catalog.push_str(include_str!("LICENSE"));
     catalog.push_str("\n\n===== Roboto font license: Apache-2.0 =====\n\n");
@@ -280,21 +305,12 @@ fn render_cargo_about(manifest_dir: &PathBuf, template: &str, target: &str) -> S
     })
 }
 
-/// Map a Rust target triple to its Gradle/`libmpv-android-video-build` ABI
-/// directory under `vendor/android-libs/`, if one is vendored there.
-fn android_lib_dir(target: &str) -> Option<&'static str> {
-    let abi = match target {
-        "aarch64-linux-android" => "arm64-v8a",
-        "x86_64-linux-android" => "x86_64",
-        "armv7-linux-androideabi" | "thumbv7neon-linux-androideabi" => "armeabi-v7a",
-        "i686-linux-android" => "x86",
-        _ => return None,
-    };
-    // Only advertise a directory that actually holds the library: a stale or
-    // missing file should surface as a warning here rather than as an
-    // obscure "cannot find -lmpv" from the linker.
-    let lib = std::path::Path::new("vendor/android-libs")
-        .join(abi)
-        .join("libmpv.so");
-    lib.exists().then_some(abi)
+/// Map Rust triples to the ABI directory names cargo-apk2 packages.
+fn android_abi(target: &str) -> Option<&'static str> {
+    match target {
+        "aarch64-linux-android" => Some("arm64-v8a"),
+        "x86_64-linux-android" => Some("x86_64"),
+        "armv7-linux-androideabi" | "thumbv7neon-linux-androideabi" => Some("armeabi-v7a"),
+        _ => None,
+    }
 }

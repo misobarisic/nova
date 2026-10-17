@@ -11,7 +11,7 @@ license.workspace = true
 nova-config = { path = "../config" }
 nova-ui = { path = "../ui" }
 slint = { workspace = true }
-# Vendored libmpv; build_libmpv stays off (see root Cargo.toml notes).
+# Source-built libmpv from the target Nix shell; build_libmpv stays off (see root Cargo.toml notes).
 libmpv2 = "6.0.0"
 # Node arrays preserve arbitrary HTTP header values when opening streams.
 libmpv2-sys = "4.0.1"

@@ -406,6 +406,9 @@ export component MiniSlider inherits Rectangle {
 // Segmented option picker (e.g. JPEG | WebP).
 export component Segmented inherits HorizontalLayout {
     in property <[string]> labels;
+    // Keep unsupported choices visible without allowing pointer, keyboard or
+    // accessibility activation. The owning page also skips them when stepping.
+    in property <int> disabled_index: -1;
     // The owning page updates the selection in picked(). Writing a mapped
     // index here would destroy its binding and strand selections in split rows.
     in property <int> current_index: 0;
@@ -418,7 +421,7 @@ export component Segmented inherits HorizontalLayout {
     for opt[i] in labels: Rectangle {
         accessible-role: button;
         accessible-label: opt;
-        accessible-enabled: root.enabled;
+        accessible-enabled: root.enabled && i != root.disabled_index;
         accessible-checkable: true;
         accessible-checked: root.current_index == i;
         width: seg_lbl.preferred-width + 28px;
@@ -427,6 +430,7 @@ export component Segmented inherits HorizontalLayout {
         border-width: self.focus_visible ? 2px : (Theme.true_black ? 1px : 0px);
         border-color: self.focus_visible ? Theme.current.focus_ring : Theme.current.control_border;
         background: root.current_index == i ? Theme.current.selection_fill : transparent;
+        opacity: root.enabled && i != root.disabled_index ? 1 : 0.45;
         animate background { duration: Anim.hover_fast; }
 
         seg_lbl := Text {
@@ -436,7 +440,7 @@ export component Segmented inherits HorizontalLayout {
             vertical-alignment: center;
         }
 
-        property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus);
+        property <bool> focus_visible: root.enabled && i != root.disabled_index && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus);
         changed focus_visible => {
             if (self.focus_visible) {
                 SettingsStyle.reveal_control(self.absolute-position.y, self.height, false);
@@ -444,14 +448,14 @@ export component Segmented inherits HorizontalLayout {
         }
         forward-focus: segment_focus;
         segment_focus := FocusScope {
-            enabled: root.enabled;
+            enabled: root.enabled && i != root.disabled_index;
             key-pressed(e) => {
                 SettingsStyle.keyboard-mode = true;
                 if e.text == Key.Return || e.text == " " { root.picked(i); accept } else { reject }
             }
         }
         TouchArea {
-            enabled: root.enabled;
+            enabled: root.enabled && i != root.disabled_index;
             width: 100%;
             height: 100%;
             mouse-cursor: pointer;

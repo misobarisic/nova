@@ -10,6 +10,11 @@ from pathlib import Path
 from zipfile import ZipFile
 
 ABIS = {"arm64-v8a", "armeabi-v7a", "x86_64"}
+NATIVE_LIBRARIES = (
+    "libnova.so", "libmpv.so", "libavcodec.so", "libavfilter.so",
+    "libavformat.so", "libavutil.so", "libswresample.so", "libswscale.so",
+)
+ABI_ELF = {"arm64-v8a": (2, 183), "armeabi-v7a": (1, 40), "x86_64": (2, 62)}
 VARIANTS = {"-universal": ABIS, **{f"-{abi}": {abi} for abi in sorted(ABIS)}}
 
 
@@ -43,7 +48,7 @@ def check_abis(entries, expected):
     required = {
         f"lib/{abi}/{library}"
         for abi in expected
-        for library in ("libnova.so", "libmpv.so")
+        for library in NATIVE_LIBRARIES
     }
     if missing := required - set(entries):
         raise RuntimeError(f"APK missing native libraries: {sorted(missing)}")
@@ -58,6 +63,19 @@ def filter_apk(source, output, abis):
         if len({entry.filename for entry in entries}) != len(entries):
             raise RuntimeError("Source APK has duplicate ZIP entries")
         check_abis([entry.filename for entry in entries], ABIS)
+        # Validate the packaged bytes rather than a checkout of nova-vendor:
+        # swapped ABI directories otherwise pass filename checks and fail on-device.
+        for abi, (elf_class, machine) in ABI_ELF.items():
+            for library in NATIVE_LIBRARIES:
+                name = f"lib/{abi}/{library}"
+                with original.open(name) as native:
+                    header = native.read(20)
+                if (
+                    len(header) != 20
+                    or header[:6] != b"\x7fELF" + bytes((elf_class, 1))
+                    or int.from_bytes(header[18:20], "little") != machine
+                ):
+                    raise RuntimeError(f"APK native library has wrong architecture: {name}")
         for entry in entries:
             if keep_entry(entry.filename, abis):
                 result.writestr(copy.copy(entry), original.read(entry))

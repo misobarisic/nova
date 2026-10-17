@@ -942,6 +942,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.set_searchable_hint(SharedString::from("Search"));
     app.set_searchable(true);
     app.set_desktop_decoder_available(cfg!(any(target_os = "windows", target_os = "linux")));
+    app.set_hw_plus_available(!cfg!(target_os = "windows"));
     // Touch-driven platform: card menus open as bottom sheets on hold;
     // desktop keeps native right-click popups at the cursor.
     #[cfg(target_os = "android")]

@@ -24,6 +24,7 @@ on:
       - "android/**"
       - "vendor/**"
       - "assets/**"
+      - "nix/**"
       - "flake.nix"
       - "flake.lock"
   push:
@@ -51,6 +52,7 @@ on:
       - "android/**"
       - "vendor/**"
       - "assets/**"
+      - "nix/**"
       - "flake.nix"
       - "flake.lock"
     tags:

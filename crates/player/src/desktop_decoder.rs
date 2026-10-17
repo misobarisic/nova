@@ -3,9 +3,9 @@ use libmpv2::Mpv;
 use nova_config::DesktopHwdec;
 
 pub(super) fn requested_mode(preference: DesktopHwdec) -> &'static str {
-    // Let mpv probe compatible direct interop first. Explicitly retain copy-back
-    // fallback: a host OpenGL context need not support Windows decoder surfaces.
-    match preference {
+    // Resolve older HW+ preferences to Windows' supported copy-back mode.
+    // Linux keeps direct interop with copy-back/software fallback.
+    match preference.supported() {
         DesktopHwdec::HwPlus => "auto,auto-copy",
         DesktopHwdec::Hw => "auto-copy",
         DesktopHwdec::Sw => "no",
@@ -39,7 +39,12 @@ mod tests {
         .unwrap();
         let saved = nova_config::CacheSettings::default();
         assert_eq!(saved.desktop_hwdec, DesktopHwdec::default());
-        for (index, expected) in [(0, "auto,auto-copy"), (2, "no"), (1, "auto-copy")] {
+        let direct = if cfg!(target_os = "windows") {
+            "auto-copy"
+        } else {
+            "auto,auto-copy"
+        };
+        for (index, expected) in [(0, direct), (2, "no"), (1, "auto-copy")] {
             configure(&mpv, DesktopHwdec::from_index(index)).unwrap();
             assert_eq!(mpv.get_property::<String>("hwdec").unwrap(), expected);
             // The same configuration runs at every new play, dropping the

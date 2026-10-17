@@ -457,6 +457,15 @@ impl Default for DesktopHwdec {
 }
 
 impl DesktopHwdec {
+    /// Resolve preferences saved before a platform's decoder support changed.
+    pub fn supported(self) -> Self {
+        if cfg!(target_os = "windows") && self == Self::HwPlus {
+            Self::Hw
+        } else {
+            self
+        }
+    }
+
     pub fn from_index(index: i32) -> Self {
         match index {
             0 => Self::HwPlus,
@@ -1483,6 +1492,16 @@ mod tests {
 
     #[test]
     fn desktop_decoder_choices_round_trip_with_platform_default() {
+        assert_eq!(
+            DesktopHwdec::HwPlus.supported(),
+            if cfg!(target_os = "windows") {
+                DesktopHwdec::Hw
+            } else {
+                DesktopHwdec::HwPlus
+            }
+        );
+        assert_eq!(DesktopHwdec::Hw.supported(), DesktopHwdec::Hw);
+        assert_eq!(DesktopHwdec::Sw.supported(), DesktopHwdec::Sw);
         assert_eq!(
             DesktopHwdec::default().index(),
             if cfg!(target_os = "windows") { 1 } else { 0 }

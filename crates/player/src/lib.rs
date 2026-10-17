@@ -6,8 +6,8 @@
 //! hidden, the window background turns transparent, and the Slint scene only
 //! paints the player overlay (status text + OSD) on top of the video.
 //!
-//! The same architecture runs on Android, against the prebuilt `libmpv.so`
-//! vendored in `vendor/android-libs/` (provenance in that directory's SOURCES, link
+//! The same architecture runs on Android, against source-built `libmpv.so`
+//! provided by the target Nix shell (recipe in `nix/native-media`, link
 //! search path in `build.rs`): Slint's Android backend renders with Skia on its
 //! own EGL/GLES surface and hands the rendering notifier a real
 //! `GraphicsAPI::NativeOpenGL`, so mpv composites into the same default
@@ -400,6 +400,20 @@ fn install_subtitle_font() -> Option<std::path::PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     write_if_size_differs(&dir.join("Roboto-Regular.ttf"), SUBTITLE_FONT).ok()?;
     Some(dir)
+}
+
+/// mbed TLS cannot read Android's platform trust store. Install the pinned
+/// Mozilla roots in private cache and refresh by contents when Nova updates.
+#[cfg(target_os = "android")]
+fn install_android_ca_bundle() -> std::io::Result<std::path::PathBuf> {
+    const ROOTS: &[u8] = include_bytes!(env!("NOVA_NATIVE_CA_BUNDLE"));
+    let dir = nova_config::app_cache_dir().join("native-media");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("cacert.pem");
+    if std::fs::read(&path).ok().as_deref() != Some(ROOTS) {
+        std::fs::write(&path, ROOTS)?;
+    }
+    Ok(path)
 }
 
 /// Family name of a font file that ships on the device, used only when
@@ -1092,24 +1106,18 @@ impl Drop for State {
     }
 }
 
-/// FFmpeg's JavaVM registration (`libavutil/jni.h`).
+/// FFmpeg's JavaVM registration (`libavcodec/jni.h` in FFmpeg 9).
 ///
 /// mpv's **direct** MediaCodec hwdec (`hwdec_aimagereader`) resolves a `JNIEnv`
 /// through `mp_jni_get_env()`, which takes the VM from
 /// `av_jni_get_java_vm(NULL)` — something the embedding application has to
-/// register, and which nothing in this app did. The mpv 0.37 build vendored in
-/// `vendor/android-libs/` *asserts* on the missing env (`hwdec_aimagereader.c:171`), so
-/// the whole process aborts instead of reporting a failure (mpv ≥ 0.38 turned
-/// that same spot into a soft `return -1`). The vendored `libmpv.so` exports
-/// `av_jni_set_java_vm` (checked with `readelf -sW --dyn-syms`), so registering
-/// the VM we already stash for JNI is what makes the zero-copy path usable at
-/// all. Returns whether the VM is registered: because the failure mode here is a
-/// crash rather than a fallback, the caller keeps direct MediaCodec off when
-/// this returns false.
+/// register. Register before creating mpv: older mpv versions asserted on a
+/// missing VM, and current versions cannot use direct MediaCodec without it.
+/// FFmpeg is now shared separately, so link the public JNI symbol from avcodec.
+/// Returns whether registration succeeded; keep direct MediaCodec off otherwise.
 #[cfg(target_os = "android")]
 fn register_java_vm() -> bool {
-    // Safety: an FFmpeg (libavutil) symbol the vendored libmpv.so exports;
-    // libmpv2-sys already links `-lmpv`, so it resolves from there at load.
+    #[link(name = "avcodec")]
     unsafe extern "C" {
         /// `int av_jni_set_java_vm(void *vm, void *log_ctx)`.
         fn av_jni_set_java_vm(vm: *mut c_void, log_ctx: *mut c_void) -> c_int;
@@ -1121,7 +1129,7 @@ fn register_java_vm() -> bool {
         return false;
     }
     // Safety: `vm` is the process-wide JavaVM pointer stashed from
-    // `android_main`; libavutil only stores it here.
+    // `android_main`; FFmpeg only stores it here.
     let rc = unsafe { av_jni_set_java_vm(vm, std::ptr::null_mut()) };
     if rc != 0 {
         alog(&format!(
@@ -1129,7 +1137,7 @@ fn register_java_vm() -> bool {
         ));
         return false;
     }
-    alog("JavaVM registered with libavutil (direct mediacodec possible)");
+    alog("JavaVM registered with FFmpeg (direct mediacodec possible)");
     true
 }
 
@@ -1192,6 +1200,14 @@ impl Player {
                     let _ = mpv.set_property("ao", "opensles");
                     let _ = mpv.set_property("config", "no");
                     let _ = mpv.set_property("load-scripts", "no");
+                    let _ = mpv.set_property("tls-verify", true);
+                    match install_android_ca_bundle() {
+                        Ok(path) => {
+                            let _ =
+                                mpv.set_property("tls-ca-file", path.to_string_lossy().as_ref());
+                        }
+                        Err(error) => alog(&format!("could not install TLS roots: {error}")),
+                    }
                     // libass here has no fontconfig, so give it a default font:
                     // text subtitles without an embedded font render blank
                     // otherwise. See [`SUBTITLE_FONT`].
@@ -1208,12 +1224,8 @@ impl Player {
                             alog("subtitle font: bundle unwritable; using /system/fonts");
                         }
                     }
-                    // Bitmap subtitles (Blu-ray HDMV PGS) are decoded by
-                    // FFmpeg's `hdmv_pgs_subtitle`, which the vendored Android
-                    // libmpv provides only in the `full` flavor (the `default`
-                    // flavor omits it). No mpv option here can render them if a
-                    // `default`-flavor libmpv is linked — see vendor/android-libs/SOURCES.
-                    alog("subtitles: PGS/bitmap decode requires the full-flavor libmpv");
+                    // PGS/bitmap subtitle decoding is explicitly enabled and
+                    // checked by the native build recipe; see SOURCES.
                 }
                 #[cfg(not(target_os = "android"))]
                 let _ = configure_desktop_decoder(mpv);
@@ -1914,7 +1926,9 @@ impl Player {
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
-            let preference = nova_config::active_cache_settings().desktop_hwdec;
+            let preference = nova_config::active_cache_settings()
+                .desktop_hwdec
+                .supported();
             app.set_decode_label(preference.label().into());
             app.set_decoder_selected(preference.index());
         }
@@ -3359,7 +3373,7 @@ impl Player {
     /// `play` reapplies the saved preference for the next stream.
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub fn pick_decoder(&self, index: i32) {
-        let preference = nova_config::DesktopHwdec::from_index(index);
+        let preference = nova_config::DesktopHwdec::from_index(index).supported();
         let applied = self
             .state
             .mpv

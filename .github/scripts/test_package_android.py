@@ -25,9 +25,13 @@ class AndroidPackagingTests(unittest.TestCase):
             for name in ("MANIFEST.MF", "CERT.SF", "CERT.RSA"):
                 apk.writestr(f"META-INF/{name}", b"old signature")
             for abi in packaging.ABIS:
-                for library in ("libnova.so", "libmpv.so"):
+                for library in packaging.NATIVE_LIBRARIES:
+                    elf_class, machine = packaging.ABI_ELF[abi]
+                    header = bytearray(20)
+                    header[:6] = b"\x7fELF" + bytes((elf_class, 1))
+                    header[18:20] = machine.to_bytes(2, "little")
                     apk.writestr(
-                        f"lib/{abi}/{library}", f"{abi}/{library}".encode(),
+                        f"lib/{abi}/{library}", header + f"{abi}/{library}".encode(),
                         compress_type=ZIP_STORED,
                     )
 
@@ -48,20 +52,17 @@ class AndroidPackagingTests(unittest.TestCase):
             set(packaging.VARIANTS), {"-universal", *(f"-{abi}" for abi in expected)}
         )
 
-    def test_vendored_libraries_match_their_android_architectures(self):
-        repo = Path(__file__).resolve().parents[2]
-        # Check the binary itself: placing an ARM64 library in the ARMv7
-        # directory would pass ZIP-path checks but fail on a 32-bit device.
-        for abi, elf_class, machine in (
-            ("arm64-v8a", 2, 183),
-            ("armeabi-v7a", 1, 40),
-            ("x86_64", 2, 62),
-        ):
-            with self.subTest(abi=abi):
-                with (repo / "vendor/android-libs" / abi / "libmpv.so").open("rb") as library:
-                    header = library.read(20)
-                self.assertEqual(header[:6], b"\x7fELF" + bytes((elf_class, 1)))
-                self.assertEqual(int.from_bytes(header[18:20], "little"), machine)
+    def test_wrong_native_architecture_rejects_the_source(self):
+        broken = self.root / "wrong-abi.apk"
+        with ZipFile(self.source) as original:
+            wrong = original.read("lib/arm64-v8a/libavcodec.so")
+        self.rewrite(
+            self.source, broken,
+            lambda entry, data: (entry, wrong)
+            if entry.filename == "lib/armeabi-v7a/libavcodec.so" else (entry, data),
+        )
+        with self.assertRaisesRegex(RuntimeError, "wrong architecture"):
+            packaging.filter_apk(broken, self.root / "output.apk", {"armeabi-v7a"})
 
     def test_all_variants_preserve_common_and_matching_native_payloads(self):
         for suffix, abis in packaging.VARIANTS.items():
@@ -75,7 +76,7 @@ class AndroidPackagingTests(unittest.TestCase):
                     self.assertFalse(any(packaging.signature_entry(name) for name in apk.namelist()))
                     self.assertEqual(
                         {name for name in apk.namelist() if name.startswith("lib/")},
-                        {f"lib/{abi}/{lib}" for abi in abis for lib in ("libnova.so", "libmpv.so")},
+                        {f"lib/{abi}/{lib}" for abi in abis for lib in packaging.NATIVE_LIBRARIES},
                     )
 
     def rewrite(self, source, destination, transform):
@@ -87,14 +88,17 @@ class AndroidPackagingTests(unittest.TestCase):
                     changed.writestr(*result)
 
     def test_missing_armv7_native_library_rejects_the_source(self):
-        broken = self.root / "missing.apk"
-        self.rewrite(
-            self.source, broken,
-            lambda entry, data: None if entry.filename == "lib/armeabi-v7a/libmpv.so"
-            else (entry, data),
-        )
-        with self.assertRaisesRegex(RuntimeError, "missing native libraries"):
-            packaging.filter_apk(broken, self.root / "output.apk", {"armeabi-v7a"})
+        for library in ("libmpv.so", "libavcodec.so", "libavutil.so"):
+            with self.subTest(library=library):
+                broken = self.root / "missing.apk"
+                self.rewrite(
+                    self.source, broken,
+                    lambda entry, data: None
+                    if entry.filename == f"lib/armeabi-v7a/{library}"
+                    else (entry, data),
+                )
+                with self.assertRaisesRegex(RuntimeError, "missing native libraries"):
+                    packaging.filter_apk(broken, self.root / "output.apk", {"armeabi-v7a"})
 
     def test_changed_native_bytes_or_compression_rejects_the_output(self):
         split = self.root / "split.apk"

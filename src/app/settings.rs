@@ -272,7 +272,7 @@ impl Bridge {
             app.set_completion_rating_prompts_enabled(settings.completion_rating_prompts_enabled);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
-            app.set_desktop_hwdec_index(settings.desktop_hwdec.index());
+            app.set_desktop_hwdec_index(settings.desktop_hwdec.supported().index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
@@ -506,7 +506,8 @@ impl Bridge {
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
                 android_hwdec: AndroidHwdec::from_index(app.get_android_hwdec_index()),
-                desktop_hwdec: nova_config::DesktopHwdec::from_index(app.get_desktop_hwdec_index()),
+                desktop_hwdec: nova_config::DesktopHwdec::from_index(app.get_desktop_hwdec_index())
+                    .supported(),
                 player_external: app.get_player_backend_index() == 1,
                 desktop_external_app: DesktopExternalApp::from_index(
                     app.get_desktop_external_app_index(),

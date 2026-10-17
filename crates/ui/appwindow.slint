@@ -1156,6 +1156,7 @@ export component AppWindow inherits Window {
     in-out property <int> desktop_hwdec_index: 0;
     in-out property <bool> is_android: false;
     in-out property <bool> desktop_decoder_available: false;
+    in-out property <bool> hw_plus_available: true;
     // Settings edits the synced global rate; the OSD edits the effective
     // title rate separately. Both sliders cover 0.5–2.0; ± steps by 0.05.
     in-out property <float> playback_speed: 1.0;
@@ -2250,6 +2251,7 @@ export component AppWindow inherits Window {
         subtitle_language_selected_names: root.subtitle_language_selected_names;
         is_android: root.is_android;
         desktop_decoder_available: root.desktop_decoder_available;
+        hw_plus_available: root.hw_plus_available;
         phone_layout: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px;
@@ -2360,6 +2362,7 @@ export component AppWindow inherits Window {
         system_back_request: root.page_back_request;
         is_android: root.is_android;
         desktop_decoder_available: root.desktop_decoder_available;
+        hw_plus_available: root.hw_plus_available;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;

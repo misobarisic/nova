@@ -481,6 +481,54 @@ fn desktop_decoder_default_and_session_picker_are_separate_and_keyboard_accessib
     assert_eq!(*picks.borrow(), [2, 1]);
     assert_eq!(app.get_desktop_hwdec_index(), 1);
 
+    // Windows exposes the same choices, but HW+ is disabled in both controls.
+    // Exercise the mount input on every host so Linux CI covers Windows UI.
+    app.set_player_open(false);
+    app.set_show_settings(true);
+    app.set_hw_plus_available(false);
+    settle();
+    let hw_plus = || {
+        ElementHandle::find_by_accessible_label(&app, "HW+")
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .unwrap()
+    };
+    assert_eq!(hw_plus().accessible_enabled(), Some(false));
+    click("HW+");
+    assert_eq!(app.get_desktop_hwdec_index(), 1);
+    click("HW");
+    key(&app, slint::platform::Key::RightArrow);
+    settle();
+    assert_eq!(app.get_desktop_hwdec_index(), 2);
+    key(&app, slint::platform::Key::LeftArrow);
+    key(&app, slint::platform::Key::LeftArrow);
+    settle();
+    assert_eq!(app.get_desktop_hwdec_index(), 1);
+
+    app.set_show_settings(false);
+    app.set_player_open(true);
+    app.set_osd_visible(true);
+    settle();
+    open_menu();
+    assert_eq!(hw_plus().accessible_enabled(), Some(false));
+    click("HW+");
+    assert_eq!(*picks.borrow(), [2, 1]);
+    key(&app, slint::platform::Key::UpArrow);
+    key(&app, slint::platform::Key::Return);
+    settle();
+    assert_eq!(*picks.borrow(), [2, 1, 1]);
+    open_menu();
+    key(&app, slint::platform::Key::DownArrow);
+    key(&app, slint::platform::Key::Return);
+    settle();
+    assert_eq!(*picks.borrow(), [2, 1, 1, 2]);
+    open_menu();
+    click("HW");
+    assert_eq!(*picks.borrow(), [2, 1, 1, 2, 1]);
+    assert_eq!(app.get_desktop_hwdec_index(), 1);
+    assert_eq!(app.get_android_hwdec_index(), 0);
+
     app.set_player_open(false);
     app.set_desktop_decoder_available(false);
     settle();

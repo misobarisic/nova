@@ -195,11 +195,9 @@ iroh = "1.2"
 [package.metadata.android]
 package = "dev.misob.nova"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
-# Folder holding extra prebuilt shared libraries: cargo-apk2 adds everything
-# matching `<runtime_libs>/<android_abi>/*.so` (see build.rs for the matching
-# link search path and vendor/android-libs/SOURCES for provenance). The ABI directory
-# names are Gradle's, not the Rust target triples.
-runtime_libs = "vendor/android-libs"
+# The Nix Android shell supplies NOVA_ANDROID_LIBS from the source-built
+# native media dependency. Its cargo-apk2 patch uses that path for runtime libraries, matching
+# build.rs, without a mutable staging directory or committed media binaries.
 resources = "android/res"
 
 # cargo-apk2 packaging: compile the Java background components (foreground

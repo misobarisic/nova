@@ -8,6 +8,7 @@ pub const SOURCE_PATHS: &[&str] = &[
     "android",
     "assets",
     "vendor",
+    "nix",
     ".github",
     ".cargo",
     "scripts",

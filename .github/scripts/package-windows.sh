@@ -14,9 +14,11 @@ mkdir -p "$bundle" "$dist"
 profile="${NOVA_RELEASE_PROFILE:-release}"
 cp "target/x86_64-pc-windows-gnu/$profile/nova.exe" "$bundle/nova.exe"
 cp LICENSE "$bundle/LICENSE"
-cp vendor/windows-libs/SOURCES "$bundle/THIRD-PARTY-SOURCES.txt"
+cp "$MPV_SOURCE/SOURCES" "$bundle/THIRD-PARTY-SOURCES.txt"
+cp -RL "$MPV_SOURCE/licenses" "$bundle/licenses"
+cp -RL "$MPV_SOURCE/metadata" "$bundle/native-media"
 
-find "$MPV_SOURCE/64" -maxdepth 1 -type f -iname "*.dll" -exec cp {} "$bundle/" \;
+find -L "$MPV_SOURCE/64" -maxdepth 1 -type f -iname "*.dll" -exec cp {} "$bundle/" \;
 test -f "$bundle/libmpv-2.dll"
 
 # Include only DLL files from the compiler's Nix dependency closure. This
@@ -39,11 +41,11 @@ tag, bundle_name, dist_name = argv[1:]
 bundle = Path(bundle_name)
 dist = Path(dist_name)
 output = dist / f"Nova-Windows-x86_64-{tag}.zip"
-files = sorted(path for path in bundle.iterdir() if path.is_file())
+files = sorted(path for path in bundle.rglob("*") if path.is_file())
 if not any(path.name.lower() == "libmpv-2.dll" for path in files):
     raise SystemExit("Windows bundle is missing libmpv-2.dll")
 with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
     for path in files:
-        archive.write(path, arcname=path.name)
+        archive.write(path, arcname=path.relative_to(bundle))
 print(f"Created {output} with {len(files)} files")
 PY

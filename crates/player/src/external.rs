@@ -8,7 +8,7 @@
 //! MediaCodec path needs — see [`java_vm_ptr`]. Pure JNI, no mpv.
 //!
 //! In-app playback on Android goes through the same mpv path as desktop
-//! (`src/player.rs`, against the prebuilt `libmpv.so` in `vendor/android-libs/`). This
+//! (`src/player.rs`, against the source-built libmpv from the Nix shell). This
 //! module is what the catalog falls back to when the in-app player reports that
 //! it cannot take the stream at all — mpv failed to initialize, the window has
 //! no OpenGL renderer, or the vendored mpv build cannot decode it. The intent

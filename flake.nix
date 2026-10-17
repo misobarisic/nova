@@ -29,6 +29,21 @@
           android_sdk.accept_license = true;
         };
       };
+      # Source-built native dependencies; Nix caches unchanged derivations.
+      nativeMedia = import ./nix/native-media { inherit system; pkgs = pkgsAndroid; };
+      androidMedia = pkgs.runCommand "nova-android-media" { } ''
+        mkdir -p "$out"
+        ln -s ${nativeMedia.bundle-android-arm64}/lib "$out/arm64-v8a"
+        ln -s ${nativeMedia.bundle-android-armv7}/lib "$out/armeabi-v7a"
+        ln -s ${nativeMedia.bundle-android-x86_64}/lib "$out/x86_64"
+      '';
+      windowsMedia = pkgs.runCommand "nova-windows-media" { } ''
+        mkdir -p "$out"
+        ln -s ${nativeMedia.bundle-mingw-x86_64}/lib "$out/64"
+        ln -s ${nativeMedia.bundle-mingw-x86_64}/share/nova-native "$out/metadata"
+        ln -s ${nativeMedia.bundle-mingw-x86_64}/share/licenses "$out/licenses"
+        cp ${nativeMedia.bundle-mingw-x86_64}/share/nova-native/sources.json "$out/SOURCES"
+      '';
       # fenix-provisioned stable toolchain for the host. This replaces the
       # ambient/nixpkgs Rust: entering the shell is enough, no rustup.
       fenixPkgs = fenix.packages.${system};
@@ -57,6 +72,11 @@
         postPatch = ''
           sed -i '/^    ".*-examples",$/d' Cargo.toml
           cp ${./android/cargo-apk2-Cargo.lock} Cargo.lock
+          # cargo-apk2 normally reads runtime_libs only from Cargo.toml. The
+          # immutable Nix input must supply the same directory to link and APK.
+          substituteInPlace cargo-apk2/src/manifest.rs \
+            --replace-fail 'runtime_libs: metadata.runtime_libs,' \
+              'runtime_libs: std::env::var_os("NOVA_ANDROID_LIBS").map(std::path::PathBuf::from).or(metadata.runtime_libs),'
         '';
         cargoBuildFlags = [ "-p" "cargo-apk2" ];
         doCheck = false; # its tests need an Android SDK/device
@@ -156,7 +176,7 @@
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       # Android build environment: nix-managed Rust (fenix, stable + the three
-      # vendored Android target stds) + SDK + NDK + JDK + cargo-apk. No
+      # Android target stds) + SDK + NDK + JDK + cargo-apk. No
       # rustup, no manual `rustup target add` — entering the shell is enough.
       # Enter with: nix develop .#android
       android = let
@@ -173,9 +193,8 @@
           includeEmulator = true;
         }).androidsdk;
         # Host stable plus a std for every target cargo-apk packages for us
-        # (Cargo.toml `build_targets`, matching the vendored libmpv.so ABIs
-        # in vendor/android-libs/). i686 is omitted until its libmpv.so is
-        # included — linking it would fail at `build.rs`'s warning.
+        # (Cargo.toml `build_targets`, matching the source-built ABIs). i686 is
+        # omitted because the native recipe does not build that ABI.
         toolchain = fenixPkgs.combine (
           [
             host.cargo
@@ -195,6 +214,7 @@
         pkgsAndroid.mkShell {
           buildInputs = [
             androidsdk
+            androidMedia
             pkgs.android-tools
             pkgsAndroid.jdk17
             # Packaged by this flake (see the cargo-apk2 derivation above):
@@ -212,6 +232,9 @@
             pkgs.curl
             toolchain
           ];
+          NOVA_ANDROID_LIBS = "${androidMedia}";
+          NOVA_NATIVE_CA_BUNDLE = "${nativeMedia.bundle-android-arm64}/share/nova-native/cacert.pem";
+          NOVA_NATIVE_NOTICES = "${nativeMedia.notices-android-arm64}";
           # cargo-apk2 does not use Gradle, so no aapt2 override is needed.
           # (If you add a Gradle wrapper later, point it at the nix
           # build-tools aapt2:
@@ -275,9 +298,8 @@
             echo "  run:   cargo apk2 run   --target aarch64-linux-android --no-default-features --features android --lib"
           '';
         };
-      # Windows x86_64 cross-build environment. MPV's Windows development
-      # archive is pinned by SHA-256 in vendor/windows-libs/SOURCES; FFmpeg is already
-      # included in that libmpv build, so no second FFmpeg bundle is needed.
+      # Windows x86_64 cross-build environment. Native media libraries are
+      # built from the pinned source recipe in nix/native-media.
       # Enter with: nix develop .#windows
       windows = let
         target = "x86_64-pc-windows-gnu";
@@ -292,30 +314,6 @@
           ]
           ++ [fenixPkgs.targets.${target}.stable.rust-std]
         );
-        mpvDevArchive = pkgs.fetchurl {
-          url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260928/mpv-dev-x86_64-20260928-git-e470f8986e.7z";
-          hash = "sha256-gXlddZ4BAW8VUP1xZRoaXVmrXCjvMcC2eTIk6c/zlFk=";
-        };
-        windowsMpvDev = pkgs.stdenvNoCC.mkDerivation {
-          pname = "nova-mpv-win64-dev";
-          version = "20260928";
-          src = mpvDevArchive;
-          dontUnpack = true;
-          nativeBuildInputs = [pkgs.p7zip];
-          installPhase = ''
-            work="$TMPDIR/mpv-unpack"
-            mkdir -p "$work" "$out/64"
-            7z x -y "$src" -o"$work" >/dev/null
-            import_library="$(find "$work" -type f -name libmpv.dll.a -print -quit)"
-            if [ -z "$import_library" ]; then
-              echo "libmpv.dll.a missing from pinned MPV development archive" >&2
-              exit 1
-            fi
-            cp -R "$(dirname "$import_library")/." "$out/64/"
-            test -f "$out/64/libmpv.dll.a"
-            test -f "$out/64/libmpv-2.dll"
-          '';
-        };
         crossGcc = mingw.stdenv.cc;
       in
         pkgs.mkShell {
@@ -327,8 +325,10 @@
           ];
           buildInputs = [
             mingw.windows.pthreads
+            windowsMedia
           ];
-          MPV_SOURCE = "${windowsMpvDev}";
+          MPV_SOURCE = "${windowsMedia}";
+          NOVA_NATIVE_NOTICES = "${nativeMedia.notices-mingw-x86_64}";
           # The release packager resolves the cross compiler's Nix closure and
           # stages its MinGW runtime DLLs alongside Nova and libmpv.
           MINGW_CC = "${crossGcc}";

@@ -113,10 +113,13 @@ export component SettingsPlayerModule inherits Window {
                     tinted: true;
                     setting-key: "desktop_hwdec";
                     row-title: @tr("Video decoder");
-                    row-desc: @tr("HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding.");
+                    row-desc: SettingsBridge.hw_plus_available
+                        ? @tr("HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding.")
+                        : @tr("HW uses copy-back decoding with a software fallback. SW uses software decoding.");
                     Segmented {
                         labels: ["HW+", "HW", "SW"];
                         current_index: SettingsBridge.desktop_hwdec_index;
+                        disabled_index: SettingsBridge.hw_plus_available ? -1 : 0;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
                         picked(i) => {
                             SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
