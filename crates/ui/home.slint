@@ -569,7 +569,11 @@ component HomeCatalogPosterCard inherits Rectangle {
                         height: 4px;
                         border-radius: 2px;
                         background: Theme.current.home_progress_track;
-                        Rectangle {
+                        history_progress_fill := Rectangle {
+                            // Slint centers children with a reduced width unless
+                            // positioned explicitly; progress grows from the left.
+                            x: 0px;
+                            y: 0px;
                             width: parent.width * Math.max(0, Math.min(1, root.entry.progress));
                             height: 100%;
                             border-radius: 2px;

@@ -34,6 +34,25 @@ fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
         .unwrap_or_else(|| panic!("missing visible element: {id}"))
 }
 
+fn assert_history_progress(cards: &[ElementHandle]) {
+    for (card, fraction) in cards.iter().zip([0.4, 1.0]) {
+        let track = card
+            .query_descendants()
+            .match_id("HomeCatalogPosterCard::history_progress")
+            .find_first()
+            .unwrap();
+        let fill = card
+            .query_descendants()
+            .match_id("HomeCatalogPosterCard::history_progress_fill")
+            .find_first()
+            .unwrap();
+        assert!((fill.absolute_position().x - track.absolute_position().x).abs() < 0.5);
+        assert!((fill.absolute_position().y - track.absolute_position().y).abs() < 0.5);
+        assert!((fill.size().width - track.size().width * fraction).abs() < 0.5);
+        assert!((fill.size().height - track.size().height).abs() < 0.5);
+    }
+}
+
 fn assert_separated(app: &nova::AppWindow, ids: &[&str]) {
     let sections: Vec<_> = ids.iter().map(|id| element(app, id)).collect();
     for section in &sections {
@@ -206,6 +225,7 @@ fn history_catalog_reuses_rail_grid_activation_and_keyboard_without_changing_cat
             })
             .collect();
         assert_eq!(cards.len(), 3);
+        assert_history_progress(&cards[..2]);
         for card in &cards {
             assert!((card.size().height - card.size().width * 1.5 - 54.0).abs() < 1.0);
         }
@@ -247,6 +267,7 @@ fn history_catalog_reuses_rail_grid_activation_and_keyboard_without_changing_cat
             })
             .collect();
         assert_eq!(cards.len(), 2);
+        assert_history_progress(&cards);
         for card in &cards {
             assert!((card.size().height - card.size().width * 1.5 - 54.0).abs() < 1.0);
         }
