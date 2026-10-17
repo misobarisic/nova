@@ -75,8 +75,8 @@ to Matroska, retaining 214 packets and identical decoded video frames. A
 Matroska fixture with missing initial DTS was explicitly rejected by the final
 probe, as intended.
 
-The test outputs, logs/verification data and native probes are under the ignored
-`target/native-media/` directory. The system's default Wine was 32-bit; tests
+The temporary test outputs, logs and native probes were removed after validation.
+The system's default Wine was 32-bit; tests
 used the separate 64-bit binary. Unused Wine USB/bus/menu/managed-code components
 were disabled for this host's isolated test prefix.
 
@@ -109,8 +109,7 @@ parsed successfully, and the built cargo-apk2 contains the runtime override.
 - The casting session's persistent upstream reader, HTTP relay, receiver
   discovery and Android foreground service are design work outside this build.
 
-Local bundles are available at `target/native-media/{android-arm64,
-android-armv7,android-x86_64,mingw-x86_64}`. Each corresponding
-`nova-media-<target>.zip` contains the bundle and the locked standalone build
-recipe. The app consumes these source-built outputs through its Android/Windows Nix
+The temporary bundle archives and unused local vendor repository were removed.
+The app consumes the source-built outputs through its Android/Windows Nix
 shells, with native notices and CA roots derived from the same dependencies.
+Entering either shell rebuilds missing outputs from the committed recipe.
