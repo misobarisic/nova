@@ -57,7 +57,7 @@ fn main() {
     // context (`@tr("ctx" => "…")`).
     slint_build::compile_with_config(
         "appwindow.slint",
-        slint_build::CompilerConfiguration::new()
+        compiler_configuration()
             .with_include_paths(vec![out_dir])
             // Imported fonts must ship in the executable/APK, rather than
             // depend on absolute paths into the build machine's checkout.

@@ -12,6 +12,19 @@ fn inspection_metadata() -> bool {
         .unwrap_or_else(|_| std::env::var("PROFILE").as_deref() == Ok("debug"))
 }
 
+fn compiler_configuration() -> slint_build::CompilerConfiguration {
+    let config = slint_build::CompilerConfiguration::new();
+    // Windows uses Slint-rendered menus instead of the native Win32 popup.
+    // Compile every page with the same dark widgets so those menus cannot
+    // inherit a light Windows system theme inside Nova's dark interface.
+    // Use the target OS: Windows releases are also cross-compiled on Linux.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        config.with_style("fluent-dark".into())
+    } else {
+        config
+    }
+}
+
 // Every compiled unit must bundle the same languages in the same order. The
 // compiler patch lets libraries read the canonical domain without changing
 // Cargo's package/library identity or generating catalogs that watch themselves.
@@ -24,7 +37,7 @@ fn compile_page_library(source: &str, library: &str) {
     println!("cargo:rerun-if-changed=../ui/translations");
     slint_build::compile_with_config(
         source,
-        slint_build::CompilerConfiguration::new()
+        compiler_configuration()
             .as_library(library)
             .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles)
             .with_debug_info(inspection_metadata())

@@ -99,8 +99,6 @@ pub(super) fn wire_page_navigation(app: &AppWindow, bridge: &Bridge) {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    crate::diagnostics::init();
-    net::init_metadata_transport();
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
     // (src/player.rs). Like the reference prototype, the app runs on the
     // default femtovg GL renderer (it exposes GraphicsAPI::NativeOpenGL to
@@ -109,12 +107,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the renderer before the first Slint window is created (which
     // initializes the platform). Never on Android: it uses Slint's
     // android-activity backend, which these overrides would break.
+    // SAFETY: configure the process before initializing services or workers.
     #[cfg(not(target_os = "android"))]
     unsafe {
         std::env::set_var("SLINT_BACKEND", "winit");
         std::env::set_var("SLINT_RENDERER", "femtovg");
+        // Winit otherwise delegates context menus to Win32/muda, which
+        // ignores Slint's dark palette. Use the same rendered popup path
+        // as Linux; the Windows UI is compiled with fluent-dark widgets.
+        #[cfg(target_os = "windows")]
+        std::env::set_var("SLINT_NO_MUDA", "1");
     }
 
+    crate::diagnostics::init();
+    net::init_metadata_transport();
+    // Set the native frame theme before its first creation, avoiding a light
+    // title-bar flash. Keep Windows decorations and caption-button behavior.
+    #[cfg(all(feature = "desktop", target_os = "windows"))]
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("femtovg".into())
+        .with_winit_window_attributes_hook(|attributes| {
+            attributes.with_theme(Some(slint::winit_030::winit::window::Theme::Dark))
+        })
+        .select()?;
     let app = AppWindow::new()?;
     nova_ui::initialize_fonts(app.window());
     about::prepare_license_text(&app);
