@@ -109,6 +109,25 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
 
+                if SettingsBridge.desktop_decoder_available && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    tinted: true;
+                    setting-key: "desktop_hwdec";
+                    row-title: @tr("Video decoder");
+                    row-desc: @tr("HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding.");
+                    Segmented {
+                        labels: ["HW+", "HW", "SW"];
+                        current_index: SettingsBridge.desktop_hwdec_index;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
+                        picked(i) => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = 2;
+                            SettingsBridge.desktop_hwdec_index = i;
+                            SettingsContent.schedule_save();
+                        }
+                    }
+                }
+
                 if SettingsBridge.player_backend_index == 0: SettingsRow {
                     setting-key: "default_audio_language";
                     row-title: @tr("Preferred audio languages");

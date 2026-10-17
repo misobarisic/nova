@@ -409,3 +409,17 @@ not whole-project clean-build measurements or general performance guarantees.
 | Combined executable size | 995.19 MiB | 174.97 MiB |
 | Build with cached dependencies | 12.286 s | 3.723 s |
 | Single-case edit rebuild, median | 3.065 s | 3.164 s |
+
+## Windows and Linux decoder preferences
+
+Settings → Player → Video decoder offers HW+ (try direct hardware decoding),
+HW (copy-back hardware decoding), and SW (software decoding).
+Windows defaults to HW; Linux defaults to HW+.
+The preference is device-local. HW+ retains copy-back/software fallbacks when
+the graphics context or driver cannot provide direct decoding.
+
+The player's Hardware decoding submenu applies only to the current stream.
+The next stream starts from the saved Settings preference. The selected row
+tracks mpv's actual decoder, so a fallback is shown as HW or SW rather than
+continuing to claim HW+. Windows and Linux change the decoder within the
+existing source through mpv; Android retains its existing reload/fallback behavior.

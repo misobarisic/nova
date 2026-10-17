@@ -495,6 +495,7 @@ export component AppWindow inherits Window {
         library_min_cols <=> root.library_min_cols;
         cache_format_names <=> root.cache_format_names;
         android_hwdec_index <=> root.android_hwdec_index;
+        desktop_hwdec_index <=> root.desktop_hwdec_index;
         player_backend_index <=> root.player_backend_index;
         desktop_external_app_index <=> root.desktop_external_app_index;
         default_audio_language <=> root.default_audio_language;
@@ -1119,11 +1120,13 @@ export component AppWindow inherits Window {
     // Player backend (Settings → Player): 0 = built-in mpv, 1 = external
     // app. Desktop external target: 0 = system default, 1 = VLC, 2 = mpv.
     // Android decoder: preferred video decoder (0 = HW+, 1 = HW, 2 = SW);
-    // the decoder row is hidden unless `is_android` is true.
+    // Windows defaults to HW (copy-back); Android/Linux default to HW+.
     in-out property <int> player_backend_index: 0;
     in-out property <int> desktop_external_app_index: 0;
     in-out property <int> android_hwdec_index: 0;
+    in-out property <int> desktop_hwdec_index: 0;
     in-out property <bool> is_android: false;
+    in-out property <bool> desktop_decoder_available: false;
     // Settings edits the synced global rate; the OSD edits the effective
     // title rate separately. Both sliders cover 0.5–2.0; ± steps by 0.05.
     in-out property <float> playback_speed: 1.0;
@@ -1496,9 +1499,9 @@ export component AppWindow inherits Window {
     in-out property <string> player_show_title;
     in-out property <bool> screenshot_busy;
     in-out property <string> screenshot_notice;
-    // Android decoder badge ("HW+" / "HW" / "SW"); empty on other targets.
+    // Android/Windows/Linux decoder badge ("HW+" / "HW" / "SW"); empty elsewhere.
     in-out property <string> decode_label: "";
-    // Android decoder-picker selection (-1 none, 0 HW+, 1 HW, 2 SW). Set
+    // Android/Windows/Linux decoder-picker selection (-1 none, 0 HW+, 1 HW, 2 SW). Set
     // optimistically the moment the user picks, then corrected by the backend
     // to whichever decoder mpv actually engages.
     in-out property <int> decoder_selected: -1;
@@ -1531,7 +1534,7 @@ export component AppWindow inherits Window {
     callback toggle_mute();
     callback pick_audio_track(int);
     callback pick_sub_track(int);
-    // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
+    // Android/Windows/Linux runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
     callback pick_decoder(int);
     // Global-default and OSD title controls have separate rate callbacks.
     // The backend quantizes ± steps and debounces persistence of slider edits.
@@ -2203,6 +2206,7 @@ export component AppWindow inherits Window {
         subtitle_language_selected_codes: root.subtitle_language_selected_codes;
         subtitle_language_selected_names: root.subtitle_language_selected_names;
         is_android: root.is_android;
+        desktop_decoder_available: root.desktop_decoder_available;
         phone_layout: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px;
@@ -2312,6 +2316,7 @@ export component AppWindow inherits Window {
         subtitle_style_preference_saved: root.subtitle_style_preference_saved;
         system_back_request: root.page_back_request;
         is_android: root.is_android;
+        desktop_decoder_available: root.desktop_decoder_available;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;

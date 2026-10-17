@@ -156,10 +156,16 @@ impl Bridge {
                 if !(0..=2).contains(&index) {
                     return Err("Invalid decoder".into());
                 }
-                #[cfg(target_os = "android")]
+                #[cfg(any(target_os = "android", target_os = "windows", target_os = "linux"))]
                 self.player.pick_decoder(index);
-                #[cfg(not(target_os = "android"))]
-                return Err("Decoder selection is available only on Android".into());
+                #[cfg(not(any(
+                    target_os = "android",
+                    target_os = "windows",
+                    target_os = "linux"
+                )))]
+                return Err(
+                    "Decoder selection is available only on Android, Windows and Linux".into(),
+                );
             }
             PlaybackAction::SetBrightness(level) => {
                 finite(level)?;

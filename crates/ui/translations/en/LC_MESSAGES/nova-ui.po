@@ -382,3 +382,9 @@ msgstr "Default"
 
 msgid "Accent-tinted"
 msgstr "Accent-tinted"
+
+msgid "HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding."
+msgstr "HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding."
+
+msgid "Applies to this stream only. The next stream uses Settings → Player."
+msgstr "Applies to this stream only. The next stream uses Settings → Player."

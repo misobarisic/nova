@@ -434,6 +434,55 @@ impl AndroidHwdec {
     }
 }
 
+/// Device-local desktop decoder preference. Windows retains copy-back by
+/// default; Linux starts with direct hardware decoding and normal fallbacks.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DesktopHwdec {
+    #[serde(rename = "hw+")]
+    HwPlus,
+    #[serde(rename = "hw")]
+    Hw,
+    #[serde(rename = "sw")]
+    Sw,
+}
+
+impl Default for DesktopHwdec {
+    fn default() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Hw
+        } else {
+            Self::HwPlus
+        }
+    }
+}
+
+impl DesktopHwdec {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::HwPlus,
+            1 => Self::Hw,
+            2 => Self::Sw,
+            _ => Self::default(),
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::HwPlus => 0,
+            Self::Hw => 1,
+            Self::Sw => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HwPlus => "HW+",
+            Self::Hw => "HW",
+            Self::Sw => "SW",
+        }
+    }
+}
+
 /// Language of the user interface (Settings → Display).
 ///
 /// English is the source language every string in `crates/ui/*.slint` is
@@ -655,6 +704,9 @@ cache_settings_type! {
     /// where unused) so the same settings blob works everywhere.
     #[serde(default)]
     pub android_hwdec: AndroidHwdec,
+    /// Windows/Linux decoder preference; device-local and ignored elsewhere.
+    #[serde(default)]
+    pub desktop_hwdec: DesktopHwdec,
     /// Play streams in an external video app instead of the built-in mpv
     /// player (Settings → Player). Persisted on every platform (harmless
     /// where unused) so the same settings blob works everywhere. Local-only:
@@ -856,6 +908,7 @@ impl Default for CacheSettings {
             completion_rating_prompts_enabled: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
+            desktop_hwdec: DesktopHwdec::default(),
             player_external: false,
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
@@ -1418,6 +1471,7 @@ mod tests {
         let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
         let settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.desktop_hwdec, DesktopHwdec::default());
         assert!(!settings.android_auto_continue);
         assert!(settings.prefetch_next_episode_streams);
         assert_eq!(
@@ -1425,6 +1479,25 @@ mod tests {
             EpisodeStartBehavior::Resume
         );
         assert_eq!(CacheSettings::default().language.index(), 0);
+    }
+
+    #[test]
+    fn desktop_decoder_choices_round_trip_with_platform_default() {
+        assert_eq!(
+            DesktopHwdec::default().index(),
+            if cfg!(target_os = "windows") { 1 } else { 0 }
+        );
+        for index in 0..=2 {
+            let settings = CacheSettings {
+                desktop_hwdec: DesktopHwdec::from_index(index),
+                ..Default::default()
+            };
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.desktop_hwdec.index(), index);
+        }
+        assert_eq!(DesktopHwdec::from_index(-1), DesktopHwdec::default());
+        assert_eq!(DesktopHwdec::from_index(99), DesktopHwdec::default());
     }
 
     #[test]

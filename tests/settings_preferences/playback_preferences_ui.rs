@@ -401,3 +401,100 @@ fn playback_defaults_reset_and_player_settings_fit() {
 }
 
 use crate::settings_support;
+
+#[test]
+fn desktop_decoder_default_and_session_picker_are_separate_and_keyboard_accessible() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::desktop_decoder_default_and_session_picker_are_separate_and_keyboard_accessible"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(5);
+    app.set_settings_detail_open(true);
+    app.set_desktop_decoder_available(true);
+    app.set_desktop_hwdec_index(nova_config::DesktopHwdec::default().index());
+    app.window().set_size(slint::PhysicalSize::new(1280, 1000));
+    app.show().unwrap();
+    let settle = || i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    settle();
+    let click = |label: &str| {
+        ElementHandle::find_by_accessible_label(&app, label)
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .unwrap_or_else(|| panic!("missing button {label}"))
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle();
+    };
+    assert_eq!(
+        app.get_desktop_hwdec_index(),
+        nova_config::DesktopHwdec::default().index()
+    );
+    assert!(has_text(&app, "Video decoder"));
+    click("HW+");
+    assert_eq!(app.get_desktop_hwdec_index(), 0);
+    key(&app, slint::platform::Key::RightArrow);
+    settle();
+    assert_eq!(app.get_desktop_hwdec_index(), 1);
+    assert_eq!(app.get_android_hwdec_index(), 0);
+
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let captured = picks.clone();
+    app.on_pick_decoder(move |index| captured.borrow_mut().push(index));
+    app.set_show_settings(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(600.0);
+    app.set_osd_visible(true);
+    app.set_decode_label("HW".into());
+    app.set_decoder_selected(1);
+    settle();
+    let open_menu = || {
+        ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")
+            .next()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle();
+        click("Hardware decoding");
+        assert!(has_text(
+            &app,
+            "Applies to this stream only. The next stream uses Settings → Player."
+        ));
+    };
+    open_menu();
+    click("SW");
+    assert_eq!(*picks.borrow(), [2]);
+    assert_eq!(
+        app.get_desktop_hwdec_index(),
+        1,
+        "OSD pick must not edit the saved preference"
+    );
+    open_menu();
+    key(&app, slint::platform::Key::DownArrow);
+    key(&app, slint::platform::Key::Return);
+    settle();
+    assert_eq!(*picks.borrow(), [2, 1]);
+    assert_eq!(app.get_desktop_hwdec_index(), 1);
+
+    app.set_player_open(false);
+    app.set_desktop_decoder_available(false);
+    settle();
+    app.set_player_open(true);
+    app.set_osd_visible(true);
+    settle();
+    ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")
+        .next()
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle();
+    assert!(
+        !has_text(&app, "Hardware decoding"),
+        "Other desktop targets keep their existing menu"
+    );
+}

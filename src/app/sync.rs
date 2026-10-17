@@ -508,12 +508,13 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 }
 
 /// `CacheSettings` fields that are never synced: device-specific
-/// (`android_hwdec`, `player_external`, `desktop_external_app`,
+/// (`android_hwdec`, `desktop_hwdec`, `player_external`, `desktop_external_app`,
 /// Android return behavior) or local-only
 /// (device-local preferences);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
+    "desktop_hwdec",
     "player_external",
     "remote_control_enabled",
     "desktop_external_app",
@@ -767,6 +768,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
         serde_json::from_value(serde_json::Value::Object(map)).unwrap_or_else(|_| base.clone());
     // Device-specific fields are never taken from the remote record.
     merged.android_hwdec = base.android_hwdec;
+    merged.desktop_hwdec = base.desktop_hwdec;
     merged.player_external = base.player_external;
     merged.remote_control_enabled = base.remote_control_enabled;
     merged.desktop_external_app = base.desktop_external_app;
@@ -2889,6 +2891,7 @@ mod tests {
         // below are device-specific.
         assert!(!fields.contains_key("categories"));
         assert!(!fields.contains_key("android_hwdec"));
+        assert!(!fields.contains_key("desktop_hwdec"));
         assert!(!fields.contains_key("player_external"));
         assert!(!fields.contains_key("remote_control_enabled"));
         assert_eq!(fields["completion_rating_prompts_enabled"], "true");
@@ -3158,6 +3161,7 @@ mod tests {
     fn merge_settings_fields_prefers_remote_and_keeps_local_device_fields() {
         let base = CacheSettings {
             android_hwdec: AndroidHwdec::Sw,
+            desktop_hwdec: nova_config::DesktopHwdec::Sw,
             player_external: true,
             remote_control_enabled: false,
             desktop_external_app: DesktopExternalApp::Mpv,
@@ -3178,6 +3182,7 @@ mod tests {
         let records = vec![
             ("cache".to_string(), "{\"quality\":77}".to_string()),
             ("android_hwdec".to_string(), "\"hw+\"".to_string()),
+            ("desktop_hwdec".to_string(), "\"hw+\"".to_string()),
             ("player_external".to_string(), "false".to_string()),
             ("remote_control_enabled".to_string(), "true".to_string()),
             ("desktop_external_app".to_string(), "\"system\"".to_string()),
@@ -3190,6 +3195,7 @@ mod tests {
         assert_eq!(merged.quality, 77);
         // Device-specific fields are never taken from the remote record.
         assert_eq!(merged.android_hwdec, AndroidHwdec::Sw);
+        assert_eq!(merged.desktop_hwdec, nova_config::DesktopHwdec::Sw);
         assert!(merged.player_external);
         assert!(!merged.remote_control_enabled);
         assert_eq!(merged.desktop_external_app, DesktopExternalApp::Mpv);

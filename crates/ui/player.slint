@@ -116,7 +116,7 @@ component TrackMenu inherits Rectangle {
 
 // Player settings panel (opened by the gear button in the bottom control
 // row): an anchored card on wide screens and a centered card on narrow ones.
-// Holds the hardware-decoder picker (Android) plus the subtitle and audio
+// Holds the hardware-decoder picker (Android/Windows/Linux) plus the subtitle and audio
 // track pickers. On narrow layouts the track pickers live here to save
 // control-row space; on wide layouts they duplicate the quick buttons so
 // the panel is available on every platform. Long row lists scroll.
@@ -132,7 +132,7 @@ component SettingsMenu inherits Rectangle {
     property <length> top_inset: root.safe_top + 16px;
     property <length> card_limit: Math.max(0px, root.anchored
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
-    // Current submenu: 0 = root, 1 = hardware decoding (Android), 2 =
+    // Current submenu: 0 = root, 1 = hardware decoding (Android/Windows/Linux), 2 =
     // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
@@ -159,8 +159,8 @@ component SettingsMenu inherits Rectangle {
     callback subtitle_style_changed(int, float);
     // Effective base rate: title override or the global default.
     in-out property <float> playback_speed: 1.0;
-    // Android-only decoder section; hidden elsewhere.
-    in property <bool> is_android: false;
+    // Decoder section is available on Android, Windows and Linux.
+    in property <bool> decoder_available: false;
 
     // Picking a track / decoder; the caller closes the modal.
     callback pick_decoder(int);
@@ -337,7 +337,7 @@ component SettingsMenu inherits Rectangle {
                             focused: root.focused_idx == 1;
                             activate => { root.page = 3; }
                         }
-                        if root.is_android: MenuRow {
+                        if root.decoder_available: MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 4; submenu: true;
                             label: @tr("Hardware decoding");
@@ -352,14 +352,14 @@ component SettingsMenu inherits Rectangle {
                             label: @tr("Playback speed");
                             enabled: !(PartyBridge.active || PartyBridge.busy);
                             value: (PartyBridge.active || PartyBridge.busy) ? @tr("Watch parties use normal speed.") : PlaybackSpeed.label(root.playback_speed);
-                            focused: root.focused_idx == (root.is_android ? 3 : 2);
+                            focused: root.focused_idx == (root.decoder_available ? 3 : 2);
                             activate => { root.page = 4; }
                         }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
                             label: @tr("Subtitle appearance and timing");
-                            focused: root.focused_idx == (root.is_android ? 4 : 3);
+                            focused: root.focused_idx == (root.decoder_available ? 4 : 3);
                             activate => { root.page = 5; }
                         }
                     }
@@ -368,6 +368,12 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 1: VerticalLayout {
                         width: 100%;
                         spacing: 4px;
+                        Text {
+                            text: @tr("Applies to this stream only. The next stream uses Settings → Player.");
+                            color: Theme.current.text_secondary;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             label: "HW+";
@@ -619,11 +625,11 @@ export component PlayerOverlay {
     in property <bool> screenshot_busy;
     in property <string> screenshot_notice;
     callback take_screenshot();
-    // Android decoder label: "HW+" = direct MediaCodec (zero-copy),
-    // "HW" = MediaCodec copy-back, "SW" = software. Empty elsewhere. Shown as
+    // Android/Windows/Linux decoder label: "HW+" = direct hardware decoding,
+    // "HW" = copy-back, "SW" = software. Empty elsewhere. Shown as
     // the current value of the settings modal's decoder submenu.
     in-out property <string> decode_label: "";
-    // Android decoder selection (-1 none, 0 HW+, 1 HW, 2 SW) for the settings
+    // Android/Windows/Linux decoder selection (-1 none, 0 HW+, 1 HW, 2 SW) for the settings
     // modal's checkmark, mirrored from mpv's `hwdec-current`.
     in-out property <int> decoder_selected: -1;
     // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
@@ -681,7 +687,7 @@ export component PlayerOverlay {
     callback pick_audio_track(int);
     callback pick_sub_track(int);
     callback restore_playback_default(int);
-    // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
+    // Android/Windows/Linux runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
     callback pick_decoder(int);
     // Playback rate: slider value / ± one 0.05 step (quantized in the backend).
     callback playback_speed_changed(float);
@@ -699,7 +705,7 @@ export component PlayerOverlay {
     // Session brightness level (0..1) for the swipe readout, mirrored from
     // the backend after every step.
     in-out property <float> player_brightness: 0.5;
-    // Android: the settings modal opened; ask the backend for the live decoder
+    // The settings modal opened; ask the backend for the live decoder
     // state so the submenu is correct immediately.
     callback settings_opened();
     callback toggle_fullscreen();
@@ -855,8 +861,8 @@ export component PlayerOverlay {
         }
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
-                // Subtitles, audio, [decoder on Android], playback speed.
-                return root.is_android ? 5 : 4;
+                // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
+                return root.decoder_available ? 5 : 4;
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1002,7 +1008,7 @@ export component PlayerOverlay {
                 root.tracks_popup_opened(1);
             }
         } else if (root.kb_idx == 7) {
-            // Gear: settings panel (subtitles/audio + Android decoder).
+            // Gear: settings panel (subtitles/audio + Android/Windows/Linux decoder).
             root.settings_page = 0;
             root.open_popup = 4;
             root.settings_opened();
@@ -1027,17 +1033,17 @@ export component PlayerOverlay {
         } else if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Open the focused submenu. The rate row is last on both
-                // layouts (Android has the decoder row before it).
+                // layouts (Android, Windows and Linux have a decoder row before it).
                 if (root.kb_menu == 0) {
                     root.settings_page = 2;
                     root.kb_menu = 0;
                 } else if (root.kb_menu == 1) {
                     root.settings_page = 3;
                     root.kb_menu = 0;
-                } else if (root.is_android && root.kb_menu == 2) {
+                } else if (root.decoder_available && root.kb_menu == 2) {
                     root.settings_page = 1;
                     root.kb_menu = 0;
-                } else if root.kb_menu == (root.is_android ? 4 : 3) {
+                } else if root.kb_menu == (root.decoder_available ? 4 : 3) {
                     root.settings_page = 5;
                     root.kb_menu = 0;
                 } else if !(PartyBridge.active || PartyBridge.busy) {
@@ -1081,8 +1087,10 @@ export component PlayerOverlay {
     // Internal: which popup is open (0=none, 1=audio, 2=subs, 4=settings).
     private property <int> open_popup: 0;
 
-    // Android: shows the decoder section in the settings panel.
+    // Android: touch input and the decoder section in the settings panel.
     in property <bool> is_android: false;
+    in property <bool> desktop_decoder_available: false;
+    property <bool> decoder_available: root.is_android || root.desktop_decoder_available;
     // Compact control bar for narrow (portrait) windows.
     in property <bool> narrow;
     // Top system-bar inset (Android status bar): Window.safe-area-insets,
@@ -2460,7 +2468,7 @@ export component PlayerOverlay {
                             } else {
                                 root.settings_page = 0;
                                 root.open_popup = 4;
-                                // Refresh the shown decoder state (Android)
+                                // Refresh the shown decoder state
                                 // and the track lists on open.
                                 root.settings_opened();
                                 root.tracks_popup_opened(0);
@@ -2536,7 +2544,7 @@ export component PlayerOverlay {
         }
 
         // Player settings panel (gear button): subtitle + audio track pickers
-        // on every platform, plus the Android decoder submenu. On narrow
+        // on every platform, plus the Android/Windows/Linux decoder submenu. On narrow
         // layouts the track pickers live here instead of the control row.
         if root.open_popup == 4: SettingsMenu {
             narrow: root.narrow;
@@ -2558,7 +2566,7 @@ export component PlayerOverlay {
             subtitle_style <=> root.subtitle_style;
             subtitle_style_preference_saved: root.subtitle_style_preference_saved;
             subtitle_style_changed(i, v) => { root.subtitle_style_changed(i, v); }
-            is_android: root.is_android;
+            decoder_available: root.decoder_available;
             pick_decoder(i) => { root.open_popup = 0; root.pick_decoder(i); }
             // Keep the panel open on a track pick so the checkmark visibly
             // moves to the chosen row (Android's gear is the only picker).

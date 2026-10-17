@@ -3124,3 +3124,9 @@ msgstr "Zadano"
 
 msgid "Accent-tinted"
 msgstr "Ton naglaska"
+
+msgid "HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding."
+msgstr "HW+ pokušava izravno dekodiranje na GPU-u, uz povratak na HW ili SW. HW koristi hardversko dekodiranje s kopiranjem. SW koristi softversko dekodiranje."
+
+msgid "Applies to this stream only. The next stream uses Settings → Player."
+msgstr "Vrijedi samo za ovaj stream. Sljedeći stream koristi Postavke → Reproduktor."

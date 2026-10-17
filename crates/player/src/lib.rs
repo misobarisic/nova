@@ -34,6 +34,8 @@ pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod gpu_screenshot;
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod desktop_decoder;
 mod subtitle_position;
 mod track_preferences;
 use libmpv2::Mpv;
@@ -53,16 +55,12 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(target_os = "android"))]
 fn configure_desktop_decoder(mpv: &Mpv) -> libmpv2::Result<()> {
-    // The embedded renderer uses Slint's OpenGL context, not an mpv-owned
-    // D3D11/ANGLE context. On Windows, copy decoded frames back before GL
-    // upload to avoid direct decoder-surface interop as a source of artifacts.
-    // auto-copy retains hardware decoding, with mpv's software fallback.
-    let mode = if cfg!(target_os = "windows") {
-        "auto-copy"
-    } else {
-        "auto"
-    };
-    mpv.set_property("hwdec", mode)
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        desktop_decoder::configure(mpv, nova_config::active_cache_settings().desktop_hwdec)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    mpv.set_property("hwdec", "auto")
 }
 
 fn mpv_http_header_fields(headers: &[(String, String)]) -> Vec<String> {
@@ -1859,6 +1857,10 @@ impl Player {
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
         {
+            // Desktop session picks live only in mpv. Every new stream starts
+            // from the saved device preference, never the previous stream's pick.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            let _ = configure_desktop_decoder(mpv);
             let _ = mpv.set_property("start", start_pos_secs.max(0.0));
             // Rate is per device (Settings → Player / the player's own
             // settings panel); `speed` also survives stop/EOF, so set it
@@ -1898,8 +1900,8 @@ impl Player {
         // Android: show the decoder that was just armed right away, so the
         // badge is populated before the first frame and never reads "unknown"
         // after an orientation change. `tick` corrects it to the decoder mpv
-        // actually engages (following any fallback). Other targets keep it
-        // empty — their overlay has no badge.
+        // actually engages (following any fallback). Windows/Linux start with their
+        // saved preference below; other desktops keep the label empty.
         #[cfg(target_os = "android")]
         {
             let (label, idx) = match self.state.decoder_chain.lock().unwrap().first().copied() {
@@ -1910,7 +1912,13 @@ impl Player {
             app.set_decode_label(slint::SharedString::from(label));
             app.set_decoder_selected(idx);
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let preference = nova_config::active_cache_settings().desktop_hwdec;
+            app.set_decode_label(preference.label().into());
+            app.set_decoder_selected(preference.index());
+        }
+        #[cfg(not(any(target_os = "android", target_os = "windows", target_os = "linux")))]
         app.set_decode_label(slint::SharedString::default());
         app.set_osd_visible(true);
         // Android has no volume UI: pin playback to 100% (unmuted) so a stale
@@ -2853,8 +2861,8 @@ impl Player {
             /// `time-pos`. Checked after the Android resume-reload so a
             /// rebuilt render context blanking `time-pos` cannot strand it.
             diverged: bool,
-            /// Android: the currently active decoder (mpv `hwdec-current`).
-            #[cfg(target_os = "android")]
+            /// Actual decoder for platforms with a runtime picker.
+            #[cfg(any(target_os = "android", target_os = "windows", target_os = "linux"))]
             hwdec_current: String,
             /// Android: the container's nominal frame rate (mpv `container-fps`).
             #[cfg(target_os = "android")]
@@ -2936,7 +2944,7 @@ impl Player {
                 muted: mpv.get_property("mute").unwrap_or(false),
                 eof: mpv.get_property("eof-reached").unwrap_or(false),
                 diverged,
-                #[cfg(target_os = "android")]
+                #[cfg(any(target_os = "android", target_os = "windows", target_os = "linux"))]
                 hwdec_current: mpv.get_property("hwdec-current").unwrap_or_default(),
                 #[cfg(target_os = "android")]
                 container_fps: mpv.get_property("container-fps").unwrap_or(0.0),
@@ -3021,6 +3029,12 @@ impl Player {
                 snapshot.hwdec_current.as_str(),
             )));
             app.set_decoder_selected(decode_index(snapshot.hwdec_current.as_str()));
+        }
+
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Some(active) = desktop_decoder::active(&snapshot.hwdec_current) {
+            app.set_decode_label(active.label().into());
+            app.set_decoder_selected(active.index());
         }
 
         // Android: drive the display refresh rate from the OSD state and the
@@ -3337,6 +3351,43 @@ impl Player {
         if let Some(app) = self.state.app.upgrade() {
             app.set_decode_label(slint::SharedString::from(decode_label(current.as_str())));
             app.set_decoder_selected(decode_index(current.as_str()));
+        }
+    }
+
+    /// Desktop: mpv reinitializes the decoder in place, retaining the current
+    /// file, position, pause state, headers and tracks. Only mpv is changed;
+    /// `play` reapplies the saved preference for the next stream.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub fn pick_decoder(&self, index: i32) {
+        let preference = nova_config::DesktopHwdec::from_index(index);
+        let applied = self
+            .state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(|mpv| desktop_decoder::configure(mpv, preference))
+            })
+            .is_some_and(|result| result.is_ok());
+        if applied && let Some(app) = self.state.app.upgrade() {
+            app.set_decode_label(preference.label().into());
+            app.set_decoder_selected(preference.index());
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub fn refresh_decoder(&self) {
+        let active = self.state.mpv.lock().ok().and_then(|guard| {
+            let current: String = guard.as_ref()?.get_property("hwdec-current").ok()?;
+            desktop_decoder::active(&current)
+        });
+        if let Some(active) = active
+            && let Some(app) = self.state.app.upgrade()
+        {
+            app.set_decode_label(active.label().into());
+            app.set_decoder_selected(active.index());
         }
     }
 
@@ -3992,8 +4043,8 @@ mod tests {
         })
         .unwrap();
         configure_desktop_decoder(&mpv).unwrap();
-        let expected = if cfg!(target_os = "windows") {
-            "auto-copy"
+        let expected = if cfg!(any(target_os = "windows", target_os = "linux")) {
+            desktop_decoder::requested_mode(nova_config::active_cache_settings().desktop_hwdec)
         } else {
             "auto"
         };

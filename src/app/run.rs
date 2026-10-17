@@ -937,6 +937,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.set_empty_hint(SharedString::from("Loading configured add-ons…"));
     app.set_searchable_hint(SharedString::from("Search"));
     app.set_searchable(true);
+    app.set_desktop_decoder_available(cfg!(any(target_os = "windows", target_os = "linux")));
     // Touch-driven platform: card menus open as bottom sheets on hold;
     // desktop keeps native right-click popups at the cursor.
     #[cfg(target_os = "android")]
@@ -1211,15 +1212,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = b.dispatch_playback_action(PlaybackAction::SetDecoder(idx));
     });
 
-    // Android: the settings modal opened — query mpv's live decoder state right
+    // The settings modal opened — query mpv's live decoder state right
     // away so the submenu shows what is actually running, without waiting for
     // the 250 ms tick.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "windows", target_os = "linux"))]
     {
         let p = player.clone();
         app.on_settings_opened(move || p.refresh_decoder());
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "windows", target_os = "linux")))]
     {
         app.on_settings_opened(|| {});
     }

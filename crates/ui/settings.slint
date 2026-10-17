@@ -102,9 +102,11 @@ export component SettingsPage {
     // Player section: player backend (0 = built-in mpv, 1 = external) on
     // every platform, plus the desktop external-app picker (0 = system
     // default, 1 = VLC, 2 = mpv) and the Android video decoder (0 = HW+,
-    // 1 = HW, 2 = SW). The decoder row stays Android-only.
+    // 1 = HW, 2 = SW). Decoder preferences are separate on Android, Windows and Linux.
     in property <bool> is_android: false;
+    in property <bool> desktop_decoder_available: false;
     in-out property <int> android_hwdec_index: 0;
+    in-out property <int> desktop_hwdec_index: 0;
     in-out property <int> player_backend_index: 0;
     in-out property <int> desktop_external_app_index: 0;
     // Built-in playback language defaults. The backend supplies search
@@ -1244,12 +1246,12 @@ export component SettingsPage {
         if (root.is_android) {
             return root.player_backend_index == 0 ? 6 : -1;
         }
-        return root.player_backend_index == 0 ? 4 : -1;
+        return root.player_backend_index == 0 ? (root.desktop_decoder_available ? 5 : 4) : -1;
     }
 
     public function kb_player_audio_language_row() -> int {
         if (root.player_backend_index != 0) { return -1; }
-        return root.is_android ? 4 : 2;
+        return root.is_android ? 4 : root.desktop_decoder_available ? 3 : 2;
     }
 
     public function kb_player_subtitle_language_row() -> int {
@@ -1313,6 +1315,9 @@ export component SettingsPage {
                 root.screenshot_webp_quality = Math.clamp(root.screenshot_webp_quality + d, 1, 100);
                 root.schedule_setting("screenshot_webp_quality");
             }
+        } else if (root.desktop_decoder_available && root.player_backend_index == 0 && root.kb_pr == 2) {
+            root.desktop_hwdec_index = Math.clamp(root.desktop_hwdec_index + d, 0, 2);
+            root.schedule_save();
         } else if (root.is_android) {
             root.android_hwdec_index = Math.max(0, Math.min(2, root.android_hwdec_index + d));
             root.schedule_save();
