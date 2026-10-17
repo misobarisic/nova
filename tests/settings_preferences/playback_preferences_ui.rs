@@ -308,21 +308,20 @@ fn playback_defaults_reset_and_player_settings_fit() {
                         found_speed |= ElementHandle::find_by_element_type_name(&app, "SpeedControl")
                             .next()
                             .is_some();
-                        if !checked_priority_control {
-                            if let Some(button) = ElementHandle::find_by_accessible_label(&app, "Move down: English (en)").find(|button| {
+                        if !checked_priority_control
+                            && let Some(button) = ElementHandle::find_by_accessible_label(&app, "Move down: English (en)").find(|button| {
                                 let position = button.absolute_position();
                                 position.y >= 170.0 && position.y + button.size().height <= height as f32 - 16.0
                             }) {
-                                let before = language_edits.borrow().len();
-                                let position = button.absolute_position();
-                                let size = button.size();
-                                let position = slint::LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0);
-                                app.window().dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left });
-                                app.window().dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left });
-                                assert_eq!(language_edits.borrow().len(), before + 1);
-                                assert_eq!(language_edits.borrow().last(), Some(&("en".into(), 3, false)));
-                                checked_priority_control = true;
-                            }
+                            let before = language_edits.borrow().len();
+                            let position = button.absolute_position();
+                            let size = button.size();
+                            let position = slint::LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0);
+                            app.window().dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left });
+                            app.window().dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left });
+                            assert_eq!(language_edits.borrow().len(), before + 1);
+                            assert_eq!(language_edits.borrow().last(), Some(&("en".into(), 3, false)));
+                            checked_priority_control = true;
                         }
                         let expected_audio = if audio_status == 1 {
                             "Synced"

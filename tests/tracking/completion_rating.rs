@@ -1,7 +1,5 @@
 //! Completion ratings keep independent tracker drafts, respect active layers,
 //! and leave the action bar reachable on compact phones and short landscapes.
-#[path = "support/isolation.rs"]
-mod isolation;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, Model};
@@ -47,7 +45,7 @@ fn prompt() -> nova_ui::AppWindow {
 
 #[test]
 fn selection_routes_each_scale_and_save_requires_a_draft() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::selection_routes_each_scale_and_save_requires_a_draft"
     )) {
@@ -146,7 +144,7 @@ fn selection_routes_each_scale_and_save_requires_a_draft() {
 
 #[test]
 fn responsive_translations_keep_the_footer_inside_the_window() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::responsive_translations_keep_the_footer_inside_the_window"
     )) {
@@ -239,7 +237,7 @@ fn responsive_translations_keep_the_footer_inside_the_window() {
 
 #[test]
 fn dismissal_and_layer_gating_preserve_the_pending_prompt() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::dismissal_and_layer_gating_preserve_the_pending_prompt"
     )) {
@@ -352,7 +350,7 @@ fn key(app: &nova_ui::AppWindow, text: impl Into<slint::SharedString>) {
 
 #[test]
 fn keyboard_navigation_stays_in_dialog_and_numeric_text_survives_old_acknowledgements() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::keyboard_navigation_stays_in_dialog_and_numeric_text_survives_old_acknowledgements"
     )) {
@@ -455,7 +453,7 @@ fn keyboard_navigation_stays_in_dialog_and_numeric_text_survives_old_acknowledge
 
 #[test]
 fn entry_motion_fades_and_rises_only_when_transitions_are_enabled() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::entry_motion_fades_and_rises_only_when_transitions_are_enabled"
     )) {

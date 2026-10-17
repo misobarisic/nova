@@ -1,6 +1,4 @@
 //! Watch-room controls and responsive, translated UI without a network or player.
-#[path = "support/isolation.rs"]
-mod isolation;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, Model};
@@ -18,7 +16,7 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
 
 #[test]
 fn room_actions_are_guarded_and_guests_have_no_shared_timeline_controls() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::room_actions_are_guarded_and_guests_have_no_shared_timeline_controls"
     )) {
@@ -123,7 +121,7 @@ fn room_actions_are_guarded_and_guests_have_no_shared_timeline_controls() {
 
 #[test]
 fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::room_translates_and_keeps_long_participants_inside_portrait_and_landscape"
     )) {
@@ -259,7 +257,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
 
 #[test]
 fn connecting_badge_reopens_setup_and_cancel_always_dispatches_leave() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::connecting_badge_reopens_setup_and_cancel_always_dispatches_leave"
     )) {
@@ -306,7 +304,7 @@ fn connecting_badge_reopens_setup_and_cancel_always_dispatches_leave() {
 
 #[test]
 fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::lobby_keeps_invites_and_people_while_host_chooses_or_changes_media"
     )) {
@@ -432,7 +430,7 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
 
 #[test]
 fn player_only_exposes_party_access_when_connected_or_connecting() {
-    if !isolation::run(concat!(
+    if !crate::isolation::run(concat!(
         module_path!(),
         "::player_only_exposes_party_access_when_connected_or_connecting"
     )) {

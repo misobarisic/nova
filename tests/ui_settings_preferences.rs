@@ -32,3 +32,9 @@ mod subtitle_style;
 
 #[path = "settings_preferences/interface_mode.rs"]
 mod interface_mode;
+
+#[path = "settings_preferences/stremio_flow.rs"]
+mod stremio_flow;
+
+#[path = "settings_preferences/stremio_motion.rs"]
+mod stremio_motion;

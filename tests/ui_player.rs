@@ -38,3 +38,6 @@ mod settings_scroll;
 
 #[path = "player/tv_controls.rs"]
 mod tv_controls;
+
+#[path = "player/party.rs"]
+mod party;
