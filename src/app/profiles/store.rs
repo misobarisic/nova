@@ -198,6 +198,20 @@ mod tests {
             return;
         };
         nova_storage::init_at(&std::path::PathBuf::from(root));
+        let list_keys = [
+            "list_services:watched:v1:title",
+            "list_services:boundary:v1:account",
+            "list_services:simkl_cache:v1:account",
+        ];
+        for key in list_keys {
+            nova_storage::try_set_str(key, "unowned").unwrap();
+        }
+        assert!(
+            super::super::legacy_snapshot_migration_entries()
+                .unwrap()
+                .iter()
+                .all(|(key, _)| !key.contains("list_services:"))
+        );
         let legacy = ProfileStore::capture();
         super::super::initialize().unwrap();
         assert_eq!(legacy.key("library"), "library");
@@ -212,6 +226,32 @@ mod tests {
         let bob_id = super::super::create("Bob").unwrap();
         let bob =
             super::super::with_context(super::super::context_for(&bob_id), ProfileStore::capture);
+        for key in list_keys {
+            assert_eq!(alice.read(key).unwrap(), None);
+            assert_eq!(bob.read(key).unwrap(), None);
+            alice.write(key, "100").unwrap();
+            bob.write(key, "10").unwrap();
+            assert_eq!(alice.read(key).unwrap().as_deref(), Some("100"));
+            assert_eq!(bob.read(key).unwrap().as_deref(), Some("10"));
+            assert_eq!(
+                nova_storage::try_get_str(key).unwrap().as_deref(),
+                Some("unowned")
+            );
+        }
+        assert_eq!(alice.scan("list_services:").unwrap().len(), 3);
+        assert!(
+            bob.scan("list_services:")
+                .unwrap()
+                .iter()
+                .all(|(_, value)| value == "10")
+        );
+        let delayed_owner = alice.clone();
+        std::thread::spawn(move || delayed_owner.write(list_keys[0], "101"))
+            .join()
+            .unwrap()
+            .unwrap();
+        assert_eq!(alice.read(list_keys[0]).unwrap().as_deref(), Some("101"));
+        assert_eq!(bob.read(list_keys[0]).unwrap().as_deref(), Some("10"));
         bob.write("library", "[2]").unwrap();
         assert_ne!(alice, bob);
         assert_eq!(alice.read("library").unwrap().as_deref(), Some("[1]"));

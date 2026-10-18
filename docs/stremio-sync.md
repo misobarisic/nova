@@ -3,7 +3,11 @@
 Settings → Tracking connects one Stremio account through a browser/code flow.
 Nova verifies the account before showing the initial library merge preview;
 Start begins the two-way merge. Settings offers **Full library sync** and
-**Selected titles**; existing connections retain full-library mode. Stremio addons remain managed in Stremio.
+**Selected titles**; existing connections retain full-library mode until an
+explicit choice changes it. The choice belongs to the Stremio account and
+survives reconnecting, including reconnecting after another account. A new
+account keeps the full-library default and still requires the initial Start
+action. Stremio addons remain managed in Stremio.
 Connecting an account does not install addons in Nova.
 
 After Start is saved, the initial preview becomes Sync now even if the first
@@ -148,7 +152,11 @@ sign-in session. Native actions use
 `title:<JSON(account,remote ID)>:<field>`. Each field is an independent record:
 `saved`, `resume`, or `watched:<JSON episode ID>`. Separate field records preserve
 concurrent changes to different episodes across paired devices. The independent
-`session:<JSON(epoch)>:mode` record stores `full_library` or `selected_titles`.
+`account:<JSON account>:mode` record stores `full_library` or `selected_titles`.
+Existing active `session:<JSON(epoch)>:mode` values migrate before credentials
+are replaced or disconnected, and account preferences take precedence over
+late legacy session updates. Reconnecting the same account keeps its mode;
+credential epochs still invalidate old requests and preference commands.
 Account-bound `selection:<JSON account>:<JSON(native type,native ID)>` records
 store explicit enable/exclusion, the reviewed episode pairs, inventory snapshots,
 history cutoff and consent revision. `excluded_remote:<JSON(account,type,remote

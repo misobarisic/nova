@@ -63,6 +63,16 @@ struct Selection {
     #[serde(skip)]
     event_boundary: u64,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct SelectionIdentity {
+    kind: MediaType,
+    ids: MediaIds,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Preferences {
+    full: bool,
+    automatic: bool,
+}
 #[derive(Clone)]
 struct Source {
     entry: LibraryEntry,
@@ -446,12 +456,12 @@ impl Worker {
                             nova_sync::local_device().map_err(|_| ApiError::Rejected)?
                         ),
                     };
-                    self.set_record(&format!("connection:{i}"), Some(&connection))?;
+                    let preferences = self.install_connection(i, &connection)?;
                     self.connections[i] = Some(connection);
                     self.verified[i] = true;
                     self.paused[i] = false;
-                    self.full[i] = false;
-                    self.automatic[i] = true;
+                    self.full[i] = preferences.full;
+                    self.automatic[i] = preferences.automatic;
                     self.next[i] = Instant::now();
                     Ok(())
                 });
@@ -460,9 +470,12 @@ impl Worker {
                 Some((i, result))
             }
             Command::Disconnect(i, generation) => {
-                let result = self
-                    .live(i, generation)
-                    .and_then(|_| self.set_record::<Connection>(&format!("connection:{i}"), None));
+                let result = self.live(i, generation).and_then(|_| {
+                    if let Some(current) = self.record::<Connection>(&format!("connection:{i}"))? {
+                        self.account_preferences(i, &current)?;
+                    }
+                    self.set_record::<Connection>(&format!("connection:{i}"), None)
+                });
                 if result.is_ok() {
                     self.connections[i] = None;
                     self.verified[i] = false;
@@ -521,8 +534,8 @@ impl Worker {
                             &selection.event_boundary.to_string(),
                         )
                         .map_err(|_| ApiError::Rejected)?;
-                        let key = selection_key(i, &connection, &review.media_type, &review.id);
-                        self.set_record(&key, Some(&selection))
+                        let identity = selection_identity(&review.media_type, &review.id);
+                        self.save_selection(i, &connection, &review, &selection, identity.as_ref())
                     });
                 self.review = Some(review.clone());
                 if result.is_ok() && enabled {
@@ -606,6 +619,66 @@ impl Worker {
         nova_sync::request_local_sync();
         Ok(())
     }
+    fn install_connection(
+        &self,
+        i: usize,
+        connection: &Connection,
+    ) -> Result<Preferences, ApiError> {
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        let device = nova_sync::local_device().map_err(|_| ApiError::Rejected)?;
+        let mut store = owner.lock().unwrap();
+        let preferences = store_connection(&mut store, i, connection, device)?;
+        store.save().map_err(|_| ApiError::Rejected)?;
+        drop(store);
+        nova_sync::request_local_sync();
+        Ok(preferences)
+    }
+    fn account_preferences(
+        &self,
+        i: usize,
+        connection: &Connection,
+    ) -> Result<Preferences, ApiError> {
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        let device = nova_sync::local_device().map_err(|_| ApiError::Rejected)?;
+        let mut store = owner.lock().unwrap();
+        let before = store.clock();
+        let preferences = migrate_preferences(&mut store, i, connection, device)?;
+        let changed = store.clock() != before;
+        if store.needs_save() {
+            store.save().map_err(|_| ApiError::Rejected)?;
+        }
+        drop(store);
+        if changed {
+            nova_sync::request_local_sync();
+        }
+        Ok(preferences)
+    }
+    fn save_selection(
+        &self,
+        i: usize,
+        connection: &Connection,
+        review: &Review,
+        selection: &Selection,
+        identity: Option<&SelectionIdentity>,
+    ) -> Result<(), ApiError> {
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        let device = nova_sync::local_device().map_err(|_| ApiError::Rejected)?;
+        let mut store = owner.lock().unwrap();
+        let current: Option<Connection> = stored(&store, &format!("connection:{i}"))?;
+        if current
+            .as_ref()
+            .is_none_or(|c| !same_session(c, connection))
+        {
+            return Err(ApiError::Authentication);
+        }
+        store_selection(
+            &mut store, i, connection, review, selection, identity, device,
+        )?;
+        store.save().map_err(|_| ApiError::Rejected)?;
+        drop(store);
+        nova_sync::request_local_sync();
+        Ok(())
+    }
     fn flag(&self, i: usize, name: &str, value: bool) -> Result<(), ApiError> {
         let connection = self.connections[i]
             .as_ref()
@@ -614,14 +687,27 @@ impl Worker {
             i,
             self.bridge.list_services().generation[i].load(Ordering::Acquire),
         )?;
-        let current: Option<Connection> = self.record(&format!("connection:{i}"))?;
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        let device = nova_sync::local_device().map_err(|_| ApiError::Rejected)?;
+        let mut store = owner.lock().unwrap();
+        let current: Option<Connection> = stored(&store, &format!("connection:{i}"))?;
         if current
             .as_ref()
-            .is_none_or(|c| c.epoch != connection.epoch || c.account.id != connection.account.id)
+            .is_none_or(|c| !same_session(c, connection))
         {
             return Err(ApiError::Authentication);
         }
-        self.set_record(&flag_key(i, connection, name), Some(&value))
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            &flag_key(i, connection, name),
+            Some(value.to_string()),
+            0,
+            device,
+        );
+        store.save().map_err(|_| ApiError::Rejected)?;
+        drop(store);
+        nova_sync::request_local_sync();
+        Ok(())
     }
     fn restore(&mut self, i: usize) -> Result<(), ApiError> {
         let prior = (self.full[i], self.automatic[i], self.verified[i]);
@@ -652,12 +738,9 @@ impl Worker {
             {
                 return Err(ApiError::InvalidResponse);
             }
-            self.full[i] = self
-                .record(&flag_key(i, &connection, "full"))?
-                .unwrap_or(false);
-            self.automatic[i] = self
-                .record(&flag_key(i, &connection, "automatic"))?
-                .unwrap_or(true);
+            let preferences = self.account_preferences(i, &connection)?;
+            self.full[i] = preferences.full;
+            self.automatic[i] = preferences.automatic;
             self.project_grants(i, &connection)?;
             if !self.verified[i] && !self.paused[i] && Instant::now() >= self.next[i] {
                 let generation = self.bridge.list_services().generation[i].load(Ordering::Acquire);
@@ -745,6 +828,21 @@ impl Worker {
             .record(&flag_key(i, connection, "full"))?
             .unwrap_or(false);
         let mut selected = self.selection(i, connection, type_, id)?;
+        if selected.is_some() {
+            // Upgrade older native-only choices while current catalog proof is
+            // still available. Later library/cache removal cannot erase it.
+            let key = identity_key(i, connection, type_, id);
+            if self.record::<SelectionIdentity>(&key)?.is_none()
+                && let Some(identity) = selection_identity(type_, id)
+            {
+                self.set_record(&key, Some(&identity))?;
+            }
+        } else if full && let Some(identity) = selection_identity(type_, id) {
+            let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+            if excluded_identity(&owner.lock().unwrap(), i, connection, &identity)? {
+                return Ok(None);
+            }
+        }
         if let Some(s) = selected.as_mut() {
             if s.grant.is_empty() || s.grant.len() > 256 {
                 return Err(ApiError::InvalidResponse);
@@ -782,6 +880,20 @@ impl Worker {
         expected: &Selection,
     ) -> Result<(), ApiError> {
         self.current(i, generation, connection)?;
+        if expected.grant.is_empty() {
+            let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+            if excluded_identity(
+                &owner.lock().unwrap(),
+                i,
+                connection,
+                &SelectionIdentity {
+                    kind: source.kind,
+                    ids: source.ids.clone(),
+                },
+            )? {
+                return Err(ApiError::Rejected);
+            }
+        }
         if self
             .enabled(i, connection, &source.entry.type_, &source.entry.id)?
             .as_ref()
@@ -1136,6 +1248,19 @@ impl Worker {
                 if effective_selection(full, selected).as_ref() != Some(&selection) {
                     return Err(ApiError::Rejected);
                 }
+                if selection.grant.is_empty()
+                    && excluded_identity(
+                        &store,
+                        i,
+                        &connection,
+                        &SelectionIdentity {
+                            kind: source.kind,
+                            ids: source.ids.clone(),
+                        },
+                    )?
+                {
+                    return Err(ApiError::Rejected);
+                }
                 let _guard = sync::ApplyingGuard::new();
                 let _external = stremio_events::ExternalGuard::new();
                 let mut state = bridge.shared.try_lock().map_err(|_| ApiError::Rejected)?;
@@ -1270,9 +1395,178 @@ impl Worker {
 }
 fn flag_key(i: usize, c: &Connection, field: &str) -> String {
     format!(
+        "account:{}:{field}",
+        serde_json::to_string(&(i, &c.account.id)).unwrap()
+    )
+}
+fn legacy_flag_key(i: usize, c: &Connection, field: &str) -> String {
+    format!(
         "session:{i}:{}:{field}",
         serde_json::to_string(&c.epoch).unwrap()
     )
+}
+fn same_session(a: &Connection, b: &Connection) -> bool {
+    a.version == 1
+        && b.version == 1
+        && a.epoch == b.epoch
+        && a.account.id == b.account.id
+        && a.credentials.service == b.credentials.service
+        && a.credentials.client_id == b.credentials.client_id
+        && a.credentials.token == b.credentials.token
+}
+fn stored<T: serde::de::DeserializeOwned>(
+    store: &nova_sync::Store,
+    key: &str,
+) -> Result<Option<T>, ApiError> {
+    store
+        .record(&sync::profile_domain(DOMAIN), key)
+        .and_then(|r| r.value.as_ref())
+        .map(|raw| serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse))
+        .transpose()
+}
+fn migrate_preferences(
+    store: &mut nova_sync::Store,
+    i: usize,
+    connection: &Connection,
+    device: u64,
+) -> Result<Preferences, ApiError> {
+    let mut values = [false, true];
+    for (index, field) in ["full", "automatic"].iter().enumerate() {
+        let key = flag_key(i, connection, field);
+        values[index] = match stored::<bool>(store, &key)? {
+            Some(value) => value,
+            None => {
+                let value = stored::<bool>(store, &legacy_flag_key(i, connection, field))?
+                    .unwrap_or(values[index]);
+                store.set(
+                    &sync::profile_domain(DOMAIN),
+                    &key,
+                    Some(value.to_string()),
+                    0,
+                    device,
+                );
+                value
+            }
+        };
+    }
+    Ok(Preferences {
+        full: values[0],
+        automatic: values[1],
+    })
+}
+fn store_connection(
+    store: &mut nova_sync::Store,
+    i: usize,
+    connection: &Connection,
+    device: u64,
+) -> Result<Preferences, ApiError> {
+    // Preserve the previous account's legacy session preferences before
+    // replacing its only durable credential pointer with another epoch.
+    if let Some(previous) = stored::<Connection>(store, &format!("connection:{i}"))?
+        && previous.version == 1
+        && previous.credentials.service == service(i)
+    {
+        migrate_preferences(store, i, &previous, device)?;
+    }
+    let preferences = migrate_preferences(store, i, connection, device)?;
+    store.set(
+        &sync::profile_domain(DOMAIN),
+        &format!("connection:{i}"),
+        Some(serde_json::to_string(connection).map_err(|_| ApiError::InvalidInput)?),
+        0,
+        device,
+    );
+    Ok(preferences)
+}
+fn identity_key(i: usize, connection: &Connection, type_: &str, id: &str) -> String {
+    format!(
+        "identity:{}",
+        serde_json::to_string(&(i, &connection.account.id, type_, id)).unwrap()
+    )
+}
+fn selection_identity(type_: &str, id: &str) -> Option<SelectionIdentity> {
+    let kind = match type_ {
+        "movie" => MediaType::Movie,
+        "series" | "anime" => MediaType::Show,
+        _ => return None,
+    };
+    Some(SelectionIdentity {
+        kind,
+        ids: media_ids(type_, id)?,
+    })
+}
+fn store_selection(
+    store: &mut nova_sync::Store,
+    i: usize,
+    connection: &Connection,
+    review: &Review,
+    selection: &Selection,
+    identity: Option<&SelectionIdentity>,
+    device: u64,
+) -> Result<(), ApiError> {
+    let domain = sync::profile_domain(DOMAIN);
+    let raw = serde_json::to_string(selection).map_err(|_| ApiError::InvalidInput)?;
+    let identity = identity
+        .map(|identity| {
+            if !identity.ids.valid() {
+                return Err(ApiError::InvalidInput);
+            }
+            serde_json::to_string(identity).map_err(|_| ApiError::InvalidInput)
+        })
+        .transpose()?;
+    if let Some(raw) = identity {
+        store.set(
+            &domain,
+            &identity_key(i, connection, &review.media_type, &review.id),
+            Some(raw),
+            0,
+            device,
+        );
+    }
+    // Retain an earlier proof if the title or metadata was removed before the
+    // user stopped tracking it. Re-enabling the native choice lifts exclusion.
+    store.set(
+        &domain,
+        &selection_key(i, connection, &review.media_type, &review.id),
+        Some(raw),
+        0,
+        device,
+    );
+    Ok(())
+}
+fn excluded_identity(
+    store: &nova_sync::Store,
+    i: usize,
+    connection: &Connection,
+    identity: &SelectionIdentity,
+) -> Result<bool, ApiError> {
+    let prefix = format!(
+        "identity:[{i},{},",
+        serde_json::to_string(&connection.account.id).unwrap()
+    );
+    let rows = store.records_with_prefix(&sync::profile_domain(DOMAIN), &prefix);
+    if rows.len() > MAX_TITLES {
+        return Err(ApiError::InvalidResponse);
+    }
+    for (key, raw) in rows {
+        let retained: SelectionIdentity =
+            serde_json::from_str(&raw).map_err(|_| ApiError::InvalidResponse)?;
+        if !retained.ids.valid() {
+            return Err(ApiError::InvalidResponse);
+        }
+        if compatible_kind(retained.kind, identity.kind) && safe_match(&retained.ids, &identity.ids)
+        {
+            let choice = format!(
+                "selected:{}",
+                key.strip_prefix("identity:")
+                    .ok_or(ApiError::InvalidResponse)?
+            );
+            if stored::<Selection>(store, &choice)?.is_some_and(|selection| !selection.enabled) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 fn same_control(a: &Command, b: &Command) -> bool {
     if a.owner().0 != b.owner().0 {
@@ -1530,6 +1824,257 @@ pub(super) fn clear_ui(app: &AppWindow) {
 }
 fn bools(values: [bool; 2]) -> slint::ModelRc<bool> {
     slint::ModelRc::new(slint::VecModel::from(values.to_vec()))
+}
+
+#[cfg(test)]
+mod policy_regressions {
+    use super::*;
+
+    fn connection(i: usize, account: &str, epoch: &str) -> Connection {
+        Connection {
+            version: 1,
+            credentials: Credentials {
+                service: service(i),
+                client_id: "nova-test".into(),
+                token: Secret::new(format!("token-{account}-{epoch}")).unwrap(),
+            },
+            account: Account {
+                id: account.into(),
+                name: account.into(),
+            },
+            epoch: epoch.into(),
+        }
+    }
+    fn choice(enabled: bool) -> Selection {
+        Selection {
+            enabled,
+            since: 10,
+            include_history: false,
+            grant: "explicit-native-choice".into(),
+            event_boundary: 0,
+        }
+    }
+    fn identity() -> SelectionIdentity {
+        SelectionIdentity {
+            kind: MediaType::Show,
+            ids: MediaIds {
+                imdb: Some("tt0903747".into()),
+                tmdb: Some(1396),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn native_exclusion_blocks_canonical_reimport_after_native_metadata_is_gone() {
+        for i in 0..2 {
+            let connection = connection(i, "account-a", "first-sign-in");
+            let review = Review {
+                service: i,
+                media_type: "series".into(),
+                id: "native:opaque-season".into(),
+            };
+            let mut store = nova_sync::Store::default();
+            // Capture current proof with the original grant. Stopping later
+            // must preserve it even if no native entry or metadata remains.
+            store_selection(
+                &mut store,
+                i,
+                &connection,
+                &review,
+                &choice(true),
+                Some(&identity()),
+                1,
+            )
+            .unwrap();
+            store_selection(&mut store, i, &connection, &review, &choice(false), None, 1).unwrap();
+            let remote = RemoteTitle {
+                ids: identity().ids,
+                media_type: MediaType::Show,
+                title: "Breaking Bad".into(),
+                year: None,
+                status: ListStatus::Planning,
+                episodes: Vec::new(),
+                watched: false,
+                progress: None,
+                playback_episode: None,
+            };
+            let canonical = imported_entry(&remote).unwrap();
+            assert_ne!(canonical.id, review.id);
+            let no_native_choice = stored::<Selection>(
+                &store,
+                &selection_key(i, &connection, &canonical.type_, &canonical.id),
+            )
+            .unwrap();
+            assert!(
+                effective_selection(true, no_native_choice).is_some(),
+                "the native key alone cannot protect a canonical import"
+            );
+            assert!(
+                excluded_identity(
+                    &store,
+                    i,
+                    &connection,
+                    &SelectionIdentity {
+                        kind: remote.media_type,
+                        ids: remote.ids
+                    }
+                )
+                .unwrap()
+            );
+
+            let other = self::connection(i, "account-b", "another-sign-in");
+            assert!(!excluded_identity(&store, i, &other, &identity()).unwrap());
+            let movie = SelectionIdentity {
+                kind: MediaType::Movie,
+                ..identity()
+            };
+            assert!(!excluded_identity(&store, i, &connection, &movie).unwrap());
+            let conflicting = SelectionIdentity {
+                ids: MediaIds {
+                    imdb: Some("tt0944947".into()),
+                    tmdb: Some(1396),
+                    ..Default::default()
+                },
+                ..identity()
+            };
+            assert!(!excluded_identity(&store, i, &connection, &conflicting).unwrap());
+        }
+    }
+
+    #[test]
+    fn returning_to_selected_mode_retains_choices_and_explicit_reenable_lifts_exclusion() {
+        let connection = connection(1, "account-a", "first");
+        let review = Review {
+            service: 1,
+            media_type: "series".into(),
+            id: "native:season".into(),
+        };
+        let mut store = nova_sync::Store::default();
+        store_selection(
+            &mut store,
+            1,
+            &connection,
+            &review,
+            &choice(false),
+            Some(&identity()),
+            1,
+        )
+        .unwrap();
+        for full in [true, false] {
+            store.set(
+                &sync::profile_domain(DOMAIN),
+                &flag_key(1, &connection, "full"),
+                Some(full.to_string()),
+                0,
+                1,
+            );
+            let retained = stored::<Selection>(
+                &store,
+                &selection_key(1, &connection, &review.media_type, &review.id),
+            )
+            .unwrap();
+            assert!(effective_selection(full, retained).is_none());
+            assert!(excluded_identity(&store, 1, &connection, &identity()).unwrap());
+        }
+        store_selection(&mut store, 1, &connection, &review, &choice(true), None, 1).unwrap();
+        assert!(!excluded_identity(&store, 1, &connection, &identity()).unwrap());
+        let selected = stored::<Selection>(
+            &store,
+            &selection_key(1, &connection, &review.media_type, &review.id),
+        )
+        .unwrap();
+        assert_eq!(effective_selection(false, selected), Some(choice(true)));
+    }
+
+    #[test]
+    fn reconnecting_a_then_b_then_a_restores_account_preferences_with_fresh_session_guards() {
+        for i in 0..2 {
+            let mut store = nova_sync::Store::default();
+            let a = connection(i, "account-a", "a-first");
+            store_connection(&mut store, i, &a, 1).unwrap();
+            for (field, value) in [("full", true), ("automatic", false)] {
+                store.set(
+                    &sync::profile_domain(DOMAIN),
+                    &flag_key(i, &a, field),
+                    Some(value.to_string()),
+                    0,
+                    1,
+                );
+            }
+            let b = connection(i, "account-b", "b-first");
+            assert_eq!(
+                store_connection(&mut store, i, &b, 1).unwrap(),
+                Preferences {
+                    full: false,
+                    automatic: true
+                }
+            );
+            let returning = connection(i, "account-a", "a-second");
+            assert_eq!(
+                store_connection(&mut store, i, &returning, 1).unwrap(),
+                Preferences {
+                    full: true,
+                    automatic: false
+                }
+            );
+            assert_eq!(flag_key(i, &a, "full"), flag_key(i, &returning, "full"));
+            assert!(
+                !same_session(&a, &returning),
+                "retained preferences cannot authorize an old credential epoch"
+            );
+            assert!(!same_session(&b, &returning));
+            let current: Connection = stored(&store, &format!("connection:{i}")).unwrap().unwrap();
+            assert!(same_session(&current, &returning));
+        }
+    }
+
+    #[test]
+    fn active_legacy_preferences_migrate_before_account_switch_and_do_not_overwrite_new_choices() {
+        let mut store = nova_sync::Store::default();
+        let old = connection(0, "account-a", "legacy-epoch");
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            "connection:0",
+            Some(serde_json::to_string(&old).unwrap()),
+            0,
+            1,
+        );
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            &legacy_flag_key(0, &old, "full"),
+            Some("true".into()),
+            0,
+            1,
+        );
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            &legacy_flag_key(0, &old, "automatic"),
+            Some("false".into()),
+            0,
+            1,
+        );
+        store_connection(&mut store, 0, &connection(0, "account-b", "new-account"), 1).unwrap();
+        let returning = connection(0, "account-a", "reconnected");
+        assert_eq!(
+            store_connection(&mut store, 0, &returning, 1).unwrap(),
+            Preferences {
+                full: true,
+                automatic: false
+            }
+        );
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            &flag_key(0, &returning, "full"),
+            Some("false".into()),
+            0,
+            2,
+        );
+        assert!(
+            !migrate_preferences(&mut store, 0, &old, 1).unwrap().full,
+            "an old session snapshot cannot replace a newer account preference"
+        );
+    }
 }
 fn publish(bridge: &Bridge, action: impl FnOnce(AppWindow) + Send + 'static) {
     let weak = bridge.app.clone();

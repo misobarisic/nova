@@ -189,6 +189,7 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "plugin_settings"
     ) || key.starts_with("tracking:")
         || key.starts_with("stremio:")
+        || key.starts_with("list_services:")
 }
 pub(super) fn writable(id: &str) -> bool {
     !RUNTIME.read().unwrap().retired.contains(id)
@@ -481,7 +482,9 @@ pub(super) fn legacy_snapshot_migration_entries()
 -> Result<Vec<(String, Option<String>)>, nova_storage::Error> {
     let mut entries = Vec::new();
     for (key, raw) in nova_storage::try_scan_prefix("")? {
-        if scoped_key(&key) {
+        // These checkpoints were introduced after profiles. An unowned row
+        // cannot prove which person's local watch action authorized an upload.
+        if scoped_key(&key) && !key.starts_with("list_services:") {
             let target = storage_key_for(DEFAULT_ID, &key);
             if nova_storage::try_get_str(&target)?.is_none() {
                 entries.push((target, Some(raw)));
@@ -614,6 +617,9 @@ mod tests {
         assert_eq!(parse_domain("profile:../alice:settings"), None);
         assert!(scoped_key("tracking:credentials:mal:v1"));
         assert!(scoped_key("stremio:state:v1:account"));
+        assert!(scoped_key("list_services:watched:v1:title"));
+        assert!(scoped_key("list_services:boundary:v1:account"));
+        assert!(scoped_key("list_services:simkl_cache:v1:account"));
         assert!(scoped_key("plugin_settings"));
         for key in [
             "downloads:v1",

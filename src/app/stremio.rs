@@ -73,6 +73,65 @@ fn session_key(connection: &Connection, field: &str) -> String {
         serde_json::to_string(&connection.epoch).expect("string epoch")
     )
 }
+fn mode_key(connection: &Connection) -> String {
+    format!(
+        "account:{}:mode",
+        serde_json::to_string(&connection.account_id).expect("account ID")
+    )
+}
+fn migrate_mode(
+    store: &mut nova_sync::Store,
+    connection: &Connection,
+    device: u64,
+) -> Result<SyncMode, ApiError> {
+    let domain = crate::app::sync::profile_domain(DOMAIN);
+    if let Some(raw) = store
+        .record(&domain, &mode_key(connection))
+        .and_then(|row| row.value.as_ref())
+    {
+        return serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse);
+    }
+    let mode = store
+        .record(&domain, &session_key(connection, "mode"))
+        .and_then(|row| row.value.as_ref())
+        .map(|raw| serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse))
+        .transpose()?
+        .unwrap_or(connection.mode);
+    store.set(
+        &domain,
+        &mode_key(connection),
+        Some(serde_json::to_string(&mode).map_err(|_| ApiError::InvalidInput)?),
+        0,
+        device,
+    );
+    Ok(mode)
+}
+fn write_connection_record(
+    store: &mut nova_sync::Store,
+    connection: Option<&Connection>,
+    device: u64,
+) -> Result<(), ApiError> {
+    let domain = crate::app::sync::profile_domain(DOMAIN);
+    let raw = connection
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| ApiError::InvalidInput)?;
+    // The active credential is the only pointer to an older session's mode.
+    // Preserve that account choice before a reconnect or disconnect removes it.
+    let previous = store
+        .record(&domain, CONNECTION)
+        .and_then(|row| row.value.as_ref())
+        .and_then(|raw| serde_json::from_str::<Connection>(raw).ok())
+        .filter(Connection::valid);
+    if let Some(previous) = previous {
+        migrate_mode(store, &previous, device)?;
+    }
+    if let Some(connection) = connection {
+        migrate_mode(store, connection, device)?;
+    }
+    store.set(&domain, CONNECTION, raw, 0, device);
+    Ok(())
+}
 fn session_flags(store: &nova_sync::Store, connection: &mut Connection) -> Result<(), ApiError> {
     let boolean = |field: &str| {
         store
@@ -92,12 +151,15 @@ fn session_flags(store: &nova_sync::Store, connection: &mut Connection) -> Resul
     // cannot reset initial merge completion on an offline device's snapshot.
     connection.started |= started.unwrap_or(false);
     connection.bootstrap_done |= bootstrap.unwrap_or(false);
+    let domain = crate::app::sync::profile_domain(DOMAIN);
     if let Some(raw) = store
-        .record(
-            &crate::app::sync::profile_domain(DOMAIN),
-            &session_key(connection, "mode"),
-        )
-        .and_then(|r| r.value.as_ref())
+        .record(&domain, &mode_key(connection))
+        .and_then(|row| row.value.as_ref())
+        .or_else(|| {
+            store
+                .record(&domain, &session_key(connection, "mode"))
+                .and_then(|row| row.value.as_ref())
+        })
     {
         connection.mode = serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse)?;
     }
@@ -125,9 +187,14 @@ fn write_session_flag(
             serde_json::to_string(&value).map_err(|_| ApiError::InvalidInput)?,
         ),
     };
+    let key = if matches!(flag, SessionFlag::Mode(_)) {
+        mode_key(&current)
+    } else {
+        session_key(&current, name)
+    };
     store.set(
         &crate::app::sync::profile_domain(DOMAIN),
-        &session_key(&current, name),
+        &key,
         Some(value),
         0,
         device,
@@ -715,7 +782,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             self.login = None;
             return Ok(());
         }
-        let connection = Connection {
+        let mut connection = Connection {
             version: 1,
             account_id: user.id,
             email: user.email,
@@ -732,6 +799,8 @@ impl<T: nova_stremio::Transport> Worker<T> {
         };
         self.write_connection(Some(&connection))
             .map_err(|_| ApiError::Rejected)?;
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        session_flags(&owner.lock().unwrap(), &mut connection)?;
         self.login = None;
         self.connection = Some(connection);
         self.verified = true;
@@ -775,6 +844,22 @@ impl<T: nova_stremio::Transport> Worker<T> {
             if let Some(connection) = loaded.as_mut() {
                 if !connection.valid() {
                     return Err(ApiError::InvalidResponse);
+                }
+                if store
+                    .record(
+                        &crate::app::sync::profile_domain(DOMAIN),
+                        &mode_key(connection),
+                    )
+                    .and_then(|row| row.value.as_ref())
+                    .is_none()
+                {
+                    migrate_mode(
+                        &mut store,
+                        connection,
+                        nova_sync::local_device().map_err(|_| ApiError::Rejected)?,
+                    )?;
+                    store.save().map_err(|_| ApiError::Rejected)?;
+                    nova_sync::request_local_sync();
                 }
                 session_flags(&store, connection)?;
             }
@@ -873,13 +958,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             .transpose()
             .map_err(|_| ())?;
         let mut store = owner.lock().unwrap();
-        store.set(
-            &crate::app::sync::profile_domain(DOMAIN),
-            CONNECTION,
-            raw.clone(),
-            0,
-            dev,
-        );
+        write_connection_record(&mut store, connection, dev).map_err(|_| ())?;
         store.save().map_err(|_| ())?;
         self.connection_raw = raw.map(Secret::new);
         drop(store);

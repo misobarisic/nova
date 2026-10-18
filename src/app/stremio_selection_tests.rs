@@ -74,7 +74,7 @@ fn install(store: &mut nova_sync::Store, connection: &Connection, selection: &Se
 }
 
 #[test]
-fn old_connections_keep_full_library_mode_until_an_explicit_session_preference() {
+fn old_connections_keep_full_library_mode_until_an_explicit_account_preference() {
     let connection = connection("account", "epoch", SyncMode::FullLibrary);
     let mut raw = serde_json::to_value(&connection).unwrap();
     raw.as_object_mut().unwrap().remove("mode");
@@ -105,7 +105,91 @@ fn old_connections_keep_full_library_mode_until_an_explicit_session_preference()
     let mut other_epoch = connection.clone();
     other_epoch.epoch = "new-sign-in".into();
     session_flags(&store, &mut other_epoch).unwrap();
-    assert_eq!(other_epoch.mode, SyncMode::FullLibrary);
+    assert_eq!(other_epoch.mode, SyncMode::SelectedTitles);
+}
+
+#[test]
+fn reconnecting_the_same_account_preserves_selected_mode_without_reusing_session_markers() {
+    let mut store = nova_sync::Store::default();
+    let old = connection("account-a", "old-epoch", SyncMode::FullLibrary);
+    install(&mut store, &old, &selected("native-a"));
+    write_session_flag(
+        &mut store,
+        &old,
+        SessionFlag::Mode(SyncMode::SelectedTitles),
+        1,
+    )
+    .unwrap();
+    write_session_flag(&mut store, &old, SessionFlag::Started, 1).unwrap();
+    write_session_flag(&mut store, &old, SessionFlag::Bootstrap, 1).unwrap();
+    let mut reconnected = connection("account-a", "new-epoch", SyncMode::FullLibrary);
+    reconnected.started = false;
+    reconnected.bootstrap_done = false;
+    write_connection_record(&mut store, Some(&reconnected), 1).unwrap();
+    session_flags(&store, &mut reconnected).unwrap();
+    assert_eq!(reconnected.mode, SyncMode::SelectedTitles);
+    assert!(!reconnected.started && !reconnected.bootstrap_done);
+    assert!(!reconnected.same_session(&old));
+    assert!(matches!(
+        write_session_flag(
+            &mut store,
+            &old,
+            SessionFlag::Mode(SyncMode::FullLibrary),
+            2
+        ),
+        Err(ApiError::Authentication)
+    ));
+    assert_eq!(
+        load(&store, &reconnected).unwrap().len(),
+        1,
+        "reconnecting preserves the account's native selections"
+    );
+}
+
+#[test]
+fn legacy_selected_mode_survives_account_switch_disconnect_and_return() {
+    let mut store = nova_sync::Store::default();
+    let old = connection("account-a", "legacy-epoch", SyncMode::FullLibrary);
+    install(&mut store, &old, &selected("native-a"));
+    let domain = crate::app::sync::profile_domain(DOMAIN);
+    store.set(
+        &domain,
+        &session_key(&old, "mode"),
+        Some("\"selected_titles\"".into()),
+        0,
+        1,
+    );
+    let mut other = connection("account-b", "other-epoch", SyncMode::FullLibrary);
+    write_connection_record(&mut store, Some(&other), 1).unwrap();
+    session_flags(&store, &mut other).unwrap();
+    assert_eq!(
+        other.mode,
+        SyncMode::FullLibrary,
+        "a new account retains the existing default and cannot inherit another account's choice"
+    );
+    assert!(load(&store, &other).unwrap().is_empty());
+    write_connection_record(&mut store, None, 1).unwrap();
+    let mut returned = connection("account-a", "returned-epoch", SyncMode::FullLibrary);
+    write_connection_record(&mut store, Some(&returned), 1).unwrap();
+    session_flags(&store, &mut returned).unwrap();
+    assert_eq!(returned.mode, SyncMode::SelectedTitles);
+    assert_eq!(load(&store, &returned).unwrap().len(), 1);
+
+    // Late writes to a retired session's mode record cannot broaden the
+    // account preference that was already migrated before the switch.
+    store.set(
+        &domain,
+        &session_key(&old, "mode"),
+        Some("\"full_library\"".into()),
+        0,
+        2,
+    );
+    assert_eq!(
+        migrate_mode(&mut store, &old, 1).unwrap(),
+        SyncMode::SelectedTitles
+    );
+    session_flags(&store, &mut returned).unwrap();
+    assert_eq!(returned.mode, SyncMode::SelectedTitles);
 }
 
 #[test]

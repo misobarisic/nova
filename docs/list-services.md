@@ -26,7 +26,9 @@ upload permission from a timestamp change.
 
 **Stop syncing this title** stores an explicit exclusion. The exclusion also
 wins when full-library mode is enabled. It does not remove the title or its
-history from the remote service.
+history from the remote service. Nova retains the title's proven catalog
+identity with that choice, so removing its native library entry or cached
+metadata cannot re-import the same remote title under a canonical ID.
 
 In account settings, check **Sync the full library**, then choose **Start
 full-library sync**. This explicitly authorizes importing and exporting all
@@ -34,7 +36,8 @@ supported saved titles and watched history for that account. **Use selected
 titles only** returns to the account's per-title choices. A selected-title pass
 never imports unrelated remote titles or history. Retained links belong to the
 verified account and remain available when reconnecting the same account;
-a different account cannot use them.
+a different account cannot use them. Full-library and automatic-sync
+preferences also belong to the verified account and are restored on reconnect.
 
 Automatic sync polls in the foreground approximately every 60 seconds. Manual
 **Sync now** remains available while automatic sync is off. **Cancel** stops new
@@ -74,14 +77,23 @@ The profile-qualified `list_services` generic peer domain contains version-1
 JSON `connection:0` (Simkl) and `connection:1` (MDBList) records. Each includes the
 verified account, credentials, public client registration and a fresh sign-in
 epoch. Disconnect publishes a tombstone. Separate
-`session:<service>:<JSON epoch>:automatic` and `:full` booleans carry preferences;
-a stale preference cannot restore credentials or enable another epoch.
+`account:<JSON(service,account)>:automatic` and `:full` booleans carry preferences
+across sign-in epochs. Existing active `session:<service>:<JSON epoch>`
+preferences migrate before that credential pointer is replaced or removed.
+Credential checks still require the current sign-in epoch; retaining an account
+preference cannot authorize requests from an earlier sign-in.
 
 `selected:<JSON(service,account,native type,native ID)>` records contain the
 explicit enable/exclusion choice, history preference, start time and unique
 grant ID. These choices synchronize with paired Nova devices. Journal counters
 are device-local: each receiving device establishes its own boundary when a
 grant arrives, so receipt never retroactively authorizes its old history.
+`identity:<JSON(service,account,native type,native ID)>` stores the typed,
+confirmed catalog IDs associated with a choice. A disabled choice blocks
+implicit full-library imports using those IDs even after its native title is
+gone. Re-enabling that native choice lifts the exclusion. These records do not
+grant consent to a different account or change explicit bindings for other
+native titles.
 
 Device-local storage uses:
 
@@ -117,6 +129,8 @@ server rate limits cannot be bypassed by the manual sync button.
   conservative identity projection, additive merge and durable apply checks.
 - `src/app/list_services_tests.rs`: scope, history authorization, queue
   cancellation, account separation, resume validity and mocked actor regressions.
+  Account-preference migration and retained identity-exclusion regressions are
+  inline in `src/app/list_services.rs::policy_regressions`.
 - `src/app/tracking.rs::journal_progress`: semantic watched-transition hook.
 - `crates/ui/list-services.slint`: account settings and full-library opt-in.
 - `crates/ui/list-services-title.slint`: selected-title opt-in and exclusion.
