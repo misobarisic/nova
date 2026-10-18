@@ -994,7 +994,7 @@ struct State {
     online_subtitles: Mutex<Vec<OnlineSubtitle>>,
     subtitle_sync: Mutex<subtitle_sync::SubtitleSync>,
     #[cfg(target_os = "android")]
-    loaded_online_subtitle: Mutex<Option<addon_subtitles::LoadedSubtitle>>,
+    loaded_online_subtitles: Mutex<addon_subtitles::LoadedSubtitles>,
     /// Playback of the current session actually produced frames.
     started: AtomicBool,
     /// The overlay is waiting for an addon URL (or showing its error), not mpv.
@@ -1288,7 +1288,7 @@ impl Player {
             online_subtitles: Mutex::new(Vec::new()),
             subtitle_sync: Mutex::new(subtitle_sync::SubtitleSync::default()),
             #[cfg(target_os = "android")]
-            loaded_online_subtitle: Mutex::new(None),
+            loaded_online_subtitles: Mutex::new(addon_subtitles::LoadedSubtitles::default()),
             started: AtomicBool::new(false),
             source_waiting: AtomicBool::new(false),
             #[cfg(not(target_os = "android"))]
@@ -1830,7 +1830,7 @@ impl Player {
         self.state.online_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
         {
-            self.state.loaded_online_subtitle.lock().unwrap().take();
+            self.state.loaded_online_subtitles.lock().unwrap().clear();
         }
         self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Some(err) = self.state.mpv_error.lock().unwrap().as_ref() {
@@ -2880,6 +2880,8 @@ impl Player {
                 self.state.catalog_maximized.load(Ordering::SeqCst)
             });
         self.state.source_waiting.store(false, Ordering::SeqCst);
+        #[cfg(target_os = "android")]
+        self.state.loaded_online_subtitles.lock().unwrap().clear();
         {
             let mpv = self.state.mpv.lock().unwrap();
             self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());

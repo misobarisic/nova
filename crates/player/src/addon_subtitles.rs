@@ -9,13 +9,73 @@ pub struct OnlineSubtitle {
     pub title: String,
 }
 
-#[cfg(target_os = "android")]
-pub(super) struct LoadedSubtitle {
+#[cfg(any(target_os = "android", test))]
+struct LoadedSubtitle {
     path: String,
     title: String,
     language: String,
     id: i32,
     restore: bool,
+}
+
+// Bound retained local paths even if a session repeatedly loads addon choices.
+#[cfg(any(target_os = "android", test))]
+const LOADED_SUBTITLE_LIMIT: usize = 64;
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Default)]
+pub(super) struct LoadedSubtitles {
+    tracks: std::collections::VecDeque<LoadedSubtitle>,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl LoadedSubtitles {
+    fn register(&mut self, path: &str, title: &str, language: &str, id: i32) {
+        self.tracks.retain(|track| track.id != id);
+        self.tracks.push_back(LoadedSubtitle {
+            path: path.into(),
+            title: title.into(),
+            language: language.into(),
+            id,
+            restore: false,
+        });
+        while self.tracks.len() > LOADED_SUBTITLE_LIMIT {
+            self.tracks.pop_front();
+        }
+    }
+
+    fn arm(&mut self, selected: i32) -> Option<i32> {
+        // Another teardown can precede the first recovered frame. Its native
+        // track list is incomplete, so keep the already captured file identity.
+        if let Some(track) = self.tracks.iter().find(|track| track.restore) {
+            return Some(track.id);
+        }
+        // Only the selected addon returns after reload. Retiring every other
+        // numeric ID prevents it from aliasing a recovered embedded track.
+        self.tracks.retain(|track| track.id == selected);
+        let track = self.tracks.front_mut()?;
+        track.restore = true;
+        Some(track.id)
+    }
+
+    fn restore(
+        &mut self,
+        mpv: &Mpv,
+        sync: &mut subtitle_sync::SubtitleSync,
+    ) -> Result<bool, String> {
+        let Some(track) = self.tracks.front_mut().filter(|track| track.restore) else {
+            return Ok(false);
+        };
+        let id = add_local_subtitle(mpv, &track.path, &track.title, &track.language)?;
+        sync.remap(track.id, id);
+        track.id = id;
+        track.restore = false;
+        Ok(true)
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.tracks.clear();
+    }
 }
 
 fn add_local_subtitle(mpv: &Mpv, path: &str, title: &str, language: &str) -> Result<i32, String> {
@@ -31,13 +91,12 @@ impl Player {
     #[cfg(target_os = "android")]
     pub(super) fn arm_online_subtitle_restore(&self) {
         let selected = self.selected_track_id(false);
-        let restore = {
-            let mut loaded = self.state.loaded_online_subtitle.lock().unwrap();
-            loaded.as_mut().and_then(|subtitle| {
-                subtitle.restore = selected == subtitle.id;
-                subtitle.restore.then_some(subtitle.id)
-            })
-        };
+        let restore = self
+            .state
+            .loaded_online_subtitles
+            .lock()
+            .unwrap()
+            .arm(selected);
         if let Some(mpv) = self.state.mpv.lock().unwrap().as_ref() {
             self.state
                 .subtitle_sync
@@ -54,19 +113,11 @@ impl Player {
         if !self.state.started.load(Ordering::SeqCst) {
             return;
         }
-        let mut loaded = self.state.loaded_online_subtitle.lock().unwrap();
-        let Some(subtitle) = loaded.as_mut().filter(|subtitle| subtitle.restore) else {
-            return;
-        };
-        if let Ok(id) = add_local_subtitle(mpv, &subtitle.path, &subtitle.title, &subtitle.language)
+        let mut loaded = self.state.loaded_online_subtitles.lock().unwrap();
+        if loaded
+            .restore(mpv, &mut self.state.subtitle_sync.lock().unwrap())
+            .unwrap_or(false)
         {
-            self.state
-                .subtitle_sync
-                .lock()
-                .unwrap()
-                .remap(subtitle.id, id);
-            subtitle.id = id;
-            subtitle.restore = false;
             self.state.preferences.lock().unwrap().manual_subtitles = true;
         }
     }
@@ -152,13 +203,11 @@ impl Player {
         drop(sync);
         #[cfg(target_os = "android")]
         {
-            *self.state.loaded_online_subtitle.lock().unwrap() = Some(LoadedSubtitle {
-                path: path.into(),
-                title: title.into(),
-                language: language.into(),
-                id,
-                restore: false,
-            });
+            self.state
+                .loaded_online_subtitles
+                .lock()
+                .unwrap()
+                .register(path, title, language, id);
         }
         Ok(id)
     }
@@ -169,7 +218,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_subtitle_is_selected_without_reopening_the_media() {
+    fn local_subtitle_selection_and_recovery_keep_the_selected_addon() {
         struct Scratch(std::path::PathBuf);
         impl Drop for Scratch {
             fn drop(&mut self) {
@@ -240,5 +289,114 @@ mod tests {
         assert!(tracks.iter().any(|track| !track.audio
             && track.id == id
             && track.descriptor.language.as_deref() == Some("en")));
+
+        let other = scratch.0.join("other.srt");
+        std::fs::write(
+            &other,
+            "1\n00:00:00,000 --> 00:00:05,000\nAnother addon subtitle\n",
+        )
+        .unwrap();
+        let mut loaded = LoadedSubtitles::default();
+        loaded.register(&subtitle.to_string_lossy(), "Addon A", "en", id);
+        let other_id = add_local_subtitle(&mpv, &other.to_string_lossy(), "Addon B", "hr").unwrap();
+        loaded.register(&other.to_string_lossy(), "Addon B", "hr", other_id);
+        assert_ne!(id, other_id);
+        let mut sync = subtitle_sync::SubtitleSync::default();
+        sync.register(id);
+        sync.register(other_id);
+
+        // A -> B -> native A is the regression: the last downloaded file is
+        // not the restore target when the viewer reselects an earlier track.
+        mpv.set_property("sid", id.to_string()).unwrap();
+        let selected = mpv.get_property::<String>("sid").unwrap().parse().unwrap();
+        let restore = loaded.arm(selected);
+        assert_eq!(restore, Some(id));
+        sync.suspend(&mpv, restore);
+        mpv.command("loadfile", &[&audio.to_string_lossy()])
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let tracks = mpv.get_property::<String>("track-list").unwrap();
+            if mpv.get_property::<f64>("duration").is_ok()
+                && !track_preferences::parse_tracks(&tracks)
+                    .iter()
+                    .any(|track| !track.audio)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "mpv did not reload the fixture"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Occupy the old A numeric ID in the recovered track list. Restoring
+        // A must remap its identity instead of treating that number as stable.
+        add_local_subtitle(&mpv, &other.to_string_lossy(), "Replacement track", "hr").unwrap();
+        assert!(loaded.restore(&mpv, &mut sync).unwrap());
+        let restored_id = mpv
+            .get_property::<String>("sid")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert_ne!(restored_id, id);
+        assert_eq!(loaded.tracks.len(), 1);
+        assert_eq!(loaded.tracks[0].id, restored_id);
+        assert_eq!(loaded.tracks[0].path, subtitle.to_string_lossy());
+        let tracks: Vec<serde_json::Value> =
+            serde_json::from_str(&mpv.get_property::<String>("track-list").unwrap()).unwrap();
+        let restored = tracks
+            .iter()
+            .find(|track| {
+                track["id"].as_i64() == Some(restored_id as i64) && track["type"] == "sub"
+            })
+            .unwrap();
+        assert_eq!(
+            restored["external-filename"].as_str(),
+            Some(subtitle.to_string_lossy().as_ref())
+        );
+        assert_eq!(restored["title"], "Addon A");
+        assert_eq!(restored["lang"], "en");
+        assert!(
+            !loaded.restore(&mpv, &mut sync).unwrap(),
+            "restore runs once per reload"
+        );
+        assert_eq!(loaded.arm(restored_id), Some(restored_id));
+        loaded.clear();
+        assert!(loaded.tracks.is_empty());
+        assert!(!loaded.restore(&mpv, &mut sync).unwrap());
+    }
+
+    #[test]
+    fn loaded_subtitle_catalog_bounds_paths_and_retires_old_track_ids() {
+        let mut loaded = LoadedSubtitles::default();
+        for id in 1..=LOADED_SUBTITLE_LIMIT as i32 + 2 {
+            loaded.register(&format!("/{id}.srt"), "Addon", "en", id);
+        }
+        assert_eq!(loaded.tracks.len(), LOADED_SUBTITLE_LIMIT);
+        assert_eq!(loaded.tracks.front().unwrap().id, 3);
+        loaded.register("/replacement.srt", "Replacement", "hr", 3);
+        assert_eq!(loaded.tracks.len(), LOADED_SUBTITLE_LIMIT);
+        assert_eq!(loaded.tracks.back().unwrap().path, "/replacement.srt");
+        assert_eq!(loaded.arm(3), Some(3));
+        assert_eq!(loaded.tracks.len(), 1);
+        assert_eq!(
+            loaded.arm(-1),
+            Some(3),
+            "an incomplete recovery keeps its armed file"
+        );
+        loaded.clear();
+        assert_eq!(
+            loaded.arm(3),
+            None,
+            "a closed/new session cannot reuse old paths"
+        );
+        loaded.register("/later.srt", "Later", "en", 8);
+        assert_eq!(
+            loaded.arm(-1),
+            None,
+            "Off/embedded selection must not restore an addon"
+        );
+        assert!(loaded.tracks.is_empty());
     }
 }
