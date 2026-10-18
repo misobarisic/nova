@@ -257,10 +257,11 @@ export component SettingsThemeModule inherits Window {
             } }
             SettingsCard { SettingsRow {
                 setting-key: "transparent_navbar";
-                row-title: @tr("Transparent navigation bar");
-                row-desc: @tr("Show content behind the bottom bar with a dark gradient.");
+                row-title: @tr("Transparent bottom navigation bar");
+                row-desc: SettingsBridge.phone_layout ? @tr("Show content behind the bottom bar with a dark gradient.") : @tr("Available when using bottom navigation.");
                 ToggleSwitch {
-                    name: @tr("Transparent navigation bar");
+                    name: @tr("Transparent bottom navigation bar");
+                    enabled: SettingsBridge.phone_layout;
                     checked: SettingsBridge.transparent_navbar;
                     focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 9 && SettingsBridge.kb_active;
                     toggled => {

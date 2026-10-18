@@ -32,6 +32,7 @@ fn theme_search_toggle_resize_and_android_back() {
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    app.set_transparent_navbar(false);
     app.set_show_home(false);
     app.set_show_settings(true);
     app.set_touch_menus(true);
@@ -196,9 +197,64 @@ fn theme_search_toggle_resize_and_android_back() {
     for _ in 0..9 {
         key(&app, slint::platform::Key::DownArrow.into());
     }
+    assert_eq!(
+        (*app)
+            .global::<nova_ui_shared::SettingsContent>()
+            .get_kb_theme(),
+        10,
+        "sidebar keyboard navigation skips the disabled bottom-bar setting"
+    );
+    key(&app, slint::platform::Key::UpArrow.into());
+    assert_eq!(
+        (*app)
+            .global::<nova_ui_shared::SettingsContent>()
+            .get_kb_theme(),
+        8
+    );
+    key(&app, slint::platform::Key::DownArrow.into());
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    settle(&app);
+    key(&app, slint::platform::Key::UpArrow.into());
+    assert_eq!(
+        (*app)
+            .global::<nova_ui_shared::SettingsContent>()
+            .get_kb_theme(),
+        9
+    );
     key(&app, slint::platform::Key::Return.into());
     assert!(app.get_transparent_navbar());
     assert!(app.global::<nova::Theme>().get_transparent_navbar());
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    settle(&app);
+    let bottom_bar_toggle =
+        ElementHandle::find_by_accessible_label(&app, "Transparent bottom navigation bar")
+            .find(|e| {
+                e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Checkbox)
+            })
+            .unwrap();
+    assert_eq!(bottom_bar_toggle.accessible_enabled(), Some(false));
+    bottom_bar_toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+    key(&app, slint::platform::Key::Return.into());
+    key(&app, slint::platform::Key::LeftArrow.into());
+    assert!(
+        app.get_transparent_navbar(),
+        "sidebar mode preserves the saved bottom-bar preference"
+    );
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    settle(&app);
+    // Reveal the row in the narrower scroll viewport before querying it.
+    key(&app, slint::platform::Key::UpArrow.into());
+    key(&app, slint::platform::Key::DownArrow.into());
+    let bottom_bar_toggle =
+        ElementHandle::find_by_accessible_label(&app, "Transparent bottom navigation bar")
+            .find(|e| {
+                e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Checkbox)
+            })
+            .unwrap();
+    assert_eq!(bottom_bar_toggle.accessible_enabled(), Some(true));
+    bottom_bar_toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert!(!app.get_transparent_navbar());
     key(&app, slint::platform::Key::DownArrow.into());
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_transparent_navbar());

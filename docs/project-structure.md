@@ -428,7 +428,9 @@ overview/search entry is hidden. The shared More entry/return transitions cover
 Sync and the other routed subpages; Profiles has its own reversible transition.
 Theme’s optional `transparent_navbar` overlays the phone bar with a dark gradient;
 Home, Discover, Library and More reserve scroll-content end space and keyboard
-reveal room so their last items remain accessible. The sidebar stays opaque.
+reveal room so their last items remain accessible. The sidebar stays opaque;
+Theme disables the bottom-bar-only toggle in sidebar layouts and keyboard
+navigation skips it, while keeping the saved preference for narrow layouts.
 
 ### Threading model (important)
 - **All Slint property/callback access is main-thread only.** `Bridge` methods are called from UI callbacks on the main thread.
