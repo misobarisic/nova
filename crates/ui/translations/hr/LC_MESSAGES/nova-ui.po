@@ -3092,8 +3092,8 @@ msgstr "Koristi opće zadane postavke"
 msgid "Remove from watch history"
 msgstr "Uklonite iz povijesti gledanja"
 
-msgid "View watch history"
-msgstr "Prikažite povijest gledanja"
+msgid "View full watch history"
+msgstr "Prikažite cijelu povijest gledanja"
 
 msgid "No watch history yet."
 msgstr "Još nema povijesti gledanja."

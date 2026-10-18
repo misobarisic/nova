@@ -2623,9 +2623,9 @@ export component HomePage {
                                         height: root.history_archive_cards.length > 0 ? archive_link.preferred-height + 24px : 0px;
                                         visible: root.history_archive_cards.length > 0;
                                         archive_link := SectionHeader {
-                                            title: @tr("View watch history");
+                                            title: @tr("View full watch history");
                                             accessible-role: button;
-                                            accessible-label: @tr("View watch history");
+                                            accessible-label: @tr("View full watch history");
                                             border-width: root.kb_active && root.kb_zone == 5 ? 2px : 0px;
                                             border-color: Theme.current.focus_ring;
                                             count: root.history_archive_cards.length;

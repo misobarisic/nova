@@ -228,7 +228,7 @@ fn archive_remains_reachable_with_only_completed_items_and_supports_keyboard() {
     app.invoke_focus_mounted_page();
     assert_eq!(app.get_home_catalog_cards().row_count(), 0);
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "View watch history")
+        ElementHandle::find_by_accessible_label(&app, "View full watch history")
             .next()
             .is_some()
     );
