@@ -1,9 +1,8 @@
 import { Theme } from "@NovaUiShared";
 
-import { IcHome, IcExplore, IcVideoLibrary, IcMoreHoriz } from "icons.slint";
 import { NavFeedback } from "sidenav.slint";
 
-// A flat, labelled phone bar. The selected icon and label turn purple;
+// A flat, labelled phone bar. The selected icon and label use the theme accent;
 // selection snaps immediately and NavFeedback only pops the incoming icon.
 // Host pages reserve the bar's height in their layout. Their existing page
 // insets are bled out by the panel so its geometry stays identical on each
@@ -72,12 +71,14 @@ export component BottomNav inherits Rectangle {
                     background: transparent;
                 }
 
-                icon_home := IcHome {
+                icon_home := Image {
+                    source: @image-url("../../assets/icons/navigation/house.svg");
+                    image-fit: contain;
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
                     width: 24px + (root.selected == 0 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.selected == 0 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    colorize: root.selected == 0 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_home := Text {
                     x: 4px; y: 36px;
@@ -110,12 +111,14 @@ export component BottomNav inherits Rectangle {
                     background: transparent;
                 }
 
-                icon_discover := IcExplore {
+                icon_discover := Image {
+                    source: @image-url("../../assets/icons/navigation/compass.svg");
+                    image-fit: contain;
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
                     width: 24px + (root.selected == 1 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.selected == 1 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    colorize: root.selected == 1 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_discover := Text {
                     x: 4px; y: 36px;
@@ -148,12 +151,14 @@ export component BottomNav inherits Rectangle {
                     background: transparent;
                 }
 
-                icon_library := IcVideoLibrary {
+                icon_library := Image {
+                    source: @image-url("../../assets/icons/navigation/library-big.svg");
+                    image-fit: contain;
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
                     width: 24px + (root.selected == 2 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.selected == 2 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    colorize: root.selected == 2 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_library := Text {
                     x: 4px; y: 36px;
@@ -186,12 +191,14 @@ export component BottomNav inherits Rectangle {
                     background: transparent;
                 }
 
-                icon_more := IcMoreHoriz {
+                icon_more := Image {
+                    source: @image-url("../../assets/icons/navigation/ellipsis.svg");
+                    image-fit: contain;
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
                     width: 24px + (root.selected == 3 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.selected == 3 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    colorize: root.selected == 3 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_more := Text {
                     x: 4px; y: 36px;

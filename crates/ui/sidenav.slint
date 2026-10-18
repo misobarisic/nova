@@ -1,7 +1,7 @@
 import { InterfaceStyle, Theme, Anim, NavMetrics, NavState } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
-import { IcHome, IcExplore, IcVideoLibrary, IcMoreHoriz, IcCalendar, IcDownload } from "icons.slint";
+import { IcCalendar, IcDownload } from "icons.slint";
 
 
 // Wide navigation keeps compact icons in Standard mode and visible labels on TV.
@@ -92,33 +92,41 @@ component SideItem inherits Rectangle {
         border-width: root.kb_focused || item_focus.has-focus ? 2px : 0px;
         border-color: Theme.current.text_bright;
 
-        if root.kind == 0: icon_home := IcHome {
+        if root.kind == 0: icon_home := Image {
+            source: @image-url("../../assets/icons/navigation/house.svg");
+            image-fit: contain;
             x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
-            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+            colorize: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
-        if root.kind == 1: icon_discover := IcExplore {
+        if root.kind == 1: icon_discover := Image {
+            source: @image-url("../../assets/icons/navigation/compass.svg");
+            image-fit: contain;
             x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
-            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+            colorize: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
-        if root.kind == 2: icon_library := IcVideoLibrary {
+        if root.kind == 2: icon_library := Image {
+            source: @image-url("../../assets/icons/navigation/library-big.svg");
+            image-fit: contain;
             x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
-            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+            colorize: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
-        if root.kind == 3: icon_more := IcMoreHoriz {
+        if root.kind == 3: icon_more := Image {
+            source: @image-url("../../assets/icons/navigation/ellipsis.svg");
+            image-fit: contain;
             x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
-            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+            colorize: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 4: icon_calendar := IcCalendar {
             x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
