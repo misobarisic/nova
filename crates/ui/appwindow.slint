@@ -1090,7 +1090,8 @@ export component AppWindow inherits Window {
         root.preserve_back_focus();
         root.cancel_more_subpage_back();
         root.more_parent = from_more;
-        root.more_service_route = from_more && index >= 8 ? index : 0;
+        root.more_service_route = from_more && (index == 8 || index == 9) ? index : 0;
+        root.sync_page = index == 10;
         root.more_open = false;
         root.more_subpage_entered = !from_more;
         if (from_more) {
@@ -1104,7 +1105,7 @@ export component AppWindow inherits Window {
         root.family_nav_index = index == 4 ? 4 : index == 5 ? 5 : 3;
         root.show_home = index == 0;
         root.show_library = index == 2;
-        root.show_settings = index == 6;
+        root.show_settings = index == 6 || index == 10;
         root.show_about = index == 7;
         root.show_calendar = index == 4;
         root.show_downloads = index == 5;
@@ -1115,7 +1116,7 @@ export component AppWindow inherits Window {
         else if (index == 2) { root.library_picked(); }
         else if (index == 4) { root.calendar_picked(); }
         else if (index == 5) { root.downloads_picked(); }
-        else if (index == 6) { root.settings_picked(); }
+        else if (index == 6 || index == 10) { root.settings_picked(); }
         else if (index == 7) { root.about_picked(); }
         // Backend callbacks can publish their own previous flags; this route
         // owns the actual visible origin for rebuilt navigation feedback.
@@ -1135,7 +1136,7 @@ export component AppWindow inherits Window {
             root.more_open = true;
         }
     }
-    function pick_more(index: int) { root.more_choice = index; root.more_focus_zone = 1; root.route_section(index == 0 ? 4 : index == 1 ? 5 : index == 2 ? 6 : 7, true); }
+    function pick_more(index: int) { root.more_choice = index; root.more_focus_zone = 1; root.route_section(index == 0 ? 4 : index == 1 ? 5 : index == 3 ? 10 : index == 6 ? 6 : 7, true); }
     function finish_more_subpage_back() {
         if root.profiles_require_selection { return; }
         if (!root.more_return_pending || root.more_return_generation != root.more_route_generation || !root.more_parent || root.player_open || root.modal_visible) { return; }
@@ -1492,7 +1493,9 @@ export component AppWindow inherits Window {
     in-out property <length> settings_scroll_y: 0px;
     in-out property <int> settings_selected_id: 13;
     in-out property <bool> settings_detail_open: root.settings_two_pane;
-    out property <bool> settings_two_pane: (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
+    // Sync reuses the compiled settings shell without its overview.
+    private property <bool> sync_page: false;
+    out property <bool> settings_two_pane: !root.sync_page && (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
     changed settings_two_pane => { if (root.settings_two_pane && root.show_settings) { root.settings_detail_open = true; } }
     in-out property <string> settings_search_query: "";
     in-out property <int> settings_focused_id: 13;
@@ -1816,8 +1819,9 @@ export component AppWindow inherits Window {
     public function more_bridge_library_picked() { root.navigate_section(2); }
     public function more_bridge_calendar_picked() { root.pick_more(0); }
     public function more_bridge_downloads_picked() { root.pick_more(1); }
-    public function more_bridge_settings_picked() { root.pick_more(2); }
-    public function more_bridge_about_picked() { root.pick_more(3); }
+    public function more_bridge_sync_picked() { root.pick_more(3); }
+    public function more_bridge_settings_picked() { root.pick_more(6); }
+    public function more_bridge_about_picked() { root.pick_more(7); }
     public function about_bridge_update_check_requested() { root.update_check_requested(); }
     public function about_bridge_update_automatic_changed(v: bool) { root.update_automatic_changed(v); }
     public function about_bridge_update_release_requested() { root.update_release_requested(); }
@@ -2329,6 +2333,7 @@ export component AppWindow inherits Window {
         active: !root.more_return_pending;
         two_pane: root.settings_two_pane;
         cache_busy: root.cache_busy;
+        standalone_sync: root.sync_page;
         cache_rewriting: root.cache_rewriting;
         cache_processed: root.cache_processed;
         cache_total: root.cache_total;

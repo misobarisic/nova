@@ -46,6 +46,40 @@ fn switch(app: &nova::AppWindow, page: i32) {
 }
 
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
+    if app.get_more_open() && label != "Back" {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    app.window().size().width as f32 / 2.0,
+                    180.0,
+                ),
+                delta_x: 0.0,
+                delta_y: 10000.0,
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        for _ in 0..20 {
+            let found = ElementHandle::find_by_accessible_label(app, label).any(|e| {
+                let p = e.absolute_position();
+                let h = e.size().height;
+                e.accessible_role() == Some(AccessibleRole::Button)
+                    && p.y >= 0.0
+                    && p.y + h <= app.window().size().height as f32 - 68.0
+            });
+            if found {
+                break;
+            }
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        app.window().size().width as f32 / 2.0,
+                        180.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: -80.0,
+                });
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        }
+    }
     ElementHandle::find_by_accessible_label(app, label)
         .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
         .unwrap_or_else(|| panic!("missing button {label}"))
@@ -178,9 +212,30 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(app.get_show_home());
 
     open_more(&app);
+    click(&app, button(&app, "Sync"));
+    assert!(app.get_show_settings() && !app.get_more_open());
+    assert!(app.global::<nova::SettingsBridge>().get_standalone_sync());
+    assert_eq!(app.get_settings_selected_id(), 7);
+    assert_no_bar(&app);
+    assert!(
+        ElementHandle::find_by_element_id(&app, "SettingsPage::settings_search")
+            .next()
+            .is_none()
+    );
+    key(&app, slint::platform::Key::Back);
+    assert!(app.get_more_open() && !app.get_show_settings());
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert_no_bar(&app);
+    assert!(!app.global::<nova::SettingsBridge>().get_standalone_sync());
+    app.set_settings_search_query("Sync".into());
+    settle(&app);
+    assert!(
+        i_slint_backend_testing::ElementQuery::from_root(&app)
+            .match_predicate(|e| e.accessible_id().as_deref() == Some("settings:sync"))
+            .find_first()
+            .is_none()
+    );
     app.set_settings_search_query("Display".into());
     settle(&app);
     click(&app, button(&app, "Display"));
@@ -201,7 +256,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     app.set_more_choice(0);
     app.set_more_focus_zone(1);
     // Keyboard selection belongs to the More page.
-    for _ in 0..3 {
+    for _ in 0..7 {
         key(&app, slint::platform::Key::DownArrow);
     }
     key(&app, slint::platform::Key::Return);
@@ -256,8 +311,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        5,
-        "wide More contains Settings, About, Devices, Watch party and Profiles; shortcuts live in the rail"
+        6,
+        "wide More contains Profiles, Sync, Devices, Watch party, Settings and About"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
@@ -269,7 +324,14 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     let devices_y = button(&app, "Devices").absolute_position().y;
     let party_y = button(&app, "Watch party").absolute_position().y;
     let profiles_y = button(&app, "Profiles").absolute_position().y;
-    assert!(about_y < devices_y && devices_y < party_y && party_y < profiles_y);
+    let sync_y = button(&app, "Sync").absolute_position().y;
+    assert!(
+        profiles_y < sync_y
+            && sync_y < devices_y
+            && devices_y < party_y
+            && party_y < settings_y
+            && settings_y < about_y
+    );
     click(&app, button(&app, "Profiles"));
     assert!(app.get_more_open() && app.get_profiles_open());
     key(&app, slint::platform::Key::Back);

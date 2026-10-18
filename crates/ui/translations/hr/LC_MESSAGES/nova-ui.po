@@ -2557,8 +2557,8 @@ msgid "Back disconnects the controls. Playback continues on your device."
 msgstr "Povratak prekida vezu s kontrolama. Reprodukcija se nastavlja na vašem uređaju."
 
 #: remote-controls.slint
-msgid "Pair a device in Settings → Sync to control its playback."
-msgstr "Uparite uređaj u Postavke → Sinkronizacija za upravljanje reprodukcijom."
+msgid "Pair a device in More → Sync to control its playback."
+msgstr "Uparite uređaj u Više → Sinkronizacija za upravljanje reprodukcijom."
 
 #: remote-controls.slint
 msgid "Playing on your devices"
@@ -3301,3 +3301,6 @@ msgstr "Ovaj profil nije dostupan."
 
 msgid "Enter a profile name of up to 64 characters."
 msgstr "Unesite naziv profila s najviše 64 znaka."
+
+msgid "Pair devices and sync all profiles"
+msgstr "Uparite uređaje i sinkronizirajte sve profile"

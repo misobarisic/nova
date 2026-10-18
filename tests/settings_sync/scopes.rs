@@ -194,7 +194,7 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     // This real Sync enablement row has a long title, a short pill, and a
     // narrow toggle. At 470px the combined line exceeds the old 62% text cap
     // while fitting in the actual space before the toggle.
-    app.set_settings_selected_id(7);
+    app.invoke_more_bridge_sync_picked();
     app.set_settings_scroll_y(0.0);
     app.window().set_size(slint::PhysicalSize::new(470, 1000));
     settle(&app);
@@ -579,7 +579,7 @@ fn comparison_modal_keeps_long_folder_values_inside_the_panel() {
     app.set_show_settings(true);
     app.set_touch_menus(true);
     app.set_sync_enabled(true);
-    app.set_settings_selected_id(7);
+    app.invoke_more_bridge_sync_picked();
     app.set_settings_detail_open(true);
     app.global::<nova::Anim>().set_enabled(false);
     let local = format!("/storage/emulated/0/Download/{}", "a".repeat(100));

@@ -3,6 +3,7 @@ import { SettingsBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow
 // by page-bindings.slint, outside the conditional ComponentContainer.
 
 export component SettingsHost inherits Rectangle {
+    in-out property <bool> standalone_sync <=> SettingsBridge.standalone_sync;
     in-out property <bool> external_navigation <=> SettingsBridge.external_navigation;
     in-out property <bool> active <=> SettingsBridge.active;
     in-out property <bool> two_pane <=> SettingsBridge.two_pane;

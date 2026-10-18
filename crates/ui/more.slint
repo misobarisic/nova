@@ -59,6 +59,7 @@ export component MorePage inherits Rectangle {
     callback home_picked();
     callback discover_picked();
     callback library_picked();
+    callback sync_picked();
     callback settings_picked();
     callback about_picked();
     callback calendar_picked();
@@ -72,14 +73,24 @@ export component MorePage inherits Rectangle {
     restore_scroll := Timer { interval: 1ms; running: false; triggered => { self.stop(); more_scroll.content-y = root.scroll_y; root.restore_pending = false; } }
     changed narrow => {
         root.kb_nav = Math.min(root.kb_nav, root.narrow ? 3 : 5);
-        root.choice = Math.max(root.first_choice, Math.min(6, root.choice));
+        root.choice = Math.max(root.first_choice, Math.min(7, root.choice));
         // Removed shortcut cards can own native focus during a resize.
         if (root.active) { entry_focus.start(); }
     }
+    function reveal_choice() {
+        if !root.kb_active || root.kb_zone != 1 || !root.landing-active { return; }
+        if root.choice < 2 { more_scroll.content-y = 0px; return; }
+        let top = root.choice == 2 ? profiles_card.y : root.choice == 3 ? sync_card.y : root.choice == 4 ? devices_card.y : root.choice == 5 ? party_card.y : root.choice == 6 ? settings_card.y : about_card.y;
+        let h = root.choice == 2 ? profiles_card.height : root.choice == 3 ? sync_card.height : root.choice == 4 ? devices_card.height : root.choice == 5 ? party_card.height : root.choice == 6 ? settings_card.height : about_card.height;
+        let vh = more_scroll.visible-height;
+        if top < -more_scroll.content-y { more_scroll.content-y = -top; }
+        else if top + h > vh - more_scroll.content-y { more_scroll.content-y = Math.max(Math.min(0px, more_scroll.visible-height - more_scroll.content-height), vh - top - h); }
+    }
     changed choice => {
-        if (root.choice < root.first_choice || root.choice > 6) {
-            root.choice = Math.max(root.first_choice, Math.min(6, root.choice));
+        if (root.choice < root.first_choice || root.choice > 7) {
+            root.choice = Math.max(root.first_choice, Math.min(7, root.choice));
         }
+        root.reveal_choice();
     }
     entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if (root.active) { root.focus_shell(); } } }
     changed active => {
@@ -89,19 +100,19 @@ export component MorePage inherits Rectangle {
     nav_scope := FocusScope {
         enabled: root.landing-active;
         width: 100%; height: 100%;
-        init => { root.choice = Math.max(root.first_choice, Math.min(6, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
+        init => { root.choice = Math.max(root.first_choice, Math.min(7, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
             if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
                 if (!e.repeat) { root.home_picked(); }
                 accept
             } else if (e.text == Key.UpArrow) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 6; }
+                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 7; }
                 else { root.choice = Math.max(root.first_choice, root.choice - 1); }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 1 && root.choice < 6) { root.choice += 1; }
+                if (root.kb_zone == 1 && root.choice < 7) { root.choice += 1; }
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
@@ -112,7 +123,7 @@ export component MorePage inherits Rectangle {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (!e.repeat) {
                     if (root.kb_zone == 1) {
-                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.settings_picked(); } else if root.choice == 3 { root.about_picked(); } else if root.choice == 4 { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); } else if root.choice == 5 { PartyBridge.page_open = true; } else { root.profiles_open = true; }
+                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.profiles_open = true; } else if root.choice == 3 { root.sync_picked(); } else if root.choice == 4 { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); } else if root.choice == 5 { PartyBridge.page_open = true; } else if root.choice == 6 { root.settings_picked(); } else { root.about_picked(); }
                     } else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
@@ -147,37 +158,44 @@ export component MorePage inherits Rectangle {
                 PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.landing-active) { root.home_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
-                SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:settings";
-                    icon: @image-url("../../assets/icons/menus/settings.svg");
-                    title: @tr("Settings"); subtitle: @tr("Make Nova yours");
+                profiles_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg");
+                    title: @tr("Profiles"); subtitle: @tr("Separate libraries, history and preferences");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
-                    picked => { if InterfaceStyle.tv { root.choice = 2; root.kb_zone = 1; } root.settings_picked(); }
+                    picked => { root.choice = 2; root.kb_zone = 1; root.profiles_open = true; }
                 } }
-                SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:about";
-                    icon: @image-url("../../assets/icons/menus/about.svg");
-                    title: @tr("About"); subtitle: @tr("Information about Nova");
+                sync_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:sync";
+                    icon: @image-url("../../assets/icons/menus/sync.svg");
+                    title: @tr("Sync"); subtitle: @tr("Pair devices and sync all profiles");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
-                    picked => { if InterfaceStyle.tv { root.choice = 3; root.kb_zone = 1; } root.about_picked(); }
+                    picked => { root.choice = 3; root.kb_zone = 1; root.sync_picked(); }
                 } }
-                SettingsCard { SettingsLink {
+                devices_card := SettingsCard { SettingsLink {
                     interactive: root.landing-active; destination-id: "more:devices"; icon: @image-url("../../assets/icons/menus/devices.svg");
                     title: @tr("Devices"); subtitle: @tr("Control playback on your paired devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 4;
                     picked => { if InterfaceStyle.tv { root.choice = 4; root.kb_zone = 1; } RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
                 } }
-                SettingsCard { SettingsLink {
+                party_card := SettingsCard { SettingsLink {
                     interactive: root.landing-active; destination-id: "more:party"; icon: @image-url("../../assets/icons/menus/watch-party.svg");
                     title: @tr("Watch party"); subtitle: @tr("Watch together on your own devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 5;
                     picked => { if InterfaceStyle.tv { root.choice = 5; root.kb_zone = 1; } PartyBridge.page_open = true; }
                 } }
-                SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg");
-                    title: @tr("Profiles"); subtitle: @tr("Separate libraries, history and preferences");
+                settings_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:settings";
+                    icon: @image-url("../../assets/icons/menus/settings.svg");
+                    title: @tr("Settings"); subtitle: @tr("Make Nova yours");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 6;
-                    picked => { root.choice = 6; root.kb_zone = 1; root.profiles_open = true; }
+                    picked => { if InterfaceStyle.tv { root.choice = 6; root.kb_zone = 1; } root.settings_picked(); }
+                } }
+                about_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:about";
+                    icon: @image-url("../../assets/icons/menus/about.svg");
+                    title: @tr("About"); subtitle: @tr("Information about Nova");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 7;
+                    picked => { if InterfaceStyle.tv { root.choice = 7; root.kb_zone = 1; } root.about_picked(); }
                 } }
                 Rectangle { vertical-stretch: 1; }
             }

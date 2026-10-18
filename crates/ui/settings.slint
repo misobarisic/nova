@@ -22,6 +22,15 @@ export component SettingsPage {
     }
     public function focus_shell() { nav_scope.focus(); }
 
+    in property <bool> standalone_sync: false;
+    function apply_page_mode() {
+        if root.standalone_sync { root.open_page(7); }
+        else if root.sel == 7 {
+            root.sel = 13; root.sub_open = root.two_pane;
+            root.kb_zone = root.two_pane ? 16 : 8;
+        }
+    }
+    changed standalone_sync => { root.apply_page_mode(); }
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     in property <[TrackingAccountRow]> tracking_accounts;
@@ -581,7 +590,7 @@ export component SettingsPage {
     function land_desc(id: int) -> string { return SettingsDestinations.entries[root.destination_index(id)].description; }
     function land_avail(id: int) -> bool {
         let entry = SettingsDestinations.entries[root.destination_index(id)];
-        return root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : root.search_matches(root.search_query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases));
+        return id != 7 && root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : root.search_matches(root.search_query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases));
     }
     function group_available(group: int) -> bool {
         if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(14) || root.land_avail(6) || root.land_avail(5); }
@@ -743,6 +752,8 @@ export component SettingsPage {
         } else if (root.sub_open) {
             root.close_page();
         } else {
+            root.back_picked();
+        } else if (root.standalone_sync) {
             root.back_picked();
         }
     }
@@ -1692,6 +1703,7 @@ export component SettingsPage {
                 // Edit mode belongs to the text fields (native there);
                 // swallow one stray keypress to recover a lost focus.
                 if (root.home_catalog_add_open
+                root.apply_page_mode();
                 && (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape)) {
                     root.home_catalog_add_open = false;
                     accept
@@ -1784,6 +1796,7 @@ export component SettingsPage {
                     x: root.sub_open && !root.two_pane ? -0.28 * content_host.width : 0px;
                     opacity: root.sub_open && !root.two_pane ? 0.0 : 1.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
+                    visible: !root.standalone_sync;
                     animate opacity { duration: Anim.transition_fade; }
                     // One stable viewport scrolls the whole landing column.
                     // Placeholder slots retain the initial title/search/chip
@@ -1939,8 +1952,8 @@ export component SettingsPage {
                     height: 100%;
                     x: root.sub_open ? (root.two_pane ? 364px : 0px) : content_host.width;
                     opacity: root.sub_open ? 1.0 : 0.0;
-                    animate x { duration: Anim.transition_slide; easing: ease-out; }
-                    animate opacity { duration: Anim.transition_fade; }
+                    animate x { duration: root.standalone_sync ? 0ms : Anim.transition_slide; easing: ease-out; }
+                    animate opacity { duration: root.standalone_sync ? 0ms : Anim.transition_fade; }
 
                     VerticalLayout {
                         width: 100%;

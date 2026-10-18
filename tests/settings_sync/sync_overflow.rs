@@ -30,6 +30,11 @@ fn max_right_edge(app: &nova::AppWindow) -> f32 {
         .find_all()
         .into_iter()
         .filter_map(|e| {
+            // More stays mounted behind its animated child. Its fully faded
+            // descendants do not contribute visible overflow on Sync.
+            if e.computed_opacity() < 0.01 {
+                return None;
+            }
             let sz = e.size();
             let p = e.absolute_position();
             (p.x >= 0.0 && p.x < width && sz.width > 0.0).then_some(p.x + sz.width)
@@ -85,11 +90,10 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
     let failures1 = failures.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // Sync is the last landing entry: addons, categories, cache, display,
-        // p2p, player, look and feel, sync.
+        // Sync is an account-wide destination under More.
         let sync_link = ({
-            app.set_settings_search_query("Sync".into());
-            destinations::find(&app, "settings:sync").next()
+            app.set_more_open(true);
+            destinations::find(&app, "more:sync").next()
         })
         .expect("Sync landing entry");
         let app2 = app.as_weak();
@@ -175,7 +179,7 @@ fn incoming_pairing_code_fits_phone_widths_in_both_languages() {
     app.set_show_settings(true);
     app.set_touch_menus(true);
     app.set_sync_enabled(true);
-    app.set_settings_selected_id(7);
+    app.invoke_more_bridge_sync_picked();
     app.set_settings_detail_open(true);
     app.set_sync_pair_prompt_visible(true);
     app.set_sync_pair_prompt_name("Living room television with a long device name".into());

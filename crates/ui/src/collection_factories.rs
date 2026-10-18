@@ -58,6 +58,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_library_picked => invoke_more_bridge_library_picked(),
             on_calendar_picked => invoke_more_bridge_calendar_picked(),
             on_downloads_picked => invoke_more_bridge_downloads_picked(),
+            on_sync_picked => invoke_more_bridge_sync_picked(),
             on_settings_picked => invoke_more_bridge_settings_picked(),
             on_about_picked => invoke_more_bridge_about_picked(),
         );

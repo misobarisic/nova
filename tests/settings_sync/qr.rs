@@ -64,11 +64,10 @@ fn sync_scan_qr_button_dispatches() {
     let scans1 = scans.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // Sync is the last landing entry (addons, categories, cache, display,
-        // p2p, player, look and feel, sync).
+        // Sync is an account-wide destination under More.
         let Some(sync_link) = ({
-            app.set_settings_search_query("Sync".into());
-            destinations::find(&app, "settings:sync").next()
+            app.set_more_open(true);
+            destinations::find(&app, "more:sync").next()
         }) else {
             failures1
                 .borrow_mut()

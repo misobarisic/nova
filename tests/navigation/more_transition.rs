@@ -9,6 +9,40 @@ fn page(app: &nova::AppWindow, name: &str) -> ElementHandle {
         .unwrap_or_else(|| panic!("missing page {name}"))
 }
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
+    if app.get_more_open() && label != "Back" {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    app.window().size().width as f32 / 2.0,
+                    180.0,
+                ),
+                delta_x: 0.0,
+                delta_y: 10000.0,
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        for _ in 0..20 {
+            let found = ElementHandle::find_by_accessible_label(app, label).any(|e| {
+                let p = e.absolute_position();
+                let h = e.size().height;
+                e.accessible_role() == Some(AccessibleRole::Button)
+                    && p.y >= 0.0
+                    && p.y + h <= app.window().size().height as f32 - 68.0
+            });
+            if found {
+                break;
+            }
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        app.window().size().width as f32 / 2.0,
+                        180.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: -80.0,
+                });
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        }
+    }
     let mut matches = ElementHandle::find_by_accessible_label(app, label)
         .filter(|e| e.accessible_role() == Some(AccessibleRole::Button));
     // During return the inactive More header is below the outgoing header.
@@ -144,6 +178,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
     for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
         for (label, component) in [
             ("Settings", "SettingsPage"),
+            ("Sync", "SettingsPage"),
             ("About", "AboutPage"),
             ("Calendar", "CalendarPage"),
             ("Downloads", "DownloadsPage"),
@@ -656,7 +691,7 @@ fn more_state_survives_children_and_breakpoints() {
     app.set_is_android(true);
     app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(360, 360));
-    app.set_more_choice(3);
+    app.set_more_choice(7);
     app.set_more_scroll_y(-120.0);
     app.set_more_open(true);
     app.show().unwrap();
@@ -675,7 +710,7 @@ fn more_state_survives_children_and_breakpoints() {
     app.set_system_back_request(app.get_system_back_request() + 1);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
     assert!(app.get_more_open());
-    assert_eq!(app.get_more_choice(), 3);
+    assert_eq!(app.get_more_choice(), 7);
     assert!((app.get_more_scroll_y() - scroll).abs() < 0.5);
     assert!(
         app.get_kb_active(),

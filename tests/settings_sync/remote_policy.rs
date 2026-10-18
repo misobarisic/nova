@@ -29,7 +29,7 @@ fn receiver_opt_out_fits_and_dispatches_in_both_languages() {
     app.set_show_settings(true);
     app.set_touch_menus(true);
     app.set_sync_enabled(true);
-    app.set_settings_selected_id(7);
+    app.invoke_more_bridge_sync_picked();
     app.set_settings_detail_open(true);
     app.global::<nova::Anim>().set_enabled(false);
     let edited = Rc::new(RefCell::new(Vec::new()));
