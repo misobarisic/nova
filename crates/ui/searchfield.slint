@@ -27,6 +27,7 @@ export component SearchField inherits Rectangle {
     in property <bool> prominent: false;
     // Optional leading icon, with input/caret space reserved beside it.
     in property <bool> search-icon: false;
+    in property <image> search-icon-image;
 
     callback accepted(string);
     callback edited(string);
@@ -74,12 +75,19 @@ export component SearchField inherits Rectangle {
     background: Theme.current.popup;
     clip: true;
 
-    if root.search-icon: search_glyph := IcSearch {
+    if root.search-icon && root.search-icon-image.width == 0: search_glyph := IcSearch {
         x: 14px;
         y: (parent.height - self.height) / 2;
         width: 20px;
         height: 20px;
         fill: inner.has-focus ? Theme.current.search_icon_focused : Theme.current.search_icon;
+    }
+
+    if root.search-icon && root.search-icon-image.width > 0: Image {
+        x: 14px; y: (parent.height - self.height) / 2;
+        width: 20px; height: 20px;
+        source: root.search-icon-image; image-fit: contain;
+        colorize: Theme.current.accent_soft;
     }
 
     if root.search-icon: search_touch := TouchArea {

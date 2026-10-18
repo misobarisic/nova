@@ -1911,6 +1911,7 @@ export component SettingsPage {
                             width: 100%;
                             show-pointer-focus: false; keyboard-mode: root.kb_active;
                             roomy: true; search-icon: true; text <=> root.search_query;
+                            search-icon-image: @image-url("../../assets/icons/menus/search.svg");
                             enabled: !root.sub_open || root.two_pane;
                             placeholder-text: @tr("Search settings");
                             focus_changed(f) => { root.input_focused = f; }

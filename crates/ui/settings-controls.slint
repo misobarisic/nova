@@ -4,7 +4,7 @@ import { SettingSyncBadge } from "settings-sync.slint";
 import { ControlTouchArea } from "control-input.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 import { SearchField } from "searchfield.slint";
-import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcInfo, IcVideoLibrary, IcLink, IcCalendar, IcDownload } from "icons.slint";
+import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcLink } from "icons.slint";
 import { KbMark } from "kbnav.slint";
 
 
@@ -707,6 +707,25 @@ export component ValueBox inherits Rectangle {
 // corresponding settings subpage (see `open_page`).
 export component SettingsLink inherits Rectangle {
     in property <int> icon-kind: 0;   // 0 addons, 1 categories, 2 cache, 3 display, 4 torrents, 5 player, 6 look-and-feel, 7 sync; 16 calendar, 17 downloads
+    // Settings IDs keep their existing meaning; More supplies explicit icons.
+    in property <image> icon:
+        root.icon-kind == 0 ? @image-url("../../assets/icons/menus/addons.svg") :
+        root.icon-kind == 1 || root.icon-kind == 11 ? @image-url("../../assets/icons/menus/categories.svg") :
+        root.icon-kind == 2 ? @image-url("../../assets/icons/menus/image-cache.svg") :
+        root.icon-kind == 3 ? @image-url("../../assets/icons/menus/display.svg") :
+        root.icon-kind == 4 ? @image-url("../../assets/icons/menus/storage.svg") :
+        root.icon-kind == 5 ? @image-url("../../assets/icons/menus/player.svg") :
+        root.icon-kind == 6 ? @image-url("../../assets/icons/menus/look-and-feel.svg") :
+        root.icon-kind == 7 ? @image-url("../../assets/icons/menus/sync.svg") :
+        root.icon-kind == 8 ? @image-url("../../assets/icons/menus/downloads-storage.svg") :
+        root.icon-kind == 9 || root.icon-kind == 17 ? @image-url("../../assets/icons/menus/download.svg") :
+        root.icon-kind == 10 ? @image-url("../../assets/icons/menus/settings.svg") :
+        root.icon-kind == 12 ? @image-url("../../assets/icons/menus/tracking.svg") :
+        root.icon-kind == 13 ? @image-url("../../assets/icons/menus/home.svg") :
+        root.icon-kind == 14 ? @image-url("../../assets/icons/menus/theme.svg") :
+        root.icon-kind == 15 ? @image-url("../../assets/icons/menus/about.svg") :
+        root.icon-kind == 16 ? @image-url("../../assets/icons/menus/calendar.svg") : root.no-icon;
+    private property <image> no-icon;
     in property <string> destination-id: "";
     in property <bool> selected: false;
     in property <string> title: "";
@@ -750,76 +769,13 @@ export component SettingsLink inherits Rectangle {
             width: 34px;
             height: 34px;
 
-            if root.icon-kind == 0: IcExtension {
+            if root.icon.width > 0: Image {
+                source: root.icon;
+                colorize: Theme.current.accent_soft;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 1: IcTag {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 2: IcImage {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 3: IcDisplay {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 4: IcTag {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 5: IcPlay {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 6 || root.icon-kind == 14: IcSettingsGear {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 15: IcInfo { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 16: IcCalendar { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 17: IcDownload { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 13: IcHome { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 6 || root.icon-kind == 10: IcSettingsGear { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 9: IcVideoLibrary { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 11: IcTag { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 12: IcSync { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
-            if root.icon-kind == 7: IcSync {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
-            }
-            if root.icon-kind == 8: IcImage {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.accent_soft;
+                width: 24px; height: 24px;
+                image-fit: contain;
             }
         }
 
