@@ -77,6 +77,20 @@ fn stage_refresh(
     store.queue_extra(&baseline_key, Some(baseline));
     store.record(domain, key).cloned().ok_or_else(refresh_error)
 }
+fn credential_snapshot_matches(
+    store: &nova_sync::Store,
+    domain: &str,
+    service: Service,
+    expected: &Option<nova_sync::Record>,
+) -> bool {
+    store.record(domain, shared_credential_key(service)) == expected.as_ref()
+        && !expected.as_ref().is_some_and(nova_sync::Record::is_deleted)
+        && !nova_sync::parse_profile_domain(domain).is_some_and(|(id, _)| {
+            store
+                .record("profile_deletions", id)
+                .is_some_and(|r| !r.is_deleted())
+        })
+}
 impl RefreshStorage {
     pub(super) fn capture(
         storage: KvStorage,
@@ -123,11 +137,12 @@ impl RefreshStorage {
     pub(super) fn current(&self) -> bool {
         let expected = self.expected.lock().unwrap();
         nova_sync::local_store().ok().is_some_and(|owner| {
-            owner
-                .lock()
-                .unwrap()
-                .record(&self.domain, shared_credential_key(self.service))
-                == expected.as_ref()
+            credential_snapshot_matches(
+                &owner.lock().unwrap(),
+                &self.domain,
+                self.service,
+                &expected,
+            )
         })
     }
 }
@@ -337,12 +352,15 @@ impl Coordinator {
             )
         };
         let _guard = crate::app::sync::ApplyingGuard::new();
-        let state = apply_peer_records(self.store.state(), &records, sequence, |episode| {
+        let mut state = apply_peer_records(self.store.state(), &records, sequence, |episode| {
             seed_watched(&history, &episode.source.source_id, &episode.episode_id)
         })
         .map_err(|_| {
             text::tr("Shared tracking data needs alignment or a newer Nova version.").to_string()
         })?;
+        // Older peers can still publish retired whole-library links. Their
+        // presence never grants this device new per-title tracking consent.
+        let retired_links = retire_bulk_links(&mut state)?;
         let connections = peer_connections(&records).map_err(|_| storage_message())?;
         let values = [Service::MyAnimeList, Service::AniList].map(|service| {
             (
@@ -416,6 +434,22 @@ impl Coordinator {
                 dev,
             );
         }
+        // Projection normally never echoes. Retiring an obsolete grant is an
+        // intentional revocation: delete its shared link, or retain the exact
+        // surviving explicit subset if it used the same source/target key.
+        for key in retired_links {
+            let value = records
+                .iter()
+                .find(|(candidate, _, _)| *candidate == key)
+                .map(|(_, value, _)| value.clone());
+            store.set(
+                &crate::app::sync::profile_domain(TRACKING_DOMAIN),
+                &key,
+                value,
+                0,
+                dev,
+            );
+        }
         store
             .mark_projected(&crate::app::sync::profile_domain(TRACKING_DOMAIN), &basis)
             .map_err(|_| storage_message())?;
@@ -441,6 +475,39 @@ mod tests {
     use super::*;
     const DOMAIN: &str = "profile:alice:tracking";
     const LOCAL: &str = "profile:alice:tracking:credentials:mal:v1";
+    #[test]
+    fn refresh_snapshot_rejects_peer_rotation_disconnect_and_profile_deletion() {
+        let mut store = refresh_store();
+        let expected = store.record(DOMAIN, "credentials:mal").cloned();
+        assert!(credential_snapshot_matches(
+            &store,
+            DOMAIN,
+            Service::MyAnimeList,
+            &expected
+        ));
+        store.set(DOMAIN, "credentials:mal", Some("newer-pair".into()), 0, 2);
+        assert!(!credential_snapshot_matches(
+            &store,
+            DOMAIN,
+            Service::MyAnimeList,
+            &expected
+        ));
+        store.set(DOMAIN, "credentials:mal", None, 0, 2);
+        assert!(!credential_snapshot_matches(
+            &store,
+            DOMAIN,
+            Service::MyAnimeList,
+            &expected
+        ));
+        let mut store = refresh_store();
+        store.set("profile_deletions", "alice", Some("true".into()), 0, 2);
+        assert!(!credential_snapshot_matches(
+            &store,
+            DOMAIN,
+            Service::MyAnimeList,
+            &expected
+        ));
+    }
     #[test]
     fn refresh_capture_rejects_stale_consumed_pair_even_when_disk_and_shared_agree() {
         let mut store = refresh_store();

@@ -41,6 +41,3 @@ pub use journal::*;
 pub use edits::*;
 
 pub use cache::*;
-
-mod library;
-pub use library::*;

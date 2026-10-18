@@ -760,6 +760,7 @@ mod tests {
             description: "Metadata ".repeat(200),
             categories: vec![],
             watch_status: WatchStatus::Auto,
+            imported_tracking_status: None,
             added_at_secs: 1,
         }];
         write_persisted_library(&entries);

@@ -351,10 +351,7 @@ pub(crate) fn recover_back_focus(app: &crate::generated::AppWindow) {
 fn recover_focus(app: &crate::generated::AppWindow, check_tree: bool) {
     let window = i_slint_core::window::WindowInner::from_pub(app.window());
     window.ensure_tree_instantiated();
-    if app.get_completion_prompt_visible()
-        || app.get_tracking_library_prompt_visible()
-        || !window.active_popups().is_empty()
-    {
+    if app.get_completion_prompt_visible() || !window.active_popups().is_empty() {
         return;
     }
     let focused = window.focus_item.borrow().upgrade();

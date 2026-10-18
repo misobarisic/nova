@@ -243,10 +243,6 @@ export component TrackingPanel inherits Rectangle {
                         Spinner { width: 20px; height: 20px; }
                         Text { text: @tr("Loading tracker…"); color: Theme.current.text_secondary; vertical-alignment: center; }
                     }
-                    if SettingsBridge.tracking_library_title_full && SettingsBridge.tracking_library_title_token != "": TrackingButton {
-                        text: SettingsBridge.tracking_library_title_excluded ? @tr("Allow this title in whole-library discovery") : @tr("Exclude this title from whole-library discovery");
-                        clicked => {SettingsBridge.tracking_library_action(root.selected_service,7,SettingsBridge.tracking_library_title_token,false);}
-                    }
                     if root.notice != "": Text {
                         text: root.notice;
                         color: Theme.current.text_episode_metadata;

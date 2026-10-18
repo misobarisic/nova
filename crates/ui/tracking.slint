@@ -1,15 +1,6 @@
-import { Theme, Anim, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "@NovaUiShared";
-import { ControlTouchArea } from "control-input.slint";
+import { Theme, TrackingAccountRow } from "@NovaUiShared";
 import { TrackingAccountCard } from "tracking-account-card.slint";
-
-import { CheckBox, Spinner } from "std-widgets.slint";
-import { ScrollView } from "scrollview.slint";
 import { PillButton, ToggleSwitch, SettingsRow, SettingsInput } from "settings-controls.slint";
-import { Dropdown } from "dropdown.slint";
-import { IcClose, IcChevronRight, IcSync, IcMyAnimeList, IcAniList, IcEdit, IcOpenInNew, IcHistory, IcDelete, IcInfo, IcTag } from "icons.slint";
-
-
-
 
 component AccountEditor inherits TrackingAccountCard {
     in property <TrackingAccountRow> entry;
@@ -20,21 +11,17 @@ component AccountEditor inherits TrackingAccountCard {
     callback input_focus(bool);
     callback release_focus();
     callback automatic(int,bool);
-    callback tracking_library_action(int,int,string,bool);
     title: root.entry.service == 0 ? "MyAnimeList" : "AniList";
     status: root.entry.name == "" ? root.entry.state : root.entry.name + " · " + root.entry.state;
     logo: root.entry.service == 0 ? @image-url("../../assets/icons/services/myanimelist.svg") : @image-url("../../assets/icons/services/anilist.svg");
     brand_color: root.entry.service == 0 ? #2e51a2 : #027fc0;
     brand_dark: root.entry.service == 0 ? #15264e : #113c61;
-    expanded: root.entry.signing_in || root.entry.library_review;
+    expanded: root.entry.signing_in;
     toggled => { if root.returned_focused { root.release_focus(); } }
     property <bool> pin_sign_in: root.entry.service == 1 && root.entry.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
     property <bool> returned_focused: false;
     out property <bool> input_focused: root.returned_focused;
     changed input_focused => { root.input_focus(root.input_focused); }
-    property <bool> library_history: false;
-    property <string> library_revision: root.entry.library_revision;
-    changed library_revision => { root.library_history=false; if root.library_revision != "" {root.expanded=true;} }
     property <bool> signing_in: root.entry.signing_in;
     changed signing_in => {
         // Expiry and automatic browser returns remove the temporary input
@@ -47,24 +34,11 @@ component AccountEditor inherits TrackingAccountCard {
     VerticalLayout {
         alignment: start;
         spacing: 12px;
-        SettingsRow { setting-key: "tracking_automatic_" + root.entry.service; row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
-        if root.entry.connected: VerticalLayout {
-            spacing:8px; alignment:start;
-            Text {text:root.entry.library_enabled ? @tr("Whole-library anime tracking") : @tr("Per-title tracking");color:Theme.current.text_settings;wrap:word-wrap;min-width:0px;}
-            Text {text:root.entry.library_summary;color:Theme.current.text_settings;wrap:word-wrap;min-width:0px;}
-            PillButton {label:@tr("Review whole library");enabled:!root.entry.library_busy;wrap_label:true;clicked=>{root.tracking_library_action(root.entry.service,0,"",false);}}
-            if root.entry.library_enabled: PillButton {label:@tr("Use per-title tracking");enabled:!root.entry.library_busy;wrap_label:true;clicked=>{root.tracking_library_action(root.entry.service,2,"",false);}}
-            PillButton {label:@tr("Rescan library");enabled:!root.entry.library_busy;wrap_label:true;clicked=>{root.tracking_library_action(root.entry.service,3,"",false);}}
-            if root.entry.library_busy: Spinner {width:24px;height:24px;}
-            if root.entry.library_review: VerticalLayout {
-                spacing:10px;alignment:start;
-                Text {text:@tr("Review each anime identity and episode range before linking. Title-search matches need your verification. Other titles keep their current links or stay pending.");color:Theme.current.text_settings;wrap:word-wrap;min-width:0px;}
-                Text {text:root.entry.library_details == "" ? @tr("No additional releases to link. Whole-library discovery can still watch for new eligible titles.") : root.entry.library_details;color:Theme.current.text_settings;wrap:word-wrap;min-width:0px;}
-                SettingsRow {row-title:@tr("Include existing watched history");ToggleSwitch {name:@tr("Include existing watched history");checked <=> root.library_history;}}
-                PillButton {label:root.entry.library_scoped_review ? @tr("Link reviewed releases") : @tr("Start whole-library tracking");primary:true;enabled:!root.entry.library_busy && root.entry.library_revision != "";wrap_label:true;clicked=>{root.tracking_library_action(root.entry.service,1,root.entry.library_revision,root.library_history);}}
-                PillButton {label:@tr("Cancel review");enabled:!root.entry.library_busy;clicked=>{root.tracking_library_action(root.entry.service,4,"",false);}}
-            }
+        Text {
+            text: @tr("Sync only titles you explicitly enable from their Tracking page.");
+            color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px;
         }
+        SettingsRow { setting-key: "tracking_automatic_" + root.entry.service; row-title: @tr("Automatic sync"); ToggleSwitch { name: @tr("Automatic sync"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
         if !root.entry.signing_in: PillButton {
             label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
             clicked => {root.release_focus();root.connect(root.entry.service,root.entry.client_id,root.entry.redirect_uri);}
@@ -81,7 +55,6 @@ component AccountEditor inherits TrackingAccountCard {
     }
 }
 export component TrackingSettings inherits Rectangle {
-    callback tracking_library_action(int,int,string,bool);
     in property <[TrackingAccountRow]> accounts;
     in-out property <bool> completion_rating_prompts_enabled: true;
     callback completion_prompts_changed();
@@ -125,7 +98,6 @@ export component TrackingSettings inherits Rectangle {
             disconnect(service) => {root.disconnect(service);}
             cancel(service) => {root.cancel(service);}
             automatic(service,enabled) => {root.automatic(service,enabled);}
-            tracking_library_action(service,action,revision,history) => {root.tracking_library_action(service,action,revision,history);}
             input_focus(focused) => {
                 if row.service == 0 { root.mal_input_focused = focused; }
                 else { root.anilist_input_focused = focused; }

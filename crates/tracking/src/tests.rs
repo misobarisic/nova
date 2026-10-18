@@ -225,6 +225,110 @@ fn scope_revocation_preserves_manual_fields_and_only_authorized_completion_ratin
 }
 
 #[test]
+fn binding_revocation_distinguishes_bulk_and_explicit_links_of_the_same_source() {
+    for mappings in [vec![0], vec![1], vec![0, 1]] {
+        let mut state = delivery_state();
+        let key = state.targets[0].key.clone();
+        let explicit = binding(&state.targets[0], "shared-native", "explicit", &[("e1", 1)]);
+        let mut bulk = binding(&state.targets[0], "shared-native", "bulk", &[("e12", 12)]);
+        bulk.bulk_origin = true;
+        assert_eq!(explicit.source, bulk.source);
+        state.bindings = vec![explicit.clone(), bulk.clone()];
+        state.snapshots.push(snapshot(&state));
+        state
+            .observe_episode("explicit", &episode(&explicit, "e1"), true)
+            .unwrap();
+        state
+            .observe_episode("bulk", &episode(&bulk, "e12"), true)
+            .unwrap();
+        let stamps: Vec<_> = mappings
+            .iter()
+            .map(|index| MappingStamp::from_binding(&state.bindings[*index]))
+            .collect();
+        let pending = &mut state.outbox.pending[0];
+        pending.mappings = stamps.clone();
+        pending.state = DeliveryState::Uncertain;
+        pending.attempts = 3;
+        pending.next_attempt_at = 77;
+        let expected_pending = pending.clone();
+        state
+            .enqueue_edit(
+                &key,
+                EntryPatch {
+                    score_tenths: Some(85),
+                    status: Some(ListStatus::OnHold),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let manual = state.outbox.edits[0].clone();
+        let mut completion = manual.clone();
+        completion.revision = rev(100);
+        completion.patch.status = None;
+        completion.only_if_unrated = true;
+        completion.completion_mappings = stamps;
+        completion.attempts = 2;
+        completion.next_attempt_at = 88;
+        state.outbox.edits.push(completion.clone());
+
+        state
+            .outbox
+            .cancel_unsent_mappings(&key, std::slice::from_ref(&bulk.id));
+
+        if mappings.contains(&1) {
+            assert!(state.outbox.pending().is_empty());
+            assert_eq!(state.outbox.edits(), &[manual]);
+        } else {
+            assert_eq!(state.outbox.pending(), &[expected_pending]);
+            assert_eq!(state.outbox.edits(), &[manual, completion]);
+        }
+    }
+}
+
+#[test]
+fn binding_revocation_preserves_inflight_and_unrelated_target_work() {
+    let mut state = delivery_state();
+    let key = state.targets[0].key.clone();
+    let binding = state.bindings[0].clone();
+    state.snapshots.push(snapshot(&state));
+    state
+        .observe_episode(&binding.id, &episode(&binding, "episode-1"), true)
+        .unwrap();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                score_tenths: Some(85),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.outbox.pending[0].state = DeliveryState::InFlight;
+    state.outbox.pending[0].attempts = 1;
+    state.outbox.edits[0].state = DeliveryState::InFlight;
+    state.outbox.edits[0].attempts = 1;
+    state.outbox.edits[0].only_if_unrated = true;
+    state.outbox.edits[0].completion_mappings = vec![MappingStamp::from_binding(&binding)];
+    let other = target(Service::AniList, 2).key;
+    let mut other_pending = state.outbox.pending[0].clone();
+    other_pending.target = other.clone();
+    other_pending.state = DeliveryState::Queued;
+    state.outbox.pending.push(other_pending);
+    let mut other_edit = state.outbox.edits[0].clone();
+    other_edit.target = other;
+    other_edit.state = DeliveryState::Queued;
+    state.outbox.edits.push(other_edit);
+    let expected = state.outbox.clone();
+
+    state.outbox.cancel_unsent_mappings(&key, &[]);
+    assert_eq!(state.outbox, expected);
+    state
+        .outbox
+        .cancel_unsent_mappings(&key, std::slice::from_ref(&binding.id));
+    assert_eq!(state.outbox, expected);
+}
+
+#[test]
 fn scope_revocation_preserves_remote_baseline_and_checkpoint_allows_rewatch() {
     let target = target(Service::AniList, 1);
     let explicit = binding(&target, "explicit", "a", &[("a", 1)]);

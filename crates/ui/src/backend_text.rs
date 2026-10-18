@@ -86,16 +86,6 @@ pub fn tr(english: &str) -> &str {
     }
     match english {
         "Paused by tracking scope" => "Pauzirano odabirom opsega praćenja",
-        "Library is too large for one tracking review." => {
-            "Zbirka je prevelika za jedan pregled praćenja."
-        }
-        "More titles will be reviewed on the next scan." => {
-            "Preostali naslovi pregledat će se pri sljedećem pretraživanju."
-        }
-        "Library metadata changed. Review the library again." => {
-            "Metapodaci zbirke su promijenjeni. Ponovno pregledajte zbirku."
-        }
-
         "Sync mode" => "Način sinkronizacije",
         "Full library sync" => "Sinkronizacija cijele zbirke",
         "Selected titles" => "Odabrani naslovi",
@@ -2219,43 +2209,4 @@ pub fn stremio_pending_title(name: &str, media_type: &str, id: &str, reason: &st
         tr("Source identifier omitted").into()
     };
     format!("{name}\n{}\n{identity}", tr(reason))
-}
-
-pub fn tracking_library_summary(ready: usize, pending: usize) -> String {
-    if croatian() {
-        format!(
-            "Samo podržani anime naslovi · {ready} za pregled · {pending} treba povezivanje naslova"
-        )
-    } else {
-        format!("Eligible anime only · {ready} ready to review · {pending} need title alignment")
-    }
-}
-pub fn tracking_library_release(
-    source: &str,
-    release: &str,
-    season: u32,
-    first: u32,
-    last: u32,
-    check_split: bool,
-    title_match_only: bool,
-) -> String {
-    let warning = if check_split {
-        if croatian() {
-            " · provjerite podjelu"
-        } else {
-            " · check split"
-        }
-    } else {
-        ""
-    };
-    let identity = if title_match_only {
-        if croatian() {
-            " · provjerite podudaranje naslova"
-        } else {
-            " · verify title match"
-        }
-    } else {
-        ""
-    };
-    format!("{source} → {release} · S{season} E{first}–{last}{warning}{identity}")
 }

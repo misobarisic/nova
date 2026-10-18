@@ -709,6 +709,28 @@ impl TrackingState {
 }
 
 impl Outbox {
+    /// Revoke only unsent work that consumed these bindings. A source can
+    /// contain both explicit and retired bulk links with disjoint coverage,
+    /// so source identity alone is not enough to withdraw that permission.
+    pub fn cancel_unsent_mappings(&mut self, target: &TargetKey, revoked_binding_ids: &[String]) {
+        self.pending.retain(|pending| {
+            pending.target != *target
+                || pending.state == DeliveryState::InFlight
+                || !pending
+                    .mappings
+                    .iter()
+                    .any(|mapping| revoked_binding_ids.contains(&mapping.binding_id))
+        });
+        self.edits.retain(|edit| {
+            edit.target != *target
+                || edit.state == DeliveryState::InFlight
+                || !edit
+                    .completion_mappings
+                    .iter()
+                    .any(|mapping| revoked_binding_ids.contains(&mapping.binding_id))
+        });
+    }
+
     pub fn cancel_unsent(&mut self, target: &TargetKey) {
         self.pending
             .retain(|p| p.target != *target || p.state == DeliveryState::InFlight);

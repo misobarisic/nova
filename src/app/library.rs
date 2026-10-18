@@ -298,8 +298,11 @@ impl Bridge {
         let changed = {
             let mut state = self.shared.lock().unwrap();
             match state.entries.iter_mut().find(|e| e.id == entry_id) {
-                Some(e) if e.watch_status != watch_status => {
+                Some(e)
+                    if e.watch_status != watch_status || e.imported_tracking_status.is_some() =>
+                {
                     e.watch_status = watch_status;
+                    e.imported_tracking_status = None;
                     true
                 }
                 _ => false,
@@ -457,6 +460,7 @@ impl Bridge {
                         description,
                         categories: Vec::new(),
                         watch_status: WatchStatus::Auto,
+                        imported_tracking_status: None,
                         added_at_secs: now_secs(),
                     },
                 );
@@ -631,6 +635,7 @@ impl Bridge {
             description: item.description.clone(),
             categories: entry.categories.clone(),
             watch_status: entry.watch_status,
+            imported_tracking_status: entry.imported_tracking_status,
             added_at_secs: entry.added_at_secs,
         };
         // Keep old progress intact; unmapped history can still be recovered by
@@ -1159,6 +1164,7 @@ struct LibraryCandidate {
     poster_url: String,
     categories: Vec<String>,
     watch_status: WatchStatus,
+    imported_tracking_status: Option<nova_tracking::ListStatus>,
     added_at_secs: u64,
 }
 
@@ -1167,6 +1173,7 @@ struct LibraryIdentitySnapshot {
     id: String,
     type_: String,
     watch_status: WatchStatus,
+    imported_tracking_status: Option<nova_tracking::ListStatus>,
 }
 
 struct LibraryViewOptions<'a> {
@@ -1197,11 +1204,15 @@ impl LibraryIdentitySnapshot {
             id: entry.id.clone(),
             type_: entry.type_.clone(),
             watch_status: entry.watch_status,
+            imported_tracking_status: entry.imported_tracking_status,
         }
     }
 
     fn matches(&self, entry: &LibraryEntry) -> bool {
-        entry.id == self.id && entry.type_ == self.type_ && entry.watch_status == self.watch_status
+        entry.id == self.id
+            && entry.type_ == self.type_
+            && entry.watch_status == self.watch_status
+            && entry.imported_tracking_status == self.imported_tracking_status
     }
 }
 
@@ -1216,6 +1227,7 @@ impl LibraryCandidate {
             poster_url: entry.poster_url.clone(),
             categories: entry.categories.clone(),
             watch_status: entry.watch_status,
+            imported_tracking_status: entry.imported_tracking_status,
             added_at_secs: entry.added_at_secs,
         }
     }
@@ -1228,6 +1240,7 @@ fn candidates_match_entry(candidate: &LibraryCandidate, entry: &LibraryEntry) ->
         && candidate.year == entry.year
         && candidate.categories == entry.categories
         && candidate.watch_status == entry.watch_status
+        && candidate.imported_tracking_status == entry.imported_tracking_status
         && candidate.added_at_secs == entry.added_at_secs
 }
 
@@ -1276,15 +1289,16 @@ fn project_library_candidate(
     let matches_filter = if options.filter.is_empty() {
         true
     } else if BUILTIN_FILTERS.contains(&options.filter) {
-        match options.filter {
-            "On Hold" => entry.watch_status == WatchStatus::OnHold,
-            "Dropped" => entry.watch_status == WatchStatus::Dropped,
-            bucket => episodes.is_some_and(|videos| {
-                entry.watch_status == WatchStatus::Auto
-                    && activity_bucket(&entry.id, videos, progress, activity.get(&entry.id), today)
-                        == builtin_filter_label(bucket)
-            }),
-        }
+        let bucket = entry.watch_status.badge_label().unwrap_or_else(|| {
+            library_activity_bucket(
+                entry,
+                episodes.unwrap_or_default(),
+                progress,
+                activity.get(&entry.id),
+                today,
+            )
+        });
+        bucket == builtin_filter_label(options.filter)
     } else {
         entry
             .categories
@@ -1307,8 +1321,8 @@ fn project_library_card(
     }
     let today = today_days();
     let status = candidate.watch_status.badge_label().unwrap_or_else(|| {
-        activity_bucket(
-            &candidate.id,
+        library_activity_bucket(
+            current,
             videos,
             progress,
             activity.get(&candidate.id),
@@ -1392,6 +1406,7 @@ mod tests {
                 description: String::new(),
                 categories: vec![category.into()],
                 watch_status: WatchStatus::Auto,
+                imported_tracking_status: None,
                 added_at_secs: added,
             }
         };
@@ -1475,6 +1490,7 @@ mod tests {
             description: String::new(),
             categories: vec![],
             watch_status: WatchStatus::Auto,
+            imported_tracking_status: None,
             added_at_secs: 1,
         };
         let entries = [
@@ -1579,6 +1595,7 @@ mod tests {
             description: String::new(),
             categories: vec![],
             watch_status: WatchStatus::Auto,
+            imported_tracking_status: None,
             added_at_secs: 1,
         };
         let entries = [entry("series"), entry("movie")];
@@ -2012,5 +2029,50 @@ mod duplicate_tests {
             duplicate_progress_copies(&old, &incomplete, &videos, &progress).1,
             5
         );
+    }
+}
+
+#[cfg(test)]
+mod imported_status_projection_tests {
+    use super::*;
+    #[test]
+    fn cold_tracker_status_matches_the_library_filter_and_visible_card() {
+        let mut entry: LibraryEntry = serde_json::from_value(serde_json::json!({"id":"mal:34","type_":"series","name":"Imported","imported_tracking_status":"completed"})).unwrap();
+        let progress = HashMap::new();
+        let activity = HashMap::new();
+        for (remote, label) in [
+            (nova_tracking::ListStatus::Planning, "Plan to Watch"),
+            (nova_tracking::ListStatus::Watching, "Watching"),
+            (nova_tracking::ListStatus::Completed, "Completed"),
+            (nova_tracking::ListStatus::OnHold, "On Hold"),
+            (nova_tracking::ListStatus::Dropped, "Dropped"),
+        ] {
+            entry.imported_tracking_status = Some(remote);
+            let options = LibraryViewOptions {
+                filter: label,
+                needle: String::new(),
+                sort: 0,
+            };
+            let candidate =
+                project_library_candidate(&entry, 0, None, &progress, &activity, &options).unwrap();
+            let card = project_library_card(&entry, &candidate, &[], &progress, &activity).unwrap();
+            assert_eq!(card.status, label);
+            assert!(
+                project_library_candidate(
+                    &entry,
+                    0,
+                    None,
+                    &progress,
+                    &activity,
+                    &LibraryViewOptions {
+                        filter: "Watching",
+                        needle: String::new(),
+                        sort: 0
+                    }
+                )
+                .is_some()
+                    == (label == "Watching")
+            );
+        }
     }
 }

@@ -56,7 +56,6 @@ pub(super) const SCOPED_DOMAINS: &[&str] = &[
     nova_tracking::TRACKING_COMPLETION_DOMAIN,
     stremio::DOMAIN,
     list_services::DOMAIN,
-    tracking::LIBRARY_POLICY_DOMAIN,
 ];
 
 pub(super) fn profile_domain(domain: &str) -> String {
@@ -1440,10 +1439,6 @@ impl Bridge {
                 }
                 list_services::DOMAIN => {
                     self.list_services_wake();
-                    continue;
-                }
-                tracking::LIBRARY_POLICY_DOMAIN => {
-                    self.tracking_library_policy_changed();
                     continue;
                 }
                 DOMAIN_LIBRARY => self.sync_apply_library(),
@@ -3051,6 +3046,7 @@ mod tests {
             description: String::new(),
             categories: Vec::new(),
             watch_status: WatchStatus::Auto,
+            imported_tracking_status: None,
             added_at_secs,
         }
     }

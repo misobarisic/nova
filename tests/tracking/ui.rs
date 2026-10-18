@@ -297,6 +297,164 @@ fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
         }
     }
 }
+
+#[cfg(not(feature = "live-preview"))]
+#[test]
+fn connected_anime_accounts_keep_per_title_automatic_controls_without_library_modes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::connected_anime_accounts_keep_per_title_automatic_controls_without_library_modes"
+    )) {
+        return;
+    }
+    fn settle(app: &nova::AppWindow) {
+        for _ in 0..16 {
+            for element in ElementQuery::from_root(app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = (element.size(), element.absolute_position());
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        }
+    }
+    fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
+        for attempt in 0..16 {
+            if let Some(control) =
+                ElementHandle::find_by_accessible_label(app, label).find(|item| {
+                    matches!(
+                        item.accessible_role(),
+                        Some(AccessibleRole::Button | AccessibleRole::Checkbox)
+                    )
+                })
+            {
+                let position = control.absolute_position();
+                let size = control.size();
+                if position.y >= 160.0 && position.y + size.height <= 650.0 {
+                    assert!(size.width >= 44.0 && size.height >= 44.0);
+                    assert!(position.x >= 0.0);
+                    assert!(position.x + size.width <= app.window().size().width as f32 + 0.5);
+                    return control;
+                }
+                app.set_settings_scroll_y(
+                    (app.get_settings_scroll_y() + 300.0 - position.y).min(0.0),
+                );
+            } else {
+                app.set_settings_scroll_y(if attempt == 0 {
+                    0.0
+                } else {
+                    app.get_settings_scroll_y() - 180.0
+                });
+            }
+            settle(app);
+        }
+        panic!("cannot reveal anime account control {label}");
+    }
+
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(12);
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(360, 900));
+    app.window().show().unwrap();
+    let automatic = Rc::new(RefCell::new(Vec::new()));
+    let recorded = automatic.clone();
+    app.on_tracking_automatic(move |service, enabled| {
+        recorded.borrow_mut().push((service, enabled));
+    });
+
+    for (language, automatic_label, per_title, review_label, full_label) in [
+        (
+            "en",
+            "Automatic sync",
+            "Sync only titles you explicitly enable from their Tracking page.",
+            "Review library titles",
+            "Full library sync",
+        ),
+        (
+            "hr",
+            "Automatska sinkronizacija",
+            "Sinkronizirajte samo naslove koje izričito omogućite na njihovoj stranici Praćenje.",
+            "Pregledaj naslove zbirke",
+            "Sinkronizacija cijele zbirke",
+        ),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        for width in [360, 1280] {
+            app.set_is_android(width == 360);
+            app.window().set_size(slint::PhysicalSize::new(width, 900));
+            for (service, name) in [(0, "MyAnimeList"), (1, "AniList")] {
+                app.set_tracking_accounts(
+                    Rc::new(VecModel::from(vec![nova::TrackingAccountRow {
+                        service,
+                        connected: true,
+                        name: "viewer".into(),
+                        client_id: "saved-public-client".into(),
+                        ..Default::default()
+                    }]))
+                    .into(),
+                );
+                app.set_settings_scroll_y(0.0);
+                settle(&app);
+                let before = automatic.borrow().len();
+                reveal(&app, name).mock_single_click(slint::platform::PointerEventButton::Left);
+                settle(&app);
+                let toggle = reveal(&app, automatic_label);
+                let card = ElementHandle::find_by_element_type_name(&app, "AccountEditor")
+                    .next()
+                    .expect("branded collapsible anime account card");
+                assert!(
+                    card.query_descendants()
+                        .match_inherits("Dropdown")
+                        .find_first()
+                        .is_none()
+                );
+                let helper = per_title.to_owned();
+                assert!(
+                    card.query_descendants()
+                        .match_predicate(move |item| {
+                            item.accessible_label().as_deref() == Some(helper.as_str())
+                        })
+                        .find_first()
+                        .is_some(),
+                    "the account describes its per-title scope"
+                );
+                assert_eq!(
+                    automatic.borrow().len(),
+                    before,
+                    "opening a card is not opt-in"
+                );
+                assert_eq!(toggle.accessible_checked(), Some(false));
+                toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+                settle(&app);
+                let toggle = reveal(&app, automatic_label);
+                assert_eq!(toggle.accessible_checked(), Some(true));
+                toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+                settle(&app);
+                assert_eq!(
+                    &automatic.borrow()[before..],
+                    &[(service, true), (service, false)]
+                );
+                for forbidden in [review_label, full_label] {
+                    assert!(
+                        card.query_descendants()
+                            .match_predicate(move |item| {
+                                item.accessible_label().as_deref() == Some(forbidden)
+                            })
+                            .find_first()
+                            .is_none(),
+                        "anime account must not expose {forbidden}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
     if !crate::isolation::run(concat!(

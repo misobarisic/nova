@@ -1748,6 +1748,7 @@ mod discover_artwork_tests {
                 description: "Cached text".into(),
                 categories: vec![],
                 watch_status: WatchStatus::Auto,
+                imported_tracking_status: None,
                 added_at_secs: 0,
             });
             state.installed = ["first", "second"].map(|path| Installed { url:format!("{base}/{path}"), label:path.into(), enabled:true,
@@ -2225,6 +2226,7 @@ mod discover_artwork_tests {
             description: String::new(),
             categories: vec![],
             watch_status: WatchStatus::Auto,
+            imported_tracking_status: None,
             added_at_secs: 0,
         });
         let old = state.entries[0].poster_url.clone();

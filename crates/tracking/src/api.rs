@@ -687,7 +687,12 @@ fn parse_media(service: Service, value: &Value) -> Result<Media, ApiError> {
                 .ok_or(ApiError::InvalidResponse)?;
             (
                 string(&json!(title))?,
-                string(&value["format"])?,
+                // Announcements legitimately have no format yet. Preserve
+                // that uncertainty instead of treating it as a TV series.
+                match value.get("format").ok_or(ApiError::InvalidResponse)? {
+                    Value::Null => String::new(),
+                    format => string(format)?,
+                },
                 if value["episodes"].is_null() {
                     0
                 } else {
@@ -729,8 +734,10 @@ fn parse_entry(
                 unsigned(&value["score"])?
                     .checked_mul(10)
                     .ok_or(ApiError::InvalidResponse)?,
-                date(&value["start_date"])?,
-                date(&value["finish_date"])?,
+                // MAL's date format permits year-only and year/month values
+                // for personal list dates too; unknown parts must stay unknown.
+                metadata_date(&value["start_date"])?,
+                metadata_date(&value["finish_date"])?,
                 value["is_rewatching"]
                     .as_bool()
                     .ok_or(ApiError::InvalidResponse)?,

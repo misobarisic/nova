@@ -130,6 +130,7 @@ pub(super) fn prepare(
                 description: String::new(),
                 categories: Vec::new(),
                 watch_status: WatchStatus::Auto,
+                imported_tracking_status: None,
                 added_at_secs: title
                     .item
                     .0

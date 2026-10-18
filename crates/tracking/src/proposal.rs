@@ -48,6 +48,13 @@ pub struct MappingProposal {
     pub releases: Vec<ProposedRelease>,
     pub unresolved: Vec<String>,
 }
+/// A missing/announced format cannot establish either movie or series type.
+pub fn known_anime_format(format: &str) -> bool {
+    matches!(
+        format.to_ascii_lowercase().as_str(),
+        "tv" | "tv_short" | "ona" | "ova" | "movie" | "special" | "tv_special" | "music"
+    )
+}
 pub fn episodic_format(format: &str) -> bool {
     matches!(
         format.to_ascii_lowercase().as_str(),
@@ -109,6 +116,10 @@ pub fn release_chain(seed: NonZeroU32, details: &[ReleaseDetails]) -> Vec<Releas
                 let (bridged, known) = neighbors(next, relation, details, seen);
                 results.extend(bridged);
                 complete &= known;
+            } else if !known_anime_format(&next.media.format) {
+                // An announced branch may still become another TV release;
+                // do not infer a unique chain by silently discarding it.
+                complete = false;
             }
         }
         results.sort_by_key(|r| r.media.id);
@@ -215,6 +226,9 @@ pub fn propose_coverage_at(
             let Some(release) = chain.get(next_index) else {
                 break;
             };
+            if !known_anime_format(&release.media.format) {
+                break;
+            }
             let remaining = rows.len() - cursor;
             let count = release.media.episodes.map(|n| n.get() as usize);
             let anchor_dated =
@@ -331,6 +345,23 @@ mod tests {
             id: n(id),
             relation,
         });
+    }
+    #[test]
+    fn announced_unknown_format_never_consumes_numbered_source_episodes() {
+        let mut known = release(199221, 13);
+        let mut announced = release(218099, 12);
+        announced.media.format = String::new();
+        relate(&mut known, 218099, ReleaseRelation::Sequel);
+        relate(&mut announced, 199221, ReleaseRelation::Prequel);
+        assert_eq!(
+            release_chain(n(199221), &[known.clone(), announced.clone()]),
+            vec![known]
+        );
+        assert!(release_chain(n(218099), std::slice::from_ref(&announced)).is_empty());
+        let episodes = rows(1, 12);
+        let proposal = propose_coverage(&episodes, &[announced]);
+        assert!(proposal.releases.is_empty());
+        assert_eq!(proposal.unresolved.len(), episodes.len());
     }
     #[test]
     fn merged_season_splits_into_two_independent_releases_and_keeps_stable_ids() {

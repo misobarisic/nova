@@ -228,6 +228,7 @@ mod tests {
             description: String::new(),
             categories: Vec::new(),
             watch_status: WatchStatus::OnHold,
+            imported_tracking_status: None,
             added_at_secs: 1,
         }];
 

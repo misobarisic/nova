@@ -40,7 +40,8 @@ pub fn title_match(media: &Media, titles: &[String], year: Option<u16>, movie: b
     if !exact {
         return TitleMatch::SearchResult;
     }
-    let format_match = movie == media.format.eq_ignore_ascii_case("movie");
+    let format_match = crate::known_anime_format(&media.format)
+        && movie == media.format.eq_ignore_ascii_case("movie");
     if format_match && year.is_some() && media.year == year {
         TitleMatch::TitleAndYear
     } else {
@@ -66,7 +67,8 @@ pub fn rank_candidates(
             && titles
                 .iter()
                 .any(|t| title.contains(t) || t.contains(&title));
-        let format_match = movie == (m.format.eq_ignore_ascii_case("movie"));
+        let format_match =
+            crate::known_anime_format(&m.format) && movie == m.format.eq_ignore_ascii_case("movie");
         let year_match = year.is_some() && m.year == year;
         let count_match = m.episodes.is_some_and(|n| n.get() as usize == source_count);
         // Counts and dates are ranking hints, never numbering proof. Unknown
@@ -78,6 +80,36 @@ pub fn rank_candidates(
 mod tests {
     use super::*;
     use std::num::NonZeroU32;
+    #[test]
+    fn announced_format_cannot_claim_movie_or_series_agreement() {
+        let mut announced = Media {
+            id: NonZeroU32::new(218099).unwrap(),
+            mal_id: None,
+            title: "Dr.STONE: TERRAFORMING".into(),
+            format: String::new(),
+            year: Some(2027),
+            episodes: NonZeroU32::new(12),
+            finished: false,
+        };
+        let titles = vec![announced.title.clone()];
+        for movie in [false, true] {
+            assert_eq!(
+                title_match(&announced, &titles, Some(2027), movie),
+                TitleMatch::Title
+            );
+        }
+        let mut known = announced.clone();
+        known.id = NonZeroU32::new(199221).unwrap();
+        known.format = "TV".into();
+        let mut candidates = vec![announced.clone(), known.clone()];
+        rank_candidates(&mut candidates, &titles, Some(2027), false, 12);
+        assert_eq!(candidates[0].id, known.id);
+        announced.format = "TV".into();
+        assert_eq!(
+            title_match(&announced, &titles, Some(2027), false),
+            TitleMatch::TitleAndYear
+        );
+    }
     #[test]
     fn ranking_preserves_ambiguity_and_prefers_alias_and_release_context() {
         let make = |id, title: &str, format: &str, year| Media {

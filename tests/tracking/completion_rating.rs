@@ -328,15 +328,6 @@ fn dismissal_and_layer_gating_preserve_the_pending_prompt() {
         &*dismissed.borrow(),
         &["draft-a", "draft-a", "draft-a", "draft-a", "draft-a"]
     );
-    app.set_tracking_library_prompt_open(true);
-    app.set_completion_prompt_open(true);
-    settle();
-    assert!(app.get_completion_prompt_visible());
-    assert!(!app.get_tracking_library_prompt_visible());
-    click(&app, "Dismiss");
-    settle();
-    assert!(app.get_tracking_library_prompt_visible());
-    assert!(!app.get_completion_prompt_visible());
 }
 
 fn native_focus(app: &nova_ui::AppWindow) -> String {

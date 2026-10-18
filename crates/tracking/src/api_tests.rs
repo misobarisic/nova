@@ -43,6 +43,200 @@ fn client(f: &Fixture) -> Client<&Fixture> {
         f,
     )
 }
+
+#[test]
+fn mal_title_read_preserves_partial_personal_dates() {
+    let cases = [
+        (
+            json!("2023"),
+            json!("2024-08"),
+            ListDate {
+                year: Some(2023),
+                month: None,
+                day: None,
+            },
+            ListDate {
+                year: Some(2024),
+                month: Some(8),
+                day: None,
+            },
+        ),
+        (
+            json!("2020-02-29"),
+            Value::Null,
+            ListDate {
+                year: Some(2020),
+                month: Some(2),
+                day: Some(29),
+            },
+            ListDate::default(),
+        ),
+        (
+            Value::Null,
+            json!("2024"),
+            ListDate::default(),
+            ListDate {
+                year: Some(2024),
+                month: None,
+                day: None,
+            },
+        ),
+    ];
+    let mut replies = vec![json!({"id":7,"name":"test"})];
+    for (index, (started, completed, _, _)) in cases.iter().enumerate() {
+        replies.push(json!({"id":index as u32 + 12,"my_list_status":{
+            "status":"completed","score":9,"num_episodes_watched":12,"is_rewatching":false,
+            "start_date":started,"finish_date":completed
+        }}));
+    }
+    let fixture = Fixture::new(replies);
+    let mut adapter = Client::new(
+        Service::MyAnimeList,
+        Secret::new("test-token".into()).unwrap(),
+        &fixture,
+    );
+    adapter.verify(0).unwrap();
+    for (index, (_, _, started, completed)) in cases.into_iter().enumerate() {
+        let media_id = (index as u32 + 12).try_into().unwrap();
+        let entry = adapter.read(media_id, 0).unwrap().unwrap();
+        assert_eq!(entry.media_id, media_id);
+        assert_eq!(entry.started, started);
+        assert_eq!(entry.completed, completed);
+        assert_eq!(entry.status, ListStatus::Completed);
+        assert_eq!(entry.progress, 12);
+        assert_eq!(entry.score_tenths, 90);
+    }
+}
+
+#[test]
+fn mal_title_read_still_rejects_malformed_personal_dates() {
+    for field in ["start_date", "finish_date"] {
+        for invalid in [
+            "",
+            "2023-",
+            "2023-00",
+            "2023-13",
+            "2023-02-29",
+            "2024-04-31",
+            "2024-01-01-extra",
+            "0000",
+        ] {
+            let mut status = json!({"status":"completed","score":9,"num_episodes_watched":12,"is_rewatching":false,"start_date":"2026-01-02","finish_date":null});
+            status[field] = json!(invalid);
+            let fixture = Fixture::new(vec![
+                json!({"id":7,"name":"test"}),
+                json!({"id":12,"my_list_status":status}),
+            ]);
+            let mut adapter = Client::new(
+                Service::MyAnimeList,
+                Secret::new("test-token".into()).unwrap(),
+                &fixture,
+            );
+            adapter.verify(0).unwrap();
+            assert_eq!(
+                adapter.read(12.try_into().unwrap(), 0),
+                Err(ApiError::InvalidResponse),
+                "{field}={invalid}"
+            );
+        }
+    }
+}
+
+#[test]
+fn anilist_announced_dr_stone_format_is_unknown_in_search_cross_id_and_release_details() {
+    // Public AniList 218099 / MAL 65161, observed with the same fields as the
+    // production release query: the announced format is explicitly null.
+    let announced = json!({
+        "id":218099,"idMal":65161,"type":"ANIME",
+        "title":{"romaji":"Dr.STONE: TERRAFORMING","english":null,"native":"Dr.STONE TERRAFORMING"},
+        "format":null,"episodes":null,"status":"NOT_YET_RELEASED","seasonYear":null,
+        "synonyms":[],"startDate":{"year":null,"month":null,"day":null},
+        "endDate":{"year":null,"month":null,"day":null},
+        "relations":{"edges":[
+            {"relationType":"ADAPTATION","node":{"id":152129,"type":"MANGA"}},
+            {"relationType":"PREQUEL","node":{"id":199221,"type":"ANIME"}}
+        ]}
+    });
+    let mut known = announced.clone();
+    known["id"] = json!(199221);
+    known["idMal"] = json!(62568);
+    known["title"]["romaji"] = json!("Dr. STONE: SCIENCE FUTURE Part 3");
+    known["format"] = json!("TV");
+    known["episodes"] = json!(13);
+    known["status"] = json!("FINISHED");
+    let fixture = Fixture::new(vec![
+        json!({"data":{"Page":{"media":[known,announced.clone()]}}}),
+        json!({"data":{"Media":announced.clone()}}),
+        json!({"data":{"Page":{"media":[announced]}}}),
+    ]);
+    let client = Client::public_anilist(&fixture);
+    let search = client.search("Dr. Stone", 0).unwrap();
+    assert_eq!(search.len(), 2);
+    assert_eq!(search[0].format, "TV");
+    assert!(search[1].format.is_empty());
+    assert!(!known_anime_format(&search[1].format));
+    let details = client
+        .release_details(218099.try_into().unwrap(), 0)
+        .unwrap();
+    assert_eq!(details.media, search[1]);
+    assert_eq!(details.media.episodes, None);
+    assert_eq!(details.start, ListDate::default());
+    assert_eq!(
+        details.relations,
+        vec![RelatedRelease {
+            id: 199221.try_into().unwrap(),
+            relation: ReleaseRelation::Prequel
+        }]
+    );
+    let resolved = client
+        .media_by_mal(65161.try_into().unwrap(), 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved, details.media);
+    assert!(
+        fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.bearer.is_none())
+    );
+}
+
+#[test]
+fn anilist_title_metadata_allows_explicit_null_format_but_rejects_missing_or_malformed_format() {
+    let media = json!({"id":218099,"idMal":65161,"type":"ANIME","title":{"romaji":"Dr.STONE: TERRAFORMING","english":null,"native":"Dr.STONE TERRAFORMING"},"format":null,"episodes":null,"status":"NOT_YET_RELEASED","seasonYear":null});
+    let fixture = Fixture::new(vec![json!({"data":{"Media":media.clone()}})]);
+    let adapter = Client::public_anilist(&fixture);
+    assert!(
+        adapter
+            .media(218099.try_into().unwrap(), 0)
+            .unwrap()
+            .format
+            .is_empty()
+    );
+    for malformed in [
+        None,
+        Some(json!("")),
+        Some(json!(12)),
+        Some(json!(true)),
+        Some(json!([])),
+    ] {
+        let mut invalid = media.clone();
+        if let Some(format) = malformed {
+            invalid["format"] = format;
+        } else {
+            invalid.as_object_mut().unwrap().remove("format");
+        }
+        let fixture = Fixture::new(vec![json!({"data":{"Media":invalid}})]);
+        let adapter = Client::public_anilist(&fixture);
+        assert_eq!(
+            adapter.media(218099.try_into().unwrap(), 0),
+            Err(ApiError::InvalidResponse)
+        );
+    }
+}
+
 #[test]
 fn anilist_progress_mutation_omits_unrelated_fields() {
     let f = Fixture::new(vec![

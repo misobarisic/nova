@@ -6,7 +6,7 @@ choose **Tracking** to open its full-screen page (the sync icon opens the same p
 
 ## Connecting
 
-MAL, AniList and Stremio use compact colored account cards with their service
+MAL, AniList, Stremio, Simkl and MDBList use compact colored account cards with their service
 icons. Expand a card to connect, reconnect, disconnect or change its automatic
 tracking/sync preference; the closed card keeps account/status visible. Cards
 precede the shared tracking preferences and reset controls.
@@ -32,7 +32,7 @@ still use a loopback implicit callback with state checking. A loopback return ca
 also be pasted as its full URL if automatic capture fails. Returned identity is verified before
 any link can use that session. Sign-in attempts expire after five minutes.
 
-The automatic-tracking checkbox applies to the service's linked releases.
+The **Automatic sync** toggle applies to explicitly enabled per-title links.
 Pausing it holds queued automatic work and checkpoints new history without
 uploading it. Manual tracker edits remain available. Resuming allows retained
 automatic work to continue; it does not replay history from the paused period.
@@ -94,8 +94,8 @@ records. Start tracking, alignment repair, unlink, pause/resume, refresh-token
 rotation and Disconnect all propagate. Local-only tracking state remains a
 schema-5 envelope, including accepted progress contributions per typed source;
 the generic sync wire structure and ALPN do not change. Each new link carries
-its intrinsic bulk ownership, so a missing or reset independent policy record
-cannot turn a bulk-only link into an explicit per-title grant.
+its legacy bulk ownership marker. Links owned only by the retired full-library
+feature are disabled rather than converted into explicit per-title permission.
 
 Receiving a link preserves stable episode IDs but uses the receiving device's
 account generation, mapping revision and current history checkpoint. Tokens are
@@ -309,7 +309,8 @@ Tracking links, account choice, access/refresh tokens and automatic-tracking
 preferences are shared through the `tracking` sync domain. Resolver caches,
 progress projections, checkpoints, pending requests and attempt leases stay local.
 Paired-device watched changes update checkpoints but do not authorize uploads.
-Remote tracker values never import library membership or mark Nova episodes watched.
+MAL/AniList per-title tracking never imports account-library membership or
+unrelated watched history.
 Live sign-in and real account mutations still require interactive verification
 with the registered applications; fixture and headless UI tests do not substitute
 for that final validation.
@@ -318,65 +319,15 @@ Curated mapping datasets remain deferred pending a coverage and redistribution-
 license review. Current proposals use official service metadata and explicit
 source evidence; they do not require a third-party mapping dataset.
 
-## Whole-library anime tracking
+## Per-title anime tracking
 
-MyAnimeList and AniList each retain **Per-title tracking** as their default.
-Connect the account, expand its card, and choose **Review whole library** to
-prepare a bulk review. Nova considers supported anime movies and series;
-known non-anime titles are skipped. Current typed MAL/AniList identities and
-already approved tracker links anchor proposals. Eligible titles without those
-IDs can use a bounded exact-title search, whose candidates remain review-only.
-An ambiguous title match stays pending for the per-title alignment editor;
-title search never silently creates a link or authorizes progress.
-Eligibility is conservative: sparse Action/Drama-only metadata without an anime
-ID can be skipped. Use the title's Tracking page to approve the anime link, or
-refresh its metadata and rescan after anime evidence becomes available; an
-existing confirmed link overrides sparse genres on later library scans.
+MyAnimeList and AniList track only titles and release mappings explicitly
+enabled from a title’s Tracking page. Their branded account cards provide
+sign-in and Automatic sync controls; there is no full-library mode, account
+library import, background discovery or new-season popup. Additional releases
+can still be selected and confirmed in the existing title alignment editor.
 
-The review lists the source title, tracker release, season and episode range.
-**Start whole-library tracking** explicitly accepts those additional links for
-the verified profile/account. Existing season assignments remain unchanged.
-The optional history checkbox authorizes saved watched progress; otherwise the
-semantic local-watch sequence at opt-in is the boundary, so paired-device
-observations and older history cannot become new upload permission. New local
-watches after that boundary can be applied when their additional mapping is
-accepted. Returning to per-title mode preserves explicit per-title grants and
-stops automatic work for links added only by whole-library mode. Their episode
-assignments are retained, so enabling full mode again restores the same mapping.
-The existing automatic-tracking preference still pauses recurring work.
-
-Mode/history choices, source exclusions and stable Bulk/Explicit ownership are
-shared through the profile-scoped `tracking_library` sync domain. Explicit
-per-title links without an ownership record retain their earlier permission.
-Intrinsic bulk ownership on shared links remains authoritative if an independent
-policy row is missing; a deliberate per-title confirmation clears that marker
-atomically with the mapping. Reset tombstones these shared preferences and links
-and clears local discovery decisions.
-Discovery decisions, including missing identities and unsupported titles, are
-persisted locally under `tracking:library:v1:<account>`. Their fingerprint
-includes the typed source identity, current metadata IDs, aliases/year, complete
-episode inventory and existing mapping revisions. Unchanged results do not
-repeat service discovery on every poll. Metadata changes, a new season, manual
-mapping changes and **Rescan library** reconsider the affected decisions.
-Each scan permits at most 72 discovery lookups and eight same-release automatic
-extensions. Remaining sources stay deferred, without negative cache entries;
-the next scan resumes after unchanged completed decisions. A visible open bulk
-review gets a new consent revision when additional proposals arrive.
-A first local watch in an uncovered season triggers one fresh metadata rescan;
-further episodes in that same uncovered season reuse the decision until its
-metadata/inventory changes. Source exclusions are account-scoped and survive cache/inventory changes;
-unlinking a release excludes that source from whole-library rediscovery.
-The title's Tracking page can explicitly allow it again.
-
-Recurring discovery can extend only the same approved, ongoing release, with
-proven dates/boundaries and every old episode assignment preserved. A separate
-MAL/AniList release always requires another review. Ambiguous splits, specials,
-missing episode inventories and conflicting identities stay unlinked. Watching
-an uncovered episode with a supported additional-release proposal queues a
-nonblocking **New anime release needs review** popup after playback, including
-for existing per-title links. **Not now**
-deduplicates it for that source/inventory/proposal fingerprint; new matching
-metadata or a manual review can reconsider it. The popup itself never links or
-uploads anything. Its review is limited to that source and preserves the current
-per-title/full-library mode; accepting an additional season does not opt the
-account into whole-library tracking.
+Previously imported titles and watch history remain in Nova. Legacy imported
+status hints remain readable without creating local playback events. Links
+marked as belonging only to the retired full-library feature are removed;
+explicit per-title links, credentials and device-to-device tracking sync remain.

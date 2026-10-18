@@ -1304,6 +1304,7 @@ fn initial_worker_merge_imports_fifty_nine_titles_and_confirms_local_uploads() {
                     description: String::new(),
                     categories: Vec::new(),
                     watch_status: WatchStatus::Auto,
+                    imported_tracking_status: None,
                     added_at_secs: 2,
                 })
                 .collect();
@@ -1790,6 +1791,7 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
                 description: String::new(),
                 categories: Vec::new(),
                 watch_status: WatchStatus::Auto,
+                imported_tracking_status: None,
                 added_at_secs: 2,
             });
             if season == 0 {
@@ -2418,6 +2420,7 @@ fn ordered_ingress_entry(id: &str) -> LibraryEntry {
         description: String::new(),
         categories: Vec::new(),
         watch_status: WatchStatus::Auto,
+        imported_tracking_status: None,
         added_at_secs: 20,
     }
 }

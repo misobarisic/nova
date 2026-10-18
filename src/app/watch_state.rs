@@ -52,6 +52,42 @@ pub(crate) fn available_completed(
         }
 }
 
+/// An account's status stays visible while cold metadata cannot establish
+/// native playback. Local watches, explicit unwatches, resume and activity
+/// always take priority over this non-authoritative display hint.
+pub(crate) fn library_activity_bucket(
+    entry: &LibraryEntry,
+    episodes: &[Video],
+    progress: &HashMap<String, EpisodeProgress>,
+    activity: Option<&ViewingActivity>,
+    today: i64,
+) -> &'static str {
+    let local = activity.is_some()
+        || progress.values().any(|p| {
+            p.series_id == entry.id
+                && (p.unwatched_at_secs > 0
+                    || p.updated_at_secs > 0
+                    || p.play_count > 0
+                    || p.position_secs >= RESUME_MIN_SECS
+                    || p.history.as_ref().is_some_and(|h| h.played_at_secs > 0))
+        });
+    if entry.watch_status == WatchStatus::Auto
+        && !local
+        && let Some(status) = entry.imported_tracking_status
+    {
+        return match status {
+            nova_tracking::ListStatus::Planning => "Plan to Watch",
+            nova_tracking::ListStatus::Watching | nova_tracking::ListStatus::Repeating => {
+                "Watching"
+            }
+            nova_tracking::ListStatus::Completed => "Completed",
+            nova_tracking::ListStatus::OnHold => "On Hold",
+            nova_tracking::ListStatus::Dropped => "Dropped",
+        };
+    }
+    activity_bucket(&entry.id, episodes, progress, activity, today)
+}
+
 pub(crate) fn activity_bucket(
     id: &str,
     episodes: &[Video],
@@ -197,6 +233,16 @@ impl Bridge {
                     .entries
                     .get(index)
                     .is_some_and(|entry| entry.id == id && entry.type_ == type_)
+                {
+                    continue;
+                }
+                // Account-list checkpoints cannot create a local viewing run
+                // merely because later metadata proves every imported episode.
+                if state
+                    .progress
+                    .values()
+                    .filter(|p| p.series_id == id)
+                    .all(tracking::imported_watch)
                 {
                     continue;
                 }
@@ -393,6 +439,67 @@ mod tests {
         assert_eq!(
             activity_bucket("s", &episodes, &map, activity.get("s"), today),
             "Watching"
+        );
+    }
+}
+
+#[cfg(test)]
+mod imported_status_tests {
+    use super::*;
+    #[test]
+    fn cold_account_status_is_fallback_and_local_activity_overrides_it() {
+        let mut entry: LibraryEntry = serde_json::from_value(serde_json::json!({"id":"mal:34","type_":"series","name":"Imported","imported_tracking_status":"completed"})).unwrap();
+        assert_eq!(
+            library_activity_bucket(&entry, &[], &HashMap::new(), None, 0),
+            "Completed"
+        );
+        entry.imported_tracking_status = Some(nova_tracking::ListStatus::OnHold);
+        assert_eq!(
+            library_activity_bucket(&entry, &[], &HashMap::new(), None, 0),
+            "On Hold"
+        );
+        entry.imported_tracking_status = Some(nova_tracking::ListStatus::Watching);
+        assert_eq!(
+            library_activity_bucket(&entry, &[], &HashMap::new(), None, 0),
+            "Watching"
+        );
+        let progress = [(
+            progress_map_key(&entry.id, "native-episode"),
+            EpisodeProgress {
+                series_id: entry.id.clone(),
+                episode_id: "native-episode".into(),
+                unwatched_at_secs: 5,
+                ..Default::default()
+            },
+        )]
+        .into();
+        entry.imported_tracking_status = Some(nova_tracking::ListStatus::Completed);
+        assert_eq!(
+            library_activity_bucket(&entry, &[], &progress, None, 0),
+            "Watching"
+        );
+        assert_eq!(
+            library_activity_bucket(
+                &entry,
+                &[],
+                &HashMap::new(),
+                Some(&ViewingActivity {
+                    phase: ViewingPhase::AwaitingReturn
+                }),
+                0
+            ),
+            "Completed"
+        );
+        let mut legacy = serde_json::to_value(&entry).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("imported_tracking_status");
+        assert!(
+            serde_json::from_value::<LibraryEntry>(legacy)
+                .unwrap()
+                .imported_tracking_status
+                .is_none()
         );
     }
 }

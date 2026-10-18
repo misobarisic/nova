@@ -311,12 +311,6 @@ impl Bridge {
             app.set_addon_config_label("".into());
             app.set_plugin_settings_notice("".into());
             app.set_completion_prompt_open(false);
-            app.set_tracking_library_prompt_open(false);
-            app.set_tracking_library_prompt_revision("".into());
-            app.set_tracking_library_prompt_title("".into());
-            app.set_tracking_library_title_full(false);
-            app.set_tracking_library_title_excluded(false);
-            app.set_tracking_library_title_token("".into());
             app.set_tracking_open(false);
             app.set_tracking_notice("".into());
             app.set_tracking_accounts(Default::default());

@@ -952,6 +952,10 @@ pub(crate) struct LibraryEntry {
     /// bucket from playback progress. Defaults for older saves.
     #[serde(default)]
     pub watch_status: WatchStatus,
+    /// Legacy account-list status retained for previously imported titles.
+    /// A display fallback, never episode progress or permission to upload it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_tracking_status: Option<nova_tracking::ListStatus>,
     /// Wall-clock seconds of when the item was added. Gives the library a
     /// stable order that is identical on every device after a sync (the list
     /// is sorted by this, ties broken by id). `0` for entries saved before

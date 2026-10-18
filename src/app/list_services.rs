@@ -1800,6 +1800,7 @@ fn imported_entry(remote: &RemoteTitle) -> Option<LibraryEntry> {
         description: String::new(),
         categories: vec![],
         watch_status: WatchStatus::Auto,
+        imported_tracking_status: None,
         added_at_secs: now_secs(),
     })
 }

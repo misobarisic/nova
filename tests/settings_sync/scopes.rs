@@ -388,16 +388,12 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
             let scope = badge(&app, "tracking_automatic_0");
             let bp = scope.absolute_position();
             assert!(
-                ElementHandle::find_by_accessible_label(
-                    &app,
-                    "Automatic tracking for linked releases"
-                )
-                .any(|title| {
+                ElementHandle::find_by_accessible_label(&app, "Automatic sync").any(|title| {
                     let p = title.absolute_position();
                     let s = title.size();
-                    p.y + s.height <= bp.y - 2.0
+                    p.y + s.height <= bp.y - 2.0 || p.x + s.width <= bp.x - 4.0
                 }),
-                "a narrow row must stack its long title above the scope pill"
+                "the tracking preference title and sync badge must not overlap"
             );
         }
     }

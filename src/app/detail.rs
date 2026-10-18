@@ -5490,6 +5490,7 @@ mod series_open_tests {
                 description: String::new(),
                 categories: vec![],
                 watch_status: WatchStatus::Auto,
+                imported_tracking_status: None,
                 added_at_secs: 0,
             });
             bridge.open_library_item(0);
