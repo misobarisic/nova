@@ -1,6 +1,5 @@
 //! Profile selection keeps startup mandatory and names routed by stable IDs.
-#[path = "support/isolation.rs"]
-mod isolation;
+use crate::isolation;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::ComponentHandle;

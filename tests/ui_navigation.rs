@@ -15,6 +15,9 @@ mod navbar_motion;
 #[path = "navigation/onboarding_ui.rs"]
 mod onboarding_ui;
 
+#[path = "navigation/profiles.rs"]
+mod profiles;
+
 #[path = "navigation/responsive_more.rs"]
 mod responsive_more;
 
