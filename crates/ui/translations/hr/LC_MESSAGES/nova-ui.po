@@ -3193,3 +3193,18 @@ msgstr "Nisu pronađeni titlovi iz dodataka za ovaj videozapis."
 
 msgid "Could not load addon subtitles. Try again."
 msgstr "Nije moguće učitati titlove iz dodataka. Pokušajte ponovno."
+
+msgid "Automatically play next episode"
+msgstr "Automatski reproduciraj sljedeću epizodu"
+
+msgid "At the end, preview the recommended source with eight seconds to cancel."
+msgstr "Na kraju prikaži preporučeni izvor uz osam sekundi za odustajanje."
+
+msgid "Play now"
+msgstr "Reproduciraj odmah"
+
+msgid "Starting in {n} second"
+msgid_plural "Starting in {n} seconds"
+msgstr[0] "Počinje za {n} sekundu"
+msgstr[1] "Počinje za {n} sekunde"
+msgstr[2] "Počinje za {n} sekundi"

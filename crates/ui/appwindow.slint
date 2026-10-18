@@ -516,6 +516,7 @@ export component AppWindow inherits Window {
         subtitle_style <=> root.subtitle_style;
         android_auto_continue <=> root.android_auto_continue;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
+        auto_next_episode <=> root.auto_next_episode;
         screenshot_format_index <=> root.screenshot_format_index;
         screenshot_jpeg_quality <=> root.screenshot_jpeg_quality;
         screenshot_webp_quality <=> root.screenshot_webp_quality;
@@ -1188,6 +1189,7 @@ export component AppWindow inherits Window {
     in property <[string]> subtitle_language_selected_names;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
+    in-out property <bool> auto_next_episode: false;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;
     in-out property <float> screenshot_webp_quality: 85;
@@ -1504,13 +1506,19 @@ export component AppWindow inherits Window {
     in-out property <string> next_episode_context: "";
     callback next_episode_streams(string);
     callback next_episode_dismiss(string);
+    in-out property <bool> auto_next_preview;
+    in-out property <int> auto_next_seconds: 8;
+    in-out property <string> auto_next_preview_title;
+    in-out property <string> auto_next_preview_source;
+    in-out property <string> auto_next_preview_metadata;
+    callback auto_next_play();
     in-out property <bool> playback_end_menu_visible: false;
     in-out property <bool> playback_end_menu_has_next: false;
     in-out property <string> playback_end_menu_next_title;
     callback playback_end_stay();
     callback playback_end_next();
     callback playback_end_details();
-    out property <bool> playback_end_menu_shown: root.playback_end_menu_visible && root.player_open
+    out property <bool> playback_end_menu_shown: (root.playback_end_menu_visible || root.auto_next_preview) && root.player_open
         && !root.completion_prompt_visible && !root.onboarding_visible && !root.resume_prompt_visible && !root.party_page_open
         && !root.remote_controls_open && !root.remote_devices_open && root.remote_replacement_token == "";
     changed playback_end_menu_shown => {
@@ -2374,15 +2382,19 @@ export component AppWindow inherits Window {
     playback_ended := PlaybackEnded {
         width: 100%; height: 100%;
         open: root.playback_end_menu_shown;
-        has_next: root.playback_end_menu_has_next;
-        next_title: root.playback_end_menu_next_title;
+        preview: root.auto_next_preview;
+        seconds: root.auto_next_seconds;
+        source_title: root.auto_next_preview_source;
+        source_metadata: root.auto_next_preview_metadata;
+        has_next: root.auto_next_preview || root.playback_end_menu_has_next;
+        next_title: root.auto_next_preview ? root.auto_next_preview_title : root.playback_end_menu_next_title;
         show_title: root.player_show_title;
         episode_title: root.player_episode_title;
         artwork: root.player_poster;
         safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
         stay => { root.playback_end_stay(); }
-        next => { root.playback_end_next(); }
+        next => { if root.auto_next_preview { root.auto_next_play(); } else { root.playback_end_next(); } }
         details => { root.playback_end_details(); }
     }
 

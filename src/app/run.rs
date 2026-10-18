@@ -1102,6 +1102,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_playback_end_next(move || b.playback_end_next());
     let b = bridge.clone();
+    app.on_auto_next_play(move || b.play_automatic_next());
+    let b = bridge.clone();
     app.on_playback_end_details(move || b.playback_end_details());
     let b = bridge.clone();
     app.on_resume_choice(move |resume| {

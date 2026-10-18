@@ -6,6 +6,9 @@ mod isolation;
 #[path = "shared_layout/animation_feedback.rs"]
 mod animation_feedback;
 
+#[path = "shared_layout/automatic_next_episode.rs"]
+mod automatic_next_episode;
+
 #[path = "shared_layout/desktop_action_menus.rs"]
 mod desktop_action_menus;
 

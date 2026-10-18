@@ -366,6 +366,13 @@ impl Bridge {
                     .map(|(selection, _)| selection.resume_position())
             })
             .flatten();
+        if state.playback.as_ref().is_some_and(|target| {
+            target.force_start_over
+                && target.series_id == context.media_id
+                && target.episode_id == context.request_id
+        }) {
+            context.history_resume = Some(0.0);
+        }
         state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
         self.publish_player_context(&context);
@@ -845,8 +852,14 @@ impl Bridge {
             .progress
             .get(&progress_map_key(&job.media_id, &job.request_id))
             .is_some_and(|p| p.watched);
+        let force_start_over = state.playback.as_ref().is_some_and(|target| {
+            target.force_start_over
+                && target.series_id == job.media_id
+                && target.episode_id == job.request_id
+        });
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
+                history_resume: force_start_over.then_some(0.0),
                 title: job.title.clone(),
                 episode_label: episode
                     .as_ref()

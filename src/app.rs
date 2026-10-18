@@ -593,6 +593,8 @@ struct PlaybackTarget {
     /// act on a replacement stream, even when its episode ID is unchanged.
     session: u64,
     next_episode_dismissed: bool,
+    /// One-shot automatic successor intent; captured into ordinary playback.
+    force_start_over: bool,
     next_episode_id: String,
     next_episode_prefetched: Option<stream_prefetch::PlaybackKey>,
     /// Position the engine should open at (resume). `None` when starting

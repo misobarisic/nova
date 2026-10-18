@@ -5,6 +5,10 @@ import { TrackingButton } from "tracking-controls.slint";
 // half-built controls. Playback policy and the five-second delay live in Rust.
 export component PlaybackEnded inherits Rectangle {
     in property <bool> open;
+    in property <bool> preview;
+    in property <int> seconds;
+    in property <string> source_title;
+    in property <string> source_metadata;
     in property <bool> has_next;
     in property <string> next_title;
     in property <string> show_title;
@@ -54,6 +58,7 @@ export component PlaybackEnded inherits Rectangle {
     init => { root.update_open(); }
     changed open => { root.update_open(); }
     changed has_next => { root.selected = 0; }
+    changed preview => { root.selected = 0; if root.open { root.focus_shell(); } }
     changed artwork => { if root.open { root.retained_artwork = root.artwork; } }
     changed motion => {
         if !root.motion {
@@ -76,9 +81,9 @@ export component PlaybackEnded inherits Rectangle {
             else if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
                 if !e.repeat { root.stay(); } accept
             } else if e.text == Key.UpArrow || e.text == Key.LeftArrow || (e.text == Key.Tab && e.modifiers.shift) {
-                root.selected = Math.mod(root.selected + (root.has_next ? 2 : 1), root.has_next ? 3 : 2); accept
+                root.selected = Math.mod(root.selected + (root.has_next && !root.preview ? 2 : 1), root.has_next && !root.preview ? 3 : 2); accept
             } else if e.text == Key.DownArrow || e.text == Key.RightArrow || e.text == Key.Tab {
-                root.selected = Math.mod(root.selected + 1, root.has_next ? 3 : 2); accept
+                root.selected = Math.mod(root.selected + 1, root.has_next && !root.preview ? 3 : 2); accept
             } else if e.text == Key.Return || e.text == " " {
                 if !e.repeat { root.activate(); } accept
             } else { accept }
@@ -92,7 +97,7 @@ export component PlaybackEnded inherits Rectangle {
             spacing: root.short ? 8px : 16px;
             animate y { duration: Anim.transition_slide; easing: ease-out; }
             Text {
-                text: @tr("Playback finished"); font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
+                text: root.preview ? @tr("Next episode") : @tr("Playback finished"); font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
                 color: Theme.current.accent_soft; horizontal-alignment: center;
             }
             Text {
@@ -111,19 +116,34 @@ export component PlaybackEnded inherits Rectangle {
                 font-size: InterfaceStyle.tv ? 20px : 13px; color: Theme.current.text_player_secondary;
                 horizontal-alignment: center; wrap: no-wrap; overflow: elide;
             }
+            if root.preview: Text {
+                text: root.source_title; color: Theme.current.text_bright;
+                font-size: InterfaceStyle.tv ? 20px : 14px;
+                horizontal-alignment: center; overflow: elide; wrap: no-wrap;
+            }
+            if root.preview && !root.short: Text {
+                text: root.source_metadata; color: Theme.current.text_player_secondary;
+                font-size: InterfaceStyle.tv ? 18px : 12px;
+                horizontal-alignment: center; overflow: elide; wrap: no-wrap;
+            }
+            if root.preview: Text {
+                text: @tr("Starting in {n} second" | "Starting in {n} seconds" % root.seconds);
+                color: Theme.current.text_player_secondary; font-size: InterfaceStyle.tv ? 18px : 12px;
+                horizontal-alignment: center;
+            }
             if root.has_next: TrackingButton {
-                text: @tr("Next episode"); primary: true; compact: root.short;
+                text: root.preview ? @tr("Play now") : @tr("Next episode"); primary: true; compact: root.short;
                 selected: root.selected == 0;
                 clicked => { if root.open { root.next(); } }
             }
             TrackingButton {
-                text: @tr("Stay here"); primary: !root.has_next; compact: root.short;
+                text: root.preview ? @tr("Cancel") : @tr("Stay here"); primary: !root.has_next; compact: root.short;
                 selected: root.selected == (root.has_next ? 1 : 0);
                 clicked => { if root.open { root.stay(); } }
             }
-            TrackingButton {
+            if !root.preview: TrackingButton {
                 text: @tr("Go to details"); compact: root.short;
-                selected: root.selected == (root.has_next ? 2 : 1);
+                selected: root.selected == (root.has_next && !root.preview ? 2 : 1);
                 clicked => { if root.open { root.details(); } }
             }
         }

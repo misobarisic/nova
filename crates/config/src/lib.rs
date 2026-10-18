@@ -758,6 +758,9 @@ cache_settings_type! {
     /// Warm the next episode source list in memory near the end of playback.
     #[serde(default = "default_true")]
     pub prefetch_next_episode_streams: bool,
+    /// Offer an eight-second automatic successor preview at native EOF.
+    #[serde(default)]
+    pub auto_next_episode: bool,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -931,6 +934,7 @@ impl Default for CacheSettings {
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
             prefetch_next_episode_streams: true,
+            auto_next_episode: false,
             animations: true,
             anim_transitions: true,
             anim_hover: true,
@@ -1483,6 +1487,7 @@ mod tests {
         assert_eq!(settings.desktop_hwdec, DesktopHwdec::default());
         assert!(!settings.android_auto_continue);
         assert!(settings.prefetch_next_episode_streams);
+        assert!(!settings.auto_next_episode);
         assert_eq!(
             settings.episode_start_behavior,
             EpisodeStartBehavior::Resume

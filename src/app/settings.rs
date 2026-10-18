@@ -292,6 +292,7 @@ impl Bridge {
             self.filter_playback_languages("", true);
             app.set_android_auto_continue(settings.android_auto_continue);
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
+            app.set_auto_next_episode(settings.auto_next_episode);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
                 EpisodeStartBehavior::Resume => 1,
@@ -528,6 +529,7 @@ impl Bridge {
                 default_subtitle_language: app.get_default_subtitle_language().to_string(),
                 android_auto_continue: app.get_android_auto_continue(),
                 prefetch_next_episode_streams: app.get_prefetch_next_episode_streams(),
+                auto_next_episode: app.get_auto_next_episode(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,
                     2 => EpisodeStartBehavior::Ask,

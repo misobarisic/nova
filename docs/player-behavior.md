@@ -19,6 +19,23 @@ artwork. Staying dismisses this end screen; seeking backward cancels it and lets
 you replay the ending with Play. Source replacement and close reset its delay. Backgrounding suppresses the
 current end menu until playback leaves the end and reaches EOF again. Watch parties retain their coordinator-owned end behavior.
 
+Settings → Player → Automatically play next episode is off by default and syncs
+with device overrides. When enabled, actual EOF first looks up the immediate
+successor through the ordinary verified stream cache/prefetch path. Movies,
+unknown/future air dates, parties and remote-controlled playback never auto-advance.
+All addon replies must finish within the ordinary five-second EOF delay; empty,
+failed or slow discovery falls back to the existing end menu. Nova prefers the
+same release family through its normal recommendation policy, then the first
+playable stream in installed-addon/provider ranking (completed downloads remain
+pinned). Unsupported streams and disabled torrents cannot be selected.
+A known candidate opens a fullscreen artwork preview showing its episode, source
+and a small eight-second countdown. Play now starts at the beginning through the
+ordinary playback path; Cancel, Escape or system Back opens the existing end menu
+immediately. Seeking away, replacing/closing playback, backgrounding, or changing
+source settings/addons revokes pending work and the countdown. Late results and
+repeated actions cannot start a second stream. No discovery activates resolvers,
+torrents or playback before the preview is accepted or its countdown finishes.
+
 Local edits request device sync after 2 seconds without another edit, with a
 10-second ceiling during continuous editing. Ordinary playback checkpoints use
 a fixed 2-minute automatic push deadline that later checkpoints do not postpone;

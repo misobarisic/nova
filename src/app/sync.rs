@@ -2782,6 +2782,26 @@ mod tests {
     }
 
     #[test]
+    fn automatic_next_episode_syncs_independently_and_supports_override() {
+        let local = CacheSettings {
+            auto_next_episode: true,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields.get("auto_next_episode").map(String::as_str),
+            Some("true")
+        );
+        assert!(setting_can_override("auto_next_episode"));
+        let merged = merge_settings_fields(&local, &[("auto_next_episode".into(), "false".into())]);
+        assert!(!merged.auto_next_episode);
+        assert!(merged.prefetch_next_episode_streams);
+    }
+
+    #[test]
     fn next_episode_prefetch_syncs_and_can_be_overridden() {
         let settings = CacheSettings {
             prefetch_next_episode_streams: false,
