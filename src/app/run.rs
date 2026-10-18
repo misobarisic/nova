@@ -1256,8 +1256,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_format_time(move |secs| SharedString::from(crate::player::format_time(secs as f64)));
     app.on_format_volume(move |v| SharedString::from(format!("{:.0}%", v.max(0.0))));
 
-    let p = player.clone();
-    app.on_tracks_popup_opened(move |_kind| p.refresh_tracks());
+    let b = bridge.clone();
+    app.on_tracks_popup_opened(move |kind| {
+        b.player.refresh_tracks();
+        if kind == 2 {
+            b.retry_addon_subtitles();
+        }
+    });
 
     // OSD auto-hide: show on activity, hide after inactivity — 3 s while
     // playing, 5 s while paused so the controls linger for resume.
@@ -1324,6 +1329,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());
             tick_player.tick();
+            tick_bridge.poll_addon_subtitles();
             if was_open
                 && tick_bridge.app().is_some_and(|app| !app.get_player_open())
                 && tick_bridge

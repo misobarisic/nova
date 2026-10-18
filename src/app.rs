@@ -268,6 +268,8 @@ struct HomeCatalogGroup {
 
 #[derive(Default)]
 struct Shared {
+    addon_subtitles: subtitles::State,
+    pending_subtitle_hints: Vec<(String, String)>,
     remote_playback: remote_playback::State,
     party: party::State,
     stream_prefetch: stream_prefetch::Cache,
@@ -796,6 +798,7 @@ mod run;
 mod settings;
 mod settings_sync;
 mod stream_prefetch;
+mod subtitles;
 #[cfg(feature = "update-check")]
 mod updates;
 mod watch_history;

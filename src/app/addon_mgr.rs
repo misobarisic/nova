@@ -1245,6 +1245,7 @@ fn addon_matches(addon: &Installed, query: &str, filter: i32) -> bool {
             }),
             2 => addon.manifest.has_meta(),
             3 => addon.manifest.has_streams(),
+            4 => addon.manifest.has_subtitles(),
             _ => true,
         }
 }

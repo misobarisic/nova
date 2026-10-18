@@ -258,6 +258,7 @@ export component AppWindow inherits Window {
         is_fullscreen <=> root.is_fullscreen;
         audio_tracks <=> root.audio_tracks;
         sub_tracks <=> root.sub_tracks;
+        subtitle_addon_status <=> root.subtitle_addon_status;
         osd_visible <=> root.osd_visible;
         player_poster <=> root.player_poster;
         kb_active <=> root.kb_active;
@@ -1544,6 +1545,7 @@ export component AppWindow inherits Window {
     in-out property <bool> is_fullscreen: false;
     in-out property <[TrackRow]> audio_tracks: [];
     in-out property <[TrackRow]> sub_tracks: [];
+    in-out property <int> subtitle_addon_status: 0;
     in-out property <bool> osd_visible: true;
     // The OSD scrim's live (animated) opacity, mirrored up from the player
     // overlay via `osd_opacity_changed`. Rust uses it to match the display

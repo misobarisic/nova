@@ -41,10 +41,24 @@ component IconBtn inherits Rectangle {
 
 import { MenuRow } from "player-menu-row.slint";
 
+component SubtitleAddonStatus inherits Text {
+    in property <int> status;
+    text: root.status == 1 ? @tr("Searching subtitle addons…")
+        : root.status == 2 ? @tr("Loading subtitle…")
+        : root.status == 3 ? @tr("No addon subtitles found for this video.")
+        : @tr("Could not load addon subtitles. Try again.");
+    color: Theme.current.text_player_muted;
+    font-size: InterfaceStyle.tv ? 20px : 13px;
+    wrap: word-wrap;
+    min-width: 0px;
+    vertical-stretch: 0;
+}
+
 // Dark rounded popup card listing audio/subtitle tracks. Anchored by the
 // caller above the button that opens it.
 component TrackMenu inherits Rectangle {
     in property <[TrackRow]> tracks;
+    in property <int> subtitle_addon_status: 0;
     in property <bool> kb_active: false;
     in property <int> row_icon: 0;   // icon for every track row
     in property <bool> with_off_row: false;
@@ -81,6 +95,8 @@ component TrackMenu inherits Rectangle {
         menu_col := VerticalLayout {
             padding: 8px;
             spacing: 4px;
+
+            if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
 
             if with_off_row: MenuRow {
                 reveal(y, h) => { root.reveal_row(y, h); }
@@ -148,6 +164,7 @@ component SettingsMenu inherits Rectangle {
     in property <string> hwdec_label: "";
     // Track lists and the current-selection summaries on the root rows.
     in property <[TrackRow]> sub_tracks;
+    in property <int> subtitle_addon_status: 0;
     in property <[TrackRow]> audio_tracks;
     in property <string> sub_label: "";
     in property <string> audio_label: "";
@@ -406,6 +423,7 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 2: VerticalLayout {
                         width: 100%;
                         spacing: 4px;
+                        if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             label: @tr("Use global default");
@@ -640,6 +658,7 @@ export component PlayerOverlay {
     // A native menu-row/preset scope may disappear when a submenu changes.
     // The player scope survives every menu body and owns nearest-layer Back.
     changed settings_page => {
+        if root.settings_page == 2 { root.tracks_popup_opened(2); }
         if root.settings_page == 1 { root.kb_menu = root.hw_plus_available ? 0 : 1; }
         key_scope.focus();
     }
@@ -659,6 +678,7 @@ export component PlayerOverlay {
     in-out property <bool> is_fullscreen: false;
     in-out property <[TrackRow]> audio_tracks: [];
     in-out property <[TrackRow]> sub_tracks: [];
+    in-out property <int> subtitle_addon_status: 0;
     in-out property <bool> osd_visible: true;
     // Whether faded controls may run their actions. Opacity alone does not
     // remove hit-testing, so handlers check this before acting.
@@ -2411,6 +2431,7 @@ export component PlayerOverlay {
                             row_icon: 2;
                             with_off_row: true;
                             tracks: root.sub_tracks;
+                            subtitle_addon_status: root.subtitle_addon_status;
                             focused_idx: root.kb_menu;
                             kb_active: root.kb_active;
                             pick(idx) => { root.kb_active = false; root.pick_sub_track(idx); }
@@ -2566,6 +2587,7 @@ export component PlayerOverlay {
             selected_index: root.decoder_selected;
             hwdec_label: root.decode_label;
             sub_tracks: root.sub_tracks;
+            subtitle_addon_status: root.subtitle_addon_status;
             audio_tracks: root.audio_tracks;
             sub_label: root.sub_label;
             audio_label: root.audio_label;

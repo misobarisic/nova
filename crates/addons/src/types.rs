@@ -73,6 +73,10 @@ impl Manifest {
         self.has_resource("stream")
     }
 
+    pub fn has_subtitles(&self) -> bool {
+        self.has_resource("subtitles")
+    }
+
     /// Match the resource's media types and opaque ID prefixes. Detailed
     /// resource declarations have their own restrictions; plain declarations
     /// inherit the manifest's restrictions, as specified by Stremio.
@@ -456,6 +460,17 @@ pub struct Subtitle {
     pub lang: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
+}
+
+impl Subtitle {
+    /// Subtitle addons supply remote media, never local paths or mpv pseudo-URLs.
+    pub fn is_remote(&self) -> bool {
+        self.url.len() <= 4096
+            && !self.url.chars().any(char::is_control)
+            && url::Url::parse(&self.url).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+            })
+    }
 }
 
 fn stringify(value: &Value) -> Option<String> {

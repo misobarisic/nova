@@ -2975,6 +2975,11 @@ impl Bridge {
             self.apply_stream_filter();
         }
 
+        self.shared.lock().unwrap().pending_subtitle_hints = if usable {
+            stream.card.subtitle_hints.clone()
+        } else {
+            Vec::new()
+        };
         match stream.source.clone() {
             StreamSource::Url(url) => {
                 // Player backend (Settings → Player): external hands the URL to

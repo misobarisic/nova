@@ -3181,3 +3181,15 @@ msgstr "Kasnije"
 
 msgid "HW uses copy-back decoding with a software fallback. SW uses software decoding."
 msgstr "HW koristi hardversko dekodiranje uz kopiranje u radnu memoriju i po potrebi softversko dekodiranje. SW koristi softversko dekodiranje."
+
+msgid "Searching subtitle addons…"
+msgstr "Pretraživanje dodataka za titlove…"
+
+msgid "Loading subtitle…"
+msgstr "Učitavanje titla…"
+
+msgid "No addon subtitles found for this video."
+msgstr "Nisu pronađeni titlovi iz dodataka za ovaj videozapis."
+
+msgid "Could not load addon subtitles. Try again."
+msgstr "Nije moguće učitati titlove iz dodataka. Pokušajte ponovno."

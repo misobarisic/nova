@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Default)]
 struct PlaybackContext {
+    subtitle_hints: Vec<(String, String)>,
     title: String,
     episode_label: String,
     osd_episode_title: String,
@@ -276,6 +277,7 @@ impl Bridge {
                 }),
         });
         let mut context = state.playback_intent.as_ref().unwrap().context.clone();
+        context.subtitle_hints = std::mem::take(&mut state.pending_subtitle_hints);
         let modal = state
             .modal_item
             .as_ref()
@@ -1270,6 +1272,11 @@ impl Bridge {
         ) {
             Ok(()) => {
                 self.mark_playback_opened(true);
+                self.start_addon_subtitles(
+                    &context.media_type,
+                    &context.request_id,
+                    &context.subtitle_hints,
+                );
                 true
             }
             Err(e) => {

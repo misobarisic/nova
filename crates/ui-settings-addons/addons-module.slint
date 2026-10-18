@@ -426,7 +426,7 @@ export component SettingsAddonsModule inherits Window {
                         height: 40px;
                         spacing: 8px;
                         alignment: start;
-                        for caption[i] in [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")]: LibraryFilterChip {
+                        for caption[i] in [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams"), @tr("Subtitles")]: LibraryFilterChip {
                             label: caption;
                             selected: SettingsBridge.addon_capability_filter == i;
                             touch_feedback: SettingsBridge.is_android;
@@ -436,7 +436,7 @@ export component SettingsAddonsModule inherits Window {
                             picked => { capability_rail.pick(i); }
                             navigate(direction) => {
                                 SettingsStyle.keyboard-mode = true;
-                                capability_rail.pick(Math.mod(i + direction + 4, 4));
+                                capability_rail.pick(Math.mod(i + direction + 5, 5));
                             }
                             focus_changed(focused) => {
                                 if focused {

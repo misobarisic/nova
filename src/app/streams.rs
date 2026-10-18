@@ -175,6 +175,7 @@ pub(crate) struct StreamCardText {
     pub description: String,
     pub size: String,
     pub binge_group: Option<String>,
+    pub subtitle_hints: Vec<(String, String)>,
 }
 
 pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
@@ -182,6 +183,22 @@ pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
     let display = stream_display(stream);
     let detail = display.strip_prefix(&label).unwrap_or_default().trim();
     let mut card = split_stream_card(&label, detail);
+    if let Some(hints) = stream.extra.get("behaviorHints") {
+        for key in ["filename", "videoHash", "videoSize"] {
+            let Some(value) = hints.get(key) else {
+                continue;
+            };
+            let value = value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|v| v.to_string()));
+            if let Some(value) = value.filter(|value| {
+                !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+            }) {
+                card.subtitle_hints.push((key.into(), value));
+            }
+        }
+    }
     // Stremio addons may expose the selected video's byte size in hints.
     // Read this before falling back to human-readable torrent metadata.
     card.binge_group = stream
@@ -220,6 +237,7 @@ fn split_stream_card(label: &str, detail: &str) -> StreamCardText {
         description: description.to_owned(),
         size: String::new(),
         binge_group: None,
+        subtitle_hints: Vec::new(),
     }
 }
 

@@ -107,6 +107,13 @@ impl Bridge {
     }
 
     pub(super) fn pick_playback_track(&self, audio: bool, id: i32) {
+        if !audio {
+            self.cancel_subtitle_download();
+            if id < -1 {
+                self.load_addon_subtitle(id, true);
+                return;
+            }
+        }
         if let Some(choice) = self.player.pick_track_preference(audio, id) {
             self.remember_playback_preference(
                 if audio { 0 } else { 1 },
@@ -130,11 +137,21 @@ impl Bridge {
     }
 
     pub(super) fn restore_playback_default(&self, control: i32) {
+        if control == 1 {
+            self.cancel_subtitle_download();
+        }
         if !(0..=3).contains(&control) {
             return;
         }
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         self.player.restore_playback_default(control, &settings);
+        if control == 1 {
+            self.shared
+                .lock()
+                .unwrap()
+                .addon_subtitles
+                .automatic_attempted = false;
+        }
         self.remember_playback_preference(control, None, true);
         self.refresh_effective_speed();
         self.refresh_subtitle_style();

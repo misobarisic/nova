@@ -202,6 +202,7 @@ impl Bridge {
 
     /// Native close and explicit Stop converge here once per opening.
     pub(super) fn complete_playback_close(&self) {
+        self.clear_addon_subtitles();
         #[cfg(target_os = "android")]
         android_player::player_brightness_reset();
         self.finish_playback_request();

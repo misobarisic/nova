@@ -34,9 +34,12 @@ pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod gpu_screenshot;
 
+mod addon_subtitles;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod desktop_decoder;
 mod subtitle_position;
+mod subtitle_sync;
+pub use addon_subtitles::OnlineSubtitle;
 mod track_preferences;
 use libmpv2::Mpv;
 use nova_config::playback_preferences::{
@@ -985,6 +988,10 @@ struct State {
     pending_headers: Mutex<Vec<(String, String)>>,
     /// External subtitle files to load with the next stream.
     pending_subtitles: Mutex<Vec<String>>,
+    online_subtitles: Mutex<Vec<OnlineSubtitle>>,
+    subtitle_sync: Mutex<subtitle_sync::SubtitleSync>,
+    #[cfg(target_os = "android")]
+    loaded_online_subtitle: Mutex<Option<addon_subtitles::LoadedSubtitle>>,
     /// Playback of the current session actually produced frames.
     started: AtomicBool,
     /// The overlay is waiting for an addon URL (or showing its error), not mpv.
@@ -1087,6 +1094,12 @@ impl State {
             .unwrap()
             .set_base(mpv, style.position as f64);
         apply_subtitle_style(mpv, style, self.native_subtitle_defaults);
+        let delay = self
+            .subtitle_sync
+            .lock()
+            .unwrap()
+            .delay(mpv, style.delay as f64);
+        let _ = mpv.set_property("sub-delay", delay);
     }
 }
 
@@ -1269,6 +1282,10 @@ impl Player {
             pending: Mutex::new(None),
             pending_headers: Mutex::new(Vec::new()),
             pending_subtitles: Mutex::new(Vec::new()),
+            online_subtitles: Mutex::new(Vec::new()),
+            subtitle_sync: Mutex::new(subtitle_sync::SubtitleSync::default()),
+            #[cfg(target_os = "android")]
+            loaded_online_subtitle: Mutex::new(None),
             started: AtomicBool::new(false),
             source_waiting: AtomicBool::new(false),
             #[cfg(not(target_os = "android"))]
@@ -1776,7 +1793,8 @@ impl Player {
         allow_external: bool,
     ) -> Result<(), String> {
         {
-            let _mpv = self.state.mpv.lock().unwrap();
+            let mpv = self.state.mpv.lock().unwrap();
+            self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());
             self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
             self.state.started.store(false, Ordering::SeqCst);
         }
@@ -1806,6 +1824,11 @@ impl Player {
             manual_subtitles: false,
         };
         *self.state.preference_source.lock().unwrap() = url.to_owned();
+        self.state.online_subtitles.lock().unwrap().clear();
+        #[cfg(target_os = "android")]
+        {
+            self.state.loaded_online_subtitle.lock().unwrap().take();
+        }
         self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Some(err) = self.state.mpv_error.lock().unwrap().as_ref() {
             return Err(err.clone());
@@ -2282,6 +2305,15 @@ impl Player {
                     .find(|t| t.audio == audio && t.id == track_id)?;
                 TrackChoice::Track(track.descriptor)
             };
+            if !audio {
+                // mpv cannot select the same track in primary and secondary
+                // slots. Release an invisible reference before a viewer pick.
+                self.state
+                    .subtitle_sync
+                    .lock()
+                    .unwrap()
+                    .release_reference(mpv);
+            }
             mpv.set_property(
                 if audio { "aid" } else { "sid" },
                 if track_id < 0 {
@@ -2337,6 +2369,13 @@ impl Player {
                     session.preferences.title.subtitle_style = None;
                     session.preferences.default_subtitle_style =
                         settings.subtitle_style.normalized();
+                    if let Some(mpv) = mpv.as_ref() {
+                        self.state
+                            .subtitle_sync
+                            .lock()
+                            .unwrap()
+                            .reset_timing(mpv, false);
+                    }
                 }
                 _ => return,
             }
@@ -2350,6 +2389,13 @@ impl Player {
                         let _ = mpv.set_property("speed", session.preferences.speed() as f64);
                     }
                 } else {
+                    if control == 1 {
+                        self.state
+                            .subtitle_sync
+                            .lock()
+                            .unwrap()
+                            .release_reference(mpv);
+                    }
                     apply_track_options(mpv, &session.preferences, control == 0);
                 }
             }
@@ -2384,14 +2430,24 @@ impl Player {
     }
 
     pub fn effective_subtitle_style(&self) -> nova_config::playback_preferences::SubtitleStyle {
-        self.resolve_subtitle_style(
+        let mpv = self.state.mpv.lock().unwrap();
+        let mut style = self.resolve_subtitle_style(
             self.state
                 .preferences
                 .lock()
                 .unwrap()
                 .preferences
                 .subtitle_style(),
-        )
+        );
+        if let Some(mpv) = mpv.as_ref() {
+            style.delay = self
+                .state
+                .subtitle_sync
+                .lock()
+                .unwrap()
+                .delay(mpv, style.delay as f64) as f32;
+        }
+        style
     }
 
     pub fn resolve_subtitle_style(
@@ -2416,6 +2472,13 @@ impl Player {
             .with_value(index, value);
         session.preferences.title.subtitle_style = Some(patch);
         if let Some(mpv) = mpv.as_ref() {
+            if index == 0 {
+                self.state
+                    .subtitle_sync
+                    .lock()
+                    .unwrap()
+                    .reset_timing(mpv, true);
+            }
             let style = session.preferences.subtitle_style();
             self.state.apply_subtitle_style(mpv, style);
         }
@@ -2454,9 +2517,17 @@ impl Player {
         let mpv = self.state.mpv.lock().unwrap();
         let mut session = self.state.preferences.lock().unwrap();
         if session.preferences.default_subtitle_style != settings.subtitle_style.normalized() {
+            let old_delay = session.preferences.subtitle_style().delay;
             session.preferences.default_subtitle_style = settings.subtitle_style.normalized();
             if let Some(mpv) = mpv.as_ref() {
                 let style = session.preferences.subtitle_style();
+                if old_delay != style.delay {
+                    self.state
+                        .subtitle_sync
+                        .lock()
+                        .unwrap()
+                        .reset_timing(mpv, true);
+                }
                 self.state.apply_subtitle_style(mpv, style);
             }
         }
@@ -2482,6 +2553,8 @@ impl Player {
         {
             return false;
         }
+        #[cfg(target_os = "android")]
+        self.restore_online_subtitle(mpv);
         let Ok(raw) = mpv.get_property::<String>("track-list") else {
             return false;
         };
@@ -2514,6 +2587,16 @@ impl Player {
                 )
             };
             if let Some(id) = select_track(&tracks, audio, saved, global) {
+                if !audio
+                    && mpv.get_property::<String>("sid").ok().as_deref()
+                        != Some(id.to_string().as_str())
+                {
+                    self.state
+                        .subtitle_sync
+                        .lock()
+                        .unwrap()
+                        .release_reference(mpv);
+                }
                 let _ = mpv.set_property(
                     if audio { "aid" } else { "sid" },
                     if id < 0 {
@@ -2527,6 +2610,11 @@ impl Player {
                 // otherwise a saved kind that is missing could pick commentary.
                 let _ = mpv.set_property(if audio { "alang" } else { "slang" }, "");
                 if !audio {
+                    self.state
+                        .subtitle_sync
+                        .lock()
+                        .unwrap()
+                        .release_reference(mpv);
                     let _ = mpv.set_property("subs-fallback", "default");
                 }
                 let _ = mpv.set_property(if audio { "aid" } else { "sid" }, "auto");
@@ -2645,6 +2733,27 @@ impl Player {
             }
         }
 
+        for (index, subtitle) in self
+            .state
+            .online_subtitles
+            .lock()
+            .unwrap()
+            .iter()
+            .take(200)
+            .enumerate()
+        {
+            if !sub_rows.iter().any(|row| {
+                row.title.as_str() == subtitle.title && row.lang.as_str() == subtitle.language
+            }) {
+                sub_rows.push(TrackRow {
+                    index: -2 - index as i32,
+                    lang: subtitle.language.clone().into(),
+                    title: subtitle.title.clone().into(),
+                    codec: Default::default(),
+                    selected: false,
+                });
+            }
+        }
         let sub_label = Self::track_selection_label(&sub_rows);
         let audio_label = Self::track_selection_label(&audio_rows);
         app.set_audio_tracks(Rc::new(VecModel::from(audio_rows)).into());
@@ -2745,7 +2854,8 @@ impl Player {
             });
         self.state.source_waiting.store(false, Ordering::SeqCst);
         {
-            let _mpv = self.state.mpv.lock().unwrap();
+            let mpv = self.state.mpv.lock().unwrap();
+            self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());
             self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
             self.state.started.store(false, Ordering::SeqCst);
         }
@@ -2853,6 +2963,8 @@ impl Player {
         }
 
         self.resolve_preferred_tracks();
+
+        self.poll_subtitle_sync();
 
         // Sample actual starvation on the regular native-player cadence even
         // when party telemetry is sent less often or a UI seek skips mirroring.
@@ -3481,6 +3593,7 @@ impl Player {
         let Some(url) = self.state.last_url.lock().unwrap().clone() else {
             return false;
         };
+        self.arm_online_subtitle_restore();
         *self.state.pending_headers.lock().unwrap() =
             self.state.last_headers.lock().unwrap().clone();
         *self.state.pending_subtitles.lock().unwrap() =

@@ -6,6 +6,7 @@
 //! * `GET /catalog/{type}/{id}.json[?extra=…]` — lists of media
 //! * `GET /meta/{type}/{id}.json` — details about one piece of media
 //! * `GET /stream/{type}/{id}.json` — stream sources for one piece of media
+//! * `GET /subtitles/{type}/{id}.json` — external subtitle choices
 //!
 //! This crate is transport-agnostic: [`Addon`] knows how to normalise install
 //! URLs, build endpoint URLs ([`Addon::manifest_url`], …) and parse response
@@ -209,6 +210,35 @@ impl Addon {
     /// URL of `GET /stream/{type}/{id}.json`.
     pub fn stream_url(&self, type_: &str, id: &str) -> String {
         self.join(&format!("stream/{type_}/{id}.json")).to_string()
+    }
+
+    /// Subtitle extras identify the selected release, not just the title.
+    pub fn subtitles_url(&self, type_: &str, id: &str, extra: &[(&str, &str)]) -> String {
+        let extras = extra
+            .iter()
+            .map(|(key, value)| format!("{key}={}", Self::encode_segment(value)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let suffix = if extras.is_empty() {
+            String::new()
+        } else {
+            format!("/{extras}")
+        };
+        self.join(&format!(
+            "subtitles/{}/{id}{suffix}.json",
+            Self::encode_segment(type_),
+            id = Self::encode_segment(id)
+        ))
+        .to_string()
+    }
+
+    pub fn parse_subtitles(bytes: &[u8]) -> Result<Vec<Subtitle>, serde_json::Error> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            #[serde(default)]
+            subtitles: Vec<Subtitle>,
+        }
+        serde_json::from_slice::<Response>(bytes).map(|response| response.subtitles)
     }
 
     // ---- Response parsers (transport-agnostic) -----------------------------
@@ -761,5 +791,47 @@ mod tests {
         assert_eq!(item.videos[1].episode_number(), Some(2));
         assert_eq!(item.videos[2].season, Some(0));
         assert_eq!(item.videos[2].episode_number(), Some(1)); // via `number`
+    }
+}
+
+#[cfg(test)]
+mod subtitle_tests {
+    use super::*;
+
+    #[test]
+    fn opensubtitles_manifest_matches_movies_and_episode_ids() {
+        let manifest = Addon::parse_manifest(br#"{"id":"org.stremio.opensubtitlesv3","version":"1.0.0","name":"OpenSubtitles v3","catalogs":[],"resources":["subtitles"],"types":["movie","series"],"idPrefixes":["tt"]}"#).unwrap();
+        assert!(manifest.has_subtitles());
+        assert!(manifest.accepts("subtitles", "movie", "tt1160419"));
+        assert!(manifest.accepts("subtitles", "series", "tt0944947:1:1"));
+        assert!(!manifest.accepts("subtitles", "series", "mal:1"));
+        assert!(!manifest.accepts("stream", "movie", "tt1160419"));
+    }
+
+    #[test]
+    fn subtitle_extras_cannot_change_request_path_or_parameter_boundaries() {
+        let addon = Addon::new("https://example.com/configured/manifest.json").unwrap();
+        assert_eq!(
+            addon.subtitles_url("series", "tt0944947:1:1", &[]),
+            "https://example.com/configured/subtitles/series/tt0944947%3A1%3A1.json"
+        );
+        let url = addon.subtitles_url(
+            "movie",
+            "tt1160419",
+            &[
+                ("filename", "Movie /x&videoSize=0.mkv"),
+                ("videoSize", "1234"),
+            ],
+        );
+        assert!(
+            url.ends_with("/filename=Movie%20%2Fx%26videoSize%3D0%2Emkv&videoSize=1234.json"),
+            "{url}"
+        );
+        let rows = Addon::parse_subtitles(
+            br#"{"subtitles":[{"id":"english","url":"https://example.com/sub.srt","lang":"eng"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(rows[0].lang.as_deref(), Some("eng"));
+        assert!(Addon::parse_subtitles(br#"{"subtitles":"invalid"}"#).is_err());
     }
 }
