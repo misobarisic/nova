@@ -479,6 +479,26 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
             }
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                SettingsRow {
+                    setting-key: "intro_skip_confidence";
+                    row-title: @tr("Automatic skip confidence");
+                    row-desc: @tr("Minimum confidence for automatic intro and recap skips. Lower-confidence timings still offer a manual prompt. Applies to providers that report confidence.");
+                    confidence_preset := Dropdown {
+                        width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
+                        model: [@tr("Any (0%)"), @tr("Low (25%)"), @tr("Balanced (50%)"), @tr("High (80%)"), @tr("Very high (95%)")];
+                        current-index <=> SettingsBridge.intro_skip_confidence_index;
+                        roomy: true;
+                        border-color: SettingsBridge.kb_zone == 9 && SettingsBridge.kb_active && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 9 ? Theme.current.focus_ring : Theme.current.control_border;
+                        selected(_) => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 9;
+                            SettingsContent.schedule_setting("intro_skip_confidence");
+                        }
+                    }
+                }
+            }
         }
     }
 }

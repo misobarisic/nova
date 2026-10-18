@@ -309,6 +309,7 @@ impl Bridge {
             self.filter_playback_languages("", true);
             app.set_android_auto_continue(settings.android_auto_continue);
             app.set_intro_skip_mode_index(settings.intro_skip_mode.index());
+            app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
             app.set_auto_next_episode(settings.auto_next_episode);
             app.set_episode_start_index(match settings.episode_start_behavior {
@@ -549,6 +550,10 @@ impl Bridge {
                 android_auto_continue: app.get_android_auto_continue(),
                 intro_skip_mode: nova_config::IntroSkipMode::from_index(
                     app.get_intro_skip_mode_index(),
+                )
+                .unwrap_or_default(),
+                intro_skip_confidence: nova_config::IntroSkipConfidence::from_index(
+                    app.get_intro_skip_confidence_index(),
                 )
                 .unwrap_or_default(),
                 prefetch_next_episode_streams: app.get_prefetch_next_episode_streams(),

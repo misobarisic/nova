@@ -15,6 +15,19 @@ struct Segment {
     start: f64,
     end: f64,
     consumed: bool,
+    confidence_percent: Option<u8>,
+}
+
+impl Segment {
+    fn persisted(&self) -> DownloadIntroSegment {
+        DownloadIntroSegment {
+            kind: self.kind,
+            start_ms: (self.start * 1000.0).round() as u64,
+            end_ms: (self.end * 1000.0).round() as u64,
+            prompt_only: false,
+            confidence_percent: self.confidence_percent,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -32,6 +45,22 @@ impl Session {
         self.segments
             .iter()
             .position(|s| position.is_finite() && position >= s.start && position < s.end - 0.5)
+    }
+
+    fn offer(&mut self, position: f64, auto: bool, minimum: u8) -> Option<(i32, f64, bool)> {
+        for segment in &mut self.segments {
+            if position >= segment.end {
+                segment.consumed = true;
+            }
+        }
+        let index = self.active(position)?;
+        let segment = &mut self.segments[index];
+        let skip =
+            auto && segment.confidence_percent.is_none_or(|c| c >= minimum) && !segment.consumed;
+        if skip {
+            segment.consumed = true;
+        }
+        Some((segment.kind, segment.end, skip))
     }
 
     fn publish(&mut self, native: u64, mut segments: Vec<Segment>) {
@@ -249,14 +278,7 @@ pub(super) fn prepare_download(
     DownloadIntroTimings::capture(
         path,
         (duration * 1000.0).round() as u64,
-        segments
-            .into_iter()
-            .map(|s| DownloadIntroSegment {
-                kind: s.kind,
-                start_ms: (s.start * 1000.0).round() as u64,
-                end_ms: (s.end * 1000.0).round() as u64,
-            })
-            .collect(),
+        segments.iter().map(Segment::persisted).collect(),
     )
 }
 
@@ -295,7 +317,10 @@ fn restore_segments(timings: &DownloadIntroTimings, duration: f64) -> Vec<Segmen
     for saved in &timings.segments {
         let start = saved.start_ms as f64 / 1000.0;
         let end = saved.end_ms as f64 / 1000.0;
-        if !matches!(saved.kind, 1 | 2) || !valid_interval(start, end, duration) {
+        if !matches!(saved.kind, 1 | 2)
+            || !valid_interval(start, end, duration)
+            || saved.confidence_percent.is_some_and(|c| c > 100)
+        {
             return Vec::new();
         }
         segments.push(Segment {
@@ -303,6 +328,13 @@ fn restore_segments(timings: &DownloadIntroTimings, duration: f64) -> Vec<Segmen
             start,
             end,
             consumed: false,
+            // The first prompt-only APK did not retain the exact score. Keep
+            // those legacy entries manual unless the viewer chooses Any.
+            confidence_percent: if saved.prompt_only {
+                Some(0)
+            } else {
+                saved.confidence_percent
+            },
         });
     }
     segments.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -331,7 +363,7 @@ fn parse(lookup: &Lookup, bytes: &[u8], duration: f64) -> Vec<Segment> {
         return Vec::new();
     };
     let mut segments = Vec::new();
-    let mut add = |kind, start: f64, end: f64| {
+    let mut add = |kind, start: f64, end: f64, confidence_percent| {
         // Bounded, finite early-episode intervals with content left afterwards.
         if valid_interval(start, end, duration) {
             segments.push(Segment {
@@ -339,6 +371,7 @@ fn parse(lookup: &Lookup, bytes: &[u8], duration: f64) -> Vec<Segment> {
                 start,
                 end,
                 consumed: false,
+                confidence_percent,
             });
         }
     };
@@ -363,7 +396,7 @@ fn parse(lookup: &Lookup, bytes: &[u8], duration: f64) -> Vec<Segment> {
                     row["interval"]["startTime"].as_f64(),
                     row["interval"]["endTime"].as_f64(),
                 ) {
-                    add(kind, start, end);
+                    add(kind, start, end, None);
                 }
             }
         }
@@ -381,16 +414,26 @@ fn parse(lookup: &Lookup, bytes: &[u8], duration: f64) -> Vec<Segment> {
             }
             for (field, kind) in [("intro", 1), ("recap", 2)] {
                 for row in value[field].as_array().into_iter().flatten().take(16) {
-                    if !row["confidence"].as_f64().is_some_and(|c| c >= 0.8) {
+                    let Some(confidence) = row["confidence"]
+                        .as_f64()
+                        .filter(|c| c.is_finite() && *c >= 0.0 && *c <= 1.0)
+                    else {
                         continue;
-                    }
+                    };
                     let start = if row["start_ms"].is_null() {
                         Some(0.0)
                     } else {
                         row["start_ms"].as_f64()
                     };
                     if let (Some(start), Some(end)) = (start, row["end_ms"].as_f64()) {
-                        add(kind, start / 1000.0, end / 1000.0);
+                        // Keep evidence independent of the selected preset so
+                        // changing it works immediately, including offline.
+                        add(
+                            kind,
+                            start / 1000.0,
+                            end / 1000.0,
+                            Some((confidence * 100.0).floor() as u8),
+                        );
                     }
                 }
             }
@@ -442,7 +485,13 @@ impl Bridge {
     }
 
     fn intro_skip_kind(&self, app: &AppWindow) -> i32 {
-        let global = self.shared.lock().unwrap().cache_settings.intro_skip_mode;
+        let (global, minimum) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.cache_settings.intro_skip_mode,
+                state.cache_settings.intro_skip_confidence.percent(),
+            )
+        };
         let mode = self.player.intro_skip_mode(global);
         if mode == nova_config::IntroSkipMode::Off || !self.intro_skip_eligible(app) {
             return 0;
@@ -525,14 +574,7 @@ impl Bridge {
                     && let (Some(job), Some(mut stamp)) = (download.as_ref(), stamp)
                 {
                     stamp.duration_ms = (duration * 1000.0).round() as u64;
-                    stamp.segments = segments
-                        .iter()
-                        .map(|s| DownloadIntroSegment {
-                            kind: s.kind,
-                            start_ms: (s.start * 1000.0).round() as u64,
-                            end_ms: (s.end * 1000.0).round() as u64,
-                        })
-                        .collect();
+                    stamp.segments = segments.iter().map(Segment::persisted).collect();
                     bridge.downloads.retain_intro(job, stamp);
                 }
                 FETCHING.store(false, Ordering::Release);
@@ -561,19 +603,7 @@ impl Bridge {
             if !compatible_duration(target.intro_skip.duration, duration) {
                 return 0;
             }
-            for segment in &mut target.intro_skip.segments {
-                if position >= segment.end {
-                    segment.consumed = true;
-                }
-            }
-            target.intro_skip.active(position).map(|index| {
-                let segment = &mut target.intro_skip.segments[index];
-                let skip = auto && !segment.consumed;
-                if skip {
-                    segment.consumed = true;
-                }
-                (segment.kind, segment.end, skip)
-            })
+            target.intro_skip.offer(position, auto, minimum)
         };
         if let Some((kind, end, automatic)) = offer {
             if automatic {
@@ -644,6 +674,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                confidence_percent: None,
             }],
             ..Session::default()
         };
@@ -668,6 +699,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                confidence_percent: None,
             }],
         );
         assert!(session.segments[0].consumed);
@@ -687,6 +719,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                confidence_percent: None,
             }],
         );
         assert!(session.segments.is_empty());
@@ -720,7 +753,128 @@ mod tests {
         let low = String::from_utf8(bytes.to_vec())
             .unwrap()
             .replace("0.95", "0.5");
-        assert!(parse(&request, low.as_bytes(), 1444.0).is_empty());
+        assert_eq!(
+            parse(&request, low.as_bytes(), 1444.0)[0].confidence_percent,
+            Some(50)
+        );
+        for confidence in ["-0.1", "1.1", "null", "\"0.95\""] {
+            let invalid = String::from_utf8(bytes.to_vec())
+                .unwrap()
+                .replace("0.95", confidence);
+            assert!(parse(&request, invalid.as_bytes(), 1444.0).is_empty());
+        }
+    }
+
+    #[test]
+    fn confidence_presets_use_inclusive_thresholds_without_hiding_manual_offers() {
+        let request = Lookup::IntroDb {
+            key: "imdb_id".into(),
+            id: "tt0460649".into(),
+            season: 1,
+            episode: 6,
+        };
+        for score in [0, 25, 50, 80, 95, 100] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"type":"tv", "season":1, "episode":6,
+                "group_duration_ms":1444000, "intro":[{"start_ms":30000,"end_ms":120000,"confidence":score as f64 / 100.0}]})).unwrap();
+            for index in 0..5 {
+                let minimum = nova_config::IntroSkipConfidence::from_index(index)
+                    .unwrap()
+                    .percent();
+                let mut session = Session {
+                    segments: parse(&request, &bytes, 1444.0),
+                    ..Session::default()
+                };
+                assert_eq!(session.offer(45.0, false, minimum), Some((1, 120.0, false)));
+                assert_eq!(
+                    session.offer(45.0, true, minimum),
+                    Some((1, 120.0, score >= minimum))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reported_episodes_respect_confidence_presets_online_and_offline() {
+        // Actual provider responses for HIMYM S1E6 and Code Geass S2E21.
+        // Their timings were previously discarded by the automatic confidence gate.
+        for (id, season, episode, duration, start, end, confidence) in [
+            (
+                "tt0460649",
+                1,
+                6,
+                1330.0,
+                Value::Null,
+                13987,
+                0.5667456894709746,
+            ),
+            (
+                "tt0994314",
+                2,
+                21,
+                1448.0,
+                Value::from(25026),
+                115102,
+                0.5963626933041053,
+            ),
+        ] {
+            let request = Lookup::IntroDb {
+                key: "imdb_id".into(),
+                id: id.into(),
+                season,
+                episode,
+            };
+            let mut body = serde_json::json!({
+                "type": "tv", "season": season, "episode": episode,
+                "group_duration_ms": duration * 1000.0,
+                "intro": [{"start_ms": start, "end_ms": end, "confidence": confidence}]
+            });
+            let parse_body = |body: &Value, duration| {
+                parse(&request, &serde_json::to_vec(body).unwrap(), duration)
+            };
+            let segments = parse_body(&body, duration);
+            assert_eq!(segments.len(), 1);
+            let position = segments[0].start + 2.0;
+            let expected = Some((1, end as f64 / 1000.0, false));
+            let mut session = Session {
+                segments,
+                ..Session::default()
+            };
+            assert_eq!(session.offer(position, false, 80), expected);
+            assert_eq!(session.offer(position, true, 80), expected);
+            session.seek(position, 0.0);
+            assert_eq!(session.offer(position, false, 80), expected);
+
+            // A download/cache round trip must not promote this evidence to auto-skip.
+            let saved = DownloadIntroTimings {
+                duration_ms: (duration * 1000.0) as u64,
+                segments: session.segments.iter().map(Segment::persisted).collect(),
+                artifact_size: 0,
+                artifact_modified_ns: 0,
+            };
+            let restored = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+            session.segments = restore_segments(&restored, duration);
+            assert_eq!(session.offer(position, true, 80), expected);
+            assert_eq!(
+                session.offer(
+                    position,
+                    true,
+                    nova_config::IntroSkipConfidence::default().percent()
+                ),
+                Some((1, end as f64 / 1000.0, true))
+            );
+            assert_eq!(session.offer(position, true, 0), expected); // once per playback
+            assert!(parse_body(&body, duration + 30.0).is_empty());
+            body["episode"] = Value::from(episode + 1);
+            assert!(parse_body(&body, duration).is_empty());
+            body["episode"] = Value::from(episode);
+            body["intro"][0]["confidence"] = Value::from(0.8);
+            session.segments = parse_body(&body, duration);
+            assert_eq!(
+                session.offer(position, true, 80),
+                Some((1, end as f64 / 1000.0, true))
+            );
+            assert_eq!(session.offer(position, true, 80), expected);
+        }
     }
 
     #[test]
@@ -787,11 +941,16 @@ mod tests {
                 kind: 1,
                 start_ms: 30000,
                 end_ms: 120000,
+                prompt_only: false,
+                confidence_percent: None,
             }],
             artifact_size: 0,
             artifact_modified_ns: 0,
         };
         assert_eq!(restore_segments(&saved, 1444.0).len(), 1);
+        saved.segments[0].confidence_percent = Some(101);
+        assert!(restore_segments(&saved, 1444.0).is_empty());
+        saved.segments[0].confidence_percent = Some(50);
         assert!(restore_segments(&saved, 1500.0).is_empty());
         saved.segments[0].end_ms = 1444000;
         assert!(restore_segments(&saved, 1444.0).is_empty());
@@ -807,5 +966,19 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn legacy_download_scores_remain_conservative_for_stricter_presets() {
+        for (flag, minimum, auto) in [(false, 80, true), (false, 95, false), (true, 50, false)] {
+            let raw = serde_json::json!({"duration_ms":1444000,"artifact_size":0,"artifact_modified_ns":0,
+                "segments":[{"kind":1,"start_ms":30000,"end_ms":120000,"prompt_only":flag}]});
+            let timings = serde_json::from_value(raw).unwrap();
+            let mut session = Session {
+                segments: restore_segments(&timings, 1444.0),
+                ..Session::default()
+            };
+            assert_eq!(session.offer(45.0, true, minimum), Some((1, 120.0, auto)));
+        }
     }
 }

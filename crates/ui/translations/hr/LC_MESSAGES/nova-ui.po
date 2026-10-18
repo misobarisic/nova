@@ -3313,3 +3313,24 @@ msgstr "Uparite uređaje i sinkronizirajte sve profile"
 
 msgid "Available when using bottom navigation."
 msgstr "Dostupno pri upotrebi donje navigacijske trake."
+
+msgid "Automatic skip confidence"
+msgstr "Pouzdanost automatskog preskakanja"
+
+msgid "Minimum confidence for automatic intro and recap skips. Lower-confidence timings still offer a manual prompt. Applies to providers that report confidence."
+msgstr "Najmanja pouzdanost za automatsko preskakanje uvoda i sažetaka. Manje pouzdane oznake i dalje nude gumb za ručno preskakanje. Primjenjuje se na pružatelje koji navode pouzdanost."
+
+msgid "Any (0%)"
+msgstr "Bilo koja (0%)"
+
+msgid "Low (25%)"
+msgstr "Niska (25%)"
+
+msgid "Balanced (50%)"
+msgstr "Uravnotežena (50%)"
+
+msgid "High (80%)"
+msgstr "Visoka (80%)"
+
+msgid "Very high (95%)"
+msgstr "Vrlo visoka (95%)"

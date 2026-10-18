@@ -2169,6 +2169,8 @@ mod tests {
                 kind: 0,
                 start_ms: 10_000,
                 end_ms: 100_000,
+                prompt_only: false,
+                confidence_percent: None,
             }],
         )
         .unwrap();

@@ -24,6 +24,9 @@ mod playback_speed;
 #[path = "settings_preferences/screenshot_format.rs"]
 mod screenshot_format;
 
+#[path = "settings_preferences/intro_skip.rs"]
+mod intro_skip;
+
 #[path = "settings_preferences/playback_preferences_ui.rs"]
 mod playback_preferences_ui;
 

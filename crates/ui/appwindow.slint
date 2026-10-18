@@ -525,6 +525,7 @@ export component AppWindow inherits Window {
         playback_speed <=> root.playback_speed;
         subtitle_style <=> root.subtitle_style;
         intro_skip_mode_index <=> root.intro_skip_mode_index;
+        intro_skip_confidence_index <=> root.intro_skip_confidence_index;
         android_auto_continue <=> root.android_auto_continue;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
         auto_next_episode <=> root.auto_next_episode;
@@ -1261,6 +1262,7 @@ export component AppWindow inherits Window {
     in property <[string]> subtitle_language_selected_codes;
     in property <[string]> subtitle_language_selected_names;
     in-out property <int> intro_skip_mode_index: 1;
+    in-out property <int> intro_skip_confidence_index: 2;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> auto_next_episode: false;

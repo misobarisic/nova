@@ -3337,6 +3337,7 @@ mod tests {
     fn automatic_intro_skip_is_independent_and_can_be_overridden() {
         let settings = CacheSettings {
             intro_skip_mode: nova_config::IntroSkipMode::Auto,
+            intro_skip_confidence: nova_config::IntroSkipConfidence::High,
             ..Default::default()
         };
         let fields: HashMap<_, _> = settings_fields(&settings)
@@ -3348,6 +3349,20 @@ mod tests {
             Some("\"auto\"")
         );
         assert!(setting_can_override("intro_skip_mode"));
+        assert!(setting_can_override("intro_skip_confidence"));
+        assert_eq!(
+            fields.get("intro_skip_confidence").map(String::as_str),
+            Some("\"high\"")
+        );
+        let merged = merge_settings_fields(
+            &settings,
+            &[("intro_skip_confidence".into(), "\"low\"".into())],
+        );
+        assert_eq!(
+            merged.intro_skip_confidence,
+            nova_config::IntroSkipConfidence::Low
+        );
+        assert_eq!(merged.intro_skip_mode, nova_config::IntroSkipMode::Auto);
         assert_eq!(
             CacheSettings::default().intro_skip_mode,
             nova_config::IntroSkipMode::Prompt

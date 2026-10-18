@@ -139,6 +139,17 @@ pub struct DownloadIntroSegment {
     pub kind: i32,
     pub start_ms: u64,
     pub end_ms: u64,
+    // Older manifests only retained timings that passed the automatic threshold.
+    #[serde(default)]
+    pub prompt_only: bool,
+    /// None means the provider does not score timings. Missing legacy scores
+    /// retain the old 80% lower bound rather than being promoted to certainty.
+    #[serde(default = "legacy_intro_confidence")]
+    pub confidence_percent: Option<u8>,
+}
+
+fn legacy_intro_confidence() -> Option<u8> {
+    Some(80)
 }
 
 /// Local timing evidence belongs to this exact completed artifact, never to a
@@ -866,6 +877,9 @@ mod tests {
             serde_json::from_str(r#"{"id":"legacy","phase":"completed"}"#).unwrap();
         assert!(legacy.intro_request.is_none());
         assert!(legacy.intro_timings.is_none());
+        let legacy_segment: DownloadIntroSegment =
+            serde_json::from_str(r#"{"kind":1,"start_ms":30000,"end_ms":120000}"#).unwrap();
+        assert!(!legacy_segment.prompt_only);
         for request in [
             DownloadIntroRequest::IntroDb {
                 key: "imdb".into(),
@@ -887,6 +901,8 @@ mod tests {
                     kind: 0,
                     start_ms: 30_000,
                     end_ms: 120_000,
+                    prompt_only: true,
+                    confidence_percent: Some(56),
                 }],
                 artifact_size: 123,
                 artifact_modified_ns: 1_777_777_777_000_000_000,

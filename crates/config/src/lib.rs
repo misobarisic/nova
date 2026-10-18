@@ -417,6 +417,51 @@ impl IntroSkipMode {
     }
 }
 
+/// Minimum scored timing confidence for automatic skips, never manual prompts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntroSkipConfidence {
+    Any,
+    Low,
+    #[default]
+    Balanced,
+    High,
+    VeryHigh,
+}
+
+impl IntroSkipConfidence {
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Any => 0,
+            Self::Low => 1,
+            Self::Balanced => 2,
+            Self::High => 3,
+            Self::VeryHigh => 4,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Any),
+            1 => Some(Self::Low),
+            2 => Some(Self::Balanced),
+            3 => Some(Self::High),
+            4 => Some(Self::VeryHigh),
+            _ => None,
+        }
+    }
+
+    pub fn percent(self) -> u8 {
+        match self {
+            Self::Any => 0,
+            Self::Low => 25,
+            Self::Balanced => 50,
+            Self::High => 80,
+            Self::VeryHigh => 95,
+        }
+    }
+}
+
 /// Android video decoder preference (Settings → Player). The player starts at
 /// the chosen decoder and steps down the chain automatically when it fails:
 /// `HwPlus` → `Hw` → `Sw`, `Hw` → `Sw`, `Sw` alone. Unused on other platforms.
@@ -793,6 +838,8 @@ cache_settings_type! {
     /// Intro/recap timing behavior; explicit per-title choices override this.
     #[serde(default)]
     pub intro_skip_mode: IntroSkipMode,
+    #[serde(default)]
+    pub intro_skip_confidence: IntroSkipConfidence,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -969,6 +1016,7 @@ impl Default for CacheSettings {
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
             intro_skip_mode: IntroSkipMode::Prompt,
+            intro_skip_confidence: IntroSkipConfidence::default(),
             prefetch_next_episode_streams: true,
             auto_next_episode: false,
             animations: true,
@@ -1524,6 +1572,7 @@ mod tests {
         assert_eq!(settings.desktop_hwdec, DesktopHwdec::default());
         assert!(!settings.android_auto_continue);
         assert_eq!(settings.intro_skip_mode, IntroSkipMode::Prompt);
+        assert_eq!(settings.intro_skip_confidence.percent(), 50);
         assert!(settings.prefetch_next_episode_streams);
         assert!(!settings.auto_next_episode);
         assert_eq!(
@@ -1531,6 +1580,25 @@ mod tests {
             EpisodeStartBehavior::Resume
         );
         assert_eq!(CacheSettings::default().language.index(), 0);
+    }
+
+    #[test]
+    fn intro_skip_confidence_presets_round_trip_and_default_to_fifty_percent() {
+        assert_eq!(CacheSettings::default().intro_skip_confidence.percent(), 50);
+        for (index, percent) in [0, 25, 50, 80, 95].into_iter().enumerate() {
+            let preset = IntroSkipConfidence::from_index(index as i32).unwrap();
+            assert_eq!(preset.index(), index as i32);
+            assert_eq!(preset.percent(), percent);
+            let settings = CacheSettings {
+                intro_skip_confidence: preset,
+                ..Default::default()
+            };
+            let decoded: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(decoded.intro_skip_confidence, preset);
+        }
+        assert!(IntroSkipConfidence::from_index(-1).is_none());
+        assert!(IntroSkipConfidence::from_index(5).is_none());
     }
 
     #[test]

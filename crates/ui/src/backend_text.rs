@@ -349,6 +349,11 @@ pub fn tr(english: &str) -> &str {
         "Off" => "Isključeno",
         "Show skip prompt" => "Prikaži gumb za preskakanje",
         "Auto skip" => "Automatski preskoči",
+        "Any (0%)" => "Bilo koja (0%)",
+        "Low (25%)" => "Niska (25%)",
+        "Balanced (50%)" => "Uravnotežena (50%)",
+        "High (80%)" => "Visoka (80%)",
+        "Very high (95%)" => "Vrlo visoka (95%)",
         "Automatic" => "Automatski",
         "Unlimited" => "Neograničeno",
         "Image disk-cache limit" => "Ograničenje slikovne predmemorije na disku",
@@ -1553,6 +1558,13 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "intro_skip_confidence" => match value.as_str() {
+            Some("any") => tr("Any (0%)").into(),
+            Some("low") => tr("Low (25%)").into(),
+            Some("high") => tr("High (80%)").into(),
+            Some("very_high") => tr("Very high (95%)").into(),
+            _ => tr("Balanced (50%)").into(),
+        },
         "intro_skip_mode" => match value.as_str() {
             Some("off") => tr("Off").into(),
             Some("auto") => tr("Auto skip").into(),
@@ -1844,6 +1856,40 @@ mod tests {
 
     #[test]
     fn setting_comparisons_translate_values_and_format_units() {
+        for (language, labels) in [
+            (
+                Language::English,
+                [
+                    "Any (0%)",
+                    "Low (25%)",
+                    "Balanced (50%)",
+                    "High (80%)",
+                    "Very high (95%)",
+                ],
+            ),
+            (
+                Language::Croatian,
+                [
+                    "Bilo koja (0%)",
+                    "Niska (25%)",
+                    "Uravnotežena (50%)",
+                    "Visoka (80%)",
+                    "Vrlo visoka (95%)",
+                ],
+            ),
+        ] {
+            with_language(language, || {
+                for (preset, label) in ["any", "low", "balanced", "high", "very_high"]
+                    .into_iter()
+                    .zip(labels)
+                {
+                    assert_eq!(
+                        setting_sync_value("intro_skip_confidence", &serde_json::json!(preset)),
+                        label
+                    );
+                }
+            });
+        }
         for (language, labels) in [
             (Language::English, ["Off", "Show skip prompt", "Auto skip"]),
             (

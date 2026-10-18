@@ -140,6 +140,7 @@ export component SettingsPage {
     // change to this default.
     in-out property <float> playback_speed: 1.0;
     in-out property <int> intro_skip_mode_index: 1;
+    in-out property <int> intro_skip_confidence_index: 2;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> auto_next_episode: false;
@@ -1281,7 +1282,7 @@ export component SettingsPage {
 
     function kb_player_n() -> int {
         if root.player_backend_index == 0 {
-            return root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) + 9;
+            return root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) + 10;
         }
         return root.is_android ? 2 : 3;
     }
@@ -1310,12 +1311,15 @@ export component SettingsPage {
         } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
             root.kb_player_language_step(root.subtitle_language_choice_index, d, true);
         } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 1 {
+            root.intro_skip_confidence_index = Math.clamp(root.intro_skip_confidence_index + d, 0, 4);
+            root.schedule_setting("intro_skip_confidence");
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
             root.intro_skip_mode_index = Math.clamp(root.intro_skip_mode_index + d, 0, 2);
             root.schedule_setting("intro_skip_mode");
         } else if (root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 1) {
             root.prefetch_next_episode_streams = d > 0;
             root.schedule_setting("prefetch_next_episode_streams");
-        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 3 {
             root.auto_next_episode = d > 0;
             root.schedule_setting("auto_next_episode");
         } else if (root.kb_pr == root.kb_player_speed_row()) {
@@ -1603,9 +1607,12 @@ export component SettingsPage {
             } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
                 root.kb_edit = 5;
             } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 1 {
+                root.intro_skip_confidence_index = Math.mod(root.intro_skip_confidence_index + 1, 5);
+                root.schedule_setting("intro_skip_confidence");
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
                 root.intro_skip_mode_index = Math.mod(root.intro_skip_mode_index + 1, 3);
                 root.schedule_setting("intro_skip_mode");
-            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 3 {
                 root.auto_next_episode = !root.auto_next_episode;
                 root.schedule_setting("auto_next_episode");
             } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) {
