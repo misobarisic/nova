@@ -1491,10 +1491,10 @@ export component AppWindow inherits Window {
     in-out property <bool> discover_scroll_page: false;
     // Settings content offset (same mirror pattern as the grids).
     in-out property <length> settings_scroll_y: 0px;
-    in-out property <int> settings_selected_id: 13;
-    in-out property <bool> settings_detail_open: root.settings_two_pane;
     // Sync reuses the compiled settings shell without its overview.
     private property <bool> sync_page: false;
+    in-out property <int> settings_selected_id: 13;
+    in-out property <bool> settings_detail_open: root.settings_two_pane;
     out property <bool> settings_two_pane: !root.sync_page && (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
     changed settings_two_pane => { if (root.settings_two_pane && root.show_settings) { root.settings_detail_open = true; } }
     in-out property <string> settings_search_query: "";
@@ -2331,9 +2331,9 @@ export component AppWindow inherits Window {
         opacity: root.more_subpage_alpha;
         external_navigation: true;
         active: !root.more_return_pending;
+        standalone_sync: root.sync_page;
         two_pane: root.settings_two_pane;
         cache_busy: root.cache_busy;
-        standalone_sync: root.sync_page;
         cache_rewriting: root.cache_rewriting;
         cache_processed: root.cache_processed;
         cache_total: root.cache_total;
