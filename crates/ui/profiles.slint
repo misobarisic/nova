@@ -1,7 +1,97 @@
 import { MoreBridge, ProfileRow, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
-import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
-import { SettingsCard, SettingsInput, PillButton, ToggleSwitch } from "settings-controls.slint";
+import { SettingsCard, SettingsInput, PillButton, ToggleSwitch, SettingsBackButton } from "settings-controls.slint";
+import { ControlTouchArea } from "control-input.slint";
+import { IcCheck, IcChevronRight, IcAdd, IcSettingsGear } from "icons.slint";
+
+component ProfileAvatar inherits Rectangle {
+    in property <ProfileRow> profile;
+    width: InterfaceStyle.tv ? 60px : 48px;
+    height: self.width;
+    border-radius: self.width / 2;
+    background: root.profile.avatar_background;
+    avatar_letter := Text {
+        width: 100%; height: 100%;
+        text: root.profile.initial;
+        color: root.profile.avatar_foreground;
+        font-size: InterfaceStyle.tv ? 30px : 24px;
+        font-weight: 600;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+}
+
+// One accessible tap target per identity; editing lives in the management view.
+component ProfileChoiceRow inherits Rectangle {
+    in property <ProfileRow> profile;
+    in property <int> kind: 0; // Profile, Add, Manage.
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> label: root.title;
+    in property <bool> selected;
+    in property <bool> focused;
+    in property <bool> interactive: true;
+    callback picked();
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.subtitle;
+    accessible-enabled: root.interactive;
+    height: Math.max(InterfaceStyle.tv ? 104px : root.kind == 2 ? 72px : 84px, 24px + row_measure.preferred-height);
+    vertical-stretch: 0;
+    border-radius: Theme.card_corner_radius;
+    border-width: root.selected || root.focus-visible ? 2px : 1px;
+    border-color: root.focus-visible ? Theme.current.focus_ring : root.selected ? Theme.current.accent : Theme.current.control_border;
+    background: touch.feedback-active && root.interactive ? Theme.current.settings_control : Theme.current.card;
+    opacity: root.interactive ? 1 : 0.45;
+    private property <bool> focus-visible: SettingsStyle.keyboard-mode && (root.focused || row_focus.has-focus);
+    Rectangle {
+        height: 0px; clip: true;
+        row_measure := VerticalLayout {
+            width: Math.max(1px, root.width - (InterfaceStyle.tv ? 152px : 132px)); spacing: 4px;
+            Text { text: root.title; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+            if root.subtitle != "": Text { text: root.subtitle; font-size: InterfaceStyle.tv ? 18px : 13px; wrap: word-wrap; min-width: 0px; }
+        }
+    }
+    HorizontalLayout {
+        padding: 16px; padding-top: 12px; padding-bottom: 12px;
+        spacing: 16px; cross-axis-alignment: center;
+        if root.kind == 0: ProfileAvatar { profile: root.profile; }
+        if root.kind != 0: Rectangle {
+            width: InterfaceStyle.tv ? 60px : 48px; height: self.width;
+            border-radius: self.width / 2;
+            border-width: root.kind == 1 ? 1px : 0px;
+            border-color: Theme.current.control_border;
+            if root.kind == 1: IcAdd { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 26px; height: 26px; fill: Theme.current.text_secondary; }
+            if root.kind == 2: IcSettingsGear { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 26px; height: 26px; fill: Theme.current.text_secondary; }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1; min-width: 0px; spacing: 4px; alignment: center;
+            Text { text: root.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+            if root.subtitle != "": Text { text: root.subtitle; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 18px : 13px; wrap: word-wrap; min-width: 0px; }
+        }
+        Rectangle {
+            width: InterfaceStyle.tv ? 32px : 24px; height: self.width;
+            if root.selected: Rectangle {
+                width: 100%; height: 100%; border-radius: self.width / 2; background: Theme.current.accent;
+                IcCheck { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; fill: Theme.current.on_accent; }
+            }
+            if !root.selected: IcChevronRight { width: 100%; height: 100%; fill: Theme.current.text_muted; }
+        }
+    }
+    forward-focus: row_focus;
+    row_focus := FocusScope {
+        enabled: root.interactive;
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " {
+                SettingsStyle.keyboard-mode = true;
+                if !e.repeat { root.picked(); } accept
+            } else { reject }
+        }
+    }
+    touch := ControlTouchArea {
+        enabled: root.interactive; width: 100%; height: 100%; mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; row_focus.focus(); root.picked(); }
+    }
+}
 
 // Profile selection belongs to this device; profile contents belong to sync.
 export component ProfilesPage inherits Rectangle {
@@ -13,6 +103,8 @@ export component ProfilesPage inherits Rectangle {
     callback back();
     background: Theme.current.artwork_canvas;
     property <int> editor: 0; // 0 list, 1 create, 2 rename, 3 delete confirmation.
+    property <bool> managing: false;
+    property <int> return-choice;
     property <string> editing-id;
     property <string> editing-name;
     property <string> draft;
@@ -22,24 +114,29 @@ export component ProfilesPage inherits Rectangle {
     property <bool> keyboard: false;
     private property <[ProfileRow]> profiles: MoreBridge.profiles;
     private property <bool> required: MoreBridge.profiles_require_selection;
-    private property <int> action-count: root.editor == 3 ? 2 : root.editor > 0 ? 3 : 2 + root.profiles.length * 3;
+    private property <int> action-count: root.editor == 3 ? 2 : root.editor > 0 ? 3 : root.managing ? root.profiles.length * 2 + 2 : root.profiles.length + 3;
 
     public function focus_shell() { if root.active { page_scope.focus(); } }
     public function go_back() {
         if root.editor > 0 { root.cancel_editor(); }
+        else if root.managing { root.managing = false; root.choice = root.profiles.length + 2; page_scope.focus(); }
         else if !root.required { root.back(); }
     }
     function cancel_editor() {
         root.editor = 0;
-        root.choice = root.required && root.profiles.length > 0 ? 2 : 1;
+        root.choice = Math.min(root.return-choice, root.action-count - 1);
+        if !root.available(root.choice) { root.choice = Math.max(0, root.choice - 1); }
+        profile_scroll.content-y = 0px;
         page_scope.focus();
     }
     function start_editor(kind: int, id: string, name: string) {
+        root.return-choice = root.choice;
         root.editing-id = id;
         root.editing-name = name;
         root.draft = kind == 2 ? name : "";
         root.name-value = root.draft;
         root.editor = kind;
+        profile_scroll.content-y = 0px;
         root.choice = kind == 3 ? 1 : 0; // Destructive confirmation starts on Cancel.
         editor_focus.start();
     }
@@ -51,16 +148,13 @@ export component ProfilesPage inherits Rectangle {
     }
     pure function available(index: int) -> bool {
         if root.editor > 0 { return true; }
-        if index < 2 { return true; }
-        let row = Math.floor((index - 2) / 3);
-        let action = Math.mod(index - 2, 3);
-        return row < root.profiles.length && (action == 0 ? !root.profiles[row].active || root.required : action != 2 || root.profiles.length > 1);
+        return !root.managing || index >= root.profiles.length * 2 || Math.mod(index, 2) == 0 || root.profiles.length > 1;
     }
     function move(direction: int) {
         SettingsStyle.keyboard-mode = true;
         root.keyboard = true;
         root.choice = Math.mod(root.choice + root.action-count + direction, root.action-count);
-        // At most one unavailable control is adjacent: current profile or last-profile Delete.
+        // Only the last remaining profile's Delete control is unavailable.
         if !root.available(root.choice) { root.choice = Math.mod(root.choice + root.action-count + direction, root.action-count); }
         if root.editor == 0 { page_scope.focus(); }
     }
@@ -73,16 +167,17 @@ export component ProfilesPage inherits Rectangle {
             if root.choice == 1 { root.submit_name(root.name-value); }
             else if root.choice == 2 { root.cancel_editor(); }
             else { root.name-focus-request += 1; }
-        } else if root.choice == 0 { MoreBridge.profile_remember_last_changed(!MoreBridge.profiles_remember_last); }
-        else if root.choice == 1 { root.start_editor(1, "", ""); }
+        } else if root.managing {
+            if root.choice < root.profiles.length * 2 && root.available(root.choice) {
+                let profile = root.profiles[Math.floor(root.choice / 2)];
+                root.start_editor(Math.mod(root.choice, 2) == 0 ? 2 : 3, profile.id, profile.name);
+            } else if root.choice == root.profiles.length * 2 { root.start_editor(1, "", ""); }
+            else if root.choice == root.profiles.length * 2 + 1 { root.go_back(); }
+        } else if root.choice < root.profiles.length { MoreBridge.profile_switch(root.profiles[root.choice].id); }
+        else if root.choice == root.profiles.length { root.start_editor(1, "", ""); }
+        else if root.choice == root.profiles.length + 1 { MoreBridge.profile_remember_last_changed(!MoreBridge.profiles_remember_last); }
         else {
-            let row = Math.floor((root.choice - 2) / 3);
-            let action = Math.mod(root.choice - 2, 3);
-            if row < root.profiles.length && root.available(root.choice) {
-                let profile = root.profiles[row];
-                if action == 0 { MoreBridge.profile_switch(profile.id); }
-                else { root.start_editor(action == 1 ? 2 : 3, profile.id, profile.name); }
-            }
+            root.managing = true; root.choice = 0; page_scope.focus();
         }
     }
     function reveal(y: length, h: length) {
@@ -90,11 +185,16 @@ export component ProfilesPage inherits Rectangle {
         if top < 0px { profile_scroll.content-y -= top; }
         else if top + h > profile_scroll.visible-height { profile_scroll.content-y -= top + h - profile_scroll.visible-height; }
     }
-    changed profiles => { root.choice = Math.min(root.choice, root.action-count - 1); }
+    changed profiles => {
+        root.choice = Math.min(root.choice, root.action-count - 1);
+        if !root.available(root.choice) { root.choice = Math.max(0, root.choice - 1); }
+    }
+    changed managing => { profile_scroll.content-y = 0px; }
     changed active => {
         if root.active {
             root.editor = 0;
-            root.choice = root.required && root.profiles.length > 0 ? 2 : 0;
+            root.managing = false;
+            root.choice = 0;
             entry_focus.start();
         } else { entry_focus.stop(); editor_focus.stop(); }
     }
@@ -123,85 +223,125 @@ export component ProfilesPage inherits Rectangle {
             width: Math.max(1px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
             height: Math.max(1px, root.height - root.safe-top - root.safe-bottom - 36px);
             content-width: self.visible-width;
+            // Wrapped controls can exceed a layout's estimated height. Include
+            // its actual end, keeping body sizing independent of the scroll
+            // range so the footer can still sit low on an otherwise short page.
+            content-height: Math.max(profile_body.height, profile_end.y + profile_end.height);
             mouse-drag-pan-enabled: true;
-            VerticalLayout {
-                width: 100%; spacing: 12px; alignment: start;
-                PageHeader {
-                    title: @tr("Profiles");
-                    subtitle: root.required ? @tr("Choose a profile to continue.") : @tr("Separate libraries, history and preferences");
-                    narrow: root.width < 700px;
-                    show-back: root.editor > 0 || !root.required;
-                    back => { root.go_back(); }
+            profile_body := VerticalLayout {
+                width: 100%; height: Math.max(profile_scroll.visible-height, Math.max(self.min-height, self.preferred-height)); spacing: 12px; alignment: start;
+                VerticalLayout {
+                    spacing: 8px; vertical-stretch: 0;
+                    if root.editor > 0 || root.managing || !root.required: HorizontalLayout {
+                        height: InterfaceStyle.tv ? 56px : 44px; spacing: 8px; cross-axis-alignment: center;
+                        SettingsBackButton { clicked => { root.go_back(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Text { text: root.managing ? @tr("Manage profiles") : @tr("Profiles"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 42px : 32px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                    Text { text: root.managing ? @tr("Separate libraries, history and preferences") : root.required ? @tr("Choose a profile to continue.") : @tr("Who's watching?"); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 20px : 16px; wrap: word-wrap; min-width: 0px; }
                 }
                 if MoreBridge.profiles_error != "": SettingsCard {
                     VerticalLayout { padding: 16px;
                         Text { text: MoreBridge.profiles_error; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
                     }
                 }
-                if root.editor == 0: SettingsCard {
-                    VerticalLayout { padding: 16px; spacing: 12px;
-                        Text { text: @tr("Profiles sync across paired devices. Each device chooses its own active profile."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                        HorizontalLayout { spacing: 12px;
-                            Text { text: @tr("Open last profile on startup"); color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
-                            remember := ToggleSwitch {
-                                name: @tr("Open last profile on startup");
-                                checked: MoreBridge.profiles_remember_last;
-                                enabled: !MoreBridge.profiles_busy;
-                                focused: root.keyboard && root.choice == 0;
-                                changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
-                                toggled => {
-                                    root.choice = 0;
-                                    MoreBridge.profile_remember_last_changed(self.checked);
-                                    // The callback persists synchronously; restore the saved value on failure.
-                                    self.checked = MoreBridge.profiles_remember_last;
-                                }
-                            }
-                        }
-                        Text { text: @tr("When disabled, choose a profile each time Nova starts. This setting applies only to this device."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                        PillButton {
-                            label: @tr("Create profile"); primary: true; wrap_label: true; enabled: !MoreBridge.profiles_busy;
-                            focused: root.keyboard && root.choice == 1;
-                            changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
-                            clicked => { root.start_editor(1, "", ""); }
-                        }
+                if root.editor == 0 && !root.managing: VerticalLayout {
+                    width: 100%; spacing: 12px; vertical-stretch: 0;
+                    for profile[index] in root.profiles: ProfileChoiceRow {
+                        profile: profile; title: profile.name;
+                        subtitle: profile.active ? @tr("Current profile") : "";
+                        label: @tr("Use profile: {}", profile.name);
+                        selected: profile.active; interactive: !MoreBridge.profiles_busy;
+                        focused: root.keyboard && root.choice == index;
+                        changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                        picked => { root.choice = index; MoreBridge.profile_switch(profile.id); }
                     }
                 }
-                if root.editor == 0: VerticalLayout {
-                    width: 100%; spacing: 12px;
+                if root.editor == 0 && root.managing: VerticalLayout {
+                    width: 100%; spacing: 12px; vertical-stretch: 0;
                     for profile[index] in root.profiles: SettingsCard {
+                        property <bool> actions-focused: root.keyboard && (root.choice == index * 2 || root.choice == index * 2 + 1);
+                        init => { if self.actions-focused { reveal_actions.start(); } }
+                        changed actions-focused => { if self.actions-focused { reveal_actions.start(); } }
+                        // A newly opened manager must finish layout before its
+                        // focused action is revealed, especially on short TVs.
+                        reveal_actions := Timer {
+                            interval: 1ms; running: false;
+                            triggered => { self.stop(); if root.active && root.editor == 0 && root.managing && root.keyboard && (root.choice == index * 2 || root.choice == index * 2 + 1) { root.reveal(actions_bar.absolute-position.y, actions_bar.height); } }
+                        }
                         VerticalLayout { padding: 16px; spacing: 10px;
-                            Text { text: profile.name; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 20px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
-                            if profile.active: Text { text: @tr("Current profile"); color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
-                            PillButton {
-                                label: @tr("Use profile"); accessible-label: @tr("Use profile: {}", profile.name); primary: !profile.active || root.required; wrap_label: true;
-                                enabled: !MoreBridge.profiles_busy && (!profile.active || root.required);
-                                focused: root.keyboard && root.choice == 2 + index * 3;
-                                changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
-                                clicked => { root.choice = 2 + index * 3; MoreBridge.profile_switch(profile.id); }
+                            HorizontalLayout { spacing: 16px; cross-axis-alignment: center;
+                                ProfileAvatar { profile: profile; }
+                                VerticalLayout { horizontal-stretch: 1; min-width: 0px; alignment: center; spacing: 4px;
+                                    Text { text: profile.name; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                    if profile.active: Text { text: @tr("Current profile"); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                }
                             }
-                            HorizontalLayout { spacing: 8px; alignment: start;
+                            actions_bar := HorizontalLayout { spacing: 8px; alignment: start;
                                 PillButton {
                                     // Short actions stay on one line; the shared wrapping pill's
                                     // label inset is wider than its compact sizing allowance.
                                     label: @tr("Rename"); accessible-label: @tr("Rename profile: {}", profile.name); compact: true;
                                     btn_min_width: InterfaceStyle.tv ? 120px : 88px;
                                     enabled: !MoreBridge.profiles_busy;
-                                    focused: root.keyboard && root.choice == 3 + index * 3;
+                                    focused: root.keyboard && root.choice == index * 2;
                                     changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
-                                    clicked => { root.start_editor(2, profile.id, profile.name); }
+                                    clicked => { root.choice = index * 2; root.start_editor(2, profile.id, profile.name); }
                                 }
                                 PillButton {
                                     label: @tr("Delete"); accessible-label: @tr("Delete profile: {}", profile.name); compact: true; destructive: true;
                                     btn_min_width: InterfaceStyle.tv ? 120px : 88px;
                                     enabled: !MoreBridge.profiles_busy && root.profiles.length > 1;
-                                    focused: root.keyboard && root.choice == 4 + index * 3;
+                                    focused: root.keyboard && root.choice == index * 2 + 1;
                                     changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
-                                    clicked => { root.start_editor(3, profile.id, profile.name); }
+                                    clicked => { root.choice = index * 2 + 1; root.start_editor(3, profile.id, profile.name); }
                                 }
                             }
                         }
                     }
                     if root.profiles.length == 1: Text { text: @tr("Keep at least one profile."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    Text { text: @tr("Profiles sync across paired devices. Each device chooses its own active profile."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                }
+                if root.editor == 0: ProfileChoiceRow {
+                    kind: 1; title: @tr("Add profile"); interactive: !MoreBridge.profiles_busy;
+                    focused: root.keyboard && root.choice == (root.managing ? root.profiles.length * 2 : root.profiles.length);
+                    changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                    picked => { root.choice = root.managing ? root.profiles.length * 2 : root.profiles.length; root.start_editor(1, "", ""); }
+                }
+                if root.editor == 0: Rectangle { min-height: 12px; vertical-stretch: root.managing ? 0 : 1; }
+                if root.editor == 0 && !root.managing: SettingsCard {
+                    height: Math.max(InterfaceStyle.tv ? 88px : 72px, remember_labels.preferred-height + 32px);
+                    HorizontalLayout { padding: 16px; spacing: 12px; cross-axis-alignment: center;
+                        remember_labels := VerticalLayout { horizontal-stretch: 1; min-width: 0px; spacing: 4px;
+                            Text { text: @tr("Open last profile on startup"); color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; font-size: InterfaceStyle.tv ? 20px : 14px; }
+                            Text { text: @tr("This device"); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 16px : 12px; }
+                        }
+                        remember := ToggleSwitch {
+                            name: @tr("Open last profile on startup");
+                            checked: MoreBridge.profiles_remember_last;
+                            enabled: !MoreBridge.profiles_busy;
+                            focused: root.keyboard && root.choice == root.profiles.length + 1;
+                            changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                            toggled => {
+                                root.choice = root.profiles.length + 1;
+                                MoreBridge.profile_remember_last_changed(self.checked);
+                                // Restore the saved value if the synchronous write failed.
+                                self.checked = MoreBridge.profiles_remember_last;
+                            }
+                        }
+                    }
+                }
+                if root.editor == 0 && !root.managing: ProfileChoiceRow {
+                    kind: 2; title: @tr("Manage profiles"); interactive: !MoreBridge.profiles_busy;
+                    focused: root.keyboard && root.choice == root.profiles.length + 2;
+                    changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                    picked => { root.managing = true; root.choice = 0; page_scope.focus(); }
+                }
+                if root.editor == 0 && root.managing: PillButton {
+                    label: @tr("Done"); wrap_label: true;
+                    focused: root.keyboard && root.choice == root.profiles.length * 2 + 1;
+                    changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                    clicked => { root.go_back(); }
                 }
                 if root.editor == 1 || root.editor == 2: SettingsCard {
                     VerticalLayout { padding: 16px; spacing: 12px;
@@ -211,7 +351,7 @@ export component ProfilesPage inherits Rectangle {
                             // The conditional editor owns its native input handle. The page
                             // requests focus through a value instead of retaining that handle.
                             property <int> focus-request: root.name-focus-request;
-                            changed focus-request => { if root.active { self.focus(); } }
+                            changed focus-request => { if root.active { self.focus_at_end(); } }
                             changed full-text => { root.name-value = self.full-text; }
                             property <bool> selected: root.keyboard && root.choice == 0;
                             changed selected => { if self.selected { self.focus(); root.reveal(self.absolute-position.y, self.height); } }
@@ -253,6 +393,7 @@ export component ProfilesPage inherits Rectangle {
                         }
                     }
                 }
+                profile_end := Rectangle { height: 0px; vertical-stretch: 0; }
             }
         }
     }

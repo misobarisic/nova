@@ -3233,6 +3233,15 @@ msgstr "Primjenjuje se na ovu seriju. Ostale postavke reprodukcije ostaju neprom
 msgid "Profiles"
 msgstr "Profili"
 
+msgid "Who's watching?"
+msgstr "Tko gleda?"
+
+msgid "Add profile"
+msgstr "Dodaj profil"
+
+msgid "Manage profiles"
+msgstr "Upravljanje profilima"
+
 msgid "Separate libraries, history and preferences"
 msgstr "Odvojene zbirke, povijest i postavke"
 

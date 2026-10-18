@@ -5,6 +5,18 @@ a PIN. Existing installations migrate into **Default**, retaining their library,
 history, settings, addon configuration and record versions. A new profile starts
 with empty personal data and normal application defaults.
 
+The picker uses compact, full-row profile buttons with a circular first-letter
+avatar and a marker for the current profile. **Add profile** opens the name
+editor; **Manage profiles** contains Rename/Delete and returns to the picker
+with Back or Done. Management and name editors cannot bypass required startup
+selection. Keyboard and TV navigation reveal the focused action while scrolling.
+
+Avatar initials follow the displayed name (including translated Default and
+Unicode names). Foreground/background pairs vary by a stable hash of the profile
+ID, using contrasting colors. Renaming, reordering, restarting or syncing to
+another device preserves the pair; no avatar files or additional stored/synced
+fields are needed. The picker respects the current theme and accent color.
+
 **Open last profile on startup** defaults to enabled, including upgrades where
 the preference is absent. Disabling it shows the profile picker on startup;
 navigation cannot bypass that picker. The selection and toggle are saved only

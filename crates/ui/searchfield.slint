@@ -37,6 +37,14 @@ export component SearchField inherits Rectangle {
     // Focus requests (keyboard edit mode) land on the inner field.
     forward-focus: inner;
 
+    // Editors opening prefilled text can place an unselected caret at its end.
+    // TextInput handles Unicode offsets and scrolls through its usual callback.
+    public function focus_at_end() {
+        inner.select-all();
+        inner.clear-selection();
+        inner.focus();
+    }
+
     // What the user sees: committed text plus any still-composing IME
     // text. On touch keyboards a tap on a submit button does not commit
     // the composition first, so submitting plain `text` would silently

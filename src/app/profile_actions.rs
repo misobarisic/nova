@@ -1,5 +1,56 @@
 //! Profile navigation swaps personal state while account sync stays connected.
 use super::*;
+use unicode_normalization::UnicodeNormalization;
+
+// Hash the durable ID, not the name or row index: a profile keeps its colors
+// after a rename, sync reorder, restart or selection on another device. Both
+// colors vary; curated pairs keep even small initials readable on every theme.
+const AVATAR_COLORS: [(u32, u32); 12] = [
+    (0x3c254b, 0xffd5b5),
+    (0xecc3d5, 0x502550),
+    (0x254633, 0xc5efcf),
+    (0x153b50, 0xb9e9ff),
+    (0xe4d2a5, 0x4e361d),
+    (0x352c64, 0xded3ff),
+    (0xa9ddd2, 0x153d36),
+    (0x543025, 0xffdac1),
+    (0xd0d8fa, 0x293667),
+    (0x3f401b, 0xe5eead),
+    (0xedc8b2, 0x5b2c20),
+    (0x253f54, 0xc8e2f7),
+];
+
+fn profile_row(profile: &profiles::Profile, active: &str) -> crate::ProfileRow {
+    let name = if profile.name == "Default" {
+        text::tr("Default")
+    } else {
+        profile.name.as_str()
+    };
+    let initial = name
+        .trim()
+        .nfc()
+        .next()
+        .and_then(|letter| letter.to_uppercase().next())
+        .unwrap_or('?')
+        .to_string();
+    // Explicit FNV-1a avoids the randomized, implementation-dependent default
+    // hasher, so the same synced identity has the same appearance everywhere.
+    let hash = profile
+        .id
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    let (background, foreground) = AVATAR_COLORS[(hash % AVATAR_COLORS.len() as u64) as usize];
+    crate::ProfileRow {
+        id: profile.id.clone().into(),
+        name: name.into(),
+        active: profile.id == active,
+        initial: initial.into(),
+        avatar_background: slint::Color::from_argb_encoded(0xff000000 | background),
+        avatar_foreground: slint::Color::from_argb_encoded(0xff000000 | foreground),
+    }
+}
 
 pub(super) struct WorkerDone(pub Arc<AtomicBool>);
 impl Drop for WorkerDone {
@@ -97,15 +148,7 @@ impl Bridge {
             app.set_profiles(
                 Rc::new(VecModel::from(
                     rows.iter()
-                        .map(|row| crate::ProfileRow {
-                            id: row.id.clone().into(),
-                            name: if row.name == "Default" {
-                                text::tr("Default").into()
-                            } else {
-                                row.name.clone().into()
-                            },
-                            active: row.id == active,
-                        })
+                        .map(|row| profile_row(row, &active))
                         .collect::<Vec<_>>(),
                 ))
                 .into(),
@@ -354,6 +397,63 @@ impl Bridge {
             } else {
                 app.set_more_open(false);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initials_follow_display_names_while_colors_follow_identity() {
+        let mut profile = profiles::Profile {
+            id: "stable-profile".into(),
+            name: "  e\u{301}va  ".into(),
+        };
+        let original = profile_row(&profile, &profile.id);
+        assert_eq!(original.initial, "É");
+        for (name, expected) in [("mišo", "M"), ("张伟", "张"), ("", "?")] {
+            profile.name = name.into();
+            let renamed = profile_row(&profile, "another-profile");
+            assert_eq!(renamed.initial, expected);
+            assert_eq!(renamed.avatar_background, original.avatar_background);
+            assert_eq!(renamed.avatar_foreground, original.avatar_foreground);
+        }
+        let pairs = (0..128)
+            .map(|index| {
+                profile.id = format!("device:{index}");
+                let row = profile_row(&profile, "");
+                (
+                    row.avatar_background.as_argb_encoded(),
+                    row.avatar_foreground.as_argb_encoded(),
+                )
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(pairs.len(), AVATAR_COLORS.len());
+    }
+
+    #[test]
+    fn every_avatar_color_pair_meets_small_text_contrast() {
+        fn luminance(rgb: u32) -> f64 {
+            let linear = |shift: u32| {
+                let channel = f64::from((rgb >> shift) & 0xff_u32) / 255.0;
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0)
+        }
+        for (background, foreground) in AVATAR_COLORS {
+            let a = luminance(background);
+            let b = luminance(foreground);
+            let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+            assert!(
+                contrast >= 4.5,
+                "{background:06x}/{foreground:06x}: {contrast}"
+            );
         }
     }
 }
