@@ -69,7 +69,9 @@ pub(super) fn prepare(
     with_progress: bool,
     generation: u64,
 ) -> Result<Option<Prepared>, ApiError> {
-    if generation != bridge.stremio().generation.load(Ordering::Acquire) {
+    if !profiles::is_current(&profiles::capture())
+        || generation != bridge.stremio().generation.load(Ordering::Acquire)
+    {
         return Err(ApiError::Rejected);
     }
     if !writable_key("library") || (with_progress && !writable_key(EPISODE_PROGRESS_KEY)) {
@@ -90,7 +92,10 @@ pub(super) fn prepare(
         }
         store.clock()
     };
-    let before = NativeSnapshot::capture(&bridge.shared.lock().unwrap(), &title.mapping);
+    let before = {
+        let state = bridge.personal_state().ok_or(ApiError::Rejected)?;
+        NativeSnapshot::capture(&state, &title.mapping)
+    };
     let entries: Vec<_> = before.entry.iter().cloned().collect();
     let projection = local_projection(&title.mapping, &entries, &before.progress);
     let local = source_canonical(connection, title, &projection, &entries, &before.progress)?;
@@ -214,7 +219,9 @@ pub(super) fn accept(
     prepared: Prepared,
     generation: u64,
 ) -> Result<Accepted, ApiError> {
-    if generation != bridge.stremio().generation.load(Ordering::Acquire) {
+    if !profiles::is_current(&profiles::capture())
+        || generation != bridge.stremio().generation.load(Ordering::Acquire)
+    {
         return Err(ApiError::Rejected);
     }
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
@@ -227,6 +234,11 @@ pub(super) fn accept(
     let Ok(mut state) = bridge.shared.try_lock() else {
         return Ok(Accepted::Retry);
     };
+    // Keep UI acceptance non-blocking, but validate ownership while holding
+    // the same Shared lock that protects the activation swap.
+    if !profiles::is_current(&profiles::capture()) {
+        return Err(ApiError::Rejected);
+    }
     if !prepared.before.matches(&state, &prepared.mapping) {
         return Ok(Accepted::Retry);
     }

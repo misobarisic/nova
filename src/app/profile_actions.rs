@@ -155,6 +155,7 @@ impl Bridge {
                 self.persist_settings();
             }
             persistence::flush()?;
+            let incoming = profiles::prepare_activation(id)?;
             self.party_leave();
             self.remote_disconnect();
             self.clear_addon_subtitles();
@@ -167,7 +168,7 @@ impl Bridge {
             self.catalog_gen.fetch_add(1, Ordering::AcqRel);
             self.home_showcase_gen.fetch_add(1, Ordering::AcqRel);
             self.home_catalog_rows_gen.fetch_add(1, Ordering::AcqRel);
-            profiles::activate(id)?;
+            profiles::commit_activation(incoming);
             if let Some(app) = self.app() {
                 app.set_profiles_require_selection(true);
                 app.set_profiles_open(true);

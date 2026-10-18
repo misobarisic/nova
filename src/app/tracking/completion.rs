@@ -181,9 +181,8 @@ impl Coordinator {
         self.apply_completion_shared(false)?;
         let enabled = self
             .bridge
-            .shared
-            .lock()
-            .unwrap()
+            .personal_state()
+            .ok_or_else(input_message)?
             .cache_settings
             .completion_rating_prompts_enabled;
         self.configure_completion(enabled)?;
@@ -218,9 +217,8 @@ impl Coordinator {
         self.apply_completion_shared(false)?;
         let enabled = self
             .bridge
-            .shared
-            .lock()
-            .unwrap()
+            .personal_state()
+            .ok_or_else(input_message)?
             .cache_settings
             .completion_rating_prompts_enabled;
         self.configure_completion(enabled)?;
@@ -229,6 +227,9 @@ impl Coordinator {
             return Ok(());
         };
         let state = prompt_decision(self.store.state(), draft, token, save)?;
+        if !self.live() {
+            return Ok(());
+        }
         self.store.save(state).map_err(|_| storage_message())?;
         self.completion_prompt = None;
         self.completion_prompt_error.clear();

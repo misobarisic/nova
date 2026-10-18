@@ -373,6 +373,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
     }
     fn run(mut self, rx: Receiver<Command>) {
         loop {
+            if !profiles::is_current(&profiles::capture()) {
+                return;
+            }
             let urgent = self.bridge.stremio().urgent.lock().unwrap().take();
             if let Some(command) = urgent {
                 if matches!(command, Command::Shutdown) {
@@ -391,6 +394,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
     }
     fn command(&mut self, command: Command) {
+        if !profiles::is_current(&profiles::capture()) {
+            return;
+        }
         match command {
             Command::Connect(generation) => {
                 if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
@@ -507,6 +513,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
     }
     fn tick(&mut self) -> Result<(), ApiError> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(ApiError::Rejected);
+        }
         let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
         if self.bridge.stremio().wake.swap(false, Ordering::AcqRel) {
             self.next_local_scan = Instant::now();
@@ -734,6 +743,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         Ok(())
     }
     fn save_flag(&mut self, connection: &Connection, flag: SessionFlag) -> Result<(), ApiError> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(ApiError::Rejected);
+        }
         let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
         let device = nova_sync::local_device().map_err(|_| ApiError::Rejected)?;
         let mut store = owner.lock().unwrap();
@@ -745,6 +757,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         Ok(())
     }
     fn write_connection(&mut self, connection: Option<&Connection>) -> Result<(), ()> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(());
+        }
         let owner = nova_sync::local_store().map_err(|_| ())?;
         let dev = nova_sync::local_device().map_err(|_| ())?;
         let raw = connection
@@ -813,7 +828,12 @@ impl<T: nova_stremio::Transport> Worker<T> {
             .into_iter()
             .map(|item| (item.id().into(), item))
             .collect();
-        let entries = self.bridge.shared.lock().unwrap().entries.clone();
+        let entries = self
+            .bridge
+            .personal_state()
+            .ok_or(ApiError::Rejected)?
+            .entries
+            .clone();
         let count = entries.len()
             + self
                 .remote_items
@@ -838,7 +858,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
     }
     fn local_changed(&self, connection: &Connection) -> bool {
         let (entries, progress) = {
-            let state = self.bridge.shared.lock().unwrap();
+            let Some(state) = self.bridge.personal_state() else {
+                return false;
+            };
             (state.entries.clone(), state.progress.clone())
         };
         entries.iter().any(|e| {
@@ -882,6 +904,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
     }
     fn synchronize(&mut self, connection: &Connection) -> Result<(), ApiError> {
         let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
+        self.check_current(connection, generation)?;
         ui(&self.bridge, |app| {
             app.set_stremio_busy(true);
             app.set_stremio_status(text::tr("Syncing with Stremio…").into());
@@ -918,7 +941,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             }
         }
         let (entries, progress, native_sources) = {
-            let state = self.bridge.shared.lock().unwrap();
+            let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
             (
                 state.entries.clone(),
                 state.progress.clone(),
@@ -1156,7 +1179,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             // Metadata/network requests can outlive a local user action. Take
             // each title's native snapshot only after those requests complete.
             let (current_entries, current_progress) = {
-                let state = self.bridge.shared.lock().unwrap();
+                let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
                 (state.entries.clone(), state.progress.clone())
             };
             let local = local_projection(&title.mapping, &current_entries, &current_progress);
@@ -1275,6 +1298,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 title.desired.saved.value != remote_projection.saved
             };
             self.set_phase("Saving merged library on this device…");
+            self.check_current(connection, generation)?;
             save_title(connection, &mut title)?;
             self.check_current(connection, generation)?;
             // The canonical account row coordinates source bindings; it must
@@ -1324,7 +1348,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     continue;
                 }
                 let (entries, progress) = {
-                    let state = self.bridge.shared.lock().unwrap();
+                    let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
                     (state.entries.clone(), state.progress.clone())
                 };
                 let native = local_projection(&title.mapping, &entries, &progress);
@@ -1333,6 +1357,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 let fresh = nova_stremio::reconcile(&title.desired, &fresh, false);
                 if fresh != title.desired {
                     title.desired = fresh;
+                    self.check_current(connection, generation)?;
                     save_title(connection, &mut title)?;
                     self.titles.insert(slot, title);
                     self.force = true;
@@ -1357,6 +1382,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 // Persist the exact intended wire revision before sending.
                 // A crash after acceptance can then recognize this export
                 // without dating its source fields at the delivery time.
+                self.check_current(connection, generation)?;
                 save_title(connection, &mut title)?;
                 if title.desired.projection() != projection {
                     self.titles.insert(slot, title);
@@ -1421,6 +1447,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 self.remote_items.insert(id.clone(), title.item.clone());
             }
             self.set_phase("Saving merged library on this device…");
+            self.check_current(connection, generation)?;
             save_title(connection, &mut title)?;
             let still_pending = if progress_available {
                 title.desired.projection() != title.remote.projection()
@@ -1430,6 +1457,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             if still_pending {
                 title.pending = true;
                 self.force = true;
+                self.check_current(connection, generation)?;
                 save_title(connection, &mut title)?;
             }
             self.titles.insert(slot, title);
@@ -1488,6 +1516,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         });
     }
     fn check_current(&self, connection: &Connection, generation: u64) -> Result<(), ApiError> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(ApiError::Rejected);
+        }
         if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             return Err(ApiError::Rejected);
         }
@@ -1565,7 +1596,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 .surfaces_dirty
                 .store(true, Ordering::Release);
             let matching = {
-                let state = bridge.shared.lock().unwrap();
+                let Some(state) = bridge.personal_state() else {
+                    return;
+                };
                 state
                     .modal_item
                     .as_ref()
@@ -1577,7 +1610,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 bridge.refresh_detail_library_watched();
                 if let Some(app) = bridge.app() {
                     let saved = {
-                        let state = bridge.shared.lock().unwrap();
+                        let Some(state) = bridge.personal_state() else {
+                            return;
+                        };
                         state.modal_item.as_ref().is_some_and(|item| {
                             state
                                 .entries

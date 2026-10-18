@@ -61,6 +61,14 @@ impl Bridge {
         self.app.upgrade()
     }
 
+    /// A worker may inspect live personal state only while it still belongs
+    /// to this activation. Validate after taking the lock: profile activation
+    /// changes the epoch before replacing Shared under this same lock.
+    pub(super) fn personal_state(&self) -> Option<std::sync::MutexGuard<'_, Shared>> {
+        let state = self.shared.lock().unwrap();
+        profiles::is_current(&profiles::capture()).then_some(state)
+    }
+
     pub(super) fn tracking(&self) -> tracking::StateHandle {
         let context = profiles::capture();
         let mut services = self.tracking_services.lock().unwrap();

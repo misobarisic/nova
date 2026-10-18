@@ -341,24 +341,33 @@ pub(super) fn initialize() -> Result<DevicePreferences, String> {
 pub(super) fn device_preferences() -> DevicePreferences {
     RUNTIME.read().unwrap().device.clone()
 }
-pub(super) fn activate(id: &str) -> Result<(), String> {
+pub(super) struct PreparedActivation {
+    device: DevicePreferences,
+}
+
+/// Finish the fallible selection write while the outgoing services still run.
+/// Publication happens later on the UI thread, after their shutdown is queued.
+pub(super) fn prepare_activation(id: &str) -> Result<PreparedActivation, String> {
     if !list()?.iter().any(|p| p.id == id) {
         return Err("This profile is unavailable.".into());
     }
-    let mut state = RUNTIME.write().unwrap();
-    let mut device = state.device.clone();
+    let mut device = RUNTIME.read().unwrap().device.clone();
     device.active_profile = id.into();
     nova_storage::try_set_str(
         DEVICE_KEY,
         &serde_json::to_string(&device).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+    Ok(PreparedActivation { device })
+}
+
+pub(super) fn commit_activation(prepared: PreparedActivation) {
+    let mut state = RUNTIME.write().unwrap();
     state.context = Context {
-        id: id.into(),
+        id: prepared.device.active_profile.clone(),
         epoch: state.context.epoch.wrapping_add(1),
     };
-    state.device = device;
-    Ok(())
+    state.device = prepared.device;
 }
 pub(super) fn set_open_last_profile_on_startup(enabled: bool) -> Result<(), String> {
     let mut state = RUNTIME.write().unwrap();
@@ -455,7 +464,9 @@ pub(super) fn invoke_account(
 }
 
 pub(super) mod thread {
-    pub use std::thread::{JoinHandle, available_parallelism, sleep};
+    #[cfg(feature = "desktop")]
+    pub use std::thread::available_parallelism;
+    pub use std::thread::{JoinHandle, sleep};
     pub fn spawn<F, T>(f: F) -> JoinHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,

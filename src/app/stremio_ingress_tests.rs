@@ -71,6 +71,113 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
     );
 }
 
+#[test]
+fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library"
+        ),
+        |fixture| {
+            struct DeferredAccount {
+                entered: mpsc::SyncSender<()>,
+                resume: Mutex<mpsc::Receiver<()>>,
+            }
+            impl nova_stremio::Transport for DeferredAccount {
+                fn send(
+                    &self,
+                    request: nova_stremio::Request,
+                ) -> Result<nova_stremio::Response, ApiError> {
+                    let result = match request.url.rsplit('/').next().unwrap() {
+                        "addonCollectionGet" => {
+                            self.entered.send(()).unwrap();
+                            self.resume
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(Duration::from_secs(10))
+                                .unwrap();
+                            serde_json::json!({"addons":[]})
+                        }
+                        "datastoreMeta" => serde_json::json!([]),
+                        endpoint => {
+                            panic!("cancelled worker must not export replacement data: {endpoint}")
+                        }
+                    };
+                    Ok(nova_stremio::Response {
+                        status: 200,
+                        retry_after: None,
+                        body: serde_json::to_vec(&serde_json::json!({"result":result}))
+                            .unwrap()
+                            .into(),
+                    })
+                }
+            }
+            sync::migrate_legacy_profiles().unwrap();
+            profiles::initialize().unwrap();
+            let outgoing = profiles::capture();
+            let title = incoming(true);
+            let prepared =
+                materialize::prepare(&fixture.bridge, &fixture.connection, &title, true, 0)
+                    .unwrap()
+                    .unwrap();
+            let before =
+                nova_storage::try_scan_prefix(&profiles::storage_key_for(&outgoing.id, ""))
+                    .unwrap();
+            let (entered, waiting) = mpsc::sync_channel(1);
+            let (release, resume) = mpsc::sync_channel(1);
+            let bridge = fixture.bridge.clone();
+            let connection = fixture.connection.clone();
+            let worker = profiles::thread::spawn(move || {
+                let mut worker = Worker::new(
+                    bridge,
+                    Client::new(DeferredAccount {
+                        entered,
+                        resume: Mutex::new(resume),
+                    }),
+                );
+                worker.synchronize(&connection)
+            });
+            waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+            let replacement = profiles::create("Bob").unwrap();
+            profiles::commit_activation(profiles::prepare_activation(&replacement).unwrap());
+            let mut private_entry = ordered_ingress_entry("bob-private");
+            private_entry.type_ = "movie".into();
+            fixture.bridge.shared.lock().unwrap().entries = vec![private_entry];
+            write_persisted_library(&fixture.bridge.shared.lock().unwrap().entries);
+            let replacement_before = read_persisted_library();
+            // Keep service generations identical: captured profile ownership,
+            // rather than an incidental shutdown generation, must reject this.
+            assert_eq!(
+                fixture.bridge.stremio().generation.load(Ordering::Acquire),
+                0
+            );
+            release.send(()).unwrap();
+            assert!(matches!(worker.join().unwrap(), Err(ApiError::Rejected)));
+            profiles::with_context(outgoing.clone(), || {
+                assert!(fixture.bridge.personal_state().is_none());
+                assert!(matches!(
+                    materialize::prepare(&fixture.bridge, &fixture.connection, &title, true, 0),
+                    Err(ApiError::Rejected)
+                ));
+                assert!(matches!(
+                    materialize::accept(&fixture.bridge, prepared, 0),
+                    Err(ApiError::Rejected)
+                ));
+            });
+            assert_eq!(
+                nova_storage::try_scan_prefix(&profiles::storage_key_for(&outgoing.id, ""))
+                    .unwrap(),
+                before
+            );
+            assert_eq!(read_persisted_library(), replacement_before);
+            assert_eq!(
+                fixture.bridge.shared.lock().unwrap().entries[0].id,
+                "bob-private"
+            );
+        },
+    );
+}
+
 struct Fixture {
     _app: AppWindow,
     bridge: Bridge,

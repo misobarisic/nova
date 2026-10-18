@@ -359,6 +359,43 @@ fn sync_rows() -> Vec<(String, String, String)> {
 }
 
 #[test]
+fn failed_selection_write_keeps_outgoing_playback_and_profile_active() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::failed_selection_write_keeps_outgoing_playback_and_profile_active"
+        ),
+        |fixture| {
+            let active = profiles::active_context();
+            let bob = profiles::create("Bob").unwrap();
+            let capture = fixture.bridge.player.screenshot_session();
+            fixture.app.set_player_open(true);
+            // Reject just the selection write through the real storage schema
+            // validator; all outgoing checkpoints must still be allowed.
+            nova_storage::register_collection(
+                "profiles:device:v1",
+                nova_storage::CollectionKind::Array {
+                    id_field: "id".into(),
+                },
+            );
+            fixture.bridge.switch_profile(&bob);
+            assert!(!fixture.app.get_profiles_error().is_empty());
+            assert_eq!(profiles::active_context(), active);
+            assert_eq!(profiles::device_preferences().active_profile, active.id);
+            assert!(fixture.app.get_player_open());
+            assert_eq!(fixture.bridge.player.screenshot_session(), capture);
+
+            nova_storage::register_collection(
+                "profiles:device:v1",
+                nova_storage::CollectionKind::Object,
+            );
+            select(fixture, &bob);
+            assert!(!fixture.app.get_player_open());
+        },
+    );
+}
+
+#[test]
 fn startup_preference_is_device_local_and_survives_profile_switches() {
     isolated(
         concat!(

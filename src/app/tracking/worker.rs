@@ -334,13 +334,13 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             .flatten()
             .unwrap_or_default(),
     };
-    let enabled = coordinator
+    let Some(enabled) = coordinator
         .bridge
-        .shared
-        .lock()
-        .unwrap()
-        .cache_settings
-        .completion_rating_prompts_enabled;
+        .personal_state()
+        .map(|state| state.cache_settings.completion_rating_prompts_enabled)
+    else {
+        return;
+    };
     if let Err(error) = coordinator
         .configure_completion(enabled)
         .and_then(|_| coordinator.apply_completion_shared(true))
@@ -356,6 +356,9 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     coordinator.restore_connections();
     coordinator.publish();
     loop {
+        if !coordinator.live() {
+            break;
+        }
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(command) => {
                 if let Err(error) = coordinator.command(command) {
@@ -367,7 +370,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if !coordinator.bridge.tracking().alive.load(Ordering::Acquire) {
+        if !coordinator.live() {
             break;
         }
         let mut expired = vec![];
@@ -421,6 +424,10 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     }
 }
 impl Coordinator {
+    fn live(&self) -> bool {
+        profiles::is_current(&profiles::capture())
+            && self.bridge.tracking().alive.load(Ordering::Acquire)
+    }
     fn restore_connections(&mut self) {
         let now = now_secs();
         for service in [Service::MyAnimeList, Service::AniList] {
@@ -558,7 +565,8 @@ impl Coordinator {
         }
     }
     fn current(&self, generation: u64) -> bool {
-        self.generation == generation
+        self.live()
+            && self.generation == generation
             && self
                 .bridge
                 .tracking()
@@ -579,6 +587,9 @@ impl Coordinator {
             .ok_or_else(|| text::tr("Connect this service in Settings → Tracking first.").into())
     }
     fn command(&mut self, command: Command) -> Result<(), String> {
+        if !self.live() {
+            return Ok(());
+        }
         match command {
             Command::CompletionPreferences { enabled } => self.configure_completion(enabled),
             Command::CompletionScore { token, id, value } => {
@@ -633,9 +644,8 @@ impl Coordinator {
                 self.completion_prompt = None;
                 let enabled = self
                     .bridge
-                    .shared
-                    .lock()
-                    .unwrap()
+                    .personal_state()
+                    .ok_or_else(input_message)?
                     .cache_settings
                     .completion_rating_prompts_enabled;
                 self.configure_completion(enabled)?;
@@ -1592,7 +1602,7 @@ impl Coordinator {
         }
         let context = self.context.clone().ok_or_else(input_message)?;
         let source_still_current = {
-            let shared = self.bridge.shared.lock().unwrap();
+            let shared = self.bridge.personal_state().ok_or_else(input_message)?;
             shared.modal_item.as_ref().is_some_and(|m| {
                 m.id == context.source.source_id
                     && m.type_ == context.source.media_type
@@ -1956,9 +1966,8 @@ impl Coordinator {
     fn consume_events(&mut self) -> Result<(), String> {
         let enabled = self
             .bridge
-            .shared
-            .lock()
-            .unwrap()
+            .personal_state()
+            .ok_or_else(input_message)?
             .cache_settings
             .completion_rating_prompts_enabled;
         self.configure_completion(enabled)?;
@@ -1986,6 +1995,9 @@ impl Coordinator {
                 return Err(self.notice.clone());
             }
             consumed.push(key);
+        }
+        if !self.live() {
+            return Ok(());
         }
         self.store
             .save_with_events(state, &consumed)
