@@ -196,3 +196,83 @@ fn paired_tracking_shares_links_tokens_rotation_and_disconnect_without_history_r
     transfer(&b, &mut a);
     assert_eq!(a.digest(), b.digest());
 }
+
+#[test]
+fn every_profile_receives_both_services_client_registration_and_verified_saved_tokens() {
+    #[derive(Clone)]
+    struct Verify;
+    impl api::Transport for Verify {
+        fn send(&self, request: api::Request) -> Result<api::Response, ApiError> {
+            let body = if request.url == "https://graphql.anilist.co" {
+                serde_json::json!({"data":{"Viewer":{"id":7,"name":"fixture","mediaListOptions":{"scoreFormat":"POINT_10"}}}})
+            } else {
+                assert_eq!(request.url, "https://api.myanimelist.net/v2/users/@me");
+                serde_json::json!({"id":7,"name":"fixture"})
+            };
+            Ok(api::Response {
+                status: 200,
+                retry_after: None,
+                reset_at: None,
+                body,
+            })
+        }
+    }
+    let mut sender = nova_sync::Store::default();
+    let mut receiver = nova_sync::Store::default();
+    for profile in ["alice", "bob"] {
+        for service in [Service::MyAnimeList, Service::AniList] {
+            let mut connection = connection(&format!("fixture-{profile}-{service:?}"));
+            connection.account.service = service;
+            connection.registration = ClientRegistration {
+                client_id: format!("custom_{profile}"),
+                redirect_uri: "http://127.0.0.1:53940/shared-callback".into(),
+            };
+            let (key, raw, _) = connection_record(&connection).unwrap();
+            // Only completed credentials and the registration necessary to
+            // use them travel; transient authorization sessions do not.
+            let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            for ephemeral in [
+                "code",
+                "state",
+                "verifier",
+                "code_verifier",
+                "nonce",
+                "authorization_url",
+            ] {
+                assert!(json.get(ephemeral).is_none());
+            }
+            sender.set(
+                &nova_sync::profile_domain(profile, TRACKING_DOMAIN),
+                &key,
+                Some(raw),
+                0,
+                1,
+            );
+        }
+    }
+    transfer(&sender, &mut receiver);
+    for profile in ["alice", "bob"] {
+        let connections = peer_connections(
+            &receiver.records(&nova_sync::profile_domain(profile, TRACKING_DOMAIN)),
+        )
+        .unwrap();
+        assert_eq!(connections.len(), 2);
+        for (service, mut saved) in connections {
+            assert_eq!(saved.registration.client_id, format!("custom_{profile}"));
+            assert_eq!(
+                saved.registration.redirect_uri,
+                "http://127.0.0.1:53940/shared-callback"
+            );
+            let (_, raw, _) = connection_record(&saved).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(json["access"], format!("fixture-{profile}-{service:?}"));
+            assert_eq!(
+                json["refresh"],
+                format!("fixture-{profile}-{service:?}-refresh")
+            );
+            let storage = Memory::default();
+            let client = saved.restore(&storage, Verify, 100).unwrap();
+            assert_eq!(client.viewer().unwrap().account, saved.account);
+        }
+    }
+}

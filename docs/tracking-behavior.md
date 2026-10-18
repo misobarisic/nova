@@ -61,6 +61,15 @@ reconnection and are never printed in errors.
 
 The `tracking` peer domain shares these records with explicitly paired Nova
 devices, including public refresh registration, tokens, expiry and account choice.
+Received active account cards use that saved registration, so their displayed
+client ID/redirect and subsequent refresh use the same client as the grant.
+Unconnected client configuration remains device-local. Incomplete OAuth codes,
+state, PKCE verifiers and browser-link nonces are never synced.
+Automatic MAL refresh compares the exact shared credential revision before
+committing the rotated pair, local credential and publication baseline in one
+transaction. A peer Disconnect or newer token pair received during refresh wins;
+retrying a failed save retains its original revision and cannot resurrect it.
+Explicitly completing a new sign-in can create a new shared grant.
 They never enter addon configuration or the ordinary settings domain. Tracker
 API requests send bearer credentials only to the official tracker endpoints.
 This is not encrypted-at-rest storage; a copy of the database can expose tokens.

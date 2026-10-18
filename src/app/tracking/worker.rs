@@ -284,13 +284,17 @@ struct Coordinator {
     completion: Option<Completion>,
     cache: CatalogCache,
     restore_after: [u64; 2],
-    pending_restore: Vec<SavedConnection>,
+    pending_restore: Vec<PendingRestore>,
     completion_prompt: Option<completion::PromptDraft>,
     completion_prompt_revision: u64,
     completion_publication: Arc<AtomicU64>,
     completion_prompt_error: String,
     completion_restored: bool,
     completion_policy_revision: Option<u64>,
+}
+struct PendingRestore {
+    connection: SavedConnection,
+    storage: peer::RefreshStorage,
 }
 enum Completion {
     Progress(DeliveryAttempt, DeliveryOutcome, Option<RemoteEntry>),
@@ -520,28 +524,42 @@ impl Coordinator {
             let retained = self
                 .pending_restore
                 .iter()
-                .position(|c| c.account == account)
+                .position(|c| c.connection.account == account)
                 .map(|index| self.pending_restore.remove(index));
-            let loaded = match retained {
-                Some(connection) => Ok(Some(connection)),
-                None => SavedConnection::load(&self.storage, service),
+            let loaded = if retained.is_none() {
+                SavedConnection::load(&self.storage, service)
+            } else {
+                Ok(None)
             };
-            let mut connection = match loaded {
-                Ok(Some(c)) if c.account == account => c,
-                Ok(None) => continue,
-                _ => {
-                    self.notice =
-                        text::tr("Saved sign-in is unreadable. Reconnect this service.").into();
-                    continue;
-                }
+            let (mut connection, refresh_storage) = if let Some(pending) = retained {
+                (pending.connection, pending.storage)
+            } else {
+                let connection = match loaded {
+                    Ok(Some(c)) if c.account == account => c,
+                    Ok(None) => continue,
+                    _ => {
+                        self.notice =
+                            text::tr("Saved sign-in is unreadable. Reconnect this service.").into();
+                        continue;
+                    }
+                };
+                let refresh_storage =
+                    match peer::RefreshStorage::capture(self.storage.clone(), &connection) {
+                        Ok(storage) => storage,
+                        Err(_) => continue,
+                    };
+                (connection, refresh_storage)
             };
             let epoch = self.bridge.tracking().login_generation[service_index(service)]
                 .load(Ordering::Acquire);
-            let client = match connection.restore(&self.storage, self.transport.clone(), now) {
+            let client = match connection.restore(&refresh_storage, self.transport.clone(), now) {
                 Ok(client) => client,
                 Err(CredentialError::Storage) => {
                     // Keep rotated secrets in memory until they can be saved.
-                    self.pending_restore.push(connection);
+                    self.pending_restore.push(PendingRestore {
+                        connection,
+                        storage: refresh_storage,
+                    });
                     self.notice = storage_message();
                     continue;
                 }
@@ -560,6 +578,9 @@ impl Coordinator {
                     continue;
                 }
             };
+            if !refresh_storage.current() {
+                continue;
+            }
             if self.bridge.tracking().login_generation[service_index(service)]
                 .load(Ordering::Acquire)
                 != epoch
@@ -770,7 +791,7 @@ impl Coordinator {
                 self.cancel(service);
                 self.sessions.retain(|s| s.service != service);
                 self.pending_restore
-                    .retain(|c| c.account.service != service);
+                    .retain(|c| c.connection.account.service != service);
                 let mut state = self.store.state().clone();
                 state.active_accounts.retain(|a| a.service != service);
                 self.store
@@ -1138,7 +1159,7 @@ impl Coordinator {
             .map_err(|_| storage_message())?;
         let tokens = connection.tokens;
         self.pending_restore
-            .retain(|c| c.account.service != service);
+            .retain(|c| c.connection.account.service != service);
         self.store
             .resume_account(&viewer.account, generation)
             .map_err(|_| storage_message())?;
@@ -2192,34 +2213,49 @@ impl Coordinator {
                 .is_some_and(|expiry| expiry <= now.saturating_add(60))
             {
                 if service == Service::MyAnimeList {
-                    let refreshed = self.sessions[index].tokens.refresh(
-                        &self.sessions[index].registration,
-                        &self.transport,
-                        now,
-                    );
+                    let session = &self.sessions[index];
+                    let consumed = SavedConnection {
+                        account: session.client.viewer().unwrap().account.clone(),
+                        registration: session.registration.clone(),
+                        tokens: Tokens {
+                            access: session.tokens.access.duplicate(),
+                            refresh: session.tokens.refresh.as_ref().map(Secret::duplicate),
+                            expires_at: session.tokens.expires_at,
+                        },
+                    };
+                    let refresh_storage =
+                        match peer::RefreshStorage::capture(self.storage.clone(), &consumed) {
+                            Ok(storage) => storage,
+                            Err(_) => {
+                                self.sessions[index].paused = true;
+                                continue;
+                            }
+                        };
+                    let refreshed =
+                        consumed
+                            .tokens
+                            .refresh(&consumed.registration, &self.transport, now);
                     match refreshed {
                         Ok(tokens) => {
                             let connection = SavedConnection {
-                                account: self.sessions[index]
-                                    .client
-                                    .viewer()
-                                    .unwrap()
-                                    .account
-                                    .clone(),
-                                registration: self.sessions[index].registration.clone(),
+                                account: consumed.account,
+                                registration: consumed.registration,
                                 tokens,
                             };
-                            let saved = connection.save(&self.storage);
+                            let saved = connection.save(&refresh_storage);
                             if saved.is_err() {
                                 self.pending_restore
-                                    .retain(|c| c.account.service != service);
-                                self.pending_restore.push(connection);
+                                    .retain(|c| c.connection.account.service != service);
+                                self.pending_restore.push(PendingRestore {
+                                    connection,
+                                    storage: refresh_storage,
+                                });
                                 self.sessions[index].paused = true;
                                 self.notice = storage_message();
                                 continue;
                             }
                             self.sessions[index].tokens = connection.tokens;
-                            if !self.live() {
+                            if !self.live() || !refresh_storage.current() {
                                 return;
                             }
                             let tokens = &self.sessions[index].tokens;
@@ -2537,7 +2573,22 @@ impl Coordinator {
                             .load(Ordering::Acquire)
                             == s.epoch
                 });
-                let registration = self.registrations.get(service);
+                let saved_registration = active
+                    .and_then(|_| SavedConnection::load(&self.storage, service).ok().flatten())
+                    .map(|c| c.registration);
+                let registration = self
+                    .logins
+                    .iter()
+                    .find(|l| l.service == service)
+                    .map(|l| &l.auth.registration)
+                    .or_else(|| {
+                        self.sessions
+                            .iter()
+                            .find(|s| s.service == service)
+                            .map(|s| &s.registration)
+                    })
+                    .or(saved_registration.as_ref())
+                    .unwrap_or_else(|| self.registrations.get(service));
                 let (
                     library_enabled,
                     library_busy,
