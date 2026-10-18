@@ -5,5 +5,9 @@
   https://github.com/simple-icons/simple-icons/tree/develop/icons
 - `stremio.svg`: official Stremio icon, retained in its original colors:
   https://github.com/Stremio/stremio-brand/blob/master/logos/SVG/stremio-logo-icon-only-fullcolor.svg
+- `simkl.svg` and `mdblist.svg`: Simple Icons brand paths, rendered in white
+  to match the MAL/AniList account cards (CC0):
+  https://github.com/simple-icons/simple-icons/blob/develop/icons/simkl.svg
+  https://github.com/simple-icons/simple-icons/blob/develop/icons/mdblist.svg
 
 Service names and logos identify the connected integrations.
