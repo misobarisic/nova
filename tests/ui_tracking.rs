@@ -15,5 +15,8 @@ mod completion_rating;
 #[path = "tracking/services_scope.rs"]
 mod services_scope;
 
+#[path = "tracking/list_service_modes.rs"]
+mod list_service_modes;
+
 #[path = "tracking/library_mode.rs"]
 mod library_mode;

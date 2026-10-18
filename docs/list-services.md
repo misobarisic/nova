@@ -8,9 +8,12 @@ The current Nova interface accepts an MDBList API key from
 [account preferences](https://mdblist.com/preferences/). Simkl currently requires
 a registered public application client ID and its access token, available through
 [Simkl application settings](https://simkl.com/settings/developer/). Nova does not
-ship a fabricated application registration. The API crate also implements
-Simkl's device authorization and refresh endpoints; browser/device-code sign-in
-and automatic token refresh are not yet wired into the account cards. An expired
+ship a fabricated application registration. For AUTH V2 browser login, a public
+mobile/desktop registration requires a redirect URI and no client secret;
+device-only registrations omit redirect URIs. See the [official setup guide](https://api.simkl.org/api-reference/auth).
+The API crate contains preliminary device/refresh helpers; AUTH V2 device PKCE
+and browser/device-code sign-in still need completion and UI wiring. Automatic
+token refresh is not yet wired into the account cards. An expired
 or rejected credential requires reconnecting. Tokens are never included in
 statuses or diagnostics.
 
@@ -30,10 +33,11 @@ history from the remote service. Nova retains the title's proven catalog
 identity with that choice, so removing its native library entry or cached
 metadata cannot re-import the same remote title under a canonical ID.
 
-In account settings, check **Sync the full library**, then choose **Start
-full-library sync**. This explicitly authorizes importing and exporting all
-supported saved titles and watched history for that account. **Use selected
-titles only** returns to the account's per-title choices. A selected-title pass
+In account settings, choose **Full library sync** in **Sync mode**, then choose
+**Start full-library sync**. The selector is only a draft until that explicit
+confirmation. This authorizes importing and exporting all supported saved titles
+and watched history for that account. Choosing **Selected titles** returns to
+the account's retained per-title choices and exclusions. A selected-title pass
 never imports unrelated remote titles or history. Retained links belong to the
 verified account and remain available when reconnecting the same account;
 a different account cannot use them. Full-library and automatic-sync

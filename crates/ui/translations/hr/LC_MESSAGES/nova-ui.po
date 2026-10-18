@@ -3455,6 +3455,15 @@ msgstr "Zaustavi sinkronizaciju ovog naslova"
 msgid "Sync combines saved titles and watched episodes. Removing a title or marking it unwatched does not delete the other service's history."
 msgstr "Sinkronizacija spaja spremljene naslove i odgledane epizode. Uklanjanje naslova ili označavanje kao neodgledanog ne briše povijest druge usluge."
 
+msgid "Connect this service to choose which titles sync."
+msgstr "Povežite ovu uslugu da biste odabrali naslove za sinkronizaciju."
+
+msgid "Your selected titles and exclusions are kept when you change modes."
+msgstr "Odabrani i isključeni naslovi ostaju sačuvani pri promjeni načina rada."
+
+msgid "Full-library sync starts only when you choose Start full-library sync."
+msgstr "Sinkronizacija cijele zbirke započinje tek kada odaberete Pokreni sinkronizaciju cijele zbirke."
+
 msgid "Whole-library anime tracking"
 msgstr "Praćenje animea iz cijele zbirke"
 

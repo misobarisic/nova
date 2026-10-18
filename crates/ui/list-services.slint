@@ -1,7 +1,7 @@
 import { SettingsBridge, Theme } from "@NovaUiShared";
 import { PillButton, SettingsInput, SettingsRow, ToggleSwitch } from "settings-controls.slint";
 import { TrackingAccountCard } from "tracking-account-card.slint";
-import { CheckBox } from "std-widgets.slint";
+import { Dropdown } from "dropdown.slint";
 
 export component ListServiceSettings inherits TrackingAccountCard {
     in property <int> service;
@@ -16,26 +16,85 @@ export component ListServiceSettings inherits TrackingAccountCard {
     changed blur => { root.release_focus(); }
     function release_focus() { blur_scope.focus(); root.client_focused = false; root.token_focused = false; }
     blur_scope := FocusScope { width: 1px; height: 1px; }
+    // Choosing full-library mode is only a draft. Account/session changes and
+    // asynchronous work must never turn an old selection into new consent.
     property <bool> full_library_draft: false;
+    property <bool> connected: SettingsBridge.list_services_connected[root.service];
+    property <bool> busy: SettingsBridge.list_services_busy[root.service];
+    property <bool> whole_library: SettingsBridge.list_services_whole_library[root.service];
+    property <string> account: SettingsBridge.list_services_account[root.service];
+    changed service => { root.full_library_draft = false; }
+    changed connected => { root.full_library_draft = false; }
+    changed busy => { root.full_library_draft = false; }
+    changed whole_library => { root.full_library_draft = false; }
+    changed account => { root.full_library_draft = false; }
+    toggled => { if !root.expanded { root.full_library_draft = false; } }
     title: root.service == 0 ? "Simkl" : "MDBList";
+    logo: root.service == 0 ? @image-url("../../assets/icons/services/simkl.svg") : @image-url("../../assets/icons/services/mdblist.svg");
     status: SettingsBridge.list_services_account[root.service] != "" ? SettingsBridge.list_services_account[root.service] : @tr("Not connected");
     brand_color: root.service == 0 ? #176c99 : #315f3d;
     brand_dark: root.service == 0 ? #12344e : #183522;
     VerticalLayout {
         alignment: start; spacing: 12px;
-        Text { text: @tr("Choose titles on their Tracking page. Connecting an account does not upload your library."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
         Text { text: SettingsBridge.list_services_status[root.service]; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
+        SettingsRow {
+            row-title: @tr("Sync mode");
+            Dropdown {
+                accessible-role: combobox;
+                accessible-label: root.title + " · " + @tr("Sync mode");
+                accessible-enabled: self.enabled;
+                property <int> mode_index: root.whole_library || root.full_library_draft ? 0 : 1;
+                current-index: self.mode_index;
+                changed mode_index => { self.current-index = self.mode_index; }
+                model: [@tr("Full library sync"), @tr("Selected titles")];
+                roomy: true;
+                enabled: root.connected && !root.busy;
+                selected(_) => {
+                    let requested = self.current-index;
+                    self.current-index = self.mode_index;
+                    // A popup opened before a worker update can still finish
+                    // its gesture; recheck the live state before changing scope.
+                    if root.connected && !root.busy {
+                        root.full_library_draft = requested == 0 && !root.whole_library;
+                        if requested == 1 && root.whole_library {
+                            SettingsBridge.list_services_scope_changed(root.service, false);
+                        }
+                    }
+                }
+            }
+        }
+        Text {
+            text: !root.connected ? @tr("Connect this service to choose which titles sync.")
+                : root.full_library_draft ? @tr("Full-library sync starts only when you choose Start full-library sync.")
+                : root.whole_library ? @tr("Full-library sync imports and exports all supported saved titles and watched episodes. Custom lists and ratings are preserved.")
+                : @tr("Sync only titles you explicitly enable from their Tracking page.");
+            color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px;
+        }
+        if root.connected: Text { text: @tr("Your selected titles and exclusions are kept when you change modes."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
         if !SettingsBridge.list_services_connected[root.service]: Text { text: root.service == 0 ? @tr("Enter your Simkl application client ID and access token. Tokens are verified before use.") : @tr("Create an API key in MDBList preferences and paste it below."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
         if root.service == 0 && !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: @tr("Simkl client ID"); accessible-label: @tr("Simkl client ID"); text <=> root.client_value; changed full-text => { root.client_full = self.full-text; } changed has-focus => { root.client_focused = self.has-focus; } }
         if !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: root.service == 0 ? @tr("Simkl access token") : @tr("MDBList API key"); accessible-label: self.placeholder-text; input-type: password; text <=> root.token_value; changed full-text => { root.token_full = self.full-text; } changed has-focus => { root.token_focused = self.has-focus; } }
-        if !SettingsBridge.list_services_connected[root.service]: PillButton { label: @tr("Connect"); primary: true; enabled: !SettingsBridge.list_services_busy[root.service]; clicked => { SettingsBridge.list_services_connect(root.service, root.service == 0 ? root.client_full : "", root.token_full); root.release_focus(); root.token_value = ""; root.token_full = ""; } }
+        if !SettingsBridge.list_services_connected[root.service]: PillButton { label: @tr("Connect"); primary: true; enabled: !SettingsBridge.list_services_busy[root.service]; clicked => { root.full_library_draft = false; SettingsBridge.list_services_connect(root.service, root.service == 0 ? root.client_full : "", root.token_full); root.release_focus(); root.token_value = ""; root.token_full = ""; } }
         if !SettingsBridge.list_services_connected[root.service]: PillButton { label: @tr("Open account settings"); clicked => { SettingsBridge.list_services_open_account(root.service); } }
         if SettingsBridge.list_services_connected[root.service]: SettingsRow { row-title: SettingsBridge.list_services_whole_library[root.service] ? @tr("Automatic sync") : @tr("Automatic sync for selected titles"); ToggleSwitch { name: SettingsBridge.list_services_whole_library[root.service] ? @tr("Automatic sync") : @tr("Automatic sync for selected titles"); checked: SettingsBridge.list_services_automatic[root.service]; toggled => { SettingsBridge.list_services_automatic_changed(root.service, self.checked); } } }
-        if SettingsBridge.list_services_connected[root.service] && !SettingsBridge.list_services_whole_library[root.service]: CheckBox { text: @tr("Sync the full library"); checked <=> root.full_library_draft; }
-        if SettingsBridge.list_services_connected[root.service]: Text { text: @tr("Full-library sync imports and exports all supported saved titles and watched episodes. Custom lists and ratings are preserved."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
-        if SettingsBridge.list_services_connected[root.service]: PillButton { label: root.full_library_draft && !SettingsBridge.list_services_whole_library[root.service] ? @tr("Start full-library sync") : @tr("Sync now"); primary: true; enabled: !SettingsBridge.list_services_busy[root.service]; clicked => { if root.full_library_draft { SettingsBridge.list_services_scope_changed(root.service, true); } else { SettingsBridge.list_services_sync(root.service); } } }
-        if SettingsBridge.list_services_connected[root.service] && SettingsBridge.list_services_whole_library[root.service]: PillButton { label: @tr("Use selected titles only"); clicked => { root.full_library_draft = false; SettingsBridge.list_services_scope_changed(root.service, false); } }
-        if SettingsBridge.list_services_connected[root.service] || SettingsBridge.list_services_account[root.service] != "": PillButton { label: @tr("Disconnect"); destructive: true; clicked => { SettingsBridge.list_services_disconnect(root.service); } }
-        if SettingsBridge.list_services_busy[root.service]: PillButton { label: @tr("Cancel"); clicked => { SettingsBridge.list_services_cancel(root.service); } }
+        if root.connected && root.full_library_draft: Text { text: @tr("Full-library sync imports and exports all supported saved titles and watched episodes. Custom lists and ratings are preserved."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+        if root.connected: PillButton {
+            label: root.full_library_draft && !root.whole_library ? @tr("Start full-library sync") : @tr("Sync now");
+            primary: true;
+            enabled: !root.busy;
+            wrap_label: true;
+            clicked => {
+                if root.connected && !root.busy {
+                    if root.full_library_draft && !root.whole_library {
+                        root.full_library_draft = false;
+                        SettingsBridge.list_services_scope_changed(root.service, true);
+                    } else {
+                        SettingsBridge.list_services_sync(root.service);
+                    }
+                }
+            }
+        }
+        if root.connected || root.account != "": PillButton { label: @tr("Disconnect"); destructive: true; clicked => { root.full_library_draft = false; SettingsBridge.list_services_disconnect(root.service); } }
+        if root.busy: PillButton { label: @tr("Cancel"); clicked => { root.full_library_draft = false; SettingsBridge.list_services_cancel(root.service); } }
     }
 }
