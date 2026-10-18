@@ -435,8 +435,14 @@ impl Client {
                 .body
                 .pointer("/pagination/total")
                 .and_then(Value::as_u64);
+            let body_has_more = response
+                .body
+                .pointer("/pagination/has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if next.is_none()
                 && !response.has_more
+                && !body_has_more
                 && total.is_none_or(|t| (offset + count) as u64 >= t)
             {
                 return Ok(result);
@@ -809,13 +815,18 @@ fn parse_ids(value: &Value, flat: bool) -> Result<MediaIds, ApiError> {
     let result = MediaIds {
         imdb: ids
             .get("imdb")
+            .or_else(|| ids.get("imdbid"))
             .or_else(|| value.get("imdb_id"))
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
-        tmdb: number(&ids["tmdb"]).or_else(|| if flat { number(&value["id"]) } else { None }),
+        tmdb: number(&ids["tmdb"])
+            .or_else(|| number(&ids["tmdbid"]))
+            .or_else(|| if flat { number(&value["id"]) } else { None }),
         simkl: number(&ids["simkl"]),
-        tvdb: number(&ids["tvdb"]).or_else(|| number(&value["tvdb_id"])),
+        tvdb: number(&ids["tvdb"])
+            .or_else(|| number(&ids["tvdbid"]))
+            .or_else(|| number(&value["tvdb_id"])),
     };
     if !result.valid() {
         return Err(ApiError::InvalidResponse);
@@ -861,7 +872,19 @@ fn parse_title(
     } else {
         "show"
     };
-    let media = row.get(key).or_else(|| row.get("anime")).unwrap_or(row);
+    // MDBList watched episodes nest the parent under episode.show; the
+    // episode's own TMDb/TVDB identifiers must never become a show identity.
+    let media = row
+        .get(key)
+        .filter(|value| value.is_object())
+        .or_else(|| row.get("anime").filter(|value| value.is_object()))
+        .or_else(|| {
+            (kind != MediaType::Movie)
+                .then(|| row.pointer("/episode/show"))
+                .flatten()
+                .filter(|value| value.is_object())
+        })
+        .unwrap_or(row);
     let ids = parse_ids(media, !simkl && media.get("ids").is_none())?;
     let status = parse_status(&row["status"], default)?;
     let mut episodes = Vec::new();
@@ -1244,6 +1267,87 @@ mod tests {
             }]
         );
         assert!(!rows[0].watched);
+    }
+    #[test]
+    fn mdblist_library_accepts_documented_watched_and_playback_shapes() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"movies": [], "shows": []}));
+        fake.push(json!({"movies": [], "shows": []}));
+        fake.push(json!({"episodes": [{
+            "last_watched_at": "2025-10-15T20:00:00Z",
+            "episode": {
+                "season": 1, "number": 1, "ids": {"tmdb": 62085},
+                "show": {"title": "Breaking Bad", "year": 2008,
+                    "ids": {"tmdb": 1396, "imdb": "tt0903747"}}
+            }
+        }]}));
+        fake.push(json!([
+            {"type": "movie", "progress": 45.25,
+                "movie": {"title": "The Shawshank Redemption", "year": 1994,
+                    "ids": {"imdbid": "tt0111161", "tmdbid": 278}},
+                "episode": null, "show": null},
+            {"type": "episode", "progress": 68.5, "movie": null,
+                "episode": {"season": 1, "number": 3,
+                    "ids": {"tmdbid": 63174, "tvdbid": 349232}},
+                "show": {"title": "Friends", "year": 1994,
+                    "ids": {"imdbid": "tt0108778", "tmdbid": 1668, "tvdbid": 79168}}}
+        ]));
+        let rows = Client::new(fake.clone())
+            .library(&credentials(Service::MdbList))
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        let watched = rows.iter().find(|row| row.ids.tmdb == Some(1396)).unwrap();
+        assert_eq!(watched.title, "Breaking Bad");
+        assert_eq!(
+            watched.episodes,
+            vec![Episode {
+                season: 1,
+                number: 1
+            }]
+        );
+        assert!(!watched.watched);
+        let movie = rows.iter().find(|row| row.ids.tmdb == Some(278)).unwrap();
+        assert_eq!(movie.media_type, MediaType::Movie);
+        assert_eq!(movie.progress, Some(45.25));
+        assert_eq!(movie.playback_episode, None);
+        let show = rows.iter().find(|row| row.ids.tmdb == Some(1668)).unwrap();
+        assert_eq!(show.ids.tvdb, Some(79168));
+        assert_eq!(show.progress, Some(68.5));
+        assert_eq!(
+            show.playback_episode,
+            Some(Episode {
+                season: 1,
+                number: 3
+            })
+        );
+        assert!(
+            show.episodes.is_empty(),
+            "a resume point is not watched history"
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.ids.tmdb != Some(62085) && row.ids.tmdb != Some(63174))
+        );
+        assert_eq!(fake.requests.lock().unwrap().len(), 4);
+    }
+    #[test]
+    fn mdblist_pagination_honors_body_has_more_without_cursor_or_header() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"movies": [{"id": 1, "title": "A"}],
+            "pagination": {"has_more": true, "total_movies": 2}}));
+        fake.push(json!({"movies": [{"id": 2, "title": "B"}],
+            "pagination": {"has_more": false, "total_movies": 2}}));
+        let rows = Client::new(fake.clone())
+            .mdb_pages(
+                &credentials(Service::MdbList),
+                "/watchlist/items",
+                ListStatus::Planning,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].url.contains("offset=1"));
     }
     #[test]
     fn collected_episodes_never_invent_watch_history() {
