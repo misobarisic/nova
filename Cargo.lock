@@ -5277,6 +5277,7 @@ dependencies = [
  "ndk-context",
  "nova-config",
  "nova-download",
+ "nova-list-services",
  "nova-media",
  "nova-party",
  "nova-playback-api",
@@ -5328,6 +5329,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "webpki-roots",
+]
+
+[[package]]
+name = "nova-list-services"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots",
+ "zeroize",
 ]
 
 [[package]]
