@@ -602,7 +602,7 @@ export component AppWindow inherits Window {
     // conditional hosts, so release their cached copies after page teardown.
     callback release_page_payloads();
     private property <bool> home_page_mounted: root.show_home && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
-    changed home_page_mounted => { if root.home_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
+    changed home_page_mounted => { if root.home_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } if !root.home_page_mounted { root.finish_profile_home_entry(); } page_release_timer.start(); }
     private property <bool> discover_page_mounted: !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
     changed discover_page_mounted => { if root.discover_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> calendar_page_mounted: root.show_calendar && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
@@ -1002,6 +1002,42 @@ export component AppWindow inherits Window {
     callback profile_switch(string);
     callback profile_delete(string);
     callback profile_remember_last_changed(bool);
+    // Animate only after the backend has published the incoming profile's models.
+    // No outgoing personal data is retained for a crossfade between identities.
+    private property <bool> profile_home_active: false;
+    private property <bool> profile_home_started: true;
+    private property <bool> profile_home_motion: Anim.enabled && Anim.transitions;
+    private property <float> profile_home_slide: root.profile_home_started ? 1.0 : 0.0;
+    animate profile_home_slide { duration: root.profile_home_started ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> profile_home_alpha: root.profile_home_started ? 1.0 : 0.0;
+    animate profile_home_alpha { duration: root.profile_home_started ? Anim.transition_fade : 0ms; }
+    private property <float> profile_home_slide_start: 0.0;
+    private property <float> profile_home_alpha_start: 0.0;
+    public function animate_profile_home_entry() {
+        root.finish_profile_home_entry();
+        if !root.home_page_mounted || root.onboarding_visible || !root.profile_home_motion { return; }
+        root.profile_home_started = false;
+        // Observe each zero-duration reset before a delayed first frame can
+        // start the animation, including repeated selections of Current.
+        root.profile_home_slide_start = root.profile_home_slide;
+        root.profile_home_alpha_start = root.profile_home_alpha;
+        root.profile_home_active = true;
+        profile_home_tick.start();
+    }
+    function finish_profile_home_entry() {
+        profile_home_tick.stop(); profile_home_done.stop();
+        root.profile_home_active = false;
+        root.profile_home_started = true;
+    }
+    profile_home_tick := Timer { interval: 1ms; running: false; triggered => {
+        self.stop();
+        if root.home_page_mounted && root.profile_home_active && root.profile_home_motion {
+            root.profile_home_started = true;
+            profile_home_done.start();
+        } else { root.finish_profile_home_entry(); }
+    } }
+    profile_home_done := Timer { interval: Math.max(Anim.transition_slide, Anim.transition_fade); running: false; triggered => { root.finish_profile_home_entry(); } }
+    changed profile_home_motion => { if !root.profile_home_motion { root.finish_profile_home_entry(); } }
     in-out property <length> more_scroll_y: 0px;
     in-out property <int> more_choice: 0;
     in-out property <int> more_focus_zone: 1;
@@ -2128,6 +2164,10 @@ export component AppWindow inherits Window {
 
     // ---- Home page (landing page, Continue Watching) --------------------
     if root.home_page_mounted: HomeHost {
+        width: root.width; height: root.height;
+        x: 0px;
+        y: root.profile_home_active && root.profile_home_motion ? 24px * (1.0 - root.profile_home_slide_start) * (1.0 - root.profile_home_slide) : 0px;
+        opacity: root.profile_home_active && root.profile_home_motion ? root.profile_home_alpha_start + (1.0 - root.profile_home_alpha_start) * root.profile_home_alpha : 1.0;
         viewport_width: self.width; viewport_height: self.height;
         nav-viewport-width: root.width;
         catalog_sections: root.home_catalog_sections;

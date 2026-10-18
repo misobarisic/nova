@@ -526,3 +526,139 @@ fn keyboard_and_tv_navigation_reveal_picker_actions_and_skip_last_delete() {
     key(&app, slint::platform::Key::Return.into());
     assert_eq!(created.borrow().as_slice(), &["New profile"]);
 }
+
+#[test]
+fn profile_picker_animates_entry_return_and_motion_disable() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::profile_picker_animates_entry_return_and_motion_disable"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
+        for width in [390, 1280] {
+            let app = picker(false);
+            app.window().set_size(slint::PhysicalSize::new(width, 900));
+            app.global::<nova_ui::Anim>().set_enabled(false);
+            app.set_profiles_open(false);
+            settle(&app);
+            app.global::<nova_ui::Anim>().set_enabled(enabled);
+            app.global::<nova_ui::Anim>().set_transitions(transitions);
+            let landing = ElementHandle::find_by_element_id(&app, "MorePage::landing")
+                .next()
+                .unwrap();
+            let origin = ElementHandle::find_by_element_type_name(&app, "MorePage")
+                .next()
+                .unwrap()
+                .absolute_position()
+                .x;
+            assert!(
+                landing.computed_opacity() > 0.99,
+                "More landing at {width}px, motion {enabled}/{transitions}: opacity {}, position {:?}, profiles {}, bridge {}, required {}, more {}",
+                landing.computed_opacity(),
+                landing.absolute_position(),
+                app.get_profiles_open(),
+                app.global::<nova_ui::MoreBridge>().get_profiles_open(),
+                app.get_profiles_require_selection(),
+                app.get_more_open()
+            );
+            button(&app, "Profiles").mock_single_click(slint::platform::PointerEventButton::Left);
+            let page = ElementHandle::find_by_element_type_name(&app, "ProfilesPage")
+                .next()
+                .unwrap();
+            if enabled && transitions {
+                assert!(page.absolute_position().x > width as f32 * 0.8);
+                assert!(page.computed_opacity() < 0.1);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+                assert!(page.computed_opacity() > 0.1 && page.computed_opacity() < 0.99);
+                // Back can reverse an incomplete entry without changing routes.
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                        text: slint::platform::Key::Back.into(),
+                    });
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                        text: slint::platform::Key::Back.into(),
+                    });
+                assert!(!app.get_profiles_open() && app.get_more_open());
+                settle(&app);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+                assert!(landing.computed_opacity() > 0.99);
+                button(&app, "Profiles")
+                    .mock_single_click(slint::platform::PointerEventButton::Left);
+                let _ = (page.absolute_position(), page.computed_opacity());
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(40));
+                app.global::<nova_ui::Anim>().set_transitions(false);
+            }
+            assert!(
+                (page.absolute_position().x - origin).abs() < 0.5,
+                "profile endpoint at {width}px: {:?}, origin {origin}",
+                page.absolute_position()
+            );
+            assert!(page.computed_opacity() > 0.99);
+            if enabled && transitions {
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+                app.global::<nova_ui::Anim>().set_transitions(true);
+                assert!((page.absolute_position().x - origin).abs() < 0.5);
+                assert!(page.computed_opacity() > 0.99);
+            }
+            key(&app, slint::platform::Key::Back.into());
+            assert!(app.get_more_open() && !app.get_profiles_open());
+        }
+    }
+}
+
+#[test]
+fn selecting_profiles_reveals_home_and_cancels_interrupted_motion() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::selecting_profiles_reveals_home_and_cancels_interrupted_motion"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
+        for required in [true, false] {
+            let app = picker(required);
+            app.global::<nova_ui::Anim>().set_enabled(enabled);
+            app.global::<nova_ui::Anim>().set_transitions(transitions);
+            let weak = app.as_weak();
+            app.on_profile_switch(move |_| {
+                let app = weak.upgrade().unwrap();
+                app.set_profiles_require_selection(false);
+                app.set_profiles_open(false);
+                app.set_show_home(true);
+                app.set_more_open(false);
+                app.invoke_animate_profile_home_entry();
+            });
+            button(&app, &format!("Use profile: {PROFILE_NAME}"))
+                .mock_single_click(slint::platform::PointerEventButton::Left);
+            let home = ElementHandle::find_by_element_type_name(&app, "HomeHost")
+                .next()
+                .unwrap();
+            if enabled && transitions {
+                assert!(home.absolute_position().y > 23.0 && home.computed_opacity() < 0.01);
+                // The first draw may occur after the deferred entry tick.
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(2));
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+                assert!(home.absolute_position().y > 0.1 && home.absolute_position().y < 23.0);
+                assert!(home.computed_opacity() > 0.01 && home.computed_opacity() < 0.99);
+                app.global::<nova_ui::Anim>().set_enabled(false);
+                assert!(home.absolute_position().y.abs() < 0.1 && home.computed_opacity() > 0.99);
+                app.global::<nova_ui::Anim>().set_enabled(true);
+                app.invoke_animate_profile_home_entry();
+                let _ = home.computed_opacity();
+                app.set_more_open(true);
+                settle(&app);
+                app.set_more_open(false);
+            }
+            settle(&app);
+            let home = ElementHandle::find_by_element_type_name(&app, "HomeHost")
+                .next()
+                .unwrap();
+            assert!(home.absolute_position().y.abs() < 0.1 && home.computed_opacity() > 0.99);
+            assert!(app.get_show_home() && !app.get_profiles_require_selection());
+        }
+    }
+}

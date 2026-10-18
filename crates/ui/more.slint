@@ -1,4 +1,4 @@
-import { PartyBridge, RemoteBridge, InterfaceStyle, Theme, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { PartyBridge, RemoteBridge, InterfaceStyle, Theme, Anim, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
 
 import { ProfilesPage } from "profiles.slint";
 
@@ -16,6 +16,24 @@ export component MorePage inherits Rectangle {
     in-out property <bool> profiles_open;
     in property <bool> profiles_require_selection;
     background: Theme.current.artwork_canvas;
+    clip: true;
+    private property <bool> profile-motion: !root.profiles_require_selection && Anim.enabled && Anim.transitions;
+    private property <float> profile-slide: 0.0;
+    animate profile-slide { duration: root.profile-motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> profile-alpha: 0.0;
+    animate profile-alpha { duration: root.profile-motion ? Anim.transition_fade : 0ms; }
+    private property <bool> landing-active: root.active && !root.profiles_open
+        && (!root.profile-motion || (root.profile-slide <= 0.0 && root.profile-alpha <= 0.0));
+    changed landing-active => { if root.landing-active { entry_focus.start(); } }
+    // Write endpoints while their current duration is in force. A hidden,
+    // unevaluated binding must not replay old motion when animations turn on.
+    function update_profile_transition() {
+        root.profile-slide = root.profiles_open ? 1.0 : 0.0;
+        root.profile-alpha = root.profiles_open ? 1.0 : 0.0;
+    }
+    init => { root.update_profile_transition(); }
+    changed profiles_open => { root.update_profile_transition(); }
+    changed profile-motion => { if !root.profile-motion { root.update_profile_transition(); } }
     in property <length> safe-top;
     in property <length> safe-left;
     in property <length> safe-right;
@@ -69,7 +87,7 @@ export component MorePage inherits Rectangle {
         if (root.active) { entry_focus.start(); } else { entry_focus.stop(); }
     }
     nav_scope := FocusScope {
-        enabled: root.active && !root.profiles_open;
+        enabled: root.landing-active;
         width: 100%; height: 100%;
         init => { root.choice = Math.max(root.first_choice, Math.min(6, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
@@ -108,7 +126,9 @@ export component MorePage inherits Rectangle {
     // Preserve the landing scroller and its native layout while the local
     // Profiles subpage owns input, just as More's other children retain it.
     landing := Rectangle {
-        visible: !root.profiles_open;
+        visible: !root.profiles_require_selection && (!root.profiles_open || (root.profile-motion && (root.profile-slide < 1.0 || root.profile-alpha < 1.0)));
+        x: root.profile-motion ? -0.28 * root.width * root.profile-slide : 0px;
+        opacity: root.profile-motion ? 1.0 - root.profile-alpha : 1.0;
         width: 100%; height: 100%;
     VerticalLayout {
         padding-left: 18px + root.safe-left + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width));
@@ -124,37 +144,37 @@ export component MorePage inherits Rectangle {
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
-                PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.active) { root.home_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
+                PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.landing-active) { root.home_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {
-                    interactive: root.active; destination-id: "more:settings";
+                    interactive: root.landing-active; destination-id: "more:settings";
                     icon: @image-url("../../assets/icons/menus/settings.svg");
                     title: @tr("Settings"); subtitle: @tr("Make Nova yours");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
                     picked => { if InterfaceStyle.tv { root.choice = 2; root.kb_zone = 1; } root.settings_picked(); }
                 } }
                 SettingsCard { SettingsLink {
-                    interactive: root.active; destination-id: "more:about";
+                    interactive: root.landing-active; destination-id: "more:about";
                     icon: @image-url("../../assets/icons/menus/about.svg");
                     title: @tr("About"); subtitle: @tr("Information about Nova");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
                     picked => { if InterfaceStyle.tv { root.choice = 3; root.kb_zone = 1; } root.about_picked(); }
                 } }
                 SettingsCard { SettingsLink {
-                    interactive: root.active; destination-id: "more:devices"; icon: @image-url("../../assets/icons/menus/devices.svg");
+                    interactive: root.landing-active; destination-id: "more:devices"; icon: @image-url("../../assets/icons/menus/devices.svg");
                     title: @tr("Devices"); subtitle: @tr("Control playback on your paired devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 4;
                     picked => { if InterfaceStyle.tv { root.choice = 4; root.kb_zone = 1; } RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
                 } }
                 SettingsCard { SettingsLink {
-                    interactive: root.active; destination-id: "more:party"; icon: @image-url("../../assets/icons/menus/watch-party.svg");
+                    interactive: root.landing-active; destination-id: "more:party"; icon: @image-url("../../assets/icons/menus/watch-party.svg");
                     title: @tr("Watch party"); subtitle: @tr("Watch together on your own devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 5;
                     picked => { if InterfaceStyle.tv { root.choice = 5; root.kb_zone = 1; } PartyBridge.page_open = true; }
                 } }
                 SettingsCard { SettingsLink {
-                    interactive: root.active; destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg");
+                    interactive: root.landing-active; destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg");
                     title: @tr("Profiles"); subtitle: @tr("Separate libraries, history and preferences");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 6;
                     picked => { root.choice = 6; root.kb_zone = 1; root.profiles_open = true; }
@@ -174,7 +194,9 @@ export component MorePage inherits Rectangle {
     }
     }
     profiles_page := ProfilesPage {
-        visible: root.profiles_open;
+        visible: root.profiles_open || (root.profile-motion && (root.profile-slide > 0.0 || root.profile-alpha > 0.0));
+        x: root.profile-motion ? root.width * (1.0 - root.profile-slide) : 0px;
+        opacity: root.profile-motion ? root.profile-alpha : 1.0;
         active: root.active && root.profiles_open;
         width: 100%; height: 100%;
         safe-top: root.safe-top;

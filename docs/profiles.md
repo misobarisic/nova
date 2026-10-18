@@ -11,6 +11,12 @@ editor; **Manage profiles** contains Rename/Delete and returns to the picker
 with Back or Done. Management and name editors cannot bypass required startup
 selection. Keyboard and TV navigation reveal the focused action while scrolling.
 
+More → Profiles slides and fades in; Back reverses that transition. Selecting
+a profile reveals its Home page with a short fade and rise after its models are
+published, including when selecting Current. Both transitions honor the animation
+and page-transition settings. Navigation or disabling motion cancels Home entry;
+no outgoing profile artwork or personal state is retained for the effect.
+
 Avatar initials follow the displayed name (including translated Default and
 Unicode names). Foreground/background pairs vary by a stable hash of the profile
 ID, using contrasting colors. Renaming, reordering, restarting or syncing to

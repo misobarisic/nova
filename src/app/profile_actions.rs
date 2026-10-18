@@ -382,6 +382,7 @@ impl Bridge {
             self.retry_profile_services();
         }
         if let Some(app) = self.app() {
+            let from_picker = app.get_profiles_open();
             app.set_profiles_require_selection(require_selection);
             app.set_profiles_open(require_selection);
             app.set_show_calendar(false);
@@ -396,6 +397,9 @@ impl Bridge {
                 app.set_more_open(true);
             } else {
                 app.set_more_open(false);
+                if from_picker {
+                    app.invoke_animate_profile_home_entry();
+                }
             }
         }
     }
