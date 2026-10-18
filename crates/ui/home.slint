@@ -1443,14 +1443,12 @@ export component HomePage {
     property <bool> catalog_grid: root.view >= 3 && !root.catalog_sections[root.view - 3].is_history;
     property <int> grid_cols: root.catalog_grid ? root.catalog_grid_cols : root.library_grid_cols;
     property <length> grid_item_width: Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.grid_cols - 1) * root.item-gap) / root.grid_cols));
-    // Keep the half-card scroll hint on phones, respecting the corresponding
-    // minimum-column setting. Landing sizes stay independent of the open grid.
+    // Home rails keep their own sizing: two full cards and a partial next
+    // card on phones. Column preferences apply only inside category grids.
+    property <int> rail_cols: Math.max(InterfaceStyle.tv ? 1 : 2, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> rail_item_width: root.narrow
-        ? Math.max(1px, (root.grid_width + root.item-gap) / (Math.max(2, root.min_cols) + 0.5) - root.item-gap)
-        : Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.library_grid_cols - 1) * root.item-gap) / root.library_grid_cols));
-    property <length> catalog_rail_item_width: root.narrow
-        ? Math.max(1px, (root.grid_width + root.item-gap) / (Math.max(2, root.catalog_min_cols) + 0.5) - root.item-gap)
-        : Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.catalog_grid_cols - 1) * root.item-gap) / root.catalog_grid_cols));
+        ? Math.max(96px, (continue_rail_host.width + root.item-gap) / 2.5 - root.item-gap)
+        : Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.rail_cols - 1) * root.item-gap) / root.rail_cols));
     property <length> rail_h: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px);
     // Conditional headers report their actual positions; wrapped headings
@@ -2546,7 +2544,7 @@ export component HomePage {
                                         visible: root.catalog_position(s) >= 0;
                                         height: self.visible ? catalog_content.preferred-height : 0px;
                                         width: 100%;
-                                        property <length> card_width: section.is_history ? root.rail_item_width : root.catalog_rail_item_width;
+                                        property <length> card_width: root.rail_item_width;
                                         property <length> rail_height: self.card_width * 3 / 2 + (InterfaceStyle.tv ? 88px : 54px);
                                         property <int> focused_card: root.view == 0 && root.kb_active && root.kb_zone == 3
                                             && root.kb_idx >= section.first_card

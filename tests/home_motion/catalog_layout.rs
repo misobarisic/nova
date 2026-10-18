@@ -8,10 +8,10 @@ fn settle() {
 }
 
 #[test]
-fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() {
+fn home_column_preferences_only_resize_open_category_grids() {
     if !crate::isolation::run(concat!(
         module_path!(),
-        "::personal_home_sections_use_library_columns_and_addons_use_discover_columns"
+        "::home_column_preferences_only_resize_open_category_grids"
     )) {
         return;
     }
@@ -84,7 +84,19 @@ fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() 
                 .size()
                 .width
         };
+        let section_card_width = |id: &str, kind| {
+            element(&app, id)
+                .query_descendants()
+                .match_type_name(kind)
+                .find_first()
+                .unwrap()
+                .size()
+                .width
+        };
         [
+            section_card_width("HomePage::continue_section", "ContinueCard"),
+            section_card_width("HomePage::new_episode_section", "ContinueCard"),
+            section_card_width("HomePage::upcoming_section", "UpcomingCard"),
             first_card_width(&sections[0]),
             first_card_width(&sections[1]),
         ]
@@ -96,8 +108,33 @@ fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() 
         app.set_home_view(0);
         settle();
         // The inspection API excludes cards clipped horizontally by each rail.
-        let [personal_rail, addon_rail] = rail_widths();
-        assert!(personal_rail < addon_rail);
+        let landing_widths = rail_widths();
+        assert!(
+            landing_widths
+                .iter()
+                .all(|w| (w - landing_widths[0]).abs() < 0.5)
+        );
+        if width == 390 {
+            let cards = element(&app, "HomePage::continue_section")
+                .query_descendants()
+                .match_type_name("ContinueCard")
+                .find_all();
+            let full = cards
+                .iter()
+                .filter(|card| {
+                    let x = card.absolute_position().x;
+                    x >= 0.0 && x + card.size().width <= width as f32
+                })
+                .count();
+            assert_eq!(full, 2, "Home shows two full cards on phones");
+            assert!(
+                cards.iter().any(|card| {
+                    let x = card.absolute_position().x;
+                    x < width as f32 && x + card.size().width > width as f32
+                }),
+                "Home shows part of the next card as a scrolling hint"
+            );
+        }
         let personal_grid = grid_width(1, "ContinueCard");
         let addon_grid = grid_width(4, "HomeCatalogPosterCard");
         assert!(personal_grid < addon_grid);
@@ -118,9 +155,12 @@ fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() 
         assert!(smaller_addon < addon_grid);
         app.set_home_view(0);
         settle();
-        let [personal_width, addon_width] = rail_widths();
-        assert!((personal_width - personal_rail).abs() < 0.5);
-        assert!(addon_width < addon_rail);
+        for (actual, original) in rail_widths().iter().zip(landing_widths) {
+            assert!(
+                (actual - original).abs() < 0.5,
+                "Discover columns must not resize Home rails"
+            );
+        }
         app.set_library_min_cols(2);
         for (view, kind) in [
             (1, "ContinueCard"),
@@ -135,6 +175,14 @@ fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() 
             );
         }
         assert!((grid_width(4, "HomeCatalogPosterCard") - smaller_addon).abs() < 0.5);
+        app.set_home_view(0);
+        settle();
+        for (actual, original) in rail_widths().iter().zip(landing_widths) {
+            assert!(
+                (actual - original).abs() < 0.5,
+                "Library columns must not resize Home rails"
+            );
+        }
     }
 }
 
