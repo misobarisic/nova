@@ -30,7 +30,7 @@ fn back(app: &nova::AppWindow) {
 fn settle(app: &nova::AppWindow) {
     // The mock backend has no paint pass to resolve virtual ListView height
     // estimates. Measure its exposed delegates before advancing queued work.
-    for _ in 0..8 {
+    for _ in 0..16 {
         for item in ElementQuery::from_root(app)
             .match_predicate(|_| true)
             .find_all()
@@ -38,6 +38,82 @@ fn settle(app: &nova::AppWindow) {
             let _ = (item.size(), item.absolute_position());
         }
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn licenses_animate_open_close_reverse_and_respect_disabled_motion() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::licenses_animate_open_close_reverse_and_respect_disabled_motion"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_about(true);
+    app.set_license_text_chunks(
+        Rc::new(VecModel::from(vec![s(&"License notice.\n".repeat(60))])).into(),
+    );
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    settle(&app);
+    let pane = || {
+        ElementHandle::find_by_element_id(&app, "AboutPage::about_scroll")
+            .next()
+            .unwrap()
+    };
+    let info = || {
+        ElementHandle::find_by_element_id(&app, "AboutPage::about_info_scroll")
+            .next()
+            .unwrap()
+    };
+    let info_x = info().absolute_position().x;
+    let button = ElementHandle::find_by_element_id(&app, "AboutPage::about_licenses_button")
+        .next()
+        .unwrap();
+    click(&app, &button);
+    let start = pane().absolute_position().x;
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    let opening = pane().absolute_position().x;
+    assert!(
+        opening < start - 1.0 && opening > info_x + 1.0,
+        "opening must visibly slide"
+    );
+    settle(&app);
+    assert!((pane().absolute_position().x - info_x).abs() < 1.0);
+    back(&app);
+    let closing_start = pane().absolute_position().x;
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    let closing = pane().absolute_position().x;
+    assert!(
+        closing > closing_start + 1.0 && closing < start - 1.0,
+        "closing must visibly slide"
+    );
+    // A quick reopen reverses the in-flight animation from its current value.
+    app.set_about_licenses_open(true);
+    let reverse_start = pane().absolute_position().x;
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    assert!(pane().absolute_position().x < reverse_start - 1.0);
+    settle(&app);
+    back(&app);
+    settle(&app);
+    assert!((info().absolute_position().x - info_x).abs() < 1.0);
+    assert!(app.get_show_about() && !app.get_about_licenses_open());
+    for master_disabled in [false, true] {
+        app.global::<nova::Anim>().set_enabled(!master_disabled);
+        app.global::<nova::Anim>().set_transitions(master_disabled);
+        app.set_about_licenses_open(true);
+        assert!(
+            (pane().absolute_position().x - info_x).abs() < 1.0,
+            "disabled motion snaps open"
+        );
+        back(&app);
+        assert!(
+            (info().absolute_position().x - info_x).abs() < 1.0,
+            "disabled motion snaps closed"
+        );
     }
 }
 

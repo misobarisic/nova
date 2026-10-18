@@ -1,4 +1,4 @@
-import { Theme, InterfaceStyle, LicenseSource, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { Theme, InterfaceStyle, LicenseSource, NavMetrics, NavState, SettingsStyle, Anim } from "@NovaUiShared";
 
 import { ListView } from "std-widgets.slint";
 import { ScrollView } from "scrollview.slint";
@@ -38,6 +38,9 @@ export component AboutPage inherits Rectangle {
     private property <int> about_action: 0;
     in property <int> system_back_request;
     in-out property <bool> licenses_open: false;
+    // Keep both scroll models alive through the reverse transition as well.
+    private property <float> licenses_progress: root.licenses_open ? 1.0 : 0.0;
+    animate licenses_progress { duration: Anim.transition_slide; easing: ease-out; }
     in-out property <length> scroll_y: 0px;
     in-out property <length> licenses_scroll_y: 0px;
     in-out property <bool> kb_active: false;
@@ -219,10 +222,14 @@ export component AboutPage inherits Rectangle {
         // native ListView height estimate and changes the restored pixel offset.
         body := Rectangle {
           vertical-stretch: 1; min-height: 0px;
+          clip: true;
           about_scroll := ListView {
-            visible: root.licenses_open;
+            visible: root.licenses_open || root.licenses_progress > 0;
+            enabled: root.active && root.licenses_open;
+            x: body.width * (1.0 - root.licenses_progress);
+            opacity: root.licenses_progress;
             width: 100%; height: 100%;
-            mouse-drag-pan-enabled: true;
+            mouse-drag-pan-enabled: root.active && root.licenses_open;
             horizontal-scrollbar-policy: always-off;
             vertical-scrollbar-policy: always-off;
             content-width: self.visible-width;
@@ -286,6 +293,7 @@ export component AboutPage inherits Rectangle {
                             }
                         }
                         source_view_button := PillButton {
+                            enabled: root.active && root.licenses_open;
                             x: source_card.width - self.width - 12px;
                             y: source_card.stacked ? source_text.y + source_text.height + 10px : (source_card.height - self.height) / 2;
                             label: @tr("Open source");
@@ -314,9 +322,12 @@ export component AboutPage inherits Rectangle {
             }
           }
           about_info_scroll := ScrollView {
-            visible: !root.licenses_open;
+            visible: !root.licenses_open || root.licenses_progress < 1;
+            enabled: root.active && !root.licenses_open;
+            x: -0.28 * body.width * root.licenses_progress;
+            opacity: 1.0 - root.licenses_progress;
             width: 100%; height: 100%;
-            mouse-drag-pan-enabled: true;
+            mouse-drag-pan-enabled: root.active && !root.licenses_open;
             content-width: self.visible-width;
             content-height: about_info_content.preferred-height;
             changed content-y => {
@@ -345,6 +356,7 @@ export component AboutPage inherits Rectangle {
                                 wrap: word-wrap;
                             }
                             about_licenses_button := PillButton {
+                                enabled: root.active && !root.licenses_open;
                                 label: @tr("Licenses");
                                 roomy: true;
                                 focused: !root.licenses_open && root.kb_zone == 1 && root.about_action == 0 && root.kb_active;
@@ -383,7 +395,7 @@ export component AboutPage inherits Rectangle {
                             ToggleSwitch {
                                 name: @tr("Automatically check for updates");
                                 checked: root.update_automatic;
-                                enabled: !root.update_is_development;
+                                enabled: root.active && !root.licenses_open && !root.update_is_development;
                                 focused: root.kb_zone == 1 && root.about_action == 1 && root.kb_active;
                                 toggled => { root.update_automatic_changed(self.checked); }
                             }
@@ -392,12 +404,13 @@ export component AboutPage inherits Rectangle {
                             spacing: 8px;
                             PillButton {
                                 label: @tr("Check for updates");
-                                enabled: root.update_status != 1;
+                                enabled: root.active && !root.licenses_open && root.update_status != 1;
                                 focused: root.kb_zone == 1 && root.about_action == 2 && root.kb_active;
                                 wrap_label: true;
                                 clicked => { root.about_action = 2; root.update_check_requested(); }
                             }
                             if root.update_available: PillButton {
+                                enabled: root.active && !root.licenses_open;
                                 label: @tr("View release"); primary: true;
                                 focused: root.kb_zone == 1 && root.about_action == 3 && root.kb_active;
                                 wrap_label: true;
@@ -406,6 +419,13 @@ export component AboutPage inherits Rectangle {
                         }
                     } }
                     }
+          }
+          // Both models stay visible during motion; don't let a faded pane
+          // capture input intended for the incoming page.
+          if root.licenses_progress > 0 && root.licenses_progress < 1: TouchArea {
+            width: 100%; height: 100%;
+            clicked => { }
+            scroll-event(event) => { accept }
           }
         }
     }
