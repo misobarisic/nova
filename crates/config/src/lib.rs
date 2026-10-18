@@ -835,7 +835,7 @@ cache_settings_type! {
     #[serde(default = "default_status_bar_gradient")]
     pub status_bar_gradient: u32,
     /// Overlay the phone navigation bar on content with a dark gradient.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub transparent_navbar: bool,
     #[serde(default)]
     pub home_backdrop_size: BackdropSize,
@@ -983,7 +983,7 @@ impl Default for CacheSettings {
             card_corner_radius: default_card_corner_radius(),
             card_spacing: default_card_spacing(),
             status_bar_gradient: default_status_bar_gradient(),
-            transparent_navbar: false,
+            transparent_navbar: true,
             home_backdrop_size: BackdropSize::default(),
             detail_backdrop_size: BackdropSize::default(),
             hero_title_alignment: HeroTitleAlignment::default(),
@@ -1583,15 +1583,16 @@ mod tests {
         let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert_eq!(settings.card_corner_radius, 10);
         assert_eq!(settings.card_spacing, 8);
-        assert!(!settings.transparent_navbar);
+        assert!(settings.transparent_navbar);
+        assert!(CacheSettings::default().transparent_navbar);
         settings.card_corner_radius = 0;
         settings.card_spacing = 0;
-        settings.transparent_navbar = true;
+        settings.transparent_navbar = false;
         let restored: CacheSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.card_corner_radius, 0);
         assert_eq!(restored.card_spacing, 0);
-        assert!(restored.transparent_navbar);
+        assert!(!restored.transparent_navbar);
     }
 
     #[test]

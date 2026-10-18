@@ -257,8 +257,8 @@ fn theme_search_toggle_resize_and_android_back() {
     assert!(!app.get_transparent_navbar());
     key(&app, slint::platform::Key::DownArrow.into());
     key(&app, slint::platform::Key::Return.into());
-    assert!(!app.get_transparent_navbar());
-    assert!(!app.global::<nova::Theme>().get_transparent_navbar());
+    assert!(app.get_transparent_navbar());
+    assert!(app.global::<nova::Theme>().get_transparent_navbar());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
     assert_eq!(app.get_accent_color(), 0);

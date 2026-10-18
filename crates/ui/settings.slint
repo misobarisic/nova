@@ -159,7 +159,7 @@ export component SettingsPage {
     in-out property <float> card_spacing: 8;
     property <int> spacing_preset_index: root.card_spacing == 0 ? 0 : root.card_spacing == 4 ? 1 : root.card_spacing == 8 ? 2 : root.card_spacing == 16 ? 3 : root.card_spacing == 32 ? 4 : -1;
     in-out property <float> status_bar_gradient: 80;
-    in-out property <bool> transparent_navbar: false;
+    in-out property <bool> transparent_navbar: true;
     in-out property <int> home_backdrop_size: 1;
     in-out property <int> detail_backdrop_size: 1;
     in-out property <int> hero_title_alignment: 1;
@@ -350,7 +350,7 @@ export component SettingsPage {
         root.button_corner_radius = 8;
         root.card_spacing = 8;
         root.status_bar_gradient = 80;
-        root.transparent_navbar = false;
+        root.transparent_navbar = true;
         root.home_backdrop_size = 1;
         root.detail_backdrop_size = 1;
         root.hero_title_alignment = 1;

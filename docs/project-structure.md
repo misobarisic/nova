@@ -426,7 +426,7 @@ Devices, Watch party, Settings and About. Sync is account-wide and uses the
 existing separately compiled Settings shell in `standalone_sync` mode; its
 overview/search entry is hidden. The shared More entry/return transitions cover
 Sync and the other routed subpages; Profiles has its own reversible transition.
-Theme’s optional `transparent_navbar` overlays the phone bar with a dark gradient;
+Theme’s default-on `transparent_navbar` overlays the phone bar with a dark gradient;
 Home, Discover, Library and More reserve scroll-content end space and keyboard
 reveal room so their last items remain accessible. The sidebar stays opaque;
 Theme disables the bottom-bar-only toggle in sidebar layouts and keyboard
@@ -565,7 +565,7 @@ Settings → Theme persists `background_style` (`default`, `accent_tinted`,
 `true_black`), `accent_color`, `card_corner_radius` (0–24 logical px,
 default 10), `button_corner_radius` (0–24 logical px, default 8),
 `card_spacing` (0–32 logical px, default 8),
-`status_bar_gradient` (0–100%, default 80), `transparent_navbar` (default false),
+`status_bar_gradient` (0–100%, default 80), `transparent_navbar` (default true; explicit saved choices are preserved),
 and independent
 `home_backdrop_size` / `detail_backdrop_size` (`BackdropSize`: Small, Medium,
 Large; default Medium), plus `hero_title_alignment` (`HeroTitleAlignment`: Left, Center, Right;

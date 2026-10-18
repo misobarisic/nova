@@ -334,7 +334,16 @@ fn nav_icons_pop_while_highlights_snap() {
                     let size = label.size();
                     assert!(p.x >= 12.0);
                     assert!(p.x + size.width <= width as f32 - 8.0);
-                    assert!(p.y + size.height <= panel.absolute_position().y + 68.0);
+                    // The transparent panel includes a decorative fade above
+                    // the controls; labels must stay inside their tab targets.
+                    let target =
+                        ElementHandle::find_by_element_id(&app, &format!("BottomNav::tab_{name}"))
+                            .next()
+                            .unwrap();
+                    assert!(p.y >= target.absolute_position().y);
+                    assert!(
+                        p.y + size.height <= target.absolute_position().y + target.size().height
+                    );
                 }
             }
         }
@@ -426,6 +435,9 @@ fn transparent_bar_overlays_content_and_keeps_navigation_reachable() {
     app.global::<nova::Anim>().set_enabled(false);
     app.show().unwrap();
     switch(&app, 0);
+    idle(&app, false, 20);
+    app.set_transparent_navbar(false);
+    nova_ui::apply_theme(&app, false);
     idle(&app, false, 20);
     let before = center(&icon(&app, false, 0));
     let content_height = || {
