@@ -88,6 +88,7 @@ fn history_menu_holds_right_clicks_and_routes_stable_title_actions() {
     app.set_home_catalog_sections(
         Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
             title: "Watch history".into(),
+            is_history: true,
             first_card: 0,
             card_count: 1,
         }]))

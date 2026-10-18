@@ -7,6 +7,137 @@ fn settle() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
 }
 
+#[test]
+fn personal_home_sections_use_library_columns_and_addons_use_discover_columns() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::personal_home_sections_use_library_columns_and_addons_use_discover_columns"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(true);
+    let episodes = (0..8)
+        .map(|i| nova::ContinueRow {
+            id: format!("episode-{i}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    app.set_home_continue(Rc::new(VecModel::from(episodes.clone())).into());
+    app.set_home_new_episodes(Rc::new(VecModel::from(episodes)).into());
+    app.set_home_upcoming(Rc::new(VecModel::from(vec![nova::UpcomingRow::default(); 8])).into());
+    app.set_home_catalog_sections(
+        Rc::new(VecModel::from(vec![
+            nova::HomeCatalogSection {
+                title: "Previously viewed".into(),
+                first_card: 0,
+                card_count: 8,
+                is_history: true,
+            },
+            // A provider can name a catalog anything; identity controls its sizing.
+            nova::HomeCatalogSection {
+                title: "Watch history".into(),
+                first_card: 8,
+                card_count: 8,
+                is_history: false,
+            },
+        ]))
+        .into(),
+    );
+    let cards = (0..16)
+        .map(|i| nova::HomeCatalogCard {
+            section_index: i / 8,
+            flat_index: i,
+            id: format!("card-{i}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    app.set_home_catalog_cards(Rc::new(VecModel::from(cards.clone())).into());
+    app.set_home_history_archive_cards(Rc::new(VecModel::from(cards[..8].to_vec())).into());
+    app.set_home_catalog_order(Rc::new(VecModel::from(vec![-1, -3, -2, 0, 1])).into());
+    app.set_home_catalog_positions(Rc::new(VecModel::from(vec![0, 2, 3, 4, 1])).into());
+    app.show().unwrap();
+    let grid_width = |view, kind| {
+        app.set_home_view(view);
+        settle();
+        element(&app, "HomePage::sub_layer")
+            .query_descendants()
+            .match_type_name(kind)
+            .find_first()
+            .unwrap()
+            .size()
+            .width
+    };
+    let rail_widths = || {
+        let sections = ElementHandle::find_by_element_id(&app, "HomePage::catalog_section")
+            .collect::<Vec<_>>();
+        assert_eq!(sections.len(), 2);
+        let first_card_width = |section: &ElementHandle| {
+            section
+                .query_descendants()
+                .match_type_name("HomeCatalogPosterCard")
+                .find_first()
+                .unwrap()
+                .size()
+                .width
+        };
+        [
+            first_card_width(&sections[0]),
+            first_card_width(&sections[1]),
+        ]
+    };
+    for width in [390, 760] {
+        app.window().set_size(slint::PhysicalSize::new(width, 4000));
+        app.set_library_min_cols(4);
+        app.set_discover_min_cols(2);
+        app.set_home_view(0);
+        settle();
+        // The inspection API excludes cards clipped horizontally by each rail.
+        let [personal_rail, addon_rail] = rail_widths();
+        assert!(personal_rail < addon_rail);
+        let personal_grid = grid_width(1, "ContinueCard");
+        let addon_grid = grid_width(4, "HomeCatalogPosterCard");
+        assert!(personal_grid < addon_grid);
+        app.set_discover_min_cols(6);
+        for (view, kind) in [
+            (1, "ContinueCard"),
+            (-3, "ContinueCard"),
+            (2, "UpcomingCard"),
+            (3, "HomeCatalogPosterCard"),
+            (-4, "HomeCatalogPosterCard"),
+        ] {
+            assert!(
+                (grid_width(view, kind) - personal_grid).abs() < 0.5,
+                "personal view {view} at {width}px"
+            );
+        }
+        let smaller_addon = grid_width(4, "HomeCatalogPosterCard");
+        assert!(smaller_addon < addon_grid);
+        app.set_home_view(0);
+        settle();
+        let [personal_width, addon_width] = rail_widths();
+        assert!((personal_width - personal_rail).abs() < 0.5);
+        assert!(addon_width < addon_rail);
+        app.set_library_min_cols(2);
+        for (view, kind) in [
+            (1, "ContinueCard"),
+            (-3, "ContinueCard"),
+            (2, "UpcomingCard"),
+            (3, "HomeCatalogPosterCard"),
+            (-4, "HomeCatalogPosterCard"),
+        ] {
+            assert!(
+                grid_width(view, kind) > personal_grid,
+                "personal view {view} updates live"
+            );
+        }
+        assert!((grid_width(4, "HomeCatalogPosterCard") - smaller_addon).abs() < 0.5);
+    }
+}
+
 fn key(app: &nova::AppWindow, key: slint::platform::Key) {
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
@@ -90,6 +221,7 @@ fn home_catalogs_keep_full_height_when_reordered_and_hidden() {
     app.set_home_catalog_sections(
         Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
             title: "Addon catalog".into(),
+            is_history: false,
             first_card: 0,
             card_count: 1,
         }]))
@@ -157,11 +289,13 @@ fn history_catalog_reuses_rail_grid_activation_and_keyboard_without_changing_cat
         Rc::new(VecModel::from(vec![
             nova::HomeCatalogSection {
                 title: "Watch history".into(),
+                is_history: true,
                 first_card: 0,
                 card_count: 2,
             },
             nova::HomeCatalogSection {
                 title: "Ordinary catalog".into(),
+                is_history: false,
                 first_card: 2,
                 card_count: 1,
             },

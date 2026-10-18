@@ -1428,6 +1428,7 @@ export component HomePage {
     property <length> min-card: InterfaceStyle.tv ? 240px : 160px;
     property <length> max-card: InterfaceStyle.tv ? 300px : 200px;
     in property <int> min_cols: 2;
+    in property <int> catalog_min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
     // Window width is supplied separately so responsive padding does not
     // feed back into the page’s own intrinsic layout width.
@@ -1437,16 +1438,21 @@ export component HomePage {
     // leave the last column wider than the space it actually occupies.
     property <length> grid_width: Math.max(1px, sub_scroll.visible-width);
     property <length> grid_top: 8px;
-    property <int> grid_cols: Math.max(InterfaceStyle.tv ? 1 : root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <int> library_grid_cols: Math.max(InterfaceStyle.tv ? 1 : root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <int> catalog_grid_cols: Math.max(InterfaceStyle.tv ? 1 : root.catalog_min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <bool> catalog_grid: root.view >= 3 && !root.catalog_sections[root.view - 3].is_history;
+    property <int> grid_cols: root.catalog_grid ? root.catalog_grid_cols : root.library_grid_cols;
     property <length> grid_item_width: Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.grid_cols - 1) * root.item-gap) / root.grid_cols));
-    // Landing carousel card: ~2.45 cards visible on narrow (Android), the
-    // grid card elsewhere.
+    // Keep the half-card scroll hint on phones, respecting the corresponding
+    // minimum-column setting. Landing sizes stay independent of the open grid.
     property <length> rail_item_width: root.narrow
-        ? Math.max(96px, (continue_rail_host.width + root.item-gap) / 2.5 - root.item-gap)
-        : root.grid_item_width;
+        ? Math.max(1px, (root.grid_width + root.item-gap) / (Math.max(2, root.min_cols) + 0.5) - root.item-gap)
+        : Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.library_grid_cols - 1) * root.item-gap) / root.library_grid_cols));
+    property <length> catalog_rail_item_width: root.narrow
+        ? Math.max(1px, (root.grid_width + root.item-gap) / (Math.max(2, root.catalog_min_cols) + 0.5) - root.item-gap)
+        : Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.catalog_grid_cols - 1) * root.item-gap) / root.catalog_grid_cols));
     property <length> rail_h: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px);
-    property <length> catalog_rail_h: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 88px : 54px);
     // Conditional headers report their actual positions; wrapped headings
     // and a taller showcase must not invalidate keyboard scroll estimates.
     property <length> continue_top: 0px;
@@ -2539,14 +2545,16 @@ export component HomePage {
                                         visible: root.catalog_position(s) >= 0;
                                         height: self.visible ? catalog_content.preferred-height : 0px;
                                         width: 100%;
+                                        property <length> card_width: section.is_history ? root.rail_item_width : root.catalog_rail_item_width;
+                                        property <length> rail_height: self.card_width * 3 / 2 + (InterfaceStyle.tv ? 88px : 54px);
                                         property <int> focused_card: root.view == 0 && root.kb_active && root.kb_zone == 3
                                             && root.kb_idx >= section.first_card
                                             && root.kb_idx < section.first_card + section.card_count
                                             ? root.kb_idx - section.first_card : -1;
                                         changed focused_card => {
                                             if (self.focused_card >= 0) {
-                                                let x = catalog_items.padding-left + self.focused_card * (root.rail_item_width + root.item-gap);
-                                                catalog_rail.content-x = root.rail_show(catalog_rail.content-x, x, root.rail_item_width, catalog_rail.width, catalog_rail.content-width);
+                                                let x = catalog_items.padding-left + self.focused_card * (catalog_section.card_width + root.item-gap);
+                                                catalog_rail.content-x = root.rail_show(catalog_rail.content-x, x, catalog_section.card_width, catalog_rail.width, catalog_rail.content-width);
                                                 let top = self.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y;
                                                 root.kb_scroll_to(top, top + self.height);
                                             }
@@ -2562,7 +2570,7 @@ export component HomePage {
 
                                             Rectangle {
                                                 width: 100%;
-                                                height: root.catalog_rail_h + 8px;
+                                                height: catalog_section.rail_height + 8px;
                                                 catalog_rail := Flickable {
                                                     x: -18px - (root.narrow ? root.safe-left : 0px);
                                                     width: content_host.width;
@@ -2577,7 +2585,7 @@ export component HomePage {
 
                                                     catalog_items := HorizontalLayout {
                                                         y: 8px;
-                                                        height: root.catalog_rail_h;
+                                                        height: catalog_section.rail_height;
                                                         width: self.preferred-width;
                                                         padding-left: 18px + (root.narrow ? root.safe-left : 0px);
                                                         padding-right: 18px + root.safe-right;
@@ -2592,7 +2600,7 @@ export component HomePage {
                                                             tappable: root.view == 0;
                                                             touch_menus: root.touch_menus;
                                                             pointer_pressed => { root.kb_active = false; }
-                                                            card-width: root.rail_item_width;
+                                                            card-width: catalog_section.card_width;
                                                             focused: root.kb_active && root.kb_zone == 3 && root.kb_idx == section.first_card + i;
                                                             picked => {
                                                                 root.kb_active = false;

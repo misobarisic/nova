@@ -747,6 +747,7 @@ impl Bridge {
                 title: SharedString::from(&group.title),
                 first_card: cards.len() as i32,
                 card_count: group.previews.len() as i32,
+                is_history: false,
             });
             for preview in &group.previews {
                 let flat_index = items.len();
@@ -792,6 +793,7 @@ impl Bridge {
                 title: text::tr("Watch history").into(),
                 first_card: cards.len() as i32,
                 card_count: history.len() as i32,
+                is_history: true,
             });
             for (index, entry) in history.iter().enumerate() {
                 let pixels = (!entry.poster_url.is_empty())
