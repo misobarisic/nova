@@ -274,7 +274,7 @@ impl Bridge {
                     return;
                 };
                 bridge.cache_background_meta("movie", &id, &item);
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     let still_open = bridge
                         .shared
                         .lock()
@@ -513,7 +513,7 @@ impl Bridge {
             })
             .unwrap_or_default();
         let bridge = self.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             let stale = {
                 let state = bridge.shared.lock().unwrap();
                 !state.installed.iter().any(|addon| {
@@ -656,14 +656,14 @@ impl Bridge {
             if let Some(mut item) = found {
                 item.videos = write_episode_meta_cache_for(&modal_type, &id, &item);
                 let bridge2 = bridge.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     bridge2.apply_episode_meta(id, Some(item), refresh, open_token);
                 });
                 return;
             }
             let Some(url) = (!urls.is_empty()).then(|| urls.remove(0)) else {
                 let bridge2 = bridge.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     bridge2.apply_episode_meta(id, None, refresh, open_token);
                 });
                 return;
@@ -2141,7 +2141,7 @@ impl Bridge {
         let requested_url = url.clone();
         net::fetch_image(url, ImageUse::PlayerEpisodeBackdrop, move |pixels| {
             let Some(pixels) = pixels else { return };
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let state = bridge.shared.lock().unwrap();
                 let current = state.modal_item.as_ref().is_some_and(|item| {
                     Arc::ptr_eq(&item.open_token, &token)

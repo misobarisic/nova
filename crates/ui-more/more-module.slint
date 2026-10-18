@@ -10,6 +10,8 @@ export component MoreModule inherits Window {
     width: MoreBridge.viewport_width; height: MoreBridge.viewport_height;
     page := MorePage {
         width: 100%; height: 100%;
+        profiles_open <=> MoreBridge.profiles_open;
+        profiles_require_selection <=> MoreBridge.profiles_require_selection;
         scroll_y <=> MoreBridge.scroll_y;
         choice <=> MoreBridge.choice;
         kb_zone <=> MoreBridge.kb_zone;

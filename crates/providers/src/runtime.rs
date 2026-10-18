@@ -906,6 +906,7 @@ fn install_settings<'js>(
     let settings = Object::new(ctx.clone())?;
     let cache = Object::new(ctx.clone())?;
     let writes = Arc::new(AtomicUsize::new(0));
+    let write_generation = Arc::new(AtomicU64::new(generation));
     let reads = Arc::new(AtomicUsize::new(0));
     let plugin = manifest.id.clone();
     let schema = manifest.configuration.clone();
@@ -957,6 +958,7 @@ fn install_settings<'js>(
     let fields = schema.clone();
     let values = snapshot.clone();
     let count = writes.clone();
+    let owner = write_generation.clone();
     settings.set(
         "set",
         Function::new(ctx.clone(), move |key: String, raw: String| {
@@ -973,8 +975,14 @@ fn install_settings<'js>(
             if field.validate(&value).is_err() {
                 return "invalid provider setting value".to_owned();
             }
-            match crate::plugin_settings::set_setting(&id, &key, value.clone()) {
-                Ok(()) => {
+            match crate::plugin_settings::set_setting_for_generation(
+                &id,
+                &key,
+                value.clone(),
+                owner.load(Ordering::Relaxed),
+            ) {
+                Ok(generation) => {
+                    owner.store(generation, Ordering::Relaxed);
                     if let Ok(mut values) = values.lock() {
                         values.insert(key, value);
                     }
@@ -988,6 +996,7 @@ fn install_settings<'js>(
     let fields = schema.clone();
     let values = snapshot;
     let count = writes.clone();
+    let owner = write_generation.clone();
     settings.set(
         "remove",
         Function::new(ctx.clone(), move |key: String| {
@@ -997,8 +1006,13 @@ fn install_settings<'js>(
             {
                 return "invalid provider settings removal".to_owned();
             }
-            match crate::plugin_settings::remove_setting(&id, &key) {
-                Ok(()) => {
+            match crate::plugin_settings::remove_setting_for_generation(
+                &id,
+                &key,
+                owner.load(Ordering::Relaxed),
+            ) {
+                Ok(generation) => {
+                    owner.store(generation, Ordering::Relaxed);
                     if let Some(field) = fields.iter().find(|field| field.key == key)
                         && let Ok(mut values) = values.lock()
                     {

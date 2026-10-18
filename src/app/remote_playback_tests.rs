@@ -100,6 +100,47 @@ fn retain_offer(bridge: &Bridge) -> PlaybackOffer {
 }
 
 #[test]
+fn startup_profile_selection_blocks_remote_playback_and_state() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::startup_profile_selection_blocks_remote_playback_and_state"
+        ),
+        |Fixture { app, bridge }| {
+            let offer = retain_offer(&bridge);
+            app.set_player_show_title("Remembered profile title".into());
+            app.set_profiles_require_selection(true);
+            let snapshot = bridge.playback_snapshot();
+            assert!(!snapshot.ready);
+            assert!(snapshot.title.is_empty());
+            for request in [
+                Request::Snapshot,
+                Request::Lookup(MediaIdentity {
+                    media_type: "movie".into(),
+                    title_id: "movie-id".into(),
+                    episode_id: "movie-id".into(),
+                    title: "Movie".into(),
+                    episode: String::new(),
+                }),
+                Request::Start {
+                    offer_id: offer.id,
+                    expected_session: None,
+                },
+            ] {
+                assert_eq!(
+                    receive(&bridge, peer("controller", 3, true), request),
+                    Response::Error(PlaybackError::Unavailable)
+                );
+            }
+            assert!(!app.get_player_open());
+            assert!(bridge.shared.lock().unwrap().playback_intent.is_none());
+            app.set_profiles_require_selection(false);
+            assert!(bridge.playback_snapshot().ready);
+        },
+    );
+}
+
+#[test]
 fn loading_reserves_local_role_and_controller_role_rejects_local_start() {
     isolated(
         concat!(
@@ -1041,7 +1082,7 @@ fn settings_change_between_addon_replies_invalidates_the_entire_offer_batch() {
         ),
         |Fixture { app: _app, bridge }| {
             use nova_providers::plugin_settings as settings;
-            settings::configure_plugin_settings(Arc::new(plugin_settings::Backend)).unwrap();
+            settings::configure_plugin_settings(Arc::new(plugin_settings::Backend::new())).unwrap();
             let generation = settings::settings_generation();
             let response = Arc::new(Mutex::new(None));
             let completed = response.clone();

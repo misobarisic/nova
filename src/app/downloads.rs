@@ -1,9 +1,9 @@
 use super::*;
 
+use crate::app::profiles::thread;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::download::{
@@ -2935,7 +2935,7 @@ mod tests {
     fn state_lock_survives_a_poisoned_mutex() {
         let coordinator = DownloadCoordinator::new(temp_root("poison"));
         let poison = coordinator.clone();
-        let _ = std::thread::spawn(move || {
+        let _ = crate::app::profiles::thread::spawn(move || {
             let _guard = poison.inner.state();
             panic!("intentional test panic to poison the state mutex");
         })

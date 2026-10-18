@@ -20,9 +20,9 @@ pub use nova_ui_shared::{
     AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, CompletionDestination,
     ContinueRow, DownloadEpisode, DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard,
     HomeCatalogRow, HomeCatalogSection, LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow,
-    RemoteDeviceRow, RemoteOfferRow, SeasonCard, SettingSyncInfo, SheetItem, StreamRow, SyncInvite,
-    SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
-    TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+    ProfileRow, RemoteDeviceRow, RemoteOfferRow, SeasonCard, SettingSyncInfo, SheetItem, StreamRow,
+    SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow,
+    TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

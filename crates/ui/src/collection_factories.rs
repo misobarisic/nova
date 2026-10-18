@@ -45,6 +45,13 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     }
     {
         let bridge = app.global::<MoreBridge>();
+        crate::forward_app_callbacks!(app, &bridge; recover_focus;
+            on_profile_create => invoke_profile_create(arg0),
+            on_profile_rename => invoke_profile_rename(arg0, arg1),
+            on_profile_switch => invoke_profile_switch(arg0),
+            on_profile_delete => invoke_profile_delete(arg0),
+            on_profile_remember_last_changed => invoke_profile_remember_last_changed(arg0),
+        );
         crate::forward_app_callbacks!(app, &bridge;
             on_home_picked => invoke_more_bridge_home_picked(),
             on_discover_picked => invoke_more_bridge_discover_picked(),

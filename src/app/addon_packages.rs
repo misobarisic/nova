@@ -301,11 +301,15 @@ pub(super) fn initialize(bridge: &Bridge) {
         let restored = (|| -> Result<(), String> {
             let owner = nova_sync::local_store().map_err(|e| e.to_string())?;
             let store = owner.lock().unwrap();
-            if !store.domains().iter().any(|domain| domain == DOMAIN) {
+            if !store
+                .domains()
+                .iter()
+                .any(|domain| domain == &sync::profile_domain(DOMAIN))
+            {
                 return Ok(());
             }
             let values: BTreeMap<String, PackageDescriptor> = store
-                .records(DOMAIN)
+                .records(&sync::profile_domain(DOMAIN))
                 .into_iter()
                 .map(|(id, raw)| serde_json::from_str(&raw).map(|descriptor| (id, descriptor)))
                 .collect::<Result<_, _>>()
@@ -508,7 +512,7 @@ pub(super) fn reconcile(bridge: &Bridge) {
     }
     for (descriptor, cancel) in jobs {
         let bridge = bridge.clone();
-        std::thread::spawn(move || {
+        crate::app::profiles::thread::spawn(move || {
             let result: Result<Arc<AddonPackage>, String> =
                 load_descriptor(&descriptor).or_else(|_| {
                     let bytes = nova_sync::fetch_package(&descriptor.sha256, cancel.clone())
@@ -523,7 +527,7 @@ pub(super) fn reconcile(bridge: &Bridge) {
                     store_archive(&package, &bytes)?;
                     Ok(package)
                 });
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !current_bridge(&bridge) {
                     return;
                 }
@@ -662,14 +666,14 @@ impl Bridge {
             .map(|addon| (addon.url.clone(), addon.generation))
             .collect();
         let bridge = self.clone();
-        std::thread::spawn(move || {
+        crate::app::profiles::thread::spawn(move || {
             let result = AddonPackage::parse(&bytes)
                 .map_err(|e| e.to_string())
                 .and_then(|package| {
                     store_archive(&package, &bytes)?;
                     Ok(package)
                 });
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !current_bridge(&bridge) {
                     return;
                 }
@@ -1002,7 +1006,7 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_system_time();
         storage::init_at(&root.join("storage"));
         nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
-            plugin_settings::Backend,
+            plugin_settings::Backend::new(),
         ))
         .unwrap();
         let app = AppWindow::new().unwrap();

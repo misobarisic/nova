@@ -6,7 +6,7 @@ use super::*;
 /// Android's camera scanner JNI entry (android_qr.rs) runs on the camera's
 /// ImageReader thread and must marshal a decoded ticket back through the same
 /// bridge the UI callbacks use. The scanner locks this and calls the bridge
-/// from inside `slint::invoke_from_event_loop`, so no Slint access happens on
+/// from inside `crate::app::profiles::invoke_from_event_loop`, so no Slint access happens on
 /// the camera thread.
 static BRIDGE: Mutex<Option<Bridge>> = Mutex::new(None);
 
@@ -43,8 +43,10 @@ impl Bridge {
             player,
             downloads,
             last_stream: Arc::default(),
-            tracking: Arc::new(tracking::TrackingHandle::new()),
-            stremio: Arc::new(stremio::Handle::new()),
+            tracking_services: Arc::default(),
+            stremio_services: Arc::default(),
+            profile_recovery_pending: Arc::default(),
+            profile_loaded_epoch: Arc::default(),
             downloads_seen: Arc::new(AtomicU64::new(0)),
             image_usage_scan: Arc::default(),
             torrent_usage_scan: Arc::default(),
@@ -57,5 +59,25 @@ impl Bridge {
 
     pub(super) fn app(&self) -> Option<AppWindow> {
         self.app.upgrade()
+    }
+
+    pub(super) fn tracking(&self) -> tracking::StateHandle {
+        let context = profiles::capture();
+        let mut services = self.tracking_services.lock().unwrap();
+        services.retain(|key, handle| *key == context || !handle.is_finished());
+        services
+            .entry(context)
+            .or_insert_with(|| Arc::new(tracking::TrackingHandle::new()))
+            .clone()
+    }
+
+    pub(super) fn stremio(&self) -> Arc<stremio::Handle> {
+        let context = profiles::capture();
+        let mut services = self.stremio_services.lock().unwrap();
+        services.retain(|key, handle| *key == context || !handle.is_finished());
+        services
+            .entry(context)
+            .or_insert_with(|| Arc::new(stremio::Handle::new()))
+            .clone()
     }
 }

@@ -14,12 +14,15 @@ impl Coordinator {
         let mut changed = false;
         for (key, value, timestamp) in records {
             if store
-                .record(TRACKING_COMPLETION_DOMAIN, &key)
+                .record(
+                    &crate::app::sync::profile_domain(TRACKING_COMPLETION_DOMAIN),
+                    &key,
+                )
                 .and_then(|r| r.value.as_ref())
                 .is_none()
             {
                 changed |= store.set(
-                    TRACKING_COMPLETION_DOMAIN,
+                    &crate::app::sync::profile_domain(TRACKING_COMPLETION_DOMAIN),
                     &key,
                     Some(value),
                     timestamp,
@@ -44,15 +47,26 @@ impl Coordinator {
                 && !store
                     .pending_domains()
                     .iter()
-                    .any(|d| d == TRACKING_COMPLETION_DOMAIN)
+                    .any(|d| d == &crate::app::sync::profile_domain(TRACKING_COMPLETION_DOMAIN))
             {
                 return Ok(());
             }
-            let Some(basis) = store.digest().get(TRACKING_COMPLETION_DOMAIN).cloned() else {
+            let Some(basis) = store
+                .digest()
+                .get(&crate::app::sync::profile_domain(
+                    TRACKING_COMPLETION_DOMAIN,
+                ))
+                .cloned()
+            else {
                 self.completion_restored = true;
                 return Ok(());
             };
-            (store.records(TRACKING_COMPLETION_DOMAIN), basis)
+            (
+                store.records(&crate::app::sync::profile_domain(
+                    TRACKING_COMPLETION_DOMAIN,
+                )),
+                basis,
+            )
         };
         let _guard = crate::app::sync::ApplyingGuard::new();
         let state = apply_completion_peer_records(self.store.state(), &records)
@@ -62,7 +76,10 @@ impl Coordinator {
         }
         let mut store = owner.lock().unwrap();
         store
-            .mark_projected(TRACKING_COMPLETION_DOMAIN, &basis)
+            .mark_projected(
+                &crate::app::sync::profile_domain(TRACKING_COMPLETION_DOMAIN),
+                &basis,
+            )
             .map_err(|_| storage_message())?;
         store.save().map_err(|_| storage_message())?;
         self.completion_restored = true;
@@ -88,7 +105,10 @@ impl Coordinator {
     pub(super) fn publish_shared(&self, seed: bool) -> Result<(), String> {
         if seed
             && KvStorage
-                .read("sync:baseline:tracking")
+                .read(&format!(
+                    "sync:baseline:{}",
+                    crate::app::sync::profile_domain(TRACKING_DOMAIN)
+                ))
                 .map_err(|_| storage_message())?
                 .is_some()
         {
@@ -96,7 +116,7 @@ impl Coordinator {
         }
         let records = self.shared_records()?;
         nova_sync::commit_snapshot(
-            TRACKING_DOMAIN,
+            &crate::app::sync::profile_domain(TRACKING_DOMAIN),
             &records,
             None,
             crate::app::sync::applying(),
@@ -111,27 +131,41 @@ impl Coordinator {
         let (records, basis, sequence, history) = {
             let mut store = owner.lock().unwrap();
             store.save().map_err(|_| storage_message())?;
-            if !force && !store.pending_domains().iter().any(|d| d == TRACKING_DOMAIN) {
+            if !force
+                && !store
+                    .pending_domains()
+                    .iter()
+                    .any(|d| d == &crate::app::sync::profile_domain(TRACKING_DOMAIN))
+            {
                 return Ok(());
             }
-            let Some(basis) = store.digest().get(TRACKING_DOMAIN).cloned() else {
+            let Some(basis) = store
+                .digest()
+                .get(&crate::app::sync::profile_domain(TRACKING_DOMAIN))
+                .cloned()
+            else {
                 return Ok(());
             };
             let sequence = store
-                .extra_value(EVENT_COUNTER_KEY)
+                .extra_value(&crate::app::profiles::storage_key(EVENT_COUNTER_KEY))
                 .map_err(|_| storage_message())?
                 .map(|raw| serde_json::from_str::<u64>(&raw))
                 .transpose()
                 .map_err(|_| storage_message())?
                 .unwrap_or(0);
             let history = store
-                .extra_value(EPISODE_PROGRESS_KEY)
+                .extra_value(&crate::app::profiles::storage_key(EPISODE_PROGRESS_KEY))
                 .map_err(|_| storage_message())?
                 .map(|raw| serde_json::from_str::<HashMap<String, EpisodeProgress>>(&raw))
                 .transpose()
                 .map_err(|_| storage_message())?
                 .unwrap_or_default();
-            (store.records(TRACKING_DOMAIN), basis, sequence, history)
+            (
+                store.records(&crate::app::sync::profile_domain(TRACKING_DOMAIN)),
+                basis,
+                sequence,
+                history,
+            )
         };
         let _guard = crate::app::sync::ApplyingGuard::new();
         let state = apply_peer_records(self.store.state(), &records, sequence, |episode| {
@@ -169,7 +203,7 @@ impl Coordinator {
             .map_err(|_| storage_message())?;
         for service in changed {
             self.cancel(service);
-            self.bridge.tracking.login_generation[service_index(service)]
+            self.bridge.tracking().login_generation[service_index(service)]
                 .fetch_add(1, Ordering::AcqRel);
             self.sessions.retain(|s| s.service != service);
             self.pending_restore
@@ -187,7 +221,7 @@ impl Coordinator {
         nova_sync::prepare_snapshot(
             &mut store,
             dev,
-            TRACKING_DOMAIN,
+            &crate::app::sync::profile_domain(TRACKING_DOMAIN),
             &records,
             None,
             true,
@@ -200,14 +234,20 @@ impl Coordinator {
         for (key, value, _) in pauses {
             let value = nova_sync::preserve_unknown(
                 store
-                    .record(TRACKING_DOMAIN, &key)
+                    .record(&crate::app::sync::profile_domain(TRACKING_DOMAIN), &key)
                     .and_then(|r| r.value.as_deref()),
                 &value,
             );
-            store.set(TRACKING_DOMAIN, &key, Some(value), 0, dev);
+            store.set(
+                &crate::app::sync::profile_domain(TRACKING_DOMAIN),
+                &key,
+                Some(value),
+                0,
+                dev,
+            );
         }
         store
-            .mark_projected(TRACKING_DOMAIN, &basis)
+            .mark_projected(&crate::app::sync::profile_domain(TRACKING_DOMAIN), &basis)
             .map_err(|_| storage_message())?;
         // mark_projected deliberately leaves a newer concurrent merge pending.
         store.save().map_err(|_| storage_message())?;

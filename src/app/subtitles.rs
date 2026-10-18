@@ -195,7 +195,7 @@ impl Bridge {
                             .map_err(|error| error.to_string())
                             .and_then(|bytes| choices(&label, &bytes, &preferred));
                     let bridge = bridge.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
+                    let _ = crate::app::profiles::invoke_from_event_loop(move || {
                         let Some(app) = bridge.app().filter(|app| app.get_player_open()) else {
                             return;
                         };
@@ -342,7 +342,7 @@ impl Bridge {
         let bridge = self.clone();
         thread::spawn(move || {
             let result = download(&subtitle.url);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app().filter(|app| app.get_player_open()) else {
                     return;
                 };

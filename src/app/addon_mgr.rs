@@ -131,7 +131,7 @@ impl Bridge {
             // Panic-guarded: a panic inside this UI-thread closure would
             // otherwise kill the event loop (app crash with no message).
             // Log it with the cause.
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !bridge2.addon_generation_matches(&base, generation) {
                     return;
                 }
@@ -343,7 +343,7 @@ impl Bridge {
         let bridge = self.clone();
         net::fetch_bytes(url, move |result| {
             let ok = result.is_ok();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !bridge.addon_generation_matches(&base, generation) {
                     return;
                 }
@@ -539,7 +539,7 @@ impl Bridge {
         let bridge = self.clone();
         crate::web_log("nova: refreshing addon manifest");
         net::fetch_bytes(manifest_url, move |result| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !bridge.addon_generation_matches(&base, generation) {
                     return;
                 }
@@ -1005,7 +1005,7 @@ impl Bridge {
             let revision = image_settings_revision();
             net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
                 let loaded = pixels.is_some();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if loaded || image_settings_revision() != revision {
                         bridge
                             .shared

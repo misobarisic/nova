@@ -490,7 +490,7 @@ impl Bridge {
                             download: None,
                         })
                         .collect();
-                    let _ = slint::invoke_from_event_loop(move || {
+                    let _ = crate::app::profiles::invoke_from_event_loop(move || {
                         let mut state = bridge.shared.lock().unwrap();
                         if let Some(automatic) = state
                             .playback_end

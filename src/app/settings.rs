@@ -44,7 +44,8 @@ pub(super) fn cancel_cache_rewrite() {
     CACHE_CANCEL.store(true, std::sync::atomic::Ordering::Release);
 }
 
-static UNSUPPORTED_SETTINGS: Mutex<Option<HashMap<String, serde_json::Value>>> = Mutex::new(None);
+type ProtectedSettings = HashMap<String, HashMap<String, serde_json::Value>>;
+static UNSUPPORTED_SETTINGS: Mutex<Option<ProtectedSettings>> = Mutex::new(None);
 
 fn resolution_index(value: Option<u32>) -> i32 {
     match value {
@@ -71,11 +72,18 @@ pub(crate) fn protect_setting_field(field: &str, raw: serde_json::Value) {
         .lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
+        .entry(profiles::storage_key("settings"))
+        .or_default()
         .insert(field.to_string(), raw);
 }
 
 pub(crate) fn allow_setting_field(field: &str) {
-    if let Some(fields) = UNSUPPORTED_SETTINGS.lock().unwrap().as_mut() {
+    if let Some(fields) = UNSUPPORTED_SETTINGS
+        .lock()
+        .unwrap()
+        .as_mut()
+        .and_then(|values| values.get_mut(&profiles::storage_key("settings")))
+    {
         if field == "cache" {
             for key in [
                 "cache_images",
@@ -102,7 +110,11 @@ pub(crate) fn preserve_unsupported_settings(_old: Option<&str>, new: &str) -> St
     };
     if let (Some(map), Some(fields)) = (
         value.as_object_mut(),
-        UNSUPPORTED_SETTINGS.lock().unwrap().as_ref(),
+        UNSUPPORTED_SETTINGS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|values| values.get(&profiles::storage_key("settings"))),
     ) {
         for (field, raw) in fields {
             map.insert(field.clone(), raw.clone());
@@ -158,10 +170,15 @@ impl Bridge {
         let b = self.clone();
         let schedule = move || {
             let b = b.clone();
+            let context = profiles::capture();
             timer.start(
                 slint::TimerMode::SingleShot,
                 Duration::from_millis(600),
-                move || b.persist_settings(),
+                move || {
+                    if profiles::is_current(&context) {
+                        b.persist_settings();
+                    }
+                },
             );
         };
         if let Some(app) = self.app() {
@@ -421,7 +438,7 @@ impl Bridge {
                 };
                 let b = b.clone();
                 let published_scan = scan.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if published_scan.lock().unwrap().generation != generation {
                         return;
                     }
@@ -1036,7 +1053,7 @@ impl Bridge {
                 }
                 last_update = std::time::Instant::now();
                 let bridge = bridge.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if let Some(app) = bridge.app() {
                         app.set_cache_processed(p.processed as i32);
                         app.set_cache_total(p.total as i32);
@@ -1055,7 +1072,7 @@ impl Bridge {
                     }
                 });
             });
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if let Some(app) = bridge.app() {
                     app.set_cache_busy(false);
                     app.set_cache_rewriting(false);
@@ -1092,7 +1109,7 @@ impl Bridge {
         let bridge = self.clone();
         thread::spawn(move || {
             let _ = guard.clear(&poster_cache_dir());
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if let Some(app) = bridge.app() {
                     app.set_cache_busy(false);
                     app.set_cache_status(SharedString::default());

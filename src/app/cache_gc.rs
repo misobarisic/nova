@@ -93,7 +93,7 @@ impl Backend for ImageBackend {
             "image cache cleanup completed"
         );
         let bridge = self.0.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if bridge.app().is_some_and(|app| app.get_show_settings()) {
                 bridge.refresh_cache_disk_usage();
             }

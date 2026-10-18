@@ -10,8 +10,8 @@ impl Bridge {
             media_type: type_,
         };
         let info = tracking_episode_info(videos);
-        let generation = self.tracking.metadata_generation(&source, &info);
-        self.tracking.send(Command::Metadata {
+        let generation = self.tracking().metadata_generation(&source, &info);
+        self.tracking().send(Command::Metadata {
             source,
             generation,
             episode_ids: videos
@@ -23,23 +23,24 @@ impl Bridge {
     }
     pub(in crate::app) fn tracking_automatic(&self, index: i32, enabled: bool) {
         if let Some(service) = service(index) {
-            self.tracking.send(Command::Automatic { service, enabled });
+            self.tracking()
+                .send(Command::Automatic { service, enabled });
         }
     }
     pub(in crate::app) fn tracking_reset(&self) {
-        for epoch in &self.tracking.login_generation {
+        for epoch in &self.tracking().login_generation {
             epoch.fetch_add(1, Ordering::AcqRel);
         }
-        self.tracking.send(Command::Reset);
+        self.tracking().send(Command::Reset);
     }
     pub(in crate::app) fn tracking_connect(&self, index: i32, client: String, redirect: String) {
         let Some(service) = service(index) else {
             return;
         };
-        let epoch = self.tracking.login_generation[service_index(service)]
+        let epoch = self.tracking().login_generation[service_index(service)]
             .fetch_add(1, Ordering::AcqRel)
             + 1;
-        self.tracking.send(Command::Connect {
+        self.tracking().send(Command::Connect {
             service,
             registration: ClientRegistration {
                 client_id: client.trim().into(),
@@ -54,8 +55,8 @@ impl Bridge {
         };
         if let Ok(value) = AuthReturn::new(value) {
             let epoch =
-                self.tracking.login_generation[service_index(service)].load(Ordering::Acquire);
-            self.tracking.send(Command::Complete {
+                self.tracking().login_generation[service_index(service)].load(Ordering::Acquire);
+            self.tracking().send(Command::Complete {
                 service,
                 value,
                 epoch,
@@ -66,19 +67,19 @@ impl Bridge {
         let Some(service) = service(index) else {
             return;
         };
-        let epoch = self.tracking.login_generation[service_index(service)]
+        let epoch = self.tracking().login_generation[service_index(service)]
             .fetch_add(1, Ordering::AcqRel)
             + 1;
-        self.tracking.send(Command::Cancel { service, epoch });
+        self.tracking().send(Command::Cancel { service, epoch });
     }
     pub(in crate::app) fn tracking_disconnect(&self, index: i32) {
         let Some(service) = service(index) else {
             return;
         };
-        let epoch = self.tracking.login_generation[service_index(service)]
+        let epoch = self.tracking().login_generation[service_index(service)]
             .fetch_add(1, Ordering::AcqRel)
             + 1;
-        self.tracking.send(Command::Disconnect { service, epoch });
+        self.tracking().send(Command::Disconnect { service, epoch });
     }
     fn tracking_context(&self) -> Option<SourceContext> {
         let state = self.shared.lock().unwrap();
@@ -143,10 +144,10 @@ impl Bridge {
         let Some(context) = self.tracking_context() else {
             return;
         };
-        *self.tracking.context_evidence.lock().unwrap() =
+        *self.tracking().context_evidence.lock().unwrap() =
             Some((context.source.clone(), context.episode_info.clone()));
         let generation = self
-            .tracking
+            .tracking()
             .context_generation
             .fetch_add(1, Ordering::AcqRel)
             + 1;
@@ -172,14 +173,14 @@ impl Bridge {
             app.set_tracking_busy(true);
             app.set_tracking_can_confirm(false);
         }
-        self.tracking.send(Command::Show {
+        self.tracking().send(Command::Show {
             context,
             generation,
         });
     }
     pub(in crate::app) fn tracking_close(&self) {
-        *self.tracking.context_evidence.lock().unwrap() = None;
-        self.tracking
+        *self.tracking().context_evidence.lock().unwrap() = None;
+        self.tracking()
             .context_generation
             .fetch_add(1, Ordering::AcqRel);
         if let Some(app) = self.app() {
@@ -189,7 +190,7 @@ impl Bridge {
                 app.set_detail_kb_tab(app.get_tracking_return_tab());
             }
         }
-        self.tracking.send(Command::Close);
+        self.tracking().send(Command::Close);
     }
     pub(in crate::app) fn tracking_search(&self, index: i32, query: String) {
         let Some(service) = service(index) else {
@@ -198,10 +199,10 @@ impl Bridge {
         let Some(context) = self.tracking_context() else {
             return;
         };
-        *self.tracking.context_evidence.lock().unwrap() =
+        *self.tracking().context_evidence.lock().unwrap() =
             Some((context.source.clone(), context.episode_info.clone()));
         let generation = self
-            .tracking
+            .tracking()
             .context_generation
             .fetch_add(1, Ordering::AcqRel)
             + 1;
@@ -213,7 +214,7 @@ impl Bridge {
                 Rc::new(VecModel::<crate::TrackingCandidateRow>::default()).into(),
             );
         }
-        self.tracking.send(Command::Search {
+        self.tracking().send(Command::Search {
             context,
             service,
             query,
@@ -225,17 +226,17 @@ impl Bridge {
         let Ok(index) = usize::try_from(index) else {
             return;
         };
-        self.tracking.send(Command::Pick {
+        self.tracking().send(Command::Pick {
             index,
-            generation: self.tracking.context_generation.load(Ordering::Acquire),
+            generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
     }
     pub(in crate::app) fn tracking_preview(&self, first: String, last: String, start: String) {
-        self.tracking.send(Command::Preview {
+        self.tracking().send(Command::Preview {
             first,
             last,
             start,
-            generation: self.tracking.context_generation.load(Ordering::Acquire),
+            generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
     }
     pub(in crate::app) fn tracking_assign(&self, row: i32, value: String) {
@@ -243,38 +244,38 @@ impl Bridge {
             if let Some(app) = self.app() {
                 app.set_tracking_can_confirm(false);
             }
-            self.tracking.send(Command::Assign {
+            self.tracking().send(Command::Assign {
                 row,
                 value,
-                generation: self.tracking.context_generation.load(Ordering::Acquire),
+                generation: self.tracking().context_generation.load(Ordering::Acquire),
             });
         }
     }
     pub(in crate::app) fn tracking_confirm(&self) {
-        self.tracking.send(Command::Confirm {
-            generation: self.tracking.context_generation.load(Ordering::Acquire),
+        self.tracking().send(Command::Confirm {
+            generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
     }
     pub(in crate::app) fn tracking_cancel_adjust(&self) {
-        self.tracking.send(Command::CancelAdjust {
-            generation: self.tracking.context_generation.load(Ordering::Acquire),
+        self.tracking().send(Command::CancelAdjust {
+            generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
     }
     pub(in crate::app) fn tracking_accept_setup(&self, revision: String, include_history: bool) {
         if let Some(app) = self.app() {
             app.set_tracking_busy(true);
         }
-        self.tracking.send(Command::AcceptSetup {
+        self.tracking().send(Command::AcceptSetup {
             revision,
             include_history,
-            generation: self.tracking.context_generation.load(Ordering::Acquire),
+            generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
     }
     pub(in crate::app) fn tracking_adjust_setup(&self, index: i32) {
         if let Ok(index) = usize::try_from(index) {
-            self.tracking.send(Command::AdjustSetup {
+            self.tracking().send(Command::AdjustSetup {
                 index,
-                generation: self.tracking.context_generation.load(Ordering::Acquire),
+                generation: self.tracking().context_generation.load(Ordering::Acquire),
             });
         }
     }
@@ -290,7 +291,7 @@ impl Bridge {
         set_completed: bool,
         completed: String,
     ) {
-        self.tracking.send(Command::Edit {
+        self.tracking().send(Command::Edit {
             id,
             progress,
             status,
@@ -300,6 +301,6 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_action(&self, id: String, action: i32) {
-        self.tracking.send(Command::Action { id, action });
+        self.tracking().send(Command::Action { id, action });
     }
 }

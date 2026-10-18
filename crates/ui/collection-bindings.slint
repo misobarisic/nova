@@ -1,4 +1,4 @@
-import { LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, MediaCard, CategoryRow, LicenseSource, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+import { LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, MediaCard, CategoryRow, LicenseSource, DownloadEpisode, DownloadGroup, ProfileRow } from "@NovaUiShared";
 
 // These aliases exist once for the lifetime of AppWindow, avoiding remount cycles.
 export component LibraryBindings {
@@ -22,6 +22,12 @@ export component LibraryBindings {
 }
 
 export component MoreBindings {
+    in-out property <bool> profiles_open <=> MoreBridge.profiles_open;
+    in-out property <[ProfileRow]> profiles <=> MoreBridge.profiles;
+    in-out property <bool> profiles_busy <=> MoreBridge.profiles_busy;
+    in-out property <string> profiles_error <=> MoreBridge.profiles_error;
+    in-out property <bool> profiles_remember_last <=> MoreBridge.profiles_remember_last;
+    in-out property <bool> profiles_require_selection <=> MoreBridge.profiles_require_selection;
     in-out property <length> scroll_y <=> MoreBridge.scroll_y;
     in-out property <int> choice <=> MoreBridge.choice;
     in-out property <int> kb_zone <=> MoreBridge.kb_zone;

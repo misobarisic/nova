@@ -287,6 +287,9 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
         return Ok("skipped: sync disabled".to_string());
     }
 
+    // An upgraded job-only process can sync before the first Activity launch.
+    // Move legacy records before advertising the profile-aware protocol.
+    super::sync::migrate_legacy_profiles().map_err(|error| error.to_string())?;
     match nova_sync::background_engine() {
         Ok(Some(lease)) => Ok(format!(
             "{:?}",

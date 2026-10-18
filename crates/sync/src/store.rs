@@ -126,7 +126,8 @@ impl Store {
                             keys.iter()
                                 .filter(move |(_, r)| {
                                     !valid_clock(r.version.hlc())
-                                        || (d == "progress" && !crate::progress::valid(r))
+                                        || (crate::is_progress_domain(d)
+                                            && !crate::progress::valid(r))
                                 })
                                 .map(move |(k, r)| {
                                     (
@@ -206,7 +207,8 @@ impl Store {
             match serde_json::from_str::<Record>(&value) {
                 Ok(record)
                     if valid_clock(record.version.hlc())
-                        && (domain != "progress" || crate::progress::valid(&record)) =>
+                        && (!crate::is_progress_domain(&domain)
+                            || crate::progress::valid(&record)) =>
                 {
                     store.domains.entry(domain).or_default().insert(key, record);
                 }
@@ -249,9 +251,19 @@ impl Store {
     /// candidate action clocks survive the merge, with no new record or HLC.
     /// Tombstoned aliases do not contribute history.
     pub fn resolved_progress<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> Option<String> {
+        self.resolved_progress_in("progress", keys)
+    }
+
+    /// Resolve aliases inside one profile; equal episode IDs in other profiles
+    /// never participate in this view.
+    pub fn resolved_progress_in<'a>(
+        &self,
+        domain: &str,
+        keys: impl IntoIterator<Item = &'a str>,
+    ) -> Option<String> {
         let mut records = keys
             .into_iter()
-            .filter_map(|key| self.record("progress", key))
+            .filter_map(|key| self.record(domain, key))
             .filter(|record| !record.is_deleted());
         let mut merged = records.next()?.clone();
         for record in records {
@@ -262,6 +274,42 @@ impl Store {
         }
         merged.value
     }
+    /// Move legacy records and their materialized baseline without creating new
+    /// user actions. The caller queues snapshot migration before the same save.
+    pub fn migrate_domain(&mut self, source: &str, target: &str) -> Result<bool> {
+        if source == target {
+            return Ok(false);
+        }
+        let baseline_source = format!("sync:baseline:{source}");
+        let baseline_target = format!("sync:baseline:{target}");
+        let baseline = self.extra_value(&baseline_source)?;
+        let mut changed = false;
+        if let Some(records) = self.domains.remove(source) {
+            for (key, record) in records {
+                self.dirty.insert((source.to_string(), key.clone()));
+                let target_records = self.domains.entry(target.to_string()).or_default();
+                if let Some(winner) = resolve(target_records.get(&key), &record) {
+                    target_records.insert(key.clone(), winner);
+                    self.dirty.insert((target.to_string(), key));
+                }
+            }
+            changed = true;
+        }
+        if let Some(baseline) = baseline {
+            if self.extra_value(&baseline_target)?.is_none() {
+                self.queue_extra(&baseline_target, Some(baseline));
+            }
+            self.queue_extra(&baseline_source, None);
+            changed = true;
+        }
+        if self.pending_domains.remove(source) {
+            self.pending_domains.insert(target.to_string());
+            self.clock_dirty = true;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     pub fn set_device(&mut self, device: u64) {
         self.device = Some(device);
     }
@@ -382,6 +430,16 @@ impl Store {
         dev: u64,
     ) -> bool {
         self.device = Some(dev);
+        // A deleted profile ID is never reused. Delayed local actors must not
+        // publish new child actions after the account-level retirement marker.
+        if value.is_some()
+            && let Some((profile, _)) = crate::parse_profile_domain(domain)
+            && self
+                .record("profile_deletions", profile)
+                .is_some_and(|r| !r.is_deleted())
+        {
+            return false;
+        }
         if let Some(cur) = self.domains.get(domain).and_then(|m| m.get(key))
             && cur.value == value
         {
@@ -396,7 +454,7 @@ impl Store {
         self.clock_dirty = true;
         let deleted = value.is_none();
         let version = Version::from_hlc(hlc, dev, deleted);
-        let value = if domain == "progress" {
+        let value = if crate::is_progress_domain(domain) {
             value.map(|value| crate::progress::local(self.record(domain, key), value, version))
         } else {
             value
@@ -415,7 +473,7 @@ impl Store {
     /// later local write always sorts after it (causality).
     pub fn apply(&mut self, domain: &str, key: &str, mut remote: Record) -> bool {
         if !valid_clock(remote.version.hlc())
-            || (domain == "progress" && !crate::progress::valid(&remote))
+            || (crate::is_progress_domain(domain) && !crate::progress::valid(&remote))
         {
             nova_storage::report(nova_storage::Error::new(
                 nova_storage::ErrorKind::Schema,
@@ -425,7 +483,7 @@ impl Store {
         }
         self.hlc.observe(remote.version.hlc(), crate::now_ms());
         self.clock_dirty = true;
-        if domain == "progress"
+        if crate::is_progress_domain(domain)
             && let Some(local) = self.record(domain, key)
             && !local.is_deleted()
             && !remote.is_deleted()
@@ -634,6 +692,125 @@ fn migrate_legacy(value: &mut serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn profile_progress_keeps_actions_and_aliases_separate() {
+        let mut store = Store::default();
+        let alice = crate::profile_domain("alice", "progress");
+        let bob = crate::profile_domain("bob", "progress");
+        let progress = |watched| {
+            serde_json::json!({"watched": watched, "position_secs": 25,
+            "duration_secs": 100, "updated_at_secs": 1, "play_count": 1})
+            .to_string()
+        };
+        store.set(&alice, "episode", Some(progress(true)), 0, DEV_A);
+        store.set(&bob, "episode", Some(progress(false)), 0, DEV_A);
+        let watched: serde_json::Value =
+            serde_json::from_str(&store.resolved_progress_in(&alice, ["episode"]).unwrap())
+                .unwrap();
+        let unwatched: serde_json::Value =
+            serde_json::from_str(&store.resolved_progress_in(&bob, ["episode"]).unwrap()).unwrap();
+        assert_eq!(watched["watched"], true);
+        assert_eq!(unwatched["watched"], false);
+        assert!(store.resolved_progress(["episode"]).is_none());
+        assert_eq!(
+            store.outbound(&Digest::new()).len(),
+            2,
+            "every profile is exchanged"
+        );
+        let mut peer = Store::default();
+        for outbound in store.outbound(&Digest::new()) {
+            peer.apply(&outbound.domain, &outbound.key, outbound.record);
+        }
+        assert_eq!(peer.records(&alice), store.records(&alice));
+        assert_eq!(peer.records(&bob), store.records(&bob));
+        let invalid = Record {
+            value: Some(r#"{"__nova_progress_v1": false}"#.into()),
+            version: Version::new(crate::now_ms(), 1, DEV_B, false),
+        };
+        assert!(!peer.apply(&alice, "invalid", invalid));
+    }
+
+    #[test]
+    fn permanent_profile_deletion_blocks_delayed_local_actions_and_survives_gc() {
+        let mut store = Store::default();
+        let domain = crate::profile_domain("alice", "library");
+        store.set(&domain, "show", Some("old".into()), 0, DEV_A);
+        store.set(
+            "profiles",
+            "alice",
+            Some(r#"{"name":"Alice"}"#.into()),
+            0,
+            DEV_A,
+        );
+        store.set("profile_deletions", "alice", Some("1".into()), 0, DEV_A);
+        store.set("profiles", "alice", None, 0, DEV_A);
+        assert!(!store.set(&domain, "show", Some("late actor".into()), 0, DEV_A));
+        assert_eq!(
+            store.record(&domain, "show").unwrap().value.as_deref(),
+            Some("old")
+        );
+        store.gc(u64::MAX, 0, AckFloor::NoPeers);
+        assert!(store.record("profiles", "alice").is_none());
+        assert_eq!(
+            store
+                .record("profile_deletions", "alice")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("1")
+        );
+        assert!(!store.set(&domain, "other", Some("late actor".into()), 0, DEV_A));
+    }
+
+    #[test]
+    fn legacy_domain_migration_retains_versions_baseline_and_pending_receipt() {
+        let mut store = Store::default();
+        let target = crate::profile_domain("default", "progress");
+        let value =
+            serde_json::json!({"watched":true,"position_secs":0,"play_count":1}).to_string();
+        store.set("progress", "episode", Some(value.clone()), 0, DEV_A);
+        let original = store.record("progress", "episode").unwrap().clone();
+        let original_clock = store.clock();
+        store.pending_domains.insert("progress".into());
+        store.queue_extra(
+            "sync:baseline:progress",
+            Some("{\"episode\":\"snapshot\"}".into()),
+        );
+        store.queue_extra(&format!("sync:baseline:{target}"), None);
+        assert!(store.migrate_domain("progress", &target).unwrap());
+        assert_eq!(store.record(&target, "episode"), Some(&original));
+        assert!(store.record("progress", "episode").is_none());
+        assert_eq!(store.clock(), original_clock);
+        assert!(store.pending_domains().contains(&target));
+        assert!(!store.pending_domains().contains(&"progress".to_string()));
+        assert!(
+            store
+                .extra_value("sync:baseline:progress")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .extra_value(&format!("sync:baseline:{target}"))
+                .unwrap()
+                .as_deref(),
+            Some("{\"episode\":\"snapshot\"}")
+        );
+        store
+            .save_with(|batch| {
+                assert!(batch.contains(&(record_row_key("progress", "episode"), None)));
+                assert!(
+                    batch
+                        .iter()
+                        .any(|(key, value)| key == &record_row_key(&target, "episode")
+                            && value.is_some())
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert!(!store.needs_save());
+    }
+
     #[test]
     fn prefix_records_are_live_and_confined_to_the_requested_family() {
         let mut store = super::Store::default();

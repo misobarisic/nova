@@ -512,7 +512,7 @@ impl Bridge {
             }
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let Some(pixels) = pixels else { return };
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     let Some(app) = weak.upgrade() else { return };
                     if !app.get_library_duplicates_open()
                         || app.get_library_duplicate_target().as_str() != target

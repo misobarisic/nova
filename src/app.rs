@@ -1,4 +1,5 @@
 use addons::{Addon, Manifest, MetaItem, MetaPreview, Video};
+use profiles::thread;
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -12,7 +13,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "desktop")]
 use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use crate::download::DownloadJob;
@@ -78,14 +78,14 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
     sources.dedup_by(|a, b| a.label == b.label && a.url == b.url);
     sources
 }
-use crate::net;
-use crate::storage;
 use nova_config::{
     AndroidHwdec, BackdropSize, CacheImageFormat, CacheSettings, DesktopExternalApp,
     DownloadSettings, EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language,
     active_cache_settings, app_cache_dir, app_data_dir, image_settings_revision, now_secs,
     poster_cache_dir, set_cache_settings,
 };
+use profile_net as net;
+use profiles::storage;
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
 // Re-exported so `nova::app::TorrentSettings` stays a valid path.
@@ -720,6 +720,7 @@ static EPISODE_INFLIGHT: LazyLock<Mutex<HashMap<String, u64>>> =
 static EPISODE_JOB_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 struct EpisodeThumbJob {
+    context: profiles::Context,
     job_id: u64,
     request_key: String,
     url: String,
@@ -759,8 +760,10 @@ struct Bridge {
     last_stream: Arc<last_stream::Cache>,
     /// Bounded tracker actor; unavailable stores retain their originals and
     /// require explicit recovery without blocking playback.
-    tracking: tracking::StateHandle,
-    stremio: Arc<stremio::Handle>,
+    tracking_services: Arc<Mutex<HashMap<profiles::Context, tracking::StateHandle>>>,
+    stremio_services: Arc<Mutex<HashMap<profiles::Context, Arc<stremio::Handle>>>>,
+    profile_recovery_pending: Arc<AtomicBool>,
+    profile_loaded_epoch: Arc<AtomicU64>,
     downloads_seen: Arc<AtomicU64>,
     image_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
     torrent_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
@@ -799,6 +802,11 @@ mod playback_preferences;
 mod plugin_cache;
 mod plugin_settings;
 mod posters;
+mod profile_actions;
+#[cfg(test)]
+mod profile_actions_tests;
+mod profile_net;
+mod profiles;
 pub(crate) mod remote_playback;
 mod run;
 mod settings;

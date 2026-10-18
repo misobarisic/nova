@@ -57,8 +57,90 @@ impl Record {
     }
 }
 
+/// A stable bridge handle dispatches each operation to its captured profile.
 #[derive(Default)]
 pub(super) struct Cache {
+    profiles: Mutex<std::collections::HashMap<String, Arc<ProfileCache>>>,
+    legacy_path: Option<PathBuf>,
+}
+impl Cache {
+    pub(super) fn open_synced(path: PathBuf) -> Self {
+        Self {
+            profiles: Mutex::default(),
+            legacy_path: Some(path),
+        }
+    }
+    fn current(&self) -> Arc<ProfileCache> {
+        let id = super::profiles::current_id();
+        let mut profiles = self.profiles.lock().unwrap();
+        if !super::profiles::writable(&id) {
+            return Arc::default();
+        }
+        profiles
+            .entry(id.clone())
+            .or_insert_with(|| {
+                let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
+                if !super::profiles::writable(&id) {
+                    return Arc::default();
+                }
+                let Some(legacy) = &self.legacy_path else {
+                    return Arc::default();
+                };
+                let path = if super::profiles::enabled() {
+                    let directory = super::profiles::cache_dir(&id);
+                    let _ = fs::create_dir_all(&directory);
+                    if id == super::profiles::DEFAULT_ID {
+                        for name in ["last-stream-v1.json", "series-stream-v1.json"] {
+                            let old = legacy.with_file_name(name);
+                            let new = directory.join(name);
+                            if !new.exists() && old.exists() {
+                                let _ = fs::copy(old, &new);
+                            }
+                        }
+                    }
+                    directory.join("last-stream-v1.json")
+                } else {
+                    legacy.clone()
+                };
+                Arc::new(ProfileCache::open_synced(path))
+            })
+            .clone()
+    }
+    pub(super) fn remember_series(
+        &self,
+        id: &str,
+        preference: super::streams::StreamPreference,
+        now: u64,
+    ) {
+        self.current().remember_series(id, preference, now);
+    }
+    pub(super) fn series_preference(
+        &self,
+        id: &str,
+        now: u64,
+    ) -> Option<super::streams::StreamPreference> {
+        self.current().series_preference(id, now)
+    }
+    pub(super) fn remember(&self, identity: String, now: u64) {
+        self.current().remember(identity, now);
+    }
+    pub(super) fn identity(&self, now: u64) -> Option<String> {
+        self.current().identity(now)
+    }
+    fn project(&self, raw: Option<&str>, now: u64) -> Result<(), String> {
+        self.current().project(raw, now)
+    }
+}
+fn domain() -> String {
+    if super::profiles::enabled() {
+        super::profiles::domain_for(&super::profiles::current_id(), DOMAIN)
+    } else {
+        DOMAIN.into()
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ProfileCache {
     record: Arc<Mutex<Option<Record>>>,
     series: Arc<Mutex<SeriesChoices>>,
     wake: Option<mpsc::Sender<()>>,
@@ -66,7 +148,7 @@ pub(super) struct Cache {
     synced: bool,
 }
 
-impl Cache {
+impl ProfileCache {
     /// The ordinary constructor stays memory-only for bridge fixtures. Only
     /// the production entry point opens the app-private cache file.
     #[cfg(test)]
@@ -98,7 +180,7 @@ impl Cache {
         let series = Arc::new(Mutex::new(series_choices));
         let series_state = series.clone();
         let (wake, receiver) = mpsc::channel();
-        match std::thread::Builder::new()
+        match super::profiles::thread::Builder::new()
             .name("nova-last-stream".into())
             .spawn(move || persist_loop(path, state, series_path, series_state, receiver, synced))
         {
@@ -159,7 +241,7 @@ impl Cache {
             identity,
             selected_at: now,
         };
-        if !record.valid(now) {
+        if !super::profiles::writable(&super::profiles::current_id()) || !record.valid(now) {
             return;
         }
         if self.synced && !super::sync::applying() {
@@ -168,7 +250,7 @@ impl Cache {
                 let dev = nova_sync::local_device()?;
                 let mut store = owner.lock().unwrap();
                 let changed = store.set(
-                    DOMAIN,
+                    &domain(),
                     SELECTION,
                     Some(serde_json::to_string(&record)?),
                     now,
@@ -217,7 +299,7 @@ impl Cache {
     }
 }
 
-impl Drop for Cache {
+impl Drop for ProfileCache {
     fn drop(&mut self) {
         self.wake.take();
         if let Some(worker) = self.worker.take() {
@@ -291,6 +373,9 @@ fn persist_loop(
         // Coalesce pending selections. Cache filesystem work happens here,
         // outside the UI thread and outside the in-memory record lock.
         for _ in receiver.try_iter() {}
+        if !super::profiles::writable(&super::profiles::current_id()) {
+            break;
+        }
         if synced && let Err(error) = expire_synced_choice(nova_config::now_secs()) {
             super::io::record_write_failure(nova_storage::Error::new(
                 nova_storage::ErrorKind::Transaction,
@@ -303,6 +388,10 @@ fn persist_loop(
             choices.clone()
         };
         if saved_series.as_ref() != Some(&current_series) {
+            let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
+            if !super::profiles::writable(&super::profiles::current_id()) {
+                break;
+            }
             match persist(&series_path, Some(&current_series)) {
                 Ok(()) => saved_series = Some(current_series),
                 Err(error) => tracing::warn!(%error, "could not persist series stream preferences"),
@@ -310,6 +399,10 @@ fn persist_loop(
         }
         let current = snapshot(&state);
         if first || current != saved {
+            let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
+            if !super::profiles::writable(&super::profiles::current_id()) {
+                break;
+            }
             match persist(&path, current.as_ref()) {
                 Ok(()) => {
                     saved = current.clone();
@@ -365,7 +458,7 @@ fn decode(raw: Option<&str>, now: u64) -> Result<Option<Record>, String> {
 
 fn expire_in_store(store: &mut nova_sync::Store, now: u64) -> bool {
     let expired = store
-        .record(DOMAIN, SELECTION)
+        .record(&domain(), SELECTION)
         .and_then(|record| record.value.as_deref())
         .filter(|raw| raw.len() as u64 <= MAX_BYTES)
         .and_then(|raw| serde_json::from_str::<Record>(raw).ok())
@@ -378,10 +471,10 @@ fn expire_in_store(store: &mut nova_sync::Store, now: u64) -> bool {
     if !expired {
         return false;
     }
-    let mut tombstone = store.record(DOMAIN, SELECTION).unwrap().clone();
+    let mut tombstone = store.record(&domain(), SELECTION).unwrap().clone();
     tombstone.value = None;
     tombstone.version.deleted = true;
-    store.apply(DOMAIN, SELECTION, tombstone)
+    store.apply(&domain(), SELECTION, tombstone)
 }
 
 fn expire_synced_choice(now: u64) -> nova_sync::Result<()> {
@@ -403,7 +496,7 @@ fn seed_legacy_choice(
     dev: u64,
     record: Option<Record>,
 ) -> nova_sync::Result<bool> {
-    if store.record(DOMAIN, SELECTION).is_some() {
+    if store.record(&domain(), SELECTION).is_some() {
         return Ok(false);
     }
     let Some(record) = record else {
@@ -412,7 +505,7 @@ fn seed_legacy_choice(
     // Migration is not a fresh selection. Retain its historical clock so an
     // older choice upgraded later cannot beat a recently selected peer choice.
     Ok(store.apply(
-        DOMAIN,
+        &domain(),
         SELECTION,
         nova_sync::Record {
             value: Some(serde_json::to_string(&record)?),
@@ -434,7 +527,11 @@ impl super::Bridge {
             let owner = nova_sync::local_store()?;
             let dev = nova_sync::local_device()?;
             let mut store = owner.lock().unwrap();
-            if seed_legacy_choice(&mut store, dev, snapshot(&self.last_stream.record))? {
+            if seed_legacy_choice(
+                &mut store,
+                dev,
+                snapshot(&self.last_stream.current().record),
+            )? {
                 store.save()?;
             }
             drop(store);
@@ -457,7 +554,7 @@ impl super::Bridge {
         let raw = owner
             .lock()
             .unwrap()
-            .record(DOMAIN, SELECTION)
+            .record(&domain(), SELECTION)
             .and_then(|record| record.value.clone());
         self.last_stream
             .project(raw.as_deref(), nova_config::now_secs())
@@ -491,14 +588,14 @@ mod tests {
         let now = nova_config::now_secs();
         let preference = super::super::streams::StreamPreference::default();
         {
-            let cache = Cache::open(path.clone());
+            let cache = ProfileCache::open(path.clone());
             cache.remember_series("show-a", preference.clone(), now);
             assert!(cache.series_preference("show-a", now).is_some());
             assert!(cache.series_preference("show-b", now).is_none());
             cache.remember_series("show-b", preference, now);
             assert_eq!(cache.series.lock().unwrap().len(), 2);
         }
-        let cache = Cache::open(path);
+        let cache = ProfileCache::open(path);
         assert!(cache.series_preference("show-a", now).is_some());
         assert!(cache.series_preference("show-b", now).is_some());
         assert!(
@@ -530,7 +627,7 @@ mod tests {
             SELECTION,
             b.record(DOMAIN, SELECTION).unwrap().clone(),
         );
-        let cache = Cache::default();
+        let cache = ProfileCache::default();
         let before = a.digest();
         cache
             .project(a.record(DOMAIN, SELECTION).unwrap().value.as_deref(), now)
@@ -591,7 +688,7 @@ mod tests {
         assert!(!expire_in_store(&mut store, now + TTL));
         let mut peer = nova_sync::Store::default();
         peer.apply(DOMAIN, SELECTION, tombstone);
-        let cache = Cache::default();
+        let cache = ProfileCache::default();
         cache.remember(identity('a'), now);
         cache
             .project(
@@ -647,7 +744,7 @@ mod tests {
     #[test]
     fn peer_choices_are_bounded_and_cannot_contain_playback_urls() {
         let now = nova_config::now_secs();
-        let cache = Cache::default();
+        let cache = ProfileCache::default();
         cache.remember(identity('a'), now);
         let invalid = serde_json::to_string(&Record {
             version: 1,
@@ -680,7 +777,7 @@ mod tests {
 
     #[test]
     fn one_choice_replaces_the_previous_without_extending_expiry_on_reads() {
-        let cache = Cache::default();
+        let cache = ProfileCache::default();
         cache.remember(identity('a'), 100);
         cache.remember(identity('b'), 200);
         assert_eq!(cache.identity(100 + TTL), Some(identity('b')));
@@ -706,14 +803,17 @@ mod tests {
         let path = directory.join("last-stream-v1.json");
         let now = nova_config::now_secs();
         {
-            let cache = Cache::open(path.clone());
+            let cache = ProfileCache::open(path.clone());
             cache.remember(identity('a'), now);
             cache.remember(identity('b'), now);
         }
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.len() < MAX_BYTES as usize);
         assert!(!raw.contains(&identity('a')));
-        assert_eq!(Cache::open(path.clone()).identity(now), Some(identity('b')));
+        assert_eq!(
+            ProfileCache::open(path.clone()).identity(now),
+            Some(identity('b'))
+        );
         persist(
             &path,
             Some(&Record {
@@ -723,10 +823,10 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(Cache::open(path.clone()).identity(now), None);
+        assert_eq!(ProfileCache::open(path.clone()).identity(now), None);
         assert!(!path.exists());
         fs::write(&path, [b'x'; MAX_BYTES as usize + 1]).unwrap();
-        assert_eq!(Cache::open(path.clone()).identity(now), None);
+        assert_eq!(ProfileCache::open(path.clone()).identity(now), None);
         assert!(!path.exists());
         fs::remove_dir_all(directory).unwrap();
     }

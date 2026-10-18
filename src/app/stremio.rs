@@ -70,7 +70,10 @@ fn session_key(connection: &Connection, field: &str) -> String {
 fn session_flags(store: &nova_sync::Store, connection: &mut Connection) -> Result<(), ApiError> {
     let boolean = |field: &str| {
         store
-            .record(DOMAIN, &session_key(connection, field))
+            .record(
+                &crate::app::sync::profile_domain(DOMAIN),
+                &session_key(connection, field),
+            )
             .and_then(|r| r.value.as_ref())
             .map(|raw| serde_json::from_str::<bool>(raw).map_err(|_| ApiError::InvalidResponse))
             .transpose()
@@ -92,7 +95,7 @@ fn write_session_flag(
     device: u64,
 ) -> Result<Connection, ApiError> {
     let mut current = store
-        .record(DOMAIN, CONNECTION)
+        .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
         .and_then(|r| r.value.as_ref())
         .map(|raw| serde_json::from_str::<Connection>(raw).map_err(|_| ApiError::InvalidResponse))
         .transpose()?
@@ -104,7 +107,7 @@ fn write_session_flag(
         SessionFlag::Bootstrap => ("bootstrap", true),
     };
     store.set(
-        DOMAIN,
+        &crate::app::sync::profile_domain(DOMAIN),
         &session_key(&current, name),
         Some(value.to_string()),
         0,
@@ -202,6 +205,7 @@ enum Command {
     Shutdown,
 }
 pub(super) struct Handle {
+    finished: Arc<AtomicBool>,
     tx: SyncSender<Command>,
     rx: Mutex<Option<Receiver<Command>>>,
     generation: AtomicU64,
@@ -214,6 +218,7 @@ impl Handle {
     pub(super) fn new() -> Self {
         let (tx, rx) = mpsc::sync_channel(32);
         Self {
+            finished: Arc::new(AtomicBool::new(true)),
             tx,
             rx: Mutex::new(Some(rx)),
             generation: AtomicU64::new(0),
@@ -238,59 +243,69 @@ impl Handle {
             tracing::warn!("Stremio command queue unavailable");
         }
     }
+
+    pub(super) fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
 }
 
 impl Bridge {
     pub(super) fn start_stremio(&self) {
-        let Some(rx) = self.stremio.rx.lock().unwrap().take() else {
+        let handle = self.stremio();
+        let Some(rx) = handle.rx.lock().unwrap().take() else {
             return;
         };
+        handle.finished.store(false, Ordering::Release);
+        let done = profile_actions::WorkerDone(handle.finished.clone());
         let bridge = self.clone();
-        thread::spawn(move || match HttpsTransport::new() {
-            Ok(transport) => Worker::new(bridge, Client::new(transport)).run(rx),
-            Err(error) => publish_error(&bridge, error, "Connecting to Stremio…"),
+        thread::spawn(move || {
+            let _done = done;
+            match HttpsTransport::new() {
+                Ok(transport) => Worker::new(bridge, Client::new(transport)).run(rx),
+                Err(error) => publish_error(&bridge, error, "Connecting to Stremio…"),
+            }
         });
     }
     pub(super) fn stremio_connect(&self) {
-        let generation = self.stremio.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.stremio.send(Command::Connect(generation));
+        let generation = self.stremio().generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.stremio().send(Command::Connect(generation));
     }
     pub(super) fn stremio_cancel(&self) {
-        let generation = self.stremio.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.stremio.send(Command::Cancel(generation));
+        let generation = self.stremio().generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.stremio().send(Command::Cancel(generation));
     }
     pub(super) fn stremio_start(&self) {
-        self.stremio.send(Command::Start(
-            self.stremio.generation.load(Ordering::Acquire),
+        self.stremio().send(Command::Start(
+            self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_sync(&self) {
-        self.stremio.send(Command::Sync(
-            self.stremio.generation.load(Ordering::Acquire),
+        self.stremio().send(Command::Sync(
+            self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_automatic(&self, enabled: bool) {
-        self.stremio.send(Command::Automatic(
+        self.stremio().send(Command::Automatic(
             enabled,
-            self.stremio.generation.load(Ordering::Acquire),
+            self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_disconnect(&self) {
-        let generation = self.stremio.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.stremio.send(Command::Disconnect(generation));
+        let generation = self.stremio().generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.stremio().send(Command::Disconnect(generation));
     }
     pub(super) fn stremio_open_link(&self) {
-        self.stremio.send(Command::OpenLink);
+        self.stremio().send(Command::OpenLink);
     }
     pub(super) fn stremio_wake(&self) {
-        self.stremio.wake.store(true, Ordering::Release);
+        self.stremio().wake.store(true, Ordering::Release);
     }
     pub(super) fn stremio_checkpoint(&self) {
-        self.stremio.checkpoint.store(true, Ordering::Release);
+        self.stremio().checkpoint.store(true, Ordering::Release);
     }
     pub(super) fn shutdown_stremio(&self) {
-        self.stremio.generation.fetch_add(1, Ordering::AcqRel);
-        self.stremio.send(Command::Shutdown);
+        self.stremio().generation.fetch_add(1, Ordering::AcqRel);
+        self.stremio().send(Command::Shutdown);
     }
 }
 
@@ -358,7 +373,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
     }
     fn run(mut self, rx: Receiver<Command>) {
         loop {
-            let urgent = self.bridge.stremio.urgent.lock().unwrap().take();
+            let urgent = self.bridge.stremio().urgent.lock().unwrap().take();
             if let Some(command) = urgent {
                 if matches!(command, Command::Shutdown) {
                     return;
@@ -378,7 +393,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
     fn command(&mut self, command: Command) {
         match command {
             Command::Connect(generation) => {
-                if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+                if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
                     return;
                 }
                 self.login = None;
@@ -391,7 +406,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     let background =
                         tracking::sign_in_background().map_err(|_| ApiError::Offline)?;
                     let code = self.client.create_link(now_secs())?;
-                    if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+                    if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
                         return Ok(());
                     }
                     let link = code.link.clone();
@@ -417,7 +432,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 }
             }
             Command::Cancel(generation) => {
-                if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+                if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
                     return;
                 }
                 self.login = None;
@@ -430,13 +445,13 @@ impl<T: nova_stremio::Transport> Worker<T> {
             }
             Command::OpenLink => {
                 if let Some(login) = &self.login
-                    && login.generation == self.bridge.stremio.generation.load(Ordering::Acquire)
+                    && login.generation == self.bridge.stremio().generation.load(Ordering::Acquire)
                 {
                     let _ = crate::player::open_browser(&login.link);
                 }
             }
             Command::Start(generation)
-                if generation == self.bridge.stremio.generation.load(Ordering::Acquire)
+                if generation == self.bridge.stremio().generation.load(Ordering::Acquire)
                     && self.preview_ready
                     && self.verified =>
             {
@@ -452,14 +467,14 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 }
             }
             Command::Sync(generation)
-                if generation == self.bridge.stremio.generation.load(Ordering::Acquire) =>
+                if generation == self.bridge.stremio().generation.load(Ordering::Acquire) =>
             {
                 self.force = true;
                 self.hydrate_after.clear();
                 self.retry_at = Instant::now();
             }
             Command::Automatic(enabled, generation)
-                if generation == self.bridge.stremio.generation.load(Ordering::Acquire) =>
+                if generation == self.bridge.stremio().generation.load(Ordering::Acquire) =>
             {
                 if let Some(connection) = self.connection.clone() {
                     if self
@@ -473,7 +488,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 }
             }
             Command::Disconnect(generation) => {
-                if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+                if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
                     return;
                 }
                 self.login = None;
@@ -492,8 +507,8 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
     }
     fn tick(&mut self) -> Result<(), ApiError> {
-        let generation = self.bridge.stremio.generation.load(Ordering::Acquire);
-        if self.bridge.stremio.wake.swap(false, Ordering::AcqRel) {
+        let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
+        if self.bridge.stremio().wake.swap(false, Ordering::AcqRel) {
             self.next_local_scan = Instant::now();
         }
         if self.login.is_some() {
@@ -505,13 +520,19 @@ impl<T: nova_stremio::Transport> Worker<T> {
         if Instant::now() < self.retry_at {
             return Ok(());
         }
-        if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+        if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             return Ok(());
         }
         let Some(connection) = self.connection.clone().filter(|_| self.verified) else {
             return Ok(());
         };
-        if self.bridge.stremio.checkpoint.swap(false, Ordering::AcqRel) && connection.automatic {
+        if self
+            .bridge
+            .stremio()
+            .checkpoint
+            .swap(false, Ordering::AcqRel)
+            && connection.automatic
+        {
             self.next_sync = Instant::now();
         }
         if self.login.is_some() {
@@ -555,7 +576,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         let Some(login) = &mut self.login else {
             return Ok(());
         };
-        if login.generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+        if login.generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             self.login = None;
             return Ok(());
         }
@@ -578,7 +599,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             return Ok(());
         };
         let user = self.client.get_user(&auth_key, now_secs())?;
-        if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+        if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             self.login = None;
             return Ok(());
         }
@@ -619,15 +640,18 @@ impl<T: nova_stremio::Transport> Worker<T> {
             let basis = if store
                 .pending_domains()
                 .iter()
-                .any(|domain| domain == DOMAIN)
+                .any(|domain| domain == &crate::app::sync::profile_domain(DOMAIN))
             {
                 store.save().map_err(|_| ApiError::Rejected)?;
-                store.digest().get(DOMAIN).cloned()
+                store
+                    .digest()
+                    .get(&crate::app::sync::profile_domain(DOMAIN))
+                    .cloned()
             } else {
                 None
             };
             let raw = store
-                .record(DOMAIN, CONNECTION)
+                .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
                 .and_then(|r| r.value.clone());
             let mut loaded = raw
                 .as_ref()
@@ -659,7 +683,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 .is_some_and(|(a, b)| a.same_session(b));
             if !same_account {
                 self.bridge
-                    .stremio
+                    .stremio()
                     .generation
                     .fetch_add(1, Ordering::AcqRel);
                 self.verified = false;
@@ -682,7 +706,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 }
                 self.check_current(
                     &connection,
-                    self.bridge.stremio.generation.load(Ordering::Acquire),
+                    self.bridge.stremio().generation.load(Ordering::Acquire),
                 )?;
                 self.titles =
                     load_titles(&connection.account_id).map_err(|_| ApiError::Rejected)?;
@@ -703,7 +727,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         if let Some(basis) = basis {
             let mut store = owner.lock().unwrap();
             store
-                .mark_projected(DOMAIN, &basis)
+                .mark_projected(&crate::app::sync::profile_domain(DOMAIN), &basis)
                 .map_err(|_| ApiError::Rejected)?;
             store.save().map_err(|_| ApiError::Rejected)?;
         }
@@ -728,7 +752,13 @@ impl<T: nova_stremio::Transport> Worker<T> {
             .transpose()
             .map_err(|_| ())?;
         let mut store = owner.lock().unwrap();
-        store.set(DOMAIN, CONNECTION, raw.clone(), 0, dev);
+        store.set(
+            &crate::app::sync::profile_domain(DOMAIN),
+            CONNECTION,
+            raw.clone(),
+            0,
+            dev,
+        );
         store.save().map_err(|_| ())?;
         self.connection_raw = raw.map(Secret::new);
         drop(store);
@@ -851,7 +881,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }) || (!connection.bootstrap_done)
     }
     fn synchronize(&mut self, connection: &Connection) -> Result<(), ApiError> {
-        let generation = self.bridge.stremio.generation.load(Ordering::Acquire);
+        let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
         ui(&self.bridge, |app| {
             app.set_stremio_busy(true);
             app.set_stremio_status(text::tr("Syncing with Stremio…").into());
@@ -1143,7 +1173,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 let store = owner.lock().unwrap();
                 store
                     .record(
-                        DOMAIN,
+                        &crate::app::sync::profile_domain(DOMAIN),
                         &format!("{}remote", shared_prefix(&connection.account_id, &id)),
                     )
                     .and_then(|r| r.value.as_ref())
@@ -1458,13 +1488,13 @@ impl<T: nova_stremio::Transport> Worker<T> {
         });
     }
     fn check_current(&self, connection: &Connection, generation: u64) -> Result<(), ApiError> {
-        if generation != self.bridge.stremio.generation.load(Ordering::Acquire) {
+        if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             return Err(ApiError::Rejected);
         }
         let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
         let store = owner.lock().unwrap();
         let current = store
-            .record(DOMAIN, CONNECTION)
+            .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
             .and_then(|r| r.value.as_ref())
             .and_then(|raw| serde_json::from_str::<Connection>(raw).ok());
         if current
@@ -1502,7 +1532,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             }
             let bridge = self.bridge.clone();
             let (tx, rx) = mpsc::sync_channel(1);
-            slint::invoke_from_event_loop(move || {
+            crate::app::profiles::invoke_from_event_loop(move || {
                 let _ = tx.send(materialize::accept(&bridge, prepared, generation));
             })
             .map_err(|_| ApiError::Rejected)?;
@@ -1529,8 +1559,11 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
         let changed = std::mem::take(&mut self.applied);
         let bridge = self.bridge.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            bridge.stremio.surfaces_dirty.store(true, Ordering::Release);
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
+            bridge
+                .stremio()
+                .surfaces_dirty
+                .store(true, Ordering::Release);
             let matching = {
                 let state = bridge.shared.lock().unwrap();
                 state
@@ -1587,7 +1620,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
 
 fn ui(bridge: &Bridge, action: impl FnOnce(AppWindow) + Send + 'static) {
     let weak = bridge.app.clone();
-    let _ = slint::invoke_from_event_loop(move || {
+    let _ = crate::app::profiles::invoke_from_event_loop(move || {
         if let Some(app) = weak.upgrade() {
             action(app);
         }
@@ -1729,7 +1762,7 @@ fn source_canonical(
                 shared_prefix(&connection.account_id, title.item.id())
             );
             store
-                .record(DOMAIN, &key)
+                .record(&crate::app::sync::profile_domain(DOMAIN), &key)
                 .and_then(|record| record.value.clone())
         } else {
             None
@@ -1948,7 +1981,10 @@ fn load_titles(account: &str) -> Result<BTreeMap<String, Title>, ()> {
 fn read_shared(connection: &Connection, id: &str) -> Result<Canonical, ApiError> {
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
     let prefix = shared_prefix(&connection.account_id, id);
-    let records = owner.lock().unwrap().records_with_prefix(DOMAIN, &prefix);
+    let records = owner
+        .lock()
+        .unwrap()
+        .records_with_prefix(&crate::app::sync::profile_domain(DOMAIN), &prefix);
     let mut result = Canonical::default();
     for (key, raw) in records {
         let Some(field) = key.strip_prefix(&prefix) else {
@@ -1986,6 +2022,12 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
     }
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
     let mut store = owner.lock().unwrap();
+    if store
+        .record("profile_deletions", &profiles::current_id())
+        .is_some_and(|r| !r.is_deleted())
+    {
+        return Err(ApiError::Rejected);
+    }
     let prefix = shared_prefix(&connection.account_id, title.item.id());
     fn field<T: Serialize + PartialEq + for<'de> Deserialize<'de>>(
         store: &mut nova_sync::Store,
@@ -2003,7 +2045,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             false,
         );
         store.apply(
-            DOMAIN,
+            &crate::app::sync::profile_domain(DOMAIN),
             &key,
             nova_sync::Record {
                 value: Some(raw.clone()),
@@ -2012,7 +2054,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         );
         if initial_union
             && let Some(retained) = store
-                .record(DOMAIN, &key)
+                .record(&crate::app::sync::profile_domain(DOMAIN), &key)
                 .and_then(|row| row.value.as_ref())
         {
             let retained: Stamped<T> =
@@ -2026,9 +2068,12 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
                 // server negative, retaining original source clocks in the
                 // payload. Never date old history at delivery time: a native
                 // edit made during the request must still supersede it.
-                let observed = store.record(DOMAIN, &key).unwrap().version;
+                let observed = store
+                    .record(&crate::app::sync::profile_domain(DOMAIN), &key)
+                    .unwrap()
+                    .version;
                 store.apply(
-                    DOMAIN,
+                    &crate::app::sync::profile_domain(DOMAIN),
                     &key,
                     nova_sync::Record {
                         value: Some(raw.clone()),
@@ -2048,7 +2093,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         // A newer mesh action may have arrived after read_shared. Project the
         // winner actually retained by Store, never the rejected stale value.
         *field = store
-            .record(DOMAIN, &key)
+            .record(&crate::app::sync::profile_domain(DOMAIN), &key)
             .and_then(|r| r.value.as_ref())
             .map(|raw| serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse))
             .transpose()?
@@ -2082,7 +2127,10 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
     }
     // Unknown local episode coverage must not hide independently received
     // fields from the shared canonical title.
-    for (key, raw) in store.records_with_prefix(DOMAIN, &format!("{prefix}watched:")) {
+    for (key, raw) in store.records_with_prefix(
+        &crate::app::sync::profile_domain(DOMAIN),
+        &format!("{prefix}watched:"),
+    ) {
         if let Some(episode) = key.strip_prefix(&format!("{prefix}watched:")) {
             let episode: String =
                 serde_json::from_str(episode).map_err(|_| ApiError::InvalidResponse)?;
@@ -2123,7 +2171,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             .filter(|changed_at| *changed_at > 0 && *changed_at < stamp)
             .count() as u32;
         store.apply(
-            DOMAIN,
+            &crate::app::sync::profile_domain(DOMAIN),
             &format!("{prefix}remote"),
             nova_sync::Record {
                 version: nova_sync::Version::new(
@@ -2137,7 +2185,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         );
     }
     store.queue_extra(
-        &title_storage_key(&connection.account_id, title),
+        &profiles::storage_key(&title_storage_key(&connection.account_id, title)),
         Some(serde_json::to_string(title).map_err(|_| ApiError::InvalidResponse)?),
     );
     store.save().map_err(|_| ApiError::Rejected)?;
@@ -2182,7 +2230,7 @@ fn apply_title(
     let connection: Connection = owner
         .lock()
         .unwrap()
-        .record(DOMAIN, CONNECTION)
+        .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
         .and_then(|row| row.value.as_ref())
         .and_then(|raw| serde_json::from_str(raw).ok())
         .ok_or(ApiError::Authentication)?;
@@ -2207,7 +2255,7 @@ impl Bridge {
     /// unrelated detail screen is scrolling. The normal UI tick consumes this
     /// flag; repeated syncs coalesce into one visible-model refresh.
     pub(super) fn refresh_stremio_surfaces_if_visible(&self) {
-        if !self.stremio.surfaces_dirty.load(Ordering::Acquire) {
+        if !self.stremio().surfaces_dirty.load(Ordering::Acquire) {
             return;
         }
         let Some(app) = self.app() else { return };
@@ -2223,7 +2271,7 @@ impl Bridge {
         {
             return;
         }
-        if self.stremio.surfaces_dirty.swap(false, Ordering::AcqRel) {
+        if self.stremio().surfaces_dirty.swap(false, Ordering::AcqRel) {
             // This remains a model publication on the UI thread, once for the
             // changed batch and only once its dependent page is visible.
             let _guard = sync::ApplyingGuard::new();

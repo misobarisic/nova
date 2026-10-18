@@ -60,12 +60,22 @@ mod imp {
         on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
+        // A queued provider request belongs to the settings snapshot that
+        // dispatched it; switching profiles must not run it with new secrets.
+        let settings_generation = nova_providers::plugin_settings::settings_generation();
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
+                if nova_providers::plugin_settings::settings_generation() != settings_generation {
+                    then(Err(FetchError::new(None, "Provider configuration changed")));
+                    return;
+                }
                 let result = if let Some(result) =
-                    nova_providers::fetch_builtin_addon_with_progress(&url, on_progress)
-                {
+                    nova_providers::fetch_builtin_addon_with_progress_for_generation(
+                        &url,
+                        on_progress,
+                        settings_generation,
+                    ) {
                     result.map_err(|error| FetchError::new(None, error.to_string()))
                 } else {
                     get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
@@ -242,13 +252,23 @@ mod imp {
         on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
+        // A queued provider request belongs to the settings snapshot that
+        // dispatched it; switching profiles must not run it with new secrets.
+        let settings_generation = nova_providers::plugin_settings::settings_generation();
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
+                if nova_providers::plugin_settings::settings_generation() != settings_generation {
+                    then(Err(FetchError::new(None, "Provider configuration changed")));
+                    return;
+                }
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let result = if let Some(result) =
-                        nova_providers::fetch_builtin_addon_with_progress(&url, on_progress)
-                    {
+                        nova_providers::fetch_builtin_addon_with_progress_for_generation(
+                            &url,
+                            on_progress,
+                            settings_generation,
+                        ) {
                         result.map_err(|error| FetchError::new(None, error.to_string()))
                     } else {
                         get_with_retries(&url)

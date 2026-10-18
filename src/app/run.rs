@@ -22,10 +22,13 @@ fn current_nav(app: &AppWindow) -> i32 {
 /// Publish selection feedback before Rust changes page flags. AppWindow owns
 /// More origins and transition cancellation; persistent family chrome also
 /// observes selection changes directly, while rebuilt bars consume `from`.
-fn note_nav_switch(bridge: &Bridge, next: i32) {
+fn note_nav_switch(bridge: &Bridge, next: i32) -> bool {
     let Some(app) = bridge.app() else {
-        return;
+        return false;
     };
+    if app.get_profiles_require_selection() {
+        return false;
+    }
     let from = current_nav(&app);
     bridge.remote_disconnect();
     bridge.cancel_pending_for_navigation();
@@ -34,6 +37,7 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
     if from != next {
         app.global::<crate::NavState>().set_from(from);
     }
+    true
 }
 
 /// Connect every root destination to its production Bridge behavior. Global
@@ -42,43 +46,57 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
 pub(super) fn wire_page_navigation(app: &AppWindow, bridge: &Bridge) {
     let b = bridge.clone();
     app.on_library_picked(move || {
-        note_nav_switch(&b, 2);
+        if !note_nav_switch(&b, 2) {
+            return;
+        }
         b.show_library_page();
     });
 
     let b = bridge.clone();
     app.on_discover_picked(move || {
-        note_nav_switch(&b, 1);
+        if !note_nav_switch(&b, 1) {
+            return;
+        }
         b.show_discover_page();
     });
 
     let b = bridge.clone();
     app.on_home_picked(move || {
-        note_nav_switch(&b, 0);
+        if !note_nav_switch(&b, 0) {
+            return;
+        }
         b.show_home_page();
     });
 
     let b = bridge.clone();
     app.on_settings_picked(move || {
-        note_nav_switch(&b, 3);
+        if !note_nav_switch(&b, 3) {
+            return;
+        }
         b.show_settings_page();
     });
 
     let b = bridge.clone();
     app.on_about_picked(move || {
-        note_nav_switch(&b, 3);
+        if !note_nav_switch(&b, 3) {
+            return;
+        }
         b.show_about_page();
     });
 
     let b = bridge.clone();
     app.on_calendar_picked(move || {
-        note_nav_switch(&b, 4);
+        if !note_nav_switch(&b, 4) {
+            return;
+        }
         b.show_calendar_page();
     });
 
     let b = bridge.clone();
     app.on_downloads_picked(move || {
-        note_nav_switch(&b, 5);
+        if !note_nav_switch(&b, 5) {
+            return;
+        }
         b.show_downloads_page();
     });
 
@@ -151,13 +169,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     storage::init_at(&app_data_dir());
     #[cfg(feature = "update-check")]
     let _updates_timer = updates::install(&app);
-    persistence::register_collections();
     let onboarding_visible = onboarding::begin(database_existed);
     let owns_addon_setup = onboarding::owns_addon_setup();
     app.set_onboarding_visible(onboarding_visible);
+    sync::migrate_legacy_profiles()?;
+    let profile_device = profiles::initialize().map_err(std::io::Error::other)?;
+    persistence::register_collections();
+    app.set_profiles_remember_last(profile_device.open_last_profile_on_startup);
+    if !profile_device.open_last_profile_on_startup {
+        app.set_profiles_require_selection(true);
+        app.set_profiles_open(true);
+        app.set_show_home(false);
+        app.set_more_open(true);
+    }
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
     if let Err(error) = nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
-        plugin_settings::Backend,
+        plugin_settings::Backend::new(),
     )) {
         io::block_unreadable(plugin_settings::KEY);
         storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
@@ -263,7 +290,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let app_weak = app_weak.clone();
                         let catalog_gen = catalog_gen.clone();
 
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = profiles::invoke_account(move || {
                             // Drop stale posters (catalog changed since dispatch).
                             if job.generation != catalog_gen.load(Ordering::Relaxed)
                                 || image_settings_revision() != revision
@@ -291,7 +318,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     } else if !job.library {
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = profiles::invoke_account(move || {
                             bridge::with_global_bridge(|bridge| {
                                 bridge.recover_catalog_artwork(job.generation, job.index, &job.url);
                             });
@@ -365,13 +392,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ));
     bridge.shared.lock().unwrap().restoring_models = true;
 
-    bridge.initialize_tracking();
+    if !app.get_profiles_require_selection() {
+        bridge.initialize_tracking();
+    }
 
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
     crate::app::bridge::install_global_bridge(&bridge);
 
     // Handler wiring.
+    let b = bridge.clone();
+    app.on_profile_create(move |name| b.create_profile(name.as_str()));
+    let b = bridge.clone();
+    app.on_profile_rename(move |id, name| b.rename_profile(id.as_str(), name.as_str()));
+    let b = bridge.clone();
+    app.on_profile_switch(move |id| b.switch_profile(id.as_str()));
+    let b = bridge.clone();
+    app.on_profile_delete(move |id| b.delete_profile(id.as_str()));
+    let b = bridge.clone();
+    app.on_profile_remember_last_changed(move |enabled| b.remember_profile_on_startup(enabled));
     let b = bridge.clone();
     app.on_addon_added(move |url| b.add_addon(&url));
     app.on_addon_zip_import_requested(super::addon_picker::pick_zip);
@@ -709,7 +748,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Home's Upcoming shortcut enters the same full planner as the navbar.
     let b = bridge.clone();
     app.on_upcoming_cal_open(move || {
-        note_nav_switch(&b, 4);
+        if !note_nav_switch(&b, 4) {
+            return;
+        }
         b.show_calendar_page();
     });
 
@@ -1016,8 +1057,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.settings_to_ui();
     let image_gc_worker = cache_gc::start(&bridge);
     let persistence_worker = persistence::start();
-    bridge.start_stremio();
+    if !app.get_profiles_require_selection() {
+        bridge.start_stremio();
+    }
     bridge.shared.lock().unwrap().restoring_models = false;
+    bridge
+        .profile_loaded_epoch
+        .store(profiles::active_context().epoch, Ordering::Release);
+    bridge.refresh_profiles();
     bridge.apply_library_to_ui();
     // Home landing page: derive Continue Watching, New episodes and Upcoming
     // from viewing activity, playback history and cached episode air dates.

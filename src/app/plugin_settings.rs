@@ -2,13 +2,26 @@
 use super::*;
 use nova_providers::plugin_settings::{self as service, PluginSettingsBackend, SettingsMap};
 pub(super) const KEY: &str = "plugin_settings";
-pub(super) struct Backend;
+pub(super) struct Backend {
+    context: profiles::Context,
+}
+impl Backend {
+    pub(super) fn new() -> Self {
+        Self {
+            context: profiles::capture(),
+        }
+    }
+}
 impl PluginSettingsBackend for Backend {
     fn load_settings(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
-        storage::try_get_str(KEY).map_err(provider_error)
+        profiles::with_context(self.context.clone(), || storage::try_get_str(KEY))
+            .map_err(provider_error)
     }
     fn save_settings(&self, raw: &str) -> Result<(), nova_providers::ProviderHostError> {
-        persist_sync_snapshot(KEY, raw, false).map_err(provider_error)
+        profiles::with_context(self.context.clone(), || {
+            persist_sync_snapshot(KEY, raw, false)
+        })
+        .map_err(provider_error)
     }
     fn load_cache(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
         plugin_cache::load()
@@ -86,13 +99,18 @@ pub(super) fn restore_retained_settings() -> nova_sync::Result<()> {
         .unwrap()
         .domains()
         .iter()
-        .any(|domain| domain == sync::DOMAIN_PLUGIN_SETTINGS)
+        .any(|domain| domain == &sync::profile_domain(sync::DOMAIN_PLUGIN_SETTINGS))
     {
         return Ok(());
     }
     let _guard = sync::ApplyingGuard::new();
     service::apply_settings_projection(|| {
-        let values = project(owner.lock().unwrap().records(sync::DOMAIN_PLUGIN_SETTINGS))?;
+        let values = project(
+            owner
+                .lock()
+                .unwrap()
+                .records(&sync::profile_domain(sync::DOMAIN_PLUGIN_SETTINGS)),
+        )?;
         serde_json::to_string(&values).map_err(provider_error)
     })
     .map_err(|error| storage::Error::new(storage::ErrorKind::Schema, error))?;
@@ -574,7 +592,7 @@ mod startup_tests {
             basis
         };
         assert!(storage::try_get_str(KEY).unwrap().is_none());
-        service::configure_plugin_settings(Arc::new(Backend)).unwrap();
+        service::configure_plugin_settings(Arc::new(Backend::new())).unwrap();
         restore_retained_settings().unwrap();
         let raw = storage::try_get_str(KEY).unwrap().unwrap();
         let values = service::parse_settings(&raw).unwrap();

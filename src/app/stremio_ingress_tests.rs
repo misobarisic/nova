@@ -45,14 +45,14 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
             app.set_modal_visible(true);
             fixture
                 .bridge
-                .stremio
+                .stremio()
                 .surfaces_dirty
                 .store(true, Ordering::Release);
             fixture.bridge.refresh_stremio_surfaces_if_visible();
             assert!(
                 fixture
                     .bridge
-                    .stremio
+                    .stremio()
                     .surfaces_dirty
                     .load(Ordering::Acquire)
             );
@@ -62,7 +62,7 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
             assert!(
                 !fixture
                     .bridge
-                    .stremio
+                    .stremio()
                     .surfaces_dirty
                     .load(Ordering::Acquire)
             );
@@ -94,7 +94,7 @@ fn queued_controls_from_an_old_connection_cannot_start_or_change_a_new_one() {
         |fixture| {
             fixture
                 .bridge
-                .stremio
+                .stremio()
                 .generation
                 .store(1, Ordering::Release);
             let mut worker = Worker::new(fixture.bridge, Client::new(NeverRequest));
@@ -446,7 +446,7 @@ fn disconnect_generation_and_tombstone_reject_old_ingress() {
             let title = incoming(true);
             fixture
                 .bridge
-                .stremio
+                .stremio()
                 .generation
                 .fetch_add(1, Ordering::AcqRel);
             assert_eq!(
@@ -1092,7 +1092,7 @@ fn initial_worker_merge_imports_fifty_nine_titles_and_confirms_local_uploads() {
             let persistence_worker = persistence::start().unwrap();
             let bridge = fixture.bridge.clone();
             let remote = datastore.clone();
-            let task = std::thread::spawn(move || {
+            let task = crate::app::profiles::thread::spawn(move || {
                 let mut worker = Worker::new(bridge, Client::new(MockDatastore(remote)));
                 worker.write_connection(Some(&connection)).unwrap();
                 worker.connection = Some(connection.clone());
@@ -1121,7 +1121,8 @@ fn initial_worker_merge_imports_fifty_nine_titles_and_confirms_local_uploads() {
                 })();
                 // Queue this after the actor's status updates so assertions see
                 // the completed UI state, including the real invoke callback.
-                slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+                crate::app::profiles::invoke_from_event_loop(|| slint::quit_event_loop().unwrap())
+                    .unwrap();
                 result
             });
             let watchdog = slint::Timer::default();
@@ -1407,7 +1408,7 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
         let requests = Arc::new(AtomicU64::new(0));
         let http_requests = requests.clone();
         let body = serde_json::to_vec(&metadata).unwrap();
-        let http = std::thread::spawn(move || {
+        let http = crate::app::profiles::thread::spawn(move || {
             while !stop_http.load(Ordering::Acquire) {
                 let (mut stream, _) = match listener.accept() {
                     Ok(connection) => connection,
@@ -1598,7 +1599,7 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
         let bridge = fixture.bridge.clone();
         let connection = fixture.connection;
         let remote = account.clone();
-        let task = std::thread::spawn(move || {
+        let task = crate::app::profiles::thread::spawn(move || {
             let result = (|| {
                 let mut worker =
                     Worker::new(bridge.clone(), Client::new(MockAccount(remote.clone())));
@@ -1661,7 +1662,8 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
                 assert!(restarted.pending.is_empty());
                 Ok::<_, ApiError>(())
             })();
-            slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+            crate::app::profiles::invoke_from_event_loop(|| slint::quit_event_loop().unwrap())
+                .unwrap();
             result
         });
         let watchdog = slint::Timer::default();

@@ -192,7 +192,7 @@ impl Bridge {
         let image_revision = image_settings_revision();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
             if let Some(pixels) = pixels {
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if image_settings_revision() != image_revision {
                         bridge.load_discover_poster(type_, id, poster_url);
                         return;
@@ -327,7 +327,7 @@ impl Bridge {
         let requested_url = url.clone();
         let image_revision = image_settings_revision();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let index = {
                     let mut state = bridge.shared.lock().unwrap();
                     state
@@ -395,7 +395,7 @@ impl Bridge {
             let requested_url = url.clone();
             let image_revision = image_settings_revision();
             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if image_settings_revision() != image_revision {
                         if let Some(app) = app_weak.upgrade() {
                             let model = if library {
@@ -528,6 +528,7 @@ impl Bridge {
                 let job_id = EPISODE_JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed);
                 inflight.insert(request_key.clone(), job_id);
                 jobs.push(EpisodeThumbJob {
+                    context: profiles::capture(),
                     job_id,
                     request_key,
                     url,
@@ -579,7 +580,10 @@ impl Bridge {
                         && item.id == job.item_id
                         && item.type_ == job.media_type
                 });
-            if !current_opening || image_settings_revision() != job.settings_revision {
+            if !profiles::is_current(&job.context)
+                || !current_opening
+                || image_settings_revision() != job.settings_revision
+            {
                 Self::release_episode_thumb_job(&job);
                 EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
                 continue;
@@ -592,8 +596,10 @@ impl Bridge {
                 // buffers even if the UI thread is busy rebuilding metadata.
                 let fallback_job = (job.request_key.clone(), job.job_id);
                 let fallback_worker = worker.clone();
-                if slint::invoke_from_event_loop(move || {
-                    if let Some(pixels) = pixels {
+                if profiles::invoke_account(move || {
+                    if profiles::is_current(&job.context)
+                        && let Some(pixels) = pixels
+                    {
                         worker.publish_detail_thumbnail(&job, pixels);
                     }
                     Self::release_episode_thumb_job(&job);
@@ -616,7 +622,9 @@ impl Bridge {
             if verify {
                 refresh_image_if_changed(url, ImageUse::EpisodeThumbnail, finish);
             } else {
-                net::fetch_image(url, ImageUse::EpisodeThumbnail, finish);
+                // Cleanup owns a global slot and must run even if its profile
+                // changed. Publication above still checks the captured owner.
+                nova_media::net::fetch_image(url, ImageUse::EpisodeThumbnail, finish);
             }
         }
     }
@@ -740,7 +748,7 @@ impl Bridge {
             let image_revision = image_settings_revision();
             let entry_for_retry = entry.clone();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     let mut state = bridge.shared.lock().unwrap();
                     state.library_poster_inflight.remove(&key);
                     let current = state.entries.iter().any(|entry| {
@@ -895,7 +903,7 @@ impl Bridge {
                         .any(|entry| entry.type_ == type_ && entry.id == id);
                     if saved && bridge.cache_background_meta(&type_, &id, item) > 0 {
                         let bridge = bridge.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::app::profiles::invoke_from_event_loop(move || {
                             bridge.sync_reconcile_progress_aliases();
                             bridge.refresh_library_progress_ui()
                         });
@@ -916,7 +924,7 @@ impl Bridge {
                 };
                 net::fetch_image(poster.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                     if let Some(pixels) = pixels {
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::app::profiles::invoke_from_event_loop(move || {
                             bridge.publish_discover_poster(&type_, &id, &poster, &pixels);
                         });
                     } else {
@@ -934,7 +942,7 @@ impl Bridge {
             let bridge = self.clone();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 if let Some(pixels) = pixels {
-                    let _ = slint::invoke_from_event_loop(move || {
+                    let _ = crate::app::profiles::invoke_from_event_loop(move || {
                         bridge.publish_discover_poster(&type_, &id, &url, &pixels);
                     });
                 } else {
@@ -961,7 +969,7 @@ impl Bridge {
         let failed_poster = fallback.clone();
         let image_revision = image_settings_revision();
         fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if image_settings_revision() != image_revision {
                     retry(&bridge);
                     return;
@@ -1192,7 +1200,7 @@ impl Bridge {
             let requested_url = url.clone();
             let image_revision = image_settings_revision();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     let Some(app) = bridge.app() else { return };
                     let model = if archive {
                         app.get_home_history_archive_cards()
@@ -1319,7 +1327,7 @@ impl Bridge {
         let revision = image_settings_revision();
         net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
             let pixels = transparent_title_logo(pixels);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 let valid = image_settings_revision() == revision
                     && app.get_modal_visible()
@@ -1389,7 +1397,7 @@ impl Bridge {
         let revision = image_settings_revision();
         let publish = move |pixels: Option<SharedPixelBuffer<Rgba8Pixel>>| {
             if let Some(pixels) = pixels {
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if image_settings_revision() == revision {
                         bridge.publish_discover_poster(&type_, &id, &requested_url, &pixels);
                     }
@@ -1415,7 +1423,7 @@ impl Bridge {
         let requested_url = url.clone();
         net::fetch_image(url, ImageUse::DetailBackdrop, move |pixels| {
             let Some(pixels) = pixels else { return };
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if bridge.detail_image_current(
                     &token,
                     &item_id,
@@ -1450,7 +1458,7 @@ impl Bridge {
         let poster_url = url.clone();
         let bridge = self.clone();
         net::fetch_image(url, ImageUse::DetailPoster, move |pixels| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !bridge.detail_image_current(
                     &token,
                     &item_id,
@@ -1491,7 +1499,7 @@ impl Bridge {
         let poster_url = url.clone();
         let bridge = self.clone();
         refresh_image_if_changed(url, ImageUse::DetailPoster, move |fresh| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if image_settings_revision() != revision
                     || bridge.detail_poster_stale(&item_id, &poster_url)
                 {
@@ -1533,7 +1541,7 @@ impl Bridge {
         let requested_url = url.clone();
         refresh_image_if_changed(url, ImageUse::DetailBackdrop, move |fresh| {
             let Some(pixels) = fresh else { return };
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if bridge.detail_image_current(
                     &token,
                     &item_id,

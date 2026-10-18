@@ -533,7 +533,7 @@ fn fetch_home_catalogs(
             results.lock().unwrap().push((source, previews));
             if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
                 let batches = std::mem::take(&mut *results.lock().unwrap());
-                let _ = slint::invoke_from_event_loop(move || finish(batches));
+                let _ = crate::app::profiles::invoke_from_event_loop(move || finish(batches));
             }
         });
     }
@@ -1092,7 +1092,7 @@ impl Bridge {
                 .ok()
                 .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
                 .filter(|item| meta_matches_request(item, &preview.type_, &preview.id));
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge.finish_home_showcase_metadata(
                     index, generation, revision, preview, urls, item,
                 );
@@ -1311,7 +1311,7 @@ impl Bridge {
         let bridge = self.clone();
         net::fetch_image(identity.url.clone(), ImageUse::Fixed(None), move |pixels| {
             let pixels = transparent_title_logo(pixels);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 let mut state = bridge.shared.lock().unwrap();
                 if state.home_showcase_list_generation != identity.generation {
@@ -1404,7 +1404,7 @@ impl Bridge {
         // Keep the add-on-provided source resolution for the large hero rather
         // than using the smaller detail-banner derivative.
         net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge.finish_home_showcase_artwork_request(request, pixels);
             });
         });

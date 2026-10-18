@@ -33,13 +33,13 @@ use crate::merge::{Record, Version};
 use crate::store::{Digest, Outbound, Store};
 use crate::{RemoteCallback, SyncStatus};
 
-/// ALPN for the sync protocol (`/3` = per-domain digest hashes + compressed
-/// postcard frames).
-pub const ALPN: &[u8] = b"nova/sync/3";
+/// ALPN for the sync protocol (`/4` = isolated profile namespaces; postcard frames retain
+/// per-domain digest hashes and compression).
+pub const ALPN: &[u8] = b"nova/sync/4";
 /// ALPN for the one-shot "you have been removed" notice. Separate from the sync
 /// ALPN so the sync wire schema (postcard, non-self-describing) is unchanged.
 pub const REMOVE_ALPN: &[u8] = b"nova/remove/1";
-const PROTO: u8 = 3;
+const PROTO: u8 = 4;
 /// Upper bound on a whole exchange (connect is timed out separately by the
 /// caller). Generous: a first sync of a large library over a relay can take a
 /// while, and aborting mid-flight drops the connection under the peer.
@@ -711,7 +711,7 @@ async fn exchange(
                     "peer clock exceeds permitted drift; correct device clock"
                 );
                 if let Wire::Records { domain, .. } = frame
-                    && domain == "progress"
+                    && crate::is_progress_domain(domain)
                 {
                     anyhow::ensure!(
                         entries

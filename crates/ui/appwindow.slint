@@ -4,7 +4,7 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { CompletionBridge, CompletionDestination, PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -295,6 +295,12 @@ export component AppWindow inherits Window {
         scroll_y <=> root.library_scroll_y;
     }
     MoreBindings {
+        profiles_open <=> root.profiles_open;
+        profiles <=> root.profiles;
+        profiles_busy <=> root.profiles_busy;
+        profiles_error <=> root.profiles_error;
+        profiles_remember_last <=> root.profiles_remember_last;
+        profiles_require_selection <=> root.profiles_require_selection;
         scroll_y <=> root.more_scroll_y;
         choice <=> root.more_choice;
         kb_zone <=> root.more_focus_zone;
@@ -979,6 +985,23 @@ export component AppWindow inherits Window {
     in-out property <length> about_licenses_scroll_y: 0px;
     // More owns transient navigation state while its children share stationary chrome.
     in-out property <bool> more_open: false;
+    in-out property <bool> profiles_open: false;
+    changed profiles_open => {
+        // More stays mounted during this local page change. Keep focus on
+        // the persistent scope while the outgoing scope is disabled, so the
+        // same Android Back release still clears the window's held flag.
+        if root.more_open { root.preserve_back_focus(); page_release_timer.start(); }
+    }
+    in-out property <[ProfileRow]> profiles;
+    in-out property <bool> profiles_busy: false;
+    in-out property <string> profiles_error;
+    in-out property <bool> profiles_remember_last: true;
+    in-out property <bool> profiles_require_selection: false;
+    callback profile_create(string);
+    callback profile_rename(string, string);
+    callback profile_switch(string);
+    callback profile_delete(string);
+    callback profile_remember_last_changed(bool);
     in-out property <length> more_scroll_y: 0px;
     in-out property <int> more_choice: 0;
     in-out property <int> more_focus_zone: 1;
@@ -994,7 +1017,7 @@ export component AppWindow inherits Window {
     private property <bool> more_subpage_exiting: false;
     private property <bool> more_return_pending: false;
     private property <bool> more_family: root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads;
-    private property <length> more_rail_width: root.narrow_ui ? 0px : NavMetrics.rail-width + root.safe-area-insets.left;
+    private property <length> more_rail_width: root.narrow_ui || root.profiles_require_selection ? 0px : NavMetrics.rail-width + root.safe-area-insets.left;
     private property <float> more_entry_progress: root.more_subpage_entered ? 1.0 : 0.0;
     animate more_entry_progress { duration: root.more_subpage_entered ? Anim.transition_slide : 0ms; easing: ease-out; }
     private property <float> more_entry_alpha: root.more_subpage_entered ? 1.0 : 0.0;
@@ -1018,12 +1041,15 @@ export component AppWindow inherits Window {
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
     public function navigate_section(index: int) { root.route_section(index, false); }
     function route_section(index: int, from_more: bool) {
+        if root.profiles_require_selection { return; }
         if (index == 3) { root.open_more(); }
         else { root.route_page(index, from_more); }
     }
     // Back's direct Home route uses this leaf helper. Keeping More dispatch
     // outside it avoids a static recursion cycle in Slint's binding analysis.
     function route_page(index: int, from_more: bool) {
+        if root.profiles_require_selection { return; }
+        root.profiles_open = false;
         let previous_nav = root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : root.show_downloads ? 5 : root.show_home ? 0 : root.show_library ? 2 : 1;
         root.preserve_back_focus();
         root.cancel_more_subpage_back();
@@ -1061,6 +1087,8 @@ export component AppWindow inherits Window {
         if (from_more) { more_entry_tick.start(); }
     }
     function open_more() {
+        if root.profiles_require_selection { return; }
+        root.profiles_open = false;
         if (root.player_open || root.modal_visible) { return; }
         if (root.more_parent) { root.more_subpage_back(); }
         else {
@@ -1073,6 +1101,7 @@ export component AppWindow inherits Window {
     }
     function pick_more(index: int) { root.more_choice = index; root.more_focus_zone = 1; root.route_section(index == 0 ? 4 : index == 1 ? 5 : index == 2 ? 6 : 7, true); }
     function finish_more_subpage_back() {
+        if root.profiles_require_selection { return; }
         if (!root.more_return_pending || root.more_return_generation != root.more_route_generation || !root.more_parent || root.player_open || root.modal_visible) { return; }
         root.more_return_pending = false;
         root.more_subpage_exiting = false;
@@ -1094,6 +1123,7 @@ export component AppWindow inherits Window {
         root.more_subpage_exiting = false;
     }
     function more_subpage_back() {
+        if root.profiles_require_selection { return; }
         root.preserve_back_focus();
         if (!root.more_parent) { root.route_page(0, false); return; }
         if (root.more_return_pending) { return; }
@@ -1119,7 +1149,7 @@ export component AppWindow inherits Window {
     in-out property <string> update_latest_version: "";
     in-out property <bool> update_notice_visible: false;
     out property <bool> update_notice_shown: root.update_checks_enabled && root.update_available && root.update_notice_visible
-        && !root.player_open && !root.onboarding_visible && !root.modal_visible
+        && !root.player_open && !root.onboarding_visible && !root.profiles_require_selection && !root.modal_visible
         && !root.completion_prompt_visible && !root.resume_prompt_visible
         && !root.party_page_open && !root.remote_devices_open && !root.remote_controls_open
         && root.remote_replacement_token == "" && !root.sync_pair_prompt_visible
@@ -1210,7 +1240,10 @@ export component AppWindow inherits Window {
     in-out property <int> system_back_request: 0;
     private property <int> page_back_request: 0;
     changed system_back_request => {
-        if root.playback_end_menu_shown { root.playback_end_stay(); }
+        // Startup selection owns Back even before the first page focus event.
+        // The Profiles page may cancel its editor, but cannot leave the picker.
+        if root.profiles_require_selection { root.page_back_request += 1; }
+        else if root.playback_end_menu_shown { root.playback_end_stay(); }
         else if !root.onboarding_visible { root.page_back_request += 1; }
     }
     private property <bool> system_back_held: false;
@@ -1964,7 +1997,13 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if root.update_notice_shown && (e.text == Key.Menu || (e.text == Key.Tab && !update_notice.actions_focused)) {
+            if root.profiles_require_selection && (e.text == Key.Back || e.text == Key.Escape) {
+                if !e.repeat && (e.text != Key.Back || !root.system_back_held) {
+                    root.system_back_held = e.text == Key.Back;
+                    root.page_back_request += 1;
+                }
+                accept
+            } else if root.update_notice_shown && (e.text == Key.Menu || (e.text == Key.Tab && !update_notice.actions_focused)) {
                 if !e.repeat { update_notice.focus_actions(); }
                 accept
             } else if root.update_notice_shown && (e.text == Key.Back || e.text == Key.Escape) {
@@ -2350,7 +2389,7 @@ export component AppWindow inherits Window {
     }
         }
     }
-    if root.more_family && !root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent) && !root.modal_visible: SideNav {
+    if !root.profiles_require_selection && root.more_family && !root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent) && !root.modal_visible: family_side_nav := SideNav {
         viewport-width: root.width;
         active: root.more_open || root.more_service_route != 0 || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : 5;
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-bottom: root.safe-area-insets.bottom;
@@ -2359,7 +2398,7 @@ export component AppWindow inherits Window {
         home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); }
         library_picked => { root.navigate_section(2); } more_picked => { root.navigate_section(3); }
     }
-    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_return_pending) && !root.remote_controls_open && (!root.remote_devices_open || root.more_return_pending) && !root.modal_visible: BottomNav {
+    if !root.profiles_require_selection && (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_return_pending) && !root.remote_controls_open && (!root.remote_devices_open || root.more_return_pending) && !root.modal_visible: family_bottom_nav := BottomNav {
         y: root.height - self.height; width: root.width;
         active: 3; kb_zone: root.more_focus_zone; kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
         safe-bottom: root.safe-area-insets.bottom; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;

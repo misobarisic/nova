@@ -69,7 +69,7 @@ pub(super) fn prepare(
     with_progress: bool,
     generation: u64,
 ) -> Result<Option<Prepared>, ApiError> {
-    if generation != bridge.stremio.generation.load(Ordering::Acquire) {
+    if generation != bridge.stremio().generation.load(Ordering::Acquire) {
         return Err(ApiError::Rejected);
     }
     if !writable_key("library") || (with_progress && !writable_key(EPISODE_PROGRESS_KEY)) {
@@ -79,7 +79,7 @@ pub(super) fn prepare(
     let clock = {
         let store = owner.lock().unwrap();
         let current = store
-            .record(DOMAIN, CONNECTION)
+            .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
             .and_then(|row| row.value.as_ref())
             .and_then(|raw| serde_json::from_str::<Connection>(raw).ok());
         if current
@@ -214,7 +214,7 @@ pub(super) fn accept(
     prepared: Prepared,
     generation: u64,
 ) -> Result<Accepted, ApiError> {
-    if generation != bridge.stremio.generation.load(Ordering::Acquire) {
+    if generation != bridge.stremio().generation.load(Ordering::Acquire) {
         return Err(ApiError::Rejected);
     }
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;

@@ -51,7 +51,9 @@ pub(super) fn try_load(
     let prefix = format!("{}:", event_key(account, type_, id));
     let mut canonical = Canonical::default();
     let mut found = false;
-    for (key, raw) in store.records_with_prefix(stremio::DOMAIN, &prefix) {
+    for (key, raw) in
+        store.records_with_prefix(&crate::app::sync::profile_domain(stremio::DOMAIN), &prefix)
+    {
         let Some(field) = key.strip_prefix(&prefix) else {
             continue;
         };
@@ -115,7 +117,10 @@ pub(super) fn capture(
         return Ok(());
     }
     let Some(raw) = store
-        .record(stremio::DOMAIN, "connection")
+        .record(
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
+            "connection",
+        )
         .and_then(|record| record.value.as_deref())
     else {
         return Ok(());
@@ -138,7 +143,7 @@ pub(super) fn capture(
             try_load(store, &connection.account_id, &media_type, &id)?.unwrap_or_default();
         if canonical.saved != previous.saved {
             store.set(
-                stremio::DOMAIN,
+                &crate::app::sync::profile_domain(stremio::DOMAIN),
                 &format!("{key}:saved"),
                 Some(serde_json::to_string(&canonical.saved)?),
                 0,
@@ -147,7 +152,7 @@ pub(super) fn capture(
         }
         if canonical.resume != previous.resume {
             store.set(
-                stremio::DOMAIN,
+                &crate::app::sync::profile_domain(stremio::DOMAIN),
                 &format!("{key}:resume"),
                 Some(serde_json::to_string(&canonical.resume)?),
                 0,
@@ -158,7 +163,7 @@ pub(super) fn capture(
             if previous.watched.get(&episode) != Some(&value) {
                 let episode = serde_json::to_string(&episode)?;
                 store.set(
-                    stremio::DOMAIN,
+                    &crate::app::sync::profile_domain(stremio::DOMAIN),
                     &format!("{key}:watched:{episode}"),
                     Some(serde_json::to_string(&value)?),
                     0,
@@ -206,7 +211,7 @@ fn changes(
             .unwrap_or_default();
         let after: HashMap<String, EpisodeProgress> = serde_json::from_str(next)?;
         let library: Vec<LibraryEntry> = store
-            .extra_value("library")?
+            .extra_value(&profiles::storage_key("library"))?
             .map(|raw| serde_json::from_str(&raw))
             .transpose()?
             .unwrap_or_default();
@@ -344,7 +349,7 @@ mod tests {
         let mut store = nova_sync::Store::default();
         let prefix = event_key("account", "series", "tt1");
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:resume"),
             Some(
                 serde_json::to_string(&Stamped {
@@ -396,7 +401,7 @@ mod tests {
     #[test]
     fn unwatch_and_resume_clear_are_independent_source_events() {
         let mut store = nova_sync::Store::default();
-        store.queue_extra("library", Some("[]".into()));
+        store.queue_extra(&profiles::storage_key("library"), Some("[]".into()));
         let before = progress(true, 50.0, 0);
         let after = progress(false, 0.0, 15);
         let events = changes(
@@ -441,7 +446,7 @@ mod tests {
     #[test]
     fn manual_completion_clears_resume_but_actual_replay_keeps_it() {
         let mut store = nova_sync::Store::default();
-        store.queue_extra("library", Some("[]".into()));
+        store.queue_extra(&profiles::storage_key("library"), Some("[]".into()));
         let before = progress(false, 50.0, 0);
         let mut completed: HashMap<String, EpisodeProgress> =
             serde_json::from_str(&before).unwrap();
@@ -486,7 +491,7 @@ mod tests {
     #[test]
     fn deleting_latest_checkpoint_clears_resume_and_retains_unwatch() {
         let mut store = nova_sync::Store::default();
-        store.queue_extra("library", Some("[]".into()));
+        store.queue_extra(&profiles::storage_key("library"), Some("[]".into()));
         let before = progress(true, 50.0, 0);
         let events = changes(
             &store,
@@ -513,14 +518,14 @@ mod tests {
         let mut store = nova_sync::Store::default();
         let prefix = event_key("a:b", "series", "tt1");
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:watched:\"one\""),
             Some(r#"{"value":true,"changed_at":1}"#.into()),
             0,
             1,
         );
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:watched:\"two\""),
             Some(r#"{"value":false,"changed_at":2}"#.into()),
             0,
@@ -538,33 +543,36 @@ mod tests {
         let mut store = nova_sync::Store::default();
         let prefix = event_key("account", "series", "tt1");
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             "connection",
             Some(r#"{"version":1,"account_id":"account"}"#.into()),
             0,
             1,
         );
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:saved"),
             Some("unreadable".into()),
             0,
             1,
         );
-        let before = store.records(stremio::DOMAIN);
+        let before = store.records(&crate::app::sync::profile_domain(stremio::DOMAIN));
         assert!(try_load(&store, "account", "series", "tt1").is_err());
         // Failure happens before resolving a local device or mutating any row.
         assert!(capture(&mut store, "library", Some("[]"), &library("A"), false).is_err());
-        assert_eq!(store.records(stremio::DOMAIN), before);
+        assert_eq!(
+            store.records(&crate::app::sync::profile_domain(stremio::DOMAIN)),
+            before
+        );
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:saved"),
             Some(r#"{"value":true,"changed_at":5}"#.into()),
             0,
             1,
         );
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &format!("{prefix}:future-field"),
             Some("unknown future schema".into()),
             0,
@@ -585,26 +593,38 @@ mod tests {
         let mut store = nova_sync::Store::default();
         let key = format!("{}:saved", event_key("old-account", "series", "tt1"));
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             &key,
             Some(r#"{"value":true,"changed_at":10}"#.into()),
             0,
             1,
         );
         store.set(
-            stremio::DOMAIN,
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
             "connection",
             Some(r#"{"version":1,"account_id":"old-account"}"#.into()),
             0,
             1,
         );
-        store.set(stremio::DOMAIN, "connection", None, 0, 1);
-        let before = store.records(stremio::DOMAIN);
+        store.set(
+            &crate::app::sync::profile_domain(stremio::DOMAIN),
+            "connection",
+            None,
+            0,
+            1,
+        );
+        let before = store.records(&crate::app::sync::profile_domain(stremio::DOMAIN));
         capture(&mut store, "library", Some(&library("A")), "[]", false).unwrap();
-        assert_eq!(store.records(stremio::DOMAIN), before);
+        assert_eq!(
+            store.records(&crate::app::sync::profile_domain(stremio::DOMAIN)),
+            before
+        );
         assert!(
             store
-                .record(stremio::DOMAIN, "connection")
+                .record(
+                    &crate::app::sync::profile_domain(stremio::DOMAIN),
+                    "connection"
+                )
                 .unwrap()
                 .value
                 .is_none()
@@ -632,13 +652,25 @@ mod tests {
                 assert!(external());
             }
             assert!(external());
-            assert!(!std::thread::spawn(external).join().unwrap());
+            assert!(
+                !crate::app::profiles::thread::spawn(external)
+                    .join()
+                    .unwrap()
+            );
             capture(&mut store, "library", Some("[]"), &library("A"), false).unwrap();
         }
         assert!(!external());
-        assert!(store.records(stremio::DOMAIN).is_empty());
+        assert!(
+            store
+                .records(&crate::app::sync::profile_domain(stremio::DOMAIN))
+                .is_empty()
+        );
         drop(applying);
         capture(&mut store, "library", Some("[]"), &library("A"), true).unwrap();
-        assert!(store.records(stremio::DOMAIN).is_empty());
+        assert!(
+            store
+                .records(&crate::app::sync::profile_domain(stremio::DOMAIN))
+                .is_empty()
+        );
     }
 }

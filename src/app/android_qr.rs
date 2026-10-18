@@ -60,7 +60,7 @@ pub extern "system" fn Java_dev_misob_nova_QrScanActivity_nativeOnFrame(
     };
     // Decoding happens on the camera's ImageReader thread; the engine and
     // Slint must be touched on the UI thread.
-    let _ = slint::invoke_from_event_loop(move || {
+    let _ = crate::app::profiles::invoke_from_event_loop(move || {
         crate::app::bridge::with_global_bridge(|bridge| bridge.sync_join_invite(&ticket));
     });
     JNI_TRUE

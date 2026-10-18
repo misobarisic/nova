@@ -22,7 +22,7 @@ pub(super) fn prepare_license_text(app: &AppWindow) {
                 return;
             }
         };
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if let Some(app) = weak.upgrade() {
                 app.set_license_text_chunks(Rc::new(VecModel::from(chunks)).into());
             }

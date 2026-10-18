@@ -56,6 +56,15 @@ pub fn prepare_snapshot(
     projection: bool,
     seed: bool,
 ) -> Result<bool> {
+    // Retired IDs are never reused. Delayed actors must not recreate either
+    // records or credential-bearing baselines after profile cleanup.
+    if let Some((profile, _)) = crate::parse_profile_domain(domain)
+        && store
+            .record("profile_deletions", profile)
+            .is_some_and(|row| !row.is_deleted())
+    {
+        return Ok(false);
+    }
     let mut changed = false;
     let baseline_key = format!("sync:baseline:{domain}");
     let baseline: BTreeMap<String, String> = store
@@ -81,7 +90,7 @@ pub fn prepare_snapshot(
                     store.record(domain, key).and_then(|r| r.value.as_deref()),
                     value,
                 );
-                let value = if domain == "progress" {
+                let value = if crate::is_progress_domain(domain) {
                     crate::progress::local_input(value)
                 } else {
                     value
@@ -113,6 +122,33 @@ pub fn preserve_unknown(old: Option<&str>, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_profile_snapshots_cannot_recreate_baselines_or_user_snapshots() {
+        let mut store = Store::default();
+        let domain = crate::profile_domain("deleted", "tracking");
+        let baseline = format!("sync:baseline:{domain}");
+        let snapshot = "profile:deleted:tracking:credentials";
+        store.set("profile_deletions", "deleted", Some("1".into()), 0, 1);
+        store.queue_extra(&baseline, None);
+        store.queue_extra(snapshot, None);
+        let records = [("credentials".into(), r#"{"token":"secret"}"#.into(), 0)];
+        assert!(
+            !prepare_snapshot(
+                &mut store,
+                1,
+                &domain,
+                &records,
+                Some((snapshot, "secret".into())),
+                false,
+                false
+            )
+            .unwrap()
+        );
+        assert!(store.record(&domain, "credentials").is_none());
+        assert!(store.extra_value(&baseline).unwrap().is_none());
+        assert!(store.extra_value(snapshot).unwrap().is_none());
+    }
 
     #[test]
     fn alias_projection_does_not_suppress_a_same_value_rewatch() {

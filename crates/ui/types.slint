@@ -8,6 +8,13 @@ export struct CompletionDestination {
     selected: bool,
 }
 
+// Stable IDs keep profile actions attached to their owner after sync reorders rows.
+export struct ProfileRow {
+    id: string,
+    name: string,
+    active: bool,
+}
+
 export struct MediaCard {
     id: string,
     title: string,

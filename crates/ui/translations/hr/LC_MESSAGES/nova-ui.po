@@ -3229,3 +3229,66 @@ msgstr "Odaberite hoće li odgovarajuće vremenske oznake uvoda i sažetaka prik
 
 msgid "Applies to this show. Other playback preferences stay unchanged."
 msgstr "Primjenjuje se na ovu seriju. Ostale postavke reprodukcije ostaju nepromijenjene."
+
+msgid "Profiles"
+msgstr "Profili"
+
+msgid "Separate libraries, history and preferences"
+msgstr "Odvojene zbirke, povijest i postavke"
+
+msgid "Choose a profile to continue."
+msgstr "Odaberite profil za nastavak."
+
+msgid "Profiles sync across paired devices. Each device chooses its own active profile."
+msgstr "Profili se sinkroniziraju među uparenim uređajima. Svaki uređaj bira vlastiti aktivni profil."
+
+msgid "Open last profile on startup"
+msgstr "Otvori posljednji profil pri pokretanju"
+
+msgid "When disabled, choose a profile each time Nova starts. This setting applies only to this device."
+msgstr "Kada je isključeno, odaberite profil pri svakom pokretanju Nove. Ova postavka vrijedi samo za ovaj uređaj."
+
+msgid "Create profile"
+msgstr "Stvori profil"
+
+msgid "Current profile"
+msgstr "Trenutni profil"
+
+msgid "Use profile"
+msgstr "Koristi profil"
+
+msgid "Rename"
+msgstr "Preimenuj"
+
+msgid "Keep at least one profile."
+msgstr "Zadržite barem jedan profil."
+
+msgid "Rename profile"
+msgstr "Preimenuj profil"
+
+msgid "Profile name"
+msgstr "Naziv profila"
+
+msgid "Delete profile?"
+msgstr "Izbrisati profil?"
+
+msgid "Its library, history, addons and preferences will be deleted from paired devices."
+msgstr "Njegova zbirka, povijest, dodaci i postavke izbrisat će se s uparenih uređaja."
+
+msgid "Use profile: {}"
+msgstr "Koristi profil: {}"
+
+msgid "Rename profile: {}"
+msgstr "Preimenuj profil: {}"
+
+msgid "Delete profile: {}"
+msgstr "Izbriši profil: {}"
+
+msgid "Could not save profile. Try again."
+msgstr "Nije moguće spremiti profil. Pokušajte ponovno."
+
+msgid "This profile is unavailable."
+msgstr "Ovaj profil nije dostupan."
+
+msgid "Enter a profile name of up to 64 characters."
+msgstr "Unesite naziv profila s najviše 64 znaka."

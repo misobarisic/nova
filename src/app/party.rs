@@ -301,7 +301,7 @@ impl Bridge {
                 };
                 Ok((service, ticket))
             });
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if b.shared.lock().unwrap().party.generation != generation {
                     if let Ok((service, _)) = result {
                         thread::spawn(move || {
@@ -781,7 +781,7 @@ impl Bridge {
                 }
             };
             let snapshot = service.snapshot();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let reopen_room;
                 {
                     let mut state = b.shared.lock().unwrap();

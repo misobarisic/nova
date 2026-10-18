@@ -536,7 +536,7 @@ impl Bridge {
                     bridge.downloads.retain_intro(job, stamp);
                 }
                 FETCHING.store(false, Ordering::Release);
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if bridge.player.screenshot_session() != native {
                         return;
                     }

@@ -691,9 +691,19 @@ impl ProviderHost for MemoryProviderHost {
 }
 
 /// Provider storage and host metadata share one bounded session store.
+fn session_owner() -> &'static std::sync::RwLock<Arc<MemoryProviderHost>> {
+    static STATE: std::sync::OnceLock<std::sync::RwLock<Arc<MemoryProviderHost>>> =
+        std::sync::OnceLock::new();
+    STATE.get_or_init(|| std::sync::RwLock::new(MemoryProviderHost::new()))
+}
 pub(crate) fn session_state() -> Arc<MemoryProviderHost> {
-    static STATE: std::sync::OnceLock<Arc<MemoryProviderHost>> = std::sync::OnceLock::new();
-    STATE.get_or_init(MemoryProviderHost::new).clone()
+    session_owner().read().unwrap().clone()
+}
+
+/// An outgoing invocation retains its own host; replacing the selected profile
+/// must not expose its session values to the next profile or redirect late writes.
+pub(crate) fn reset_session_state() {
+    *session_owner().write().unwrap() = MemoryProviderHost::new();
 }
 
 #[cfg(test)]

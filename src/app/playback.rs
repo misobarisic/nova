@@ -127,12 +127,12 @@ impl Bridge {
         }
         app.set_screenshot_notice(SharedString::default());
         let bridge = self.clone();
-        std::thread::spawn(move || {
+        crate::app::profiles::thread::spawn(move || {
             let result = bridge
                 .player
                 .capture_screenshot_with_context(session, context);
             let succeeded = result.is_ok();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 if !app.get_player_open() || bridge.player.screenshot_session() != session {
                     return;
@@ -578,7 +578,7 @@ impl Bridge {
             move |result| {
                 let bridge = bridge.clone();
                 let active_hash = active_hash.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     bridge.complete_torrent_resolution(request, active_hash, result);
                 });
             },
@@ -710,14 +710,14 @@ impl Bridge {
         } else {
             self.open_provider_loading(&request);
         }
-        std::thread::spawn(move || {
+        crate::app::profiles::thread::spawn(move || {
             let result = nova_providers::resolve_provider_stream(
                 &provider_url,
                 &token,
                 Duration::from_secs(30),
                 cancelled.clone(),
             );
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge.complete_provider_resolution(request, cancelled(), result);
             });
         });
@@ -938,7 +938,7 @@ impl Bridge {
             engine.pin_local_playback(request, path.to_path_buf(), move || {
                 let abandoned = callback_request.clone();
                 let abandoned_engine = cleanup_engine.clone();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if bridge.playback_request_is_current(&callback_request) {
                         if !bridge.open_player_for_request(
                             callback_request,
@@ -1733,7 +1733,7 @@ impl Bridge {
         let b = self.clone();
         thread::spawn(move || {
             let engine = crate::torrent::TorrentEngine::setup(dir.clone(), &settings);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let current = active_torrent_settings();
                 if b.app().is_some()
                     && current.enabled

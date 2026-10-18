@@ -192,6 +192,7 @@ fn thumbnail_job(bridge: &Bridge, url: &str) -> EpisodeThumbJob {
     let state = bridge.shared.lock().unwrap();
     let modal = state.modal_item.as_ref().unwrap();
     EpisodeThumbJob {
+        context: profiles::capture(),
         job_id: 1,
         request_key: "test".into(),
         url: url.into(),

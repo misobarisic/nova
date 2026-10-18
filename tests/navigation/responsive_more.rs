@@ -1,4 +1,4 @@
-//! More-page routing and Settings/About/Devices/Watch party chrome across the phone breakpoint.
+//! More-page routing and its Settings/About/Devices/Watch party/Profiles destinations.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, LogicalPosition};
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -256,8 +256,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        4,
-        "wide More contains Settings, About, Devices and Watch party; shortcuts live in the rail"
+        5,
+        "wide More contains Settings, About, Devices, Watch party and Profiles; shortcuts live in the rail"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
@@ -268,7 +268,16 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(settings_y < about_y);
     let devices_y = button(&app, "Devices").absolute_position().y;
     let party_y = button(&app, "Watch party").absolute_position().y;
-    assert!(about_y < devices_y && devices_y < party_y);
+    let profiles_y = button(&app, "Profiles").absolute_position().y;
+    assert!(about_y < devices_y && devices_y < party_y && party_y < profiles_y);
+    click(&app, button(&app, "Profiles"));
+    assert!(app.get_more_open() && app.get_profiles_open());
+    key(&app, slint::platform::Key::Back);
+    assert!(app.get_more_open() && !app.get_profiles_open());
+    assert_eq!(backgrounds.get(), 0);
+    for label in ["Settings", "About", "Devices", "Watch party"] {
+        assert_ne!(button(&app, label).accessible_enabled(), Some(false));
+    }
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert!(!app.get_more_open());

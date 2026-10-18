@@ -10,22 +10,37 @@ static ACTIVE: Mutex<Option<Arc<Queue>>> = Mutex::new(None);
 thread_local! { static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 pub(super) fn register_collections() {
-    static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| {
+    {
         storage::register_collection(
             "library",
             storage::CollectionKind::Array {
                 id_field: "id".into(),
             },
         );
-        for key in [
-            EPISODE_PROGRESS_KEY,
-            "sync:baseline:library",
-            "sync:baseline:progress",
-        ] {
-            storage::register_collection(key, storage::CollectionKind::Object);
+        storage::register_collection(EPISODE_PROGRESS_KEY, storage::CollectionKind::Object);
+        for domain in [sync::DOMAIN_LIBRARY, sync::DOMAIN_PROGRESS] {
+            storage::register_collection(
+                &format!("sync:baseline:{}", sync::profile_domain(domain)),
+                storage::CollectionKind::Object,
+            );
         }
-    });
+    }
+}
+
+/// The durable retirement marker can precede its UI callback. Do not retain a
+/// deleted profile's queued job as a global persistence failure in that gap.
+fn profile_retired(id: &str) -> Result<bool, String> {
+    if !profiles::writable(id) {
+        return Ok(true);
+    }
+    if !profiles::is_initialized() {
+        return Ok(false);
+    }
+    let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
+    let store = owner.lock().unwrap();
+    Ok(store
+        .record(profiles::DELETIONS_DOMAIN, id)
+        .is_some_and(|row| !row.is_deleted()))
 }
 
 #[derive(Clone)]
@@ -107,7 +122,7 @@ impl Snapshot {
 }
 #[derive(Default)]
 struct State {
-    pending: VecDeque<(u64, Snapshot)>,
+    pending: VecDeque<(u64, profiles::Context, Snapshot)>,
     next: u64,
     completed: u64,
     head_started: bool,
@@ -122,6 +137,7 @@ struct Queue {
 }
 impl Queue {
     fn enqueue(&self, snapshot: Snapshot) -> Result<bool, String> {
+        let context = profiles::capture();
         let mut state = self.state.lock().unwrap();
         while state.pending.len() >= MAX_PENDING
             && state.error.is_none()
@@ -144,12 +160,14 @@ impl Queue {
         // Only adjacent periodic checkpoints may collapse. Manual watched /
         // unwatched edits and Library changes retain their transaction order.
         let replace = snapshot.periodic()
-            && state.pending.back().is_some_and(|(_, old)| old.periodic())
+            && state.pending.back().is_some_and(|(_, old_context, old)| {
+                old_context.id == context.id && old.periodic()
+            })
             && !(state.pending.len() == 1 && state.head_started);
         if replace {
             state.pending.pop_back();
         }
-        state.pending.push_back((sequence, snapshot));
+        state.pending.push_back((sequence, context, snapshot));
         self.changed.notify_all();
         Ok(true)
     }
@@ -200,7 +218,7 @@ impl Worker {
             .spawn(move || {
                 IN_WORKER.set(true);
                 loop {
-                    let (sequence, snapshot) = {
+                    let (sequence, context, snapshot) = {
                         let mut state = worker.state.lock().unwrap();
                         while !state.stop
                             && (state.pending.is_empty() || (state.error.is_some() && !state.retry))
@@ -225,11 +243,25 @@ impl Worker {
                         state.retry = false;
                         state.pending.front().unwrap().clone()
                     };
-                    let result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| save(&snapshot)))
-                            .unwrap_or_else(|_| {
-                                Err("persistence worker panicked; pending saves retained".into())
-                            });
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        profiles::with_context(context, || {
+                            let id = profiles::current_id();
+                            if profile_retired(&id)? {
+                                return Ok(());
+                            }
+                            let result = save(&snapshot);
+                            // Retirement may race the preflight check and be
+                            // rejected by the snapshot's transaction guard.
+                            if result.is_err() && profile_retired(&id)? {
+                                Ok(())
+                            } else {
+                                result
+                            }
+                        })
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err("persistence worker panicked; pending saves retained".into())
+                    });
                     if let Snapshot::External(_, done) = &snapshot {
                         let _ = done.send(result.clone());
                     }
@@ -330,9 +362,11 @@ pub(super) fn try_external(patch: ExternalPatch) -> Option<mpsc::Receiver<Result
     }
     state.next += 1;
     let sequence = state.next;
-    state
-        .pending
-        .push_back((sequence, Snapshot::External(Box::new(patch), done)));
+    state.pending.push_back((
+        sequence,
+        profiles::capture(),
+        Snapshot::External(Box::new(patch), done),
+    ));
     queue.changed.notify_all();
     Some(receipt)
 }
@@ -379,7 +413,10 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
-        for (_, snapshot) in state.pending.iter().rev() {
+        for (_, context, snapshot) in state.pending.iter().rev() {
+            if context.id != profiles::current_id() {
+                continue;
+            }
             match snapshot {
                 Snapshot::Library(entries) => {
                     base = Some(entries.clone());
@@ -409,7 +446,10 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
-        for (_, snapshot) in state.pending.iter().rev() {
+        for (_, context, snapshot) in state.pending.iter().rev() {
+            if context.id != profiles::current_id() {
+                continue;
+            }
             match snapshot {
                 Snapshot::Progress(map, _) => {
                     base = Some(map.clone());
@@ -470,12 +510,117 @@ mod tests {
             state
                 .pending
                 .iter()
-                .map(|(_, save)| position(save))
+                .map(|(_, _, save)| position(save))
                 .collect::<Vec<_>>(),
             vec![2.0, 0.0, 4.0]
         );
         assert_eq!(state.pending.back().unwrap().0, 5);
     }
+    #[test]
+    fn periodic_saves_and_pending_reads_keep_profile_ownership() {
+        let queue = Queue {
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+        };
+        profiles::with_context(profiles::context_for("alice"), || {
+            queue.enqueue(progress(1.0, true)).unwrap()
+        });
+        profiles::with_context(profiles::context_for("bob"), || {
+            queue.enqueue(progress(2.0, true)).unwrap()
+        });
+        let state = queue.state.lock().unwrap();
+        assert_eq!(state.pending.len(), 2);
+        assert_eq!(state.pending[0].1.id, "alice");
+        assert_eq!(state.pending[1].1.id, "bob");
+    }
+    #[test]
+    fn remote_retirement_drops_failed_head_before_ui_reconciliation() {
+        const ROOT: &str = "NOVA_PROFILE_QUEUE_RETIREMENT_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-profile-retirement-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root)
+                .args(["--exact", "app::persistence::tests::remote_retirement_drops_failed_head_before_ui_reconciliation", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&PathBuf::from(root));
+        profiles::initialize().unwrap();
+        let retired = profiles::capture();
+        let survivor = profiles::create("Survivor").unwrap();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, receiver) = mpsc::channel();
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let worker = Worker::spawn({
+            let gate = gate.clone();
+            let saved = saved.clone();
+            let retired = retired.clone();
+            move |snapshot| {
+                if profiles::current_id() == retired.id {
+                    let _ = started.send(());
+                    let mut ready = gate.0.lock().unwrap();
+                    while !*ready {
+                        ready = gate.1.wait(ready).unwrap();
+                    }
+                    return Err("profile has been deleted".into());
+                }
+                saved
+                    .lock()
+                    .unwrap()
+                    .push((profiles::current_id(), position(snapshot)));
+                Ok(())
+            }
+        })
+        .unwrap();
+        worker.queue.enqueue(progress(1.0, false)).unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        {
+            let owner = nova_sync::local_store().unwrap();
+            let mut store = owner.lock().unwrap();
+            store.set(
+                profiles::DELETIONS_DOMAIN,
+                &retired.id,
+                Some("1".into()),
+                0,
+                9,
+            );
+            store.save().unwrap();
+        }
+        // The UI has not called list()/refresh_profiles yet: its cached view
+        // still allows this identity, exactly the network delivery gap.
+        assert!(profiles::writable(&retired.id));
+        worker.queue.enqueue(progress(2.0, false)).unwrap();
+        profiles::with_context(profiles::context_for(&survivor), || {
+            worker.queue.enqueue(progress(3.0, false)).unwrap()
+        });
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        worker.queue.flush().unwrap();
+        assert_eq!(*saved.lock().unwrap(), vec![(survivor, 3.0)]);
+        assert!(worker.queue.state.lock().unwrap().pending.is_empty());
+        assert!(worker.queue.state.lock().unwrap().error.is_none());
+        profiles::list().unwrap();
+        profiles::with_context(retired, || {
+            persist_sync_snapshot("downloads:v1", "[]", false).unwrap();
+        });
+        assert_eq!(
+            nova_storage::try_get_str("downloads:v1")
+                .unwrap()
+                .as_deref(),
+            Some("[]")
+        );
+    }
+
     #[test]
     fn in_flight_save_is_retained_and_flush_waits_for_worker_commit() {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));

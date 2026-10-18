@@ -1,0 +1,254 @@
+import { MoreBridge, ProfileRow, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { PageHeader } from "page-header.slint";
+import { ScrollView } from "scrollview.slint";
+import { SettingsCard, SettingsInput, PillButton, ToggleSwitch } from "settings-controls.slint";
+
+// Profile selection belongs to this device; profile contents belong to sync.
+export component ProfilesPage inherits Rectangle {
+    in property <bool> active: true;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback back();
+    background: Theme.current.artwork_canvas;
+    property <int> editor: 0; // 0 list, 1 create, 2 rename, 3 delete confirmation.
+    property <string> editing-id;
+    property <string> editing-name;
+    property <string> draft;
+    property <string> name-value;
+    property <int> name-focus-request;
+    property <int> choice: 0;
+    property <bool> keyboard: false;
+    private property <[ProfileRow]> profiles: MoreBridge.profiles;
+    private property <bool> required: MoreBridge.profiles_require_selection;
+    private property <int> action-count: root.editor == 3 ? 2 : root.editor > 0 ? 3 : 2 + root.profiles.length * 3;
+
+    public function focus_shell() { if root.active { page_scope.focus(); } }
+    public function go_back() {
+        if root.editor > 0 { root.cancel_editor(); }
+        else if !root.required { root.back(); }
+    }
+    function cancel_editor() {
+        root.editor = 0;
+        root.choice = root.required && root.profiles.length > 0 ? 2 : 1;
+        page_scope.focus();
+    }
+    function start_editor(kind: int, id: string, name: string) {
+        root.editing-id = id;
+        root.editing-name = name;
+        root.draft = kind == 2 ? name : "";
+        root.name-value = root.draft;
+        root.editor = kind;
+        root.choice = kind == 3 ? 1 : 0; // Destructive confirmation starts on Cancel.
+        editor_focus.start();
+    }
+    function submit_name(value: string) {
+        if value == "" || MoreBridge.profiles_busy { return; }
+        if root.editor == 1 { MoreBridge.profile_create(value); }
+        else if root.editor == 2 { MoreBridge.profile_rename(root.editing-id, value); }
+        if MoreBridge.profiles_error == "" && !MoreBridge.profiles_busy { root.cancel_editor(); }
+    }
+    pure function available(index: int) -> bool {
+        if root.editor > 0 { return true; }
+        if index < 2 { return true; }
+        let row = Math.floor((index - 2) / 3);
+        let action = Math.mod(index - 2, 3);
+        return row < root.profiles.length && (action == 0 ? !root.profiles[row].active || root.required : action != 2 || root.profiles.length > 1);
+    }
+    function move(direction: int) {
+        SettingsStyle.keyboard-mode = true;
+        root.keyboard = true;
+        root.choice = Math.mod(root.choice + root.action-count + direction, root.action-count);
+        // At most one unavailable control is adjacent: current profile or last-profile Delete.
+        if !root.available(root.choice) { root.choice = Math.mod(root.choice + root.action-count + direction, root.action-count); }
+        if root.editor == 0 { page_scope.focus(); }
+    }
+    function activate() {
+        if MoreBridge.profiles_busy { return; }
+        if root.editor == 3 {
+            if root.choice == 0 { MoreBridge.profile_delete(root.editing-id); if MoreBridge.profiles_error == "" { root.cancel_editor(); } }
+            else { root.cancel_editor(); }
+        } else if root.editor > 0 {
+            if root.choice == 1 { root.submit_name(root.name-value); }
+            else if root.choice == 2 { root.cancel_editor(); }
+            else { root.name-focus-request += 1; }
+        } else if root.choice == 0 { MoreBridge.profile_remember_last_changed(!MoreBridge.profiles_remember_last); }
+        else if root.choice == 1 { root.start_editor(1, "", ""); }
+        else {
+            let row = Math.floor((root.choice - 2) / 3);
+            let action = Math.mod(root.choice - 2, 3);
+            if row < root.profiles.length && root.available(root.choice) {
+                let profile = root.profiles[row];
+                if action == 0 { MoreBridge.profile_switch(profile.id); }
+                else { root.start_editor(action == 1 ? 2 : 3, profile.id, profile.name); }
+            }
+        }
+    }
+    function reveal(y: length, h: length) {
+        let top = y - profile_scroll.absolute-position.y;
+        if top < 0px { profile_scroll.content-y -= top; }
+        else if top + h > profile_scroll.visible-height { profile_scroll.content-y -= top + h - profile_scroll.visible-height; }
+    }
+    changed profiles => { root.choice = Math.min(root.choice, root.action-count - 1); }
+    changed active => {
+        if root.active {
+            root.editor = 0;
+            root.choice = root.required && root.profiles.length > 0 ? 2 : 0;
+            entry_focus.start();
+        } else { entry_focus.stop(); editor_focus.stop(); }
+    }
+    entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.focus_shell(); } }
+    editor_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.active { if root.editor == 1 || root.editor == 2 { root.name-focus-request += 1; } else { page_scope.focus(); } } } }
+    page_scope := FocusScope {
+        enabled: root.active;
+        width: 100%; height: 100%;
+        init => { if root.active { entry_focus.start(); } }
+        capture-key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || (e.text == Key.Backspace && self.has-focus) {
+                if !e.repeat { root.go_back(); } accept
+            } else if e.text == Key.Tab || e.text == Key.UpArrow || e.text == Key.DownArrow || (root.editor == 0 && (e.text == Key.LeftArrow || e.text == Key.RightArrow)) {
+                root.move(e.text == Key.UpArrow || e.text == Key.LeftArrow || (e.text == Key.Tab && e.modifiers.shift) ? -1 : 1); accept
+            } else { reject }
+        }
+        key-pressed(e) => {
+            if self.has-focus && (e.text == Key.Return || e.text == " ") {
+                root.keyboard = true; SettingsStyle.keyboard-mode = true;
+                if !e.repeat { root.activate(); } accept
+            } else { reject }
+        }
+        profile_scroll := ScrollView {
+            x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2);
+            y: root.safe-top + 18px;
+            width: Math.max(1px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
+            height: Math.max(1px, root.height - root.safe-top - root.safe-bottom - 36px);
+            content-width: self.visible-width;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                width: 100%; spacing: 12px; alignment: start;
+                PageHeader {
+                    title: @tr("Profiles");
+                    subtitle: root.required ? @tr("Choose a profile to continue.") : @tr("Separate libraries, history and preferences");
+                    narrow: root.width < 700px;
+                    show-back: root.editor > 0 || !root.required;
+                    back => { root.go_back(); }
+                }
+                if MoreBridge.profiles_error != "": SettingsCard {
+                    VerticalLayout { padding: 16px;
+                        Text { text: MoreBridge.profiles_error; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
+                    }
+                }
+                if root.editor == 0: SettingsCard {
+                    VerticalLayout { padding: 16px; spacing: 12px;
+                        Text { text: @tr("Profiles sync across paired devices. Each device chooses its own active profile."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                        HorizontalLayout { spacing: 12px;
+                            Text { text: @tr("Open last profile on startup"); color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
+                            remember := ToggleSwitch {
+                                name: @tr("Open last profile on startup");
+                                checked: MoreBridge.profiles_remember_last;
+                                enabled: !MoreBridge.profiles_busy;
+                                focused: root.keyboard && root.choice == 0;
+                                changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                                toggled => {
+                                    root.choice = 0;
+                                    MoreBridge.profile_remember_last_changed(self.checked);
+                                    // The callback persists synchronously; restore the saved value on failure.
+                                    self.checked = MoreBridge.profiles_remember_last;
+                                }
+                            }
+                        }
+                        Text { text: @tr("When disabled, choose a profile each time Nova starts. This setting applies only to this device."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                        PillButton {
+                            label: @tr("Create profile"); primary: true; wrap_label: true; enabled: !MoreBridge.profiles_busy;
+                            focused: root.keyboard && root.choice == 1;
+                            changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                            clicked => { root.start_editor(1, "", ""); }
+                        }
+                    }
+                }
+                if root.editor == 0: VerticalLayout {
+                    width: 100%; spacing: 12px;
+                    for profile[index] in root.profiles: SettingsCard {
+                        VerticalLayout { padding: 16px; spacing: 10px;
+                            Text { text: profile.name; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 20px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                            if profile.active: Text { text: @tr("Current profile"); color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
+                            PillButton {
+                                label: @tr("Use profile"); accessible-label: @tr("Use profile: {}", profile.name); primary: !profile.active || root.required; wrap_label: true;
+                                enabled: !MoreBridge.profiles_busy && (!profile.active || root.required);
+                                focused: root.keyboard && root.choice == 2 + index * 3;
+                                changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                                clicked => { root.choice = 2 + index * 3; MoreBridge.profile_switch(profile.id); }
+                            }
+                            HorizontalLayout { spacing: 8px; alignment: start;
+                                PillButton {
+                                    label: @tr("Rename"); accessible-label: @tr("Rename profile: {}", profile.name); compact: true; wrap_label: true; enabled: !MoreBridge.profiles_busy;
+                                    focused: root.keyboard && root.choice == 3 + index * 3;
+                                    changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                                    clicked => { root.start_editor(2, profile.id, profile.name); }
+                                }
+                                PillButton {
+                                    label: @tr("Delete"); accessible-label: @tr("Delete profile: {}", profile.name); compact: true; wrap_label: true; destructive: true;
+                                    enabled: !MoreBridge.profiles_busy && root.profiles.length > 1;
+                                    focused: root.keyboard && root.choice == 4 + index * 3;
+                                    changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
+                                    clicked => { root.start_editor(3, profile.id, profile.name); }
+                                }
+                            }
+                        }
+                    }
+                    if root.profiles.length == 1: Text { text: @tr("Keep at least one profile."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                }
+                if root.editor == 1 || root.editor == 2: SettingsCard {
+                    VerticalLayout { padding: 16px; spacing: 12px;
+                        Text { text: root.editor == 1 ? @tr("Create profile") : @tr("Rename profile"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                        name_input := SettingsInput {
+                            text <=> root.draft; placeholder-text: @tr("Profile name"); enabled: !MoreBridge.profiles_busy;
+                            // The conditional editor owns its native input handle. The page
+                            // requests focus through a value instead of retaining that handle.
+                            property <int> focus-request: root.name-focus-request;
+                            changed focus-request => { if root.active { self.focus(); } }
+                            changed full-text => { root.name-value = self.full-text; }
+                            property <bool> selected: root.keyboard && root.choice == 0;
+                            changed selected => { if self.selected { self.focus(); root.reveal(self.absolute-position.y, self.height); } }
+                            focus_changed(value) => { if value { root.choice = 0; } }
+                            accepted(value) => { root.submit_name(value); }
+                        }
+                        HorizontalLayout { spacing: 8px; alignment: start;
+                            PillButton {
+                                label: @tr("Save"); primary: true; compact: true;
+                                enabled: !MoreBridge.profiles_busy && name_input.full-text != "";
+                                focused: root.keyboard && root.choice == 1;
+                                changed focused => { if self.focused { self.focus(); root.reveal(self.absolute-position.y, self.height); } }
+                                clicked => { root.submit_name(name_input.full-text); }
+                            }
+                            PillButton {
+                                label: @tr("Cancel"); compact: true;
+                                focused: root.keyboard && root.choice == 2;
+                                changed focused => { if self.focused { self.focus(); root.reveal(self.absolute-position.y, self.height); } }
+                                clicked => { root.cancel_editor(); }
+                            }
+                        }
+                    }
+                }
+                if root.editor == 3: SettingsCard {
+                    VerticalLayout { padding: 16px; spacing: 12px;
+                        Text { text: @tr("Delete profile?"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                        Text { text: root.editing-name; color: Theme.current.text_primary; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                        Text { text: @tr("Its library, history, addons and preferences will be deleted from paired devices."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                        HorizontalLayout { spacing: 8px; alignment: start;
+                            PillButton {
+                                label: @tr("Delete"); destructive: true; compact: true; enabled: !MoreBridge.profiles_busy;
+                                focused: root.keyboard && root.choice == 0;
+                                clicked => { MoreBridge.profile_delete(root.editing-id); if MoreBridge.profiles_error == "" { root.cancel_editor(); } }
+                            }
+                            PillButton {
+                                label: @tr("Cancel"); compact: true; focused: root.keyboard && root.choice == 1;
+                                clicked => { root.cancel_editor(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

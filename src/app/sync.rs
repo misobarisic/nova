@@ -36,6 +36,50 @@ pub(crate) const DOMAIN_CATEGORY: &str = "category";
 /// it simply ignore it.
 pub(crate) const DOMAIN_CONTINUE_HIDDEN: &str = "continue_hidden";
 
+/// Account membership is shared; every user-data domain is qualified even for
+/// the migrated default profile. Switching locally never changes this directory.
+pub(super) const SCOPED_DOMAINS: &[&str] = &[
+    DOMAIN_LIBRARY,
+    DOMAIN_PROGRESS,
+    DOMAIN_LAST_STREAM,
+    DOMAIN_PLAYBACK_PREFERENCES,
+    DOMAIN_VIEWING_ACTIVITY,
+    DOMAIN_HISTORY_HIDDEN,
+    DOMAIN_NEW_EPISODES_HIDDEN,
+    DOMAIN_PACKAGES,
+    DOMAIN_PLUGIN_SETTINGS,
+    DOMAIN_ADDONS,
+    DOMAIN_SETTINGS,
+    DOMAIN_CATEGORY,
+    DOMAIN_CONTINUE_HIDDEN,
+    nova_tracking::peer::TRACKING_DOMAIN,
+    nova_tracking::TRACKING_COMPLETION_DOMAIN,
+    stremio::DOMAIN,
+];
+
+pub(super) fn profile_domain(domain: &str) -> String {
+    if profiles::is_initialized() && SCOPED_DOMAINS.contains(&domain) {
+        nova_sync::profile_domain(&profiles::current_id(), domain)
+    } else {
+        domain.to_owned()
+    }
+}
+
+/// Preserve legacy record clocks and snapshots in one transaction. In particular
+/// progress action registers must not be restamped as a fresh watch action.
+pub(super) fn migrate_legacy_profiles() -> nova_sync::Result<()> {
+    let snapshots = profiles::legacy_snapshot_migration_entries()?;
+    let owner = nova_sync::local_store()?;
+    let mut store = owner.lock().unwrap();
+    for (key, value) in snapshots {
+        store.queue_extra(&key, value);
+    }
+    for domain in SCOPED_DOMAINS {
+        store.migrate_domain(domain, &nova_sync::profile_domain("default", domain))?;
+    }
+    store.save()
+}
+
 // Origin is scoped to synchronous work on this thread, not a global flag that
 // could suppress an unrelated mutation on another worker. Nesting is safe.
 thread_local! { static APPLYING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
@@ -63,7 +107,7 @@ impl Drop for ApplyingGuard {
 struct ProjectionStore(std::sync::Arc<Mutex<nova_sync::Store>>);
 impl ProjectionStore {
     fn records(&self, domain: &str) -> Vec<(String, String)> {
-        self.0.lock().unwrap().records(domain)
+        self.0.lock().unwrap().records(&profile_domain(domain))
     }
 }
 fn projection_store() -> Option<ProjectionStore> {
@@ -98,6 +142,9 @@ fn merged_addon_capabilities(
 /// present in the list, as one batched store write (a seed of a large library
 /// would otherwise save once per record).
 fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
+    if !profiles::writable(&profiles::current_id()) {
+        return;
+    }
     let key = match domain {
         DOMAIN_LIBRARY => "library",
         DOMAIN_PROGRESS => "episode_progress",
@@ -115,7 +162,9 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
     if !writable_key(key) {
         return;
     }
-    if let Err(e) = nova_sync::commit_snapshot(domain, &records, None, applying(), false) {
+    if let Err(e) =
+        nova_sync::commit_snapshot(&profile_domain(domain), &records, None, applying(), false)
+    {
         storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
     }
 }
@@ -125,6 +174,11 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
 type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
 
 pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    if profiles::scoped_key(key) && !profiles::writable(&profiles::current_id()) {
+        return Err(
+            storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),
+        );
+    }
     persistence::register_collections();
     persistence::flush()
         .map_err(|error| storage::Error::new(storage::ErrorKind::Transaction, error))?;
@@ -268,19 +322,28 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     let owner = nova_sync::local_store()?;
     let dev = nova_sync::local_device()?;
     let mut store = owner.lock().unwrap();
+    if profiles::scoped_key(key)
+        && store
+            .record("profile_deletions", &profiles::current_id())
+            .is_some_and(|r| !r.is_deleted())
+    {
+        return Err(
+            storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),
+        );
+    }
     let mut changed = store.has_dirty_records();
     if let Some(activity) = activity_update {
         changed |= nova_sync::prepare_snapshot(
             &mut store,
             dev,
-            DOMAIN_VIEWING_ACTIVITY,
+            &profile_domain(DOMAIN_VIEWING_ACTIVITY),
             &activity_records(&activity)?,
             None,
             false,
             false,
         )?;
         store.queue_extra(
-            VIEWING_ACTIVITY_KEY,
+            &profiles::storage_key(VIEWING_ACTIVITY_KEY),
             Some(serde_json::to_string(&activity)?),
         );
     }
@@ -292,14 +355,15 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         changed |= nova_sync::prepare_snapshot(
             &mut store,
             dev,
-            domain,
+            &profile_domain(domain),
             &records,
             None,
             projection || untouched,
             seed,
         )?;
     }
-    let old = store.extra_value(key)?;
+    let snapshot_key = profiles::storage_key(key);
+    let old = store.extra_value(&snapshot_key)?;
     stremio_events::capture(&mut store, key, old.as_deref(), raw, seed)?;
     changed |= store.has_dirty_records();
     if key == EPISODE_PROGRESS_KEY {
@@ -317,7 +381,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     } else {
         raw
     };
-    store.queue_extra(key, Some(raw));
+    store.queue_extra(&snapshot_key, Some(raw));
     store.save()?;
     drop(store);
     if changed && !projection && !seed {
@@ -353,6 +417,13 @@ pub(super) fn persist_package_state(
     packages: &std::collections::BTreeMap<String, addon_packages::PackageDescriptor>,
 ) -> Result<(), String> {
     let commit = || -> nova_sync::Result<()> {
+        if !profiles::writable(&profiles::current_id()) {
+            return Err(storage::Error::new(
+                storage::ErrorKind::Schema,
+                "profile has been deleted",
+            )
+            .into());
+        }
         if !writable_key("addons") || !writable_key(addon_packages::KEY) {
             return Err(storage::Error::new(
                 storage::ErrorKind::Schema,
@@ -373,6 +444,16 @@ pub(super) fn persist_package_state(
         let owner = nova_sync::local_store()?;
         let dev = nova_sync::local_device()?;
         let mut store = owner.lock().unwrap();
+        if store
+            .record("profile_deletions", &profiles::current_id())
+            .is_some_and(|r| !r.is_deleted())
+        {
+            return Err(storage::Error::new(
+                storage::ErrorKind::Schema,
+                "profile has been deleted",
+            )
+            .into());
+        }
         // Stage the complete action away from the live owner. A failed save
         // must not leave a package selection queued for a later background retry.
         let mut candidate = store.clone();
@@ -381,15 +462,18 @@ pub(super) fn persist_package_state(
             changed |= nova_sync::prepare_snapshot(
                 &mut candidate,
                 dev,
-                domain,
+                &profile_domain(domain),
                 &records,
                 None,
                 applying(),
                 false,
             )?;
         }
-        candidate.queue_extra("addons", Some(addon_raw));
-        candidate.queue_extra(addon_packages::KEY, Some(package_raw));
+        candidate.queue_extra(&profiles::storage_key("addons"), Some(addon_raw));
+        candidate.queue_extra(
+            &profiles::storage_key(addon_packages::KEY),
+            Some(package_raw),
+        );
         candidate.save()?;
         *store = candidate;
         drop(store);
@@ -793,6 +877,9 @@ pub(crate) fn notify_settings(settings: &CacheSettings) {
 }
 
 pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
+    if !profiles::writable(&profiles::current_id()) {
+        return;
+    }
     if settings.sync_overrides.contains_key(field) {
         return;
     }
@@ -807,17 +894,257 @@ pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
             let mut store = owner.lock().unwrap();
             let value = nova_sync::preserve_unknown(
                 store
-                    .record(DOMAIN_SETTINGS, &key)
+                    .record(&profile_domain(DOMAIN_SETTINGS), &key)
                     .and_then(|r| r.value.as_deref()),
                 &value,
             );
-            store.set(DOMAIN_SETTINGS, &key, Some(value), 0, dev);
+            store.set(&profile_domain(DOMAIN_SETTINGS), &key, Some(value), 0, dev);
             store.save()
         })();
         if let Err(e) = result {
             storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
         }
     }
+}
+
+/// Snapshots used to seed inactive profiles come from disk, never from the
+/// active profile's Shared models. The record owner still exchanges every domain.
+const PROFILE_SNAPSHOTS: &[(&str, &str)] = &[
+    ("library", DOMAIN_LIBRARY),
+    ("episode_progress", DOMAIN_PROGRESS),
+    (PREFERENCES_KEY, DOMAIN_PLAYBACK_PREFERENCES),
+    ("continue_hidden", DOMAIN_CONTINUE_HIDDEN),
+    (VIEWING_ACTIVITY_KEY, DOMAIN_VIEWING_ACTIVITY),
+    (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
+    (watch_history::HIDDEN_KEY, DOMAIN_HISTORY_HIDDEN),
+    ("addons", DOMAIN_ADDONS),
+    (plugin_settings::KEY, DOMAIN_PLUGIN_SETTINGS),
+    (addon_packages::KEY, DOMAIN_PACKAGES),
+    ("settings", DOMAIN_SETTINGS),
+];
+
+fn seed_stored_profiles() -> nova_sync::Result<()> {
+    if !profiles::is_initialized() {
+        return Ok(());
+    }
+    let owner = nova_sync::local_store()?;
+    let ids = {
+        let store = owner.lock().unwrap();
+        let mut ids = BTreeSet::new();
+        for (id, _) in store.records("profiles") {
+            ids.insert(id);
+        }
+        for domain in store.domains() {
+            if let Some((id, _)) = nova_sync::parse_profile_domain(&domain) {
+                ids.insert(id.to_string());
+            }
+        }
+        ids.retain(|id| {
+            store
+                .record("profile_deletions", id)
+                .is_none_or(|r| r.is_deleted())
+        });
+        ids
+    };
+    for id in ids {
+        profiles::with_context(profiles::context_for(&id), || -> nova_sync::Result<()> {
+            for (key, domain) in PROFILE_SNAPSHOTS {
+                let baseline = format!("sync:baseline:{}", profile_domain(domain));
+                if nova_storage::try_get_str(&baseline)?.is_some() {
+                    continue;
+                }
+                if let Some(raw) = nova_storage::try_get_str(&profiles::storage_key_for(&id, key))?
+                {
+                    persist_sync_snapshot(key, &raw, true)?;
+                }
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+fn projected_map<T: serde::de::DeserializeOwned + Serialize>(
+    records: &[(String, String)],
+) -> nova_sync::Result<String> {
+    let values = records
+        .iter()
+        .map(|(key, raw)| serde_json::from_str::<T>(raw).map(|value| (key.clone(), value)))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    Ok(serde_json::to_string(&values)?)
+}
+
+/// Stale peers may retain a value after ordinary child tombstones expire. A
+/// permanent profile marker turns that late value into a newer tombstone, so
+/// secrets disappear from the record owner and both version digests converge.
+fn tombstone_deleted_profile_domain(
+    store: &mut nova_sync::Store,
+    domain: &str,
+    device: u64,
+) -> nova_sync::Result<bool> {
+    let mut changed = false;
+    for (key, _) in store.records(domain) {
+        changed |= store.set(domain, &key, None, 0, device);
+    }
+    if let Some(basis) = store.digest().get(domain).cloned() {
+        store.mark_projected(domain, &basis)?;
+    } else {
+        store.save()?;
+    }
+    Ok(changed)
+}
+
+/// Rebuild an inactive profile durably without changing UI state or process-wide
+/// provider preferences. Activation reads these snapshots through the same paths
+/// as startup. Raw record-only domains are consumed by their owners on activation.
+fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Result<()> {
+    let owner = nova_sync::local_store()?;
+    let (records, basis, deleted) = {
+        let store = owner.lock().unwrap();
+        (
+            store.records(domain),
+            store.digest().get(domain).cloned(),
+            store
+                .record("profile_deletions", id)
+                .is_some_and(|r| !r.is_deleted()),
+        )
+    };
+    let Some(basis) = basis else {
+        return Ok(());
+    };
+    if deleted {
+        let device = nova_sync::local_device()?;
+        let changed = tombstone_deleted_profile_domain(&mut owner.lock().unwrap(), domain, device)?;
+        if changed {
+            nova_sync::request_local_sync();
+        }
+        return Ok(());
+    }
+    profiles::with_context(profiles::context_for(id), || -> nova_sync::Result<()> {
+        persistence::register_collections();
+        let snapshot: Option<(&str, String)> = match base {
+            DOMAIN_LIBRARY => {
+                let mut entries = records
+                    .iter()
+                    .map(|(_, raw)| serde_json::from_str::<LibraryEntry>(raw))
+                    .collect::<Result<Vec<_>, _>>()?;
+                entries.sort_by(|a, b| {
+                    a.added_at_secs
+                        .cmp(&b.added_at_secs)
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+                Some(("library", serde_json::to_string(&entries)?))
+            }
+            DOMAIN_PROGRESS => Some((
+                EPISODE_PROGRESS_KEY,
+                projected_map::<EpisodeProgress>(&records)?,
+            )),
+            DOMAIN_PLAYBACK_PREFERENCES => {
+                Some((PREFERENCES_KEY, projected_map::<PreferenceValue>(&records)?))
+            }
+            DOMAIN_VIEWING_ACTIVITY => Some((
+                VIEWING_ACTIVITY_KEY,
+                projected_map::<ViewingActivity>(&records)?,
+            )),
+            DOMAIN_NEW_EPISODES_HIDDEN => Some((
+                NEW_EPISODES_HIDDEN_KEY,
+                projected_map::<Vec<String>>(&records)?,
+            )),
+            DOMAIN_HISTORY_HIDDEN => {
+                Some((watch_history::HIDDEN_KEY, projected_map::<u64>(&records)?))
+            }
+            DOMAIN_CONTINUE_HIDDEN => Some(("continue_hidden", projected_map::<u64>(&records)?)),
+            DOMAIN_PLUGIN_SETTINGS => Some((
+                plugin_settings::KEY,
+                serde_json::to_string(&plugin_settings::project(records.clone())?)?,
+            )),
+            DOMAIN_PACKAGES => {
+                let raw = projected_map::<serde_json::Value>(&records)?;
+                addon_packages::records(&raw)
+                    .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?;
+                Some((addon_packages::KEY, raw))
+            }
+            DOMAIN_ADDONS => {
+                let order = records
+                    .iter()
+                    .find(|(key, _)| key == ADDON_ORDER_KEY)
+                    .map(|(_, raw)| serde_json::from_str::<Vec<String>>(raw))
+                    .transpose()?
+                    .unwrap_or_default();
+                let mut addons = records
+                    .iter()
+                    .filter(|(key, _)| key != ADDON_ORDER_KEY)
+                    .map(|(url, raw)| {
+                        let addon: SyncedAddon = serde_json::from_str(raw)?;
+                        Ok(AddonStore {
+                            url: url.clone(),
+                            enabled: addon.enabled,
+                            label: addon.label,
+                            configure_ok: addon.configure_ok,
+                            capabilities: addon.capabilities,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, serde_json::Error>>()?;
+                let urls = sort_by_order(addons.iter().map(|a| a.url.clone()).collect(), &order);
+                addons.sort_by_key(|a| urls.iter().position(|url| url == &a.url));
+                Some(("addons", serde_json::to_string(&addons)?))
+            }
+            DOMAIN_SETTINGS | DOMAIN_CATEGORY => {
+                let raw = nova_storage::try_get_str(&profiles::storage_key_for(id, "settings"))?;
+                let local: CacheSettings = raw
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()?
+                    .unwrap_or_default();
+                let store = owner.lock().unwrap();
+                let mut settings = merge_settings_fields(
+                    &local,
+                    &store.records(&nova_sync::profile_domain(id, DOMAIN_SETTINGS)),
+                );
+                settings.categories = store
+                    .records(&nova_sync::profile_domain(id, DOMAIN_CATEGORY))
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .collect();
+                Some((
+                    "settings",
+                    preserve_settings_snapshot(raw.as_deref(), &serde_json::to_string(&settings)?),
+                ))
+            }
+            _ => None,
+        };
+        let dev = nova_sync::local_device()?;
+        let mut store = owner.lock().unwrap();
+        // Retirement can arrive while this snapshot is being decoded.
+        if store
+            .record("profile_deletions", id)
+            .is_some_and(|r| !r.is_deleted())
+        {
+            let changed = tombstone_deleted_profile_domain(&mut store, domain, dev)?;
+            drop(store);
+            if changed {
+                nova_sync::request_local_sync();
+            }
+            return Ok(());
+        }
+        if let Some((key, raw)) = snapshot {
+            let baseline_records: Vec<_> = records
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone(), 0))
+                .collect();
+            nova_sync::prepare_snapshot(
+                &mut store,
+                dev,
+                domain,
+                &baseline_records,
+                None,
+                true,
+                false,
+            )?;
+            store.queue_extra(&profiles::storage_key_for(id, key), Some(raw));
+        }
+        store.mark_projected(domain, &basis)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -844,7 +1171,9 @@ impl Bridge {
             ("settings", DOMAIN_SETTINGS),
         ] {
             let result = (|| -> nova_sync::Result<()> {
-                if storage::try_get_str(&format!("sync:baseline:{domain}"))?.is_some() {
+                if storage::try_get_str(&format!("sync:baseline:{}", profile_domain(domain)))?
+                    .is_some()
+                {
                     return Ok(());
                 }
                 let state = self.shared.lock().unwrap();
@@ -889,6 +1218,9 @@ impl Bridge {
                 storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
             }
         }
+        if let Err(error) = seed_stored_profiles() {
+            storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+        }
     }
 
     /// Upgrade an existing settings baseline with newly supported defaults.
@@ -919,7 +1251,10 @@ impl Bridge {
             let dev = nova_sync::local_device()?;
             let mut store = owner.lock().unwrap();
             let baseline: std::collections::BTreeMap<String, String> = store
-                .extra_value("sync:baseline:settings")?
+                .extra_value(&format!(
+                    "sync:baseline:{}",
+                    profile_domain(DOMAIN_SETTINGS)
+                ))?
                 .and_then(|raw| serde_json::from_str(&raw).ok())
                 .unwrap_or_default();
             let mut changed = false;
@@ -928,9 +1263,12 @@ impl Bridge {
                 // backfill a legacy field absent from its materialized baseline.
                 if stored.get(&key).is_some()
                     && !baseline.contains_key(&key)
-                    && store.record(DOMAIN_SETTINGS, &key).is_none()
+                    && store
+                        .record(&profile_domain(DOMAIN_SETTINGS), &key)
+                        .is_none()
                 {
-                    changed |= store.set(DOMAIN_SETTINGS, &key, Some(value), 0, dev);
+                    changed |=
+                        store.set(&profile_domain(DOMAIN_SETTINGS), &key, Some(value), 0, dev);
                 }
             }
             if changed {
@@ -1012,6 +1350,17 @@ impl Bridge {
         if domains.is_empty() {
             return;
         }
+        // Reconcile retirement before waiting on the ordered writer: a late
+        // snapshot for a remotely deleted profile must be discarded rather
+        // than keep this account-wide queue blocked behind a schema error.
+        if domains
+            .iter()
+            .any(|domain| matches!(domain.as_str(), "profiles" | "profile_deletions"))
+            && let Err(error) = profiles::list()
+        {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+            return;
+        }
         if let Err(error) = persistence::flush() {
             io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
             return;
@@ -1019,6 +1368,43 @@ impl Bridge {
         // Flush a slider edit before projecting a remote snapshot; independent
         // fields then merge in the record owner instead of losing the local edit.
         self.flush_playback_preferences(true);
+        if domains
+            .iter()
+            .any(|domain| matches!(domain.as_str(), "profiles" | "profile_deletions"))
+        {
+            self.refresh_profiles();
+        }
+        let active = profiles::current_id();
+        let deleted_profiles: HashSet<String> = nova_sync::local_store()
+            .ok()
+            .map(|owner| {
+                owner
+                    .lock()
+                    .unwrap()
+                    .records("profile_deletions")
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut active_domains = Vec::new();
+        for domain in domains {
+            if let Some((id, base)) = nova_sync::parse_profile_domain(&domain) {
+                if id != active || deleted_profiles.contains(id) {
+                    if let Err(error) = project_inactive_profile(id, &domain, base) {
+                        storage::report(storage::Error::new(
+                            storage::ErrorKind::Transaction,
+                            error,
+                        ));
+                    }
+                    continue;
+                }
+                active_domains.push(base.to_string());
+            } else {
+                active_domains.push(domain);
+            }
+        }
+        let domains = active_domains;
         let library_changed = domains.iter().any(|d| d == DOMAIN_LIBRARY);
         let models_changed = domains.iter().any(|d| {
             matches!(
@@ -1038,9 +1424,13 @@ impl Bridge {
         let peers_changed = domains.iter().any(|d| d == nova_sync::DOMAIN_PEERS);
         for domain in domains {
             let failures = write_failures();
-            let basis = nova_sync::local_store()
-                .ok()
-                .and_then(|s| s.lock().unwrap().digest().get(&domain).cloned());
+            let basis = nova_sync::local_store().ok().and_then(|s| {
+                s.lock()
+                    .unwrap()
+                    .digest()
+                    .get(&profile_domain(&domain))
+                    .cloned()
+            });
             match domain.as_str() {
                 stremio::DOMAIN => {
                     self.stremio_wake();
@@ -1136,7 +1526,11 @@ impl Bridge {
                 nova_sync::local_store(),
                 basis.filter(|_| write_failures() == failures),
             ) {
-                if let Err(e) = owner.lock().unwrap().mark_projected(&domain, &basis) {
+                if let Err(e) = owner
+                    .lock()
+                    .unwrap()
+                    .mark_projected(&profile_domain(&domain), &basis)
+                {
                     storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
                 } else if tracing::enabled!(target: "nova_sync::projection", tracing::Level::DEBUG)
                 {
@@ -1349,7 +1743,7 @@ impl Bridge {
                     // Forgetting this native episode must not resurrect it via an
                     // older alias which a peer still retains.
                     if store
-                        .record(DOMAIN_PROGRESS, &key)
+                        .record(&profile_domain(DOMAIN_PROGRESS), &key)
                         .is_some_and(|r| r.is_deleted())
                     {
                         return None;
@@ -1358,12 +1752,18 @@ impl Bridge {
                         .iter()
                         .filter_map(|alias| {
                             let key = progress_map_key(&series, alias);
-                            let raw = store.record(DOMAIN_PROGRESS, &key)?.value.as_deref()?;
+                            let raw = store
+                                .record(&profile_domain(DOMAIN_PROGRESS), &key)?
+                                .value
+                                .as_deref()?;
                             let p: EpisodeProgress = serde_json::from_str(raw).ok()?;
                             (p.series_id == series && p.episode_id == *alias).then_some(key)
                         })
                         .collect::<Vec<_>>();
-                    let raw = store.resolved_progress(keys.iter().map(String::as_str))?;
+                    let raw = store.resolved_progress_in(
+                        &profile_domain(DOMAIN_PROGRESS),
+                        keys.iter().map(String::as_str),
+                    )?;
                     let mut progress: EpisodeProgress = serde_json::from_str(&raw).ok()?;
                     progress.series_id = series;
                     progress.episode_id = native;
@@ -1698,7 +2098,7 @@ impl Bridge {
             let b = self.clone();
             thread::spawn(move || {
                 let result = nova_sync::SyncEngine::setup();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = profiles::invoke_account(move || {
                     if b.sync_start_generation.load(Ordering::Acquire) != generation {
                         // Runtime teardown can wait for worker shutdown too.
                         thread::spawn(move || drop(result));
@@ -1745,13 +2145,13 @@ impl Bridge {
         let b = self.clone();
         engine.set_on_remote(std::sync::Arc::new(move |domains| {
             let b = b.clone();
-            let _ = slint::invoke_from_event_loop(move || b.sync_apply(domains));
+            let _ = profiles::invoke_account(move || b.sync_apply(domains));
         }));
         // Pairing events (requests + completions) likewise marshal.
         let b = self.clone();
         engine.set_pair_callback(std::sync::Arc::new(move |event| {
             let b = b.clone();
-            let _ = slint::invoke_from_event_loop(move || b.sync_pair_event(event));
+            let _ = profiles::invoke_account(move || b.sync_pair_event(event));
         }));
         // Keep the Android periodic job in step with the enable +
         // background flags: it runs a bounded pass with no Activity.
@@ -2239,6 +2639,126 @@ fn activity_records(
 mod tests {
     use super::*;
 
+    #[test]
+    fn inactive_profiles_materialize_without_changing_local_selection() {
+        const ROOT: &str = "NOVA_SYNC_PROFILE_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-sync-profiles-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::sync::tests::inactive_profiles_materialize_without_changing_local_selection", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&PathBuf::from(root));
+        let active = profiles::current_id();
+        let active_key = profiles::storage_key_for(&active, "library");
+        nova_storage::try_set_str(&active_key, "[]").unwrap();
+        let bob_library = nova_sync::profile_domain("bob", DOMAIN_LIBRARY);
+        let bob_settings = nova_sync::profile_domain("bob", DOMAIN_SETTINGS);
+        let owner = nova_sync::local_store().unwrap();
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                &bob_library,
+                "show",
+                Some(serde_json::to_string(&entry("show", 1)).unwrap()),
+                0,
+                9,
+            );
+            store.set(
+                &bob_settings,
+                "language",
+                Some(serde_json::to_string(&nova_config::Language::Croatian).unwrap()),
+                0,
+                9,
+            );
+            store.save().unwrap();
+        }
+        let before = owner.lock().unwrap().digest();
+        project_inactive_profile("bob", &bob_library, DOMAIN_LIBRARY).unwrap();
+        project_inactive_profile("bob", &bob_settings, DOMAIN_SETTINGS).unwrap();
+        assert_eq!(profiles::current_id(), active);
+        assert_eq!(
+            nova_storage::try_get_str(&active_key).unwrap().as_deref(),
+            Some("[]")
+        );
+        let bob_raw = nova_storage::try_get_str(&profiles::storage_key_for("bob", "library"))
+            .unwrap()
+            .unwrap();
+        let bob_entries: Vec<LibraryEntry> = serde_json::from_str(&bob_raw).unwrap();
+        assert_eq!(bob_entries[0].id, "show");
+        let settings: CacheSettings = serde_json::from_str(
+            &nova_storage::try_get_str(&profiles::storage_key_for("bob", "settings"))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings.language, nova_config::Language::Croatian);
+        assert_eq!(
+            owner.lock().unwrap().digest(),
+            before,
+            "projection cannot create a new action"
+        );
+        {
+            let mut store = owner.lock().unwrap();
+            store.set("profile_deletions", "bob", Some("1".into()), 0, 9);
+            store.apply(
+                &bob_library,
+                "stale",
+                nova_sync::Record {
+                    value: Some(serde_json::to_string(&entry("stale", 2)).unwrap()),
+                    version: nova_sync::Version::new(nova_config::now_ms(), 0, 9, false),
+                },
+            );
+            store.save().unwrap();
+        }
+        let mut stale_peer = nova_sync::Store::default();
+        {
+            let store = owner.lock().unwrap();
+            for outbound in store.outbound(&std::collections::BTreeMap::new()) {
+                stale_peer.apply(&outbound.domain, &outbound.key, outbound.record);
+            }
+        }
+        project_inactive_profile("bob", &bob_library, DOMAIN_LIBRARY).unwrap();
+        let retired_digest = {
+            let store = owner.lock().unwrap();
+            assert!(store.records(&bob_library).is_empty());
+            assert!(store.record(&bob_library, "stale").unwrap().is_deleted());
+            assert!(!store.pending_domains().contains(&bob_library));
+            for outbound in store.outbound(&stale_peer.digest()) {
+                stale_peer.apply(&outbound.domain, &outbound.key, outbound.record);
+            }
+            store.digest()
+        };
+        assert!(stale_peer.records(&bob_library).is_empty());
+        assert_eq!(stale_peer.digest(), retired_digest);
+        project_inactive_profile("bob", &bob_library, DOMAIN_LIBRARY).unwrap();
+        assert_eq!(
+            owner.lock().unwrap().digest(),
+            retired_digest,
+            "replaying retirement must not generate more actions"
+        );
+        assert_eq!(
+            nova_storage::try_get_str(&profiles::storage_key_for("bob", "library"))
+                .unwrap()
+                .as_deref(),
+            Some(bob_raw.as_str())
+        );
+        assert_eq!(profiles::current_id(), active);
+    }
+
     #[cfg(feature = "desktop")]
     #[test]
     fn synced_episode_aliases_agree_on_completion_and_explicit_unwatch() {
@@ -2302,7 +2822,7 @@ mod tests {
                 ..Default::default()
             };
             source.set(
-                DOMAIN_PROGRESS,
+                &profile_domain(DOMAIN_PROGRESS),
                 &progress_map_key(series, episode),
                 Some(serde_json::to_string(&p).unwrap()),
                 0,
@@ -2312,7 +2832,7 @@ mod tests {
         let mut saved = entry(series, 1);
         saved.type_ = "series".into();
         source.set(
-            DOMAIN_LIBRARY,
+            &profile_domain(DOMAIN_LIBRARY),
             series,
             Some(serde_json::to_string(&saved).unwrap()),
             0,
@@ -2321,17 +2841,23 @@ mod tests {
         let owner = nova_sync::local_store().unwrap();
         {
             let mut target = owner.lock().unwrap();
-            for (episode, _) in source.records(DOMAIN_PROGRESS) {
+            for (episode, _) in source.records(&profile_domain(DOMAIN_PROGRESS)) {
                 target.apply(
-                    DOMAIN_PROGRESS,
+                    &profile_domain(DOMAIN_PROGRESS),
                     &episode,
-                    source.record(DOMAIN_PROGRESS, &episode).unwrap().clone(),
+                    source
+                        .record(&profile_domain(DOMAIN_PROGRESS), &episode)
+                        .unwrap()
+                        .clone(),
                 );
             }
             target.apply(
-                DOMAIN_LIBRARY,
+                &profile_domain(DOMAIN_LIBRARY),
                 series,
-                source.record(DOMAIN_LIBRARY, series).unwrap().clone(),
+                source
+                    .record(&profile_domain(DOMAIN_LIBRARY), series)
+                    .unwrap()
+                    .clone(),
             );
             target.save().unwrap();
         }
@@ -2359,7 +2885,10 @@ mod tests {
         let native_record = owner
             .lock()
             .unwrap()
-            .record(DOMAIN_PROGRESS, &progress_map_key(series, native))
+            .record(
+                &profile_domain(DOMAIN_PROGRESS),
+                &progress_map_key(series, native),
+            )
             .unwrap()
             .clone();
         let map = {
@@ -2383,7 +2912,10 @@ mod tests {
             owner
                 .lock()
                 .unwrap()
-                .record(DOMAIN_PROGRESS, &progress_map_key(series, native))
+                .record(
+                    &profile_domain(DOMAIN_PROGRESS),
+                    &progress_map_key(series, native)
+                )
                 .unwrap(),
             &native_record,
             "an unrelated save must not turn an alias view into a new watch action"

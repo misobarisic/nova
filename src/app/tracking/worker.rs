@@ -10,6 +10,7 @@ mod completion;
 mod peer;
 #[path = "setup.rs"]
 mod setup;
+use crate::app::profiles::TrackingStorage as KvStorage;
 use nova_tracking::{
     api::{Client, HttpsTransport},
     auth::{AuthReturn, Authorization, ClientRegistration, Tokens},
@@ -17,6 +18,7 @@ use nova_tracking::{
     *,
 };
 use std::num::{NonZeroU32, NonZeroU64};
+type Store<S = KvStorage> = nova_tracking::Store<S>;
 
 /// All account integrations share ownership of the Android authorization
 /// service, so finishing one sign-in cannot interrupt another one.
@@ -265,7 +267,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     let mut loaded = Store::load(KvStorage);
     while loaded.is_err() {
         let weak = bridge.app.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if let Some(app) = weak.upgrade() {
                 app.set_tracking_notice(
                     text::tr("Tracking data needs recovery. Playback remains available.").into(),
@@ -278,7 +280,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             _ => {
-                if !bridge.tracking.alive.load(Ordering::Acquire) {
+                if !bridge.tracking().alive.load(Ordering::Acquire) {
                     return;
                 }
             }
@@ -365,18 +367,18 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if !coordinator.bridge.tracking.alive.load(Ordering::Acquire) {
+        if !coordinator.bridge.tracking().alive.load(Ordering::Acquire) {
             break;
         }
         let mut expired = vec![];
         coordinator.logins.retain(|login| {
             let live = now_secs() < login.expires_at
-                && coordinator.bridge.tracking.login_generation[service_index(login.service)]
+                && coordinator.bridge.tracking().login_generation[service_index(login.service)]
                     .load(Ordering::Acquire)
                     == login.epoch;
             if !live {
                 login.cancel.store(true, Ordering::Release);
-                if coordinator.bridge.tracking.login_generation[service_index(login.service)]
+                if coordinator.bridge.tracking().login_generation[service_index(login.service)]
                     .load(Ordering::Acquire)
                     == login.epoch
                 {
@@ -467,7 +469,7 @@ impl Coordinator {
                     continue;
                 }
             };
-            let epoch = self.bridge.tracking.login_generation[service_index(service)]
+            let epoch = self.bridge.tracking().login_generation[service_index(service)]
                 .load(Ordering::Acquire);
             let client = match connection.restore(&KvStorage, self.transport.clone(), now) {
                 Ok(client) => client,
@@ -492,7 +494,8 @@ impl Coordinator {
                     continue;
                 }
             };
-            if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+            if self.bridge.tracking().login_generation[service_index(service)]
+                .load(Ordering::Acquire)
                 != epoch
             {
                 continue;
@@ -558,7 +561,7 @@ impl Coordinator {
         self.generation == generation
             && self
                 .bridge
-                .tracking
+                .tracking()
                 .context_generation
                 .load(Ordering::Acquire)
                 == generation
@@ -569,7 +572,7 @@ impl Coordinator {
             .find(|s| {
                 s.service == service
                     && !s.paused
-                    && self.bridge.tracking.login_generation[service_index(service)]
+                    && self.bridge.tracking().login_generation[service_index(service)]
                         .load(Ordering::Acquire)
                         == s.epoch
             })
@@ -594,7 +597,7 @@ impl Coordinator {
                     .logins
                     .iter()
                     .any(|l| l.service == service && l.epoch == epoch)
-                    && self.bridge.tracking.login_generation[service_index(service)]
+                    && self.bridge.tracking().login_generation[service_index(service)]
                         .load(Ordering::Acquire)
                         == epoch
                 {
@@ -677,7 +680,7 @@ impl Coordinator {
                 Ok(())
             }
             Command::Disconnect { service, epoch } => {
-                if self.bridge.tracking.login_generation[service_index(service)]
+                if self.bridge.tracking().login_generation[service_index(service)]
                     .load(Ordering::Acquire)
                     != epoch
                 {
@@ -892,7 +895,7 @@ impl Coordinator {
         }
     }
     fn restore_session_epoch(&mut self, service: Service, epoch: u64) {
-        if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+        if self.bridge.tracking().login_generation[service_index(service)].load(Ordering::Acquire)
             == epoch
         {
             for session in self.sessions.iter_mut().filter(|s| s.service == service) {
@@ -957,7 +960,7 @@ impl Coordinator {
             _background: background,
         });
         if let Some(receiver) = receiver {
-            let tx = self.bridge.tracking.tx.clone();
+            let tx = self.bridge.tracking().tx.clone();
             thread::spawn(move || {
                 let result = receiver
                     .receive(cancel.clone(), LOGIN_TIMEOUT)
@@ -999,7 +1002,7 @@ impl Coordinator {
         Ok(())
     }
     fn complete(&mut self, service: Service, value: AuthReturn, epoch: u64) -> Result<(), String> {
-        if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+        if self.bridge.tracking().login_generation[service_index(service)].load(Ordering::Acquire)
             != epoch
         {
             return Ok(());
@@ -1023,7 +1026,7 @@ impl Coordinator {
             .map_err(api_message)?;
         let mut client = Client::new(service, tokens.access.duplicate(), self.transport.clone());
         let viewer = client.verify(now_secs()).map_err(api_message)?;
-        if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+        if self.bridge.tracking().login_generation[service_index(service)].load(Ordering::Acquire)
             != epoch
         {
             return Ok(());
@@ -1131,7 +1134,7 @@ impl Coordinator {
     ) -> Result<(), String> {
         if self
             .bridge
-            .tracking
+            .tracking()
             .context_generation
             .load(Ordering::Acquire)
             != generation
@@ -1234,7 +1237,7 @@ impl Coordinator {
                     .map_err(api_message)?,
             ]
         } else if !discovery.ids.is_empty() {
-            let tracking = self.bridge.tracking.clone();
+            let tracking = self.bridge.tracking().clone();
             let reply = {
                 let client = &self.session(service)?.client;
                 collect_discovery(&discovery.ids, |id| {
@@ -1646,14 +1649,14 @@ impl Coordinator {
         let mut history = owner.lock().unwrap();
         history.save().map_err(|_| storage_message())?;
         let sequence = history
-            .extra_value(EVENT_COUNTER_KEY)
+            .extra_value(&crate::app::profiles::storage_key(EVENT_COUNTER_KEY))
             .map_err(|_| storage_message())?
             .map(|raw| serde_json::from_str::<u64>(&raw))
             .transpose()
             .map_err(|_| storage_message())?
             .unwrap_or(0);
         let map: HashMap<String, EpisodeProgress> = history
-            .extra_value(EPISODE_PROGRESS_KEY)
+            .extra_value(&crate::app::profiles::storage_key(EPISODE_PROGRESS_KEY))
             .map_err(|_| storage_message())?
             .map(|raw| serde_json::from_str(&raw))
             .transpose()
@@ -1751,7 +1754,7 @@ impl Coordinator {
         history.save().map_err(|_| storage_message())?;
         if progress != current_progress {
             let map: HashMap<String, EpisodeProgress> = history
-                .extra_value(EPISODE_PROGRESS_KEY)
+                .extra_value(&crate::app::profiles::storage_key(EPISODE_PROGRESS_KEY))
                 .map_err(|_| storage_message())?
                 .map(|raw| serde_json::from_str(&raw))
                 .transpose()
@@ -1759,7 +1762,7 @@ impl Coordinator {
                 .unwrap_or_default();
             let observations = checkpoint(&state, &binding.target, &map);
             let sequence = history
-                .extra_value(EVENT_COUNTER_KEY)
+                .extra_value(&crate::app::profiles::storage_key(EVENT_COUNTER_KEY))
                 .map_err(|_| storage_message())?
                 .map(|raw| serde_json::from_str::<u64>(&raw))
                 .transpose()
@@ -1872,14 +1875,14 @@ impl Coordinator {
                 let mut history = owner.lock().unwrap();
                 history.save().map_err(|_| storage_message())?;
                 let map: HashMap<String, EpisodeProgress> = history
-                    .extra_value(EPISODE_PROGRESS_KEY)
+                    .extra_value(&crate::app::profiles::storage_key(EPISODE_PROGRESS_KEY))
                     .map_err(|_| storage_message())?
                     .map(|raw| serde_json::from_str(&raw))
                     .transpose()
                     .map_err(|_| storage_message())?
                     .unwrap_or_default();
                 let sequence: u64 = history
-                    .extra_value(EVENT_COUNTER_KEY)
+                    .extra_value(&crate::app::profiles::storage_key(EVENT_COUNTER_KEY))
                     .map_err(|_| storage_message())?
                     .map(|raw| serde_json::from_str(&raw))
                     .transpose()
@@ -2006,7 +2009,8 @@ impl Coordinator {
                 continue;
             }
             let service = self.sessions[index].service;
-            if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+            if self.bridge.tracking().login_generation[service_index(service)]
+                .load(Ordering::Acquire)
                 != self.sessions[index].epoch
             {
                 continue;
@@ -2114,7 +2118,7 @@ impl Coordinator {
                         .client
                         .read(target.remote_media_id, now)
                         .and_then(|remote| {
-                            if self.bridge.tracking.login_generation[service_index(service)]
+                            if self.bridge.tracking().login_generation[service_index(service)]
                                 .load(Ordering::Acquire)
                                 != self.sessions[index].epoch
                             {
@@ -2157,7 +2161,7 @@ impl Coordinator {
                     .client
                     .read(target.remote_media_id, now)
                     .and_then(|remote| {
-                        if self.bridge.tracking.login_generation[service_index(service)]
+                        if self.bridge.tracking().login_generation[service_index(service)]
                             .load(Ordering::Acquire)
                             != self.sessions[index].epoch
                         {
@@ -2213,7 +2217,7 @@ impl Coordinator {
                             }
                             patch
                         };
-                        if self.bridge.tracking.login_generation[service_index(service)]
+                        if self.bridge.tracking().login_generation[service_index(service)]
                             .load(Ordering::Acquire)
                             != self.sessions[index].epoch
                         {
@@ -2317,7 +2321,7 @@ impl Coordinator {
                 let connected = self.sessions.iter().any(|s| {
                     s.service == service
                         && !s.paused
-                        && self.bridge.tracking.login_generation[service_index(service)]
+                        && self.bridge.tracking().login_generation[service_index(service)]
                             .load(Ordering::Acquire)
                             == s.epoch
                 });
@@ -2338,7 +2342,7 @@ impl Coordinator {
                     automatic: !state.automatic_paused.contains(&service),
                     signing_in: self.logins.iter().any(|l| {
                         l.service == service
-                            && self.bridge.tracking.login_generation[service_index(service)]
+                            && self.bridge.tracking().login_generation[service_index(service)]
                                 .load(Ordering::Acquire)
                                 == l.epoch
                     }),
@@ -2722,13 +2726,13 @@ impl Coordinator {
         let selected_service = service_index(self.candidate_service) as i32;
         let bridge = self.bridge.clone();
         let generation = self.generation;
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if let Some(app) = bridge.app() {
                 if let Some(model) = update_rows(app.get_tracking_accounts(), accounts) {
                     app.set_tracking_accounts(model);
                     bridge.refresh_setting_sync();
                 }
-                if bridge.tracking.context_generation.load(Ordering::Acquire) == generation
+                if bridge.tracking().context_generation.load(Ordering::Acquire) == generation
                     || !app.get_tracking_open()
                 {
                     app.set_tracking_notice(notice.into());

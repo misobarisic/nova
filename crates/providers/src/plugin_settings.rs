@@ -392,6 +392,7 @@ pub fn configure_plugin_settings(
         persisted_cache: Mutex::new(persisted_cache),
     };
     prune_cache(&mut state, 0);
+    crate::host::reset_session_state();
     Ok(())
 }
 pub fn settings_snapshot(
@@ -493,7 +494,8 @@ fn update_settings(
     plugin: &str,
     key: Option<&str>,
     value: Option<Value>,
-) -> Result<(), ProviderHostError> {
+    expected_generation: Option<u64>,
+) -> Result<u64, ProviderHostError> {
     validate_plugin(plugin)?;
     if let Some(key) = key {
         validate_key(key)?;
@@ -502,6 +504,9 @@ fn update_settings(
         validate_value(value)?;
     }
     let mut state = service().lock().unwrap();
+    if expected_generation.is_some_and(|generation| generation != state.generation) {
+        return Err(error("plugin settings changed during operation"));
+    }
     let mut next = state.settings.clone();
     match (key, value) {
         (Some(key), Some(value)) => {
@@ -522,7 +527,7 @@ fn update_settings(
     let raw = serde_json::to_string(&next).map_err(|_| error("invalid plugin settings"))?;
     parse_settings(&raw)?;
     if next == state.settings {
-        return Ok(());
+        return Ok(state.generation);
     }
     let backend = state
         .backend
@@ -534,16 +539,33 @@ fn update_settings(
     // Cached results may contain credential-dependent URLs; invalidate at edit.
     state.cache.retain(|_, entry| entry.plugin != plugin);
     state.memory_cache.retain(|_, entry| entry.plugin != plugin);
-    Ok(())
+    Ok(state.generation)
 }
 pub fn set_setting(plugin: &str, key: &str, value: Value) -> Result<(), ProviderHostError> {
-    update_settings(plugin, Some(key), Some(value))
+    update_settings(plugin, Some(key), Some(value), None).map(|_| ())
 }
 pub fn remove_setting(plugin: &str, key: &str) -> Result<(), ProviderHostError> {
-    update_settings(plugin, Some(key), None)
+    update_settings(plugin, Some(key), None, None).map(|_| ())
 }
 pub fn clear_settings(plugin: &str) -> Result<(), ProviderHostError> {
-    update_settings(plugin, None, None)
+    update_settings(plugin, None, None, None).map(|_| ())
+}
+/// Validate ownership under the same lock as the backend write. Returning the
+/// resulting generation permits sequential edits from one running invocation.
+pub(crate) fn set_setting_for_generation(
+    plugin: &str,
+    key: &str,
+    value: Value,
+    generation: u64,
+) -> Result<u64, ProviderHostError> {
+    update_settings(plugin, Some(key), Some(value), Some(generation))
+}
+pub(crate) fn remove_setting_for_generation(
+    plugin: &str,
+    key: &str,
+    generation: u64,
+) -> Result<u64, ProviderHostError> {
+    update_settings(plugin, Some(key), None, Some(generation))
 }
 /// Serialize projection construction, durable storage, and publication with local
 /// writes. The loader runs under the service lock so it must read the latest
@@ -1315,6 +1337,26 @@ mod tests {
                 .unwrap()
                 .values
                 .contains_key("future")
+        );
+        // A profile change swaps the backend even when its values match.
+        // In-flight invocations retain their owner and cannot write the new one.
+        let replacement = Arc::new(Memory::default());
+        let previous_owner = settings_generation();
+        configure_plugin_settings(replacement.clone()).unwrap();
+        assert!(
+            set_setting_for_generation("test", "enabled", Value::Bool(true), previous_owner)
+                .is_err()
+        );
+        assert!(replacement.settings.lock().unwrap().is_none());
+        let first =
+            set_setting_for_generation("test", "enabled", Value::Bool(true), settings_generation())
+                .unwrap();
+        let second = set_setting_for_generation("test", "other", Value::Bool(true), first).unwrap();
+        remove_setting_for_generation("test", "other", second).unwrap();
+        assert_eq!(
+            parse_settings(replacement.settings.lock().unwrap().as_ref().unwrap()).unwrap()["test"]
+                ["enabled"],
+            true
         );
         *service().lock().unwrap() = Service::default();
     }

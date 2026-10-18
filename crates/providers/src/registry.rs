@@ -275,7 +275,7 @@ pub fn fetch_builtin_addon_with_timeout(
     raw_url: &str,
     timeout: Duration,
 ) -> Option<Result<Vec<u8>, ProviderHostError>> {
-    fetch_builtin_addon_with_progress_and_timeout(raw_url, timeout, Arc::new(|_| {}))
+    fetch_builtin_addon_with_progress_and_timeout(raw_url, timeout, Arc::new(|_| {}), None)
 }
 
 /// Fetches an installed provider response with validated complete stream snapshots. All
@@ -284,13 +284,33 @@ pub fn fetch_builtin_addon_with_progress(
     raw_url: &str,
     on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
 ) -> Option<Result<Vec<u8>, ProviderHostError>> {
-    fetch_builtin_addon_with_progress_and_timeout(raw_url, Duration::from_secs(60), on_progress)
+    fetch_builtin_addon_with_progress_and_timeout(
+        raw_url,
+        Duration::from_secs(60),
+        on_progress,
+        None,
+    )
+}
+
+/// Dispatch a queued app request only with its original configuration owner.
+pub fn fetch_builtin_addon_with_progress_for_generation(
+    raw_url: &str,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    generation: u64,
+) -> Option<Result<Vec<u8>, ProviderHostError>> {
+    fetch_builtin_addon_with_progress_and_timeout(
+        raw_url,
+        Duration::from_secs(60),
+        on_progress,
+        Some(generation),
+    )
 }
 
 fn fetch_builtin_addon_with_progress_and_timeout(
     raw_url: &str,
     timeout: Duration,
     on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    expected_generation: Option<u64>,
 ) -> Option<Result<Vec<u8>, ProviderHostError>> {
     let url = match Url::parse(raw_url) {
         Ok(url) if url.scheme() == "nova-provider" => url,
@@ -345,6 +365,16 @@ fn fetch_builtin_addon_with_progress_and_timeout(
             manifest.limits.requests_per_operation,
         ));
         let mut provider = JsProvider::new(manifest, addon, &definition.source);
+        if expected_generation.is_some_and(|generation| {
+            provider
+                .settings
+                .as_ref()
+                .is_ok_and(|settings| settings.generation != generation)
+        }) {
+            return Err(ProviderHostError(
+                "provider configuration changed before dispatch".into(),
+            ));
+        }
         provider.config = config;
         let provider = Arc::new(provider);
         let host: Arc<dyn ProviderHost> = if matches!(

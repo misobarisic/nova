@@ -15,14 +15,14 @@ pub(crate) fn block_unreadable(key: &str) {
         .lock()
         .unwrap()
         .get_or_insert_with(HashSet::new)
-        .insert(key.to_string());
+        .insert(profiles::storage_key(key));
 }
 pub(crate) fn writable_key(key: &str) -> bool {
     !UNREADABLE_KEYS
         .lock()
         .unwrap()
         .as_ref()
-        .is_some_and(|keys| keys.contains(key))
+        .is_some_and(|keys| keys.contains(&profiles::storage_key(key)))
 }
 
 /// Only local metadata is eligible; user state and sync wire values retain
@@ -67,7 +67,7 @@ pub(crate) fn write_json(key: &str, value: &(impl Serialize + ?Sized)) {
         .lock()
         .unwrap()
         .as_ref()
-        .is_some_and(|keys| keys.contains(key))
+        .is_some_and(|keys| keys.contains(&profiles::storage_key(key)))
     {
         storage::report(storage::Error::new(
             storage::ErrorKind::Schema,

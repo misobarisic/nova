@@ -287,7 +287,7 @@ impl Bridge {
         ));
         if fetch_urls.is_empty() {
             let bridge2 = bridge.clone();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge2.apply_catalog(generation, Vec::new(), append);
             });
             return;
@@ -313,7 +313,7 @@ impl Bridge {
                 if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
                     let all = std::mem::take(&mut *results.lock().unwrap());
                     let bridge2 = bridge.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
+                    let _ = crate::app::profiles::invoke_from_event_loop(move || {
                         if failed.load(Ordering::SeqCst) {
                             bridge2.catalog_page_failed(generation);
                         } else {
@@ -435,7 +435,7 @@ impl Bridge {
                             let bridge = self.clone();
                             let requested_url = url.clone();
                             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                                let _ = slint::invoke_from_event_loop(move || {
+                                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                                     let Some(pixels) = pixels else {
                                         bridge.recover_catalog_artwork(
                                             generation,
@@ -722,7 +722,7 @@ impl Bridge {
             let Some((type_, id, mut urls)) = work.pop_front() else {
                 let msg = text::prefetch_done(cached as usize);
                 eprintln!("prefetch: {msg}");
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     // Newly cached episode lists feed badges/checks/Home.
                     bridge.sync_reconcile_progress_aliases();
                     bridge.refresh_library_progress_ui();
@@ -784,7 +784,7 @@ impl Bridge {
                                 let poster = poster.clone();
                                 let poster_type = type_.clone();
                                 let poster_id = id.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
+                                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                                     bridge.load_discover_poster(poster_type, poster_id, poster);
                                 });
                             }
@@ -1186,7 +1186,11 @@ impl Bridge {
         if has_query {
             let query = text.to_string();
             let bridge = self.clone();
+            let context = profiles::capture();
             slint::Timer::single_shot(Duration::from_millis(350), move || {
+                if !profiles::is_current(&context) {
+                    return;
+                }
                 let current = bridge.shared.lock().unwrap().search_generation == generation;
                 if current {
                     bridge.start_search(&query, false);
@@ -1288,7 +1292,7 @@ impl Bridge {
 
         if work.is_empty() {
             let bridge = self.clone();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge.apply_search_results(generation, Vec::new(), append);
             });
             return;
@@ -1307,7 +1311,7 @@ impl Bridge {
                         }
                     }
                 }
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     bridge.apply_search_results(generation, vec![(target_index, page)], append);
                 });
             });

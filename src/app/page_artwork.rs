@@ -207,7 +207,15 @@ struct Request {
 }
 struct Subscriber {
     request: Request,
+    context: profiles::Context,
     deliver: Box<dyn FnOnce(Request, Delivery) + Send>,
+}
+impl Subscriber {
+    fn dispatch(self, delivery: Delivery) {
+        // One transport may serve rows belonging to different profiles. Its
+        // launching worker does not own every subscriber's UI continuation.
+        profiles::with_context(self.context, || (self.deliver)(self.request, delivery));
+    }
 }
 /// A transport slot remains reserved until every subscriber has delivered or
 /// discarded its shared completion. Failed dispatch and early UI returns drop
@@ -302,7 +310,11 @@ fn pump() {
             return;
         };
         let worker_revision = image_settings_revision();
-        net::fetch_image(identity.url.clone(), identity.image_use, move |pixels| {
+        // The scheduler owns process-wide lanes. Always receive transport
+        // completion, including when the launching profile has been replaced;
+        // subscriber UI guards discard stale pixels while their RAII ack frees
+        // the lane after the last delivery is consumed or dropped.
+        nova_media::net::fetch_image(identity.url.clone(), identity.image_use, move |pixels| {
             let subscribers = {
                 let mut queue = QUEUE.lock().unwrap();
                 if pixels.is_none() {
@@ -330,13 +342,10 @@ fn pump() {
                 } else {
                     None
                 };
-                (subscriber.deliver)(
-                    subscriber.request,
-                    Delivery {
-                        pixels: delivered,
-                        _acknowledgement: acknowledgement.clone(),
-                    },
-                );
+                subscriber.dispatch(Delivery {
+                    pixels: delivered,
+                    _acknowledgement: acknowledgement.clone(),
+                });
             }
             // Clones share one backing buffer. Drop the transport's owner
             // before the final acknowledgement can admit another worker.
@@ -461,7 +470,7 @@ impl Bridge {
         let live = request.live.clone();
         let bridge = self.clone();
         let deliver = Box::new(move |request: Request, mut delivery: Delivery| {
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 let active = app.get_page_artwork_allowed()
                     && match request.page {
@@ -490,7 +499,11 @@ impl Bridge {
                 }
             });
         });
-        if !QUEUE.lock().unwrap().add(Subscriber { request, deliver }) {
+        if !QUEUE.lock().unwrap().add(Subscriber {
+            request,
+            context: profiles::capture(),
+            deliver,
+        }) {
             live.store(false, Ordering::Release);
             if let Some(row) = self
                 .shared
@@ -644,6 +657,7 @@ mod tests {
 
     fn subscriber(url: &str) -> Subscriber {
         Subscriber {
+            context: profiles::capture(),
             request: Request {
                 page: Page::Calendar,
                 key: url.into(),
@@ -704,6 +718,60 @@ mod tests {
         drop(successful);
         assert_eq!(released.load(Ordering::SeqCst), 1);
         assert_eq!(queue.lock().unwrap().next().unwrap().url, "e");
+    }
+
+    #[test]
+    fn coalesced_profiles_keep_each_context_and_discarded_callbacks_release_the_lane() {
+        let original_context = profiles::capture();
+        let queue = Arc::new(Mutex::new(Queue::default()));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let retained = Arc::new(Mutex::new(None::<Delivery>));
+        let mut outgoing =
+            profiles::with_context(profiles::context_for("alice"), || subscriber("shared"));
+        let old_observed = observed.clone();
+        outgoing.deliver = Box::new(move |_, delivery| {
+            old_observed.lock().unwrap().push(profiles::current_id());
+            // The outgoing profile's queued UI callback is discarded.
+            drop(delivery);
+        });
+        let mut selected =
+            profiles::with_context(profiles::context_for("bob"), || subscriber("shared"));
+        let new_observed = observed.clone();
+        let keep = retained.clone();
+        selected.deliver = Box::new(move |_, delivery| {
+            new_observed.lock().unwrap().push(profiles::current_id());
+            *keep.lock().unwrap() = Some(delivery);
+        });
+        let subscribers = {
+            let mut queue = queue.lock().unwrap();
+            assert!(queue.add(outgoing));
+            assert!(queue.add(selected));
+            for url in ["b", "c", "d", "pending"] {
+                assert!(queue.add(subscriber(url)));
+            }
+            for _ in 0..WORKERS {
+                assert!(queue.next().is_some());
+            }
+            assert!(queue.next().is_none());
+            queue.work.remove(&identity("shared")).unwrap().subscribers
+        };
+        let release_queue = queue.clone();
+        let acknowledgement = CompletionAck::new(move || release_queue.lock().unwrap().active -= 1);
+        for subscriber in subscribers {
+            subscriber.dispatch(Delivery {
+                pixels: None,
+                _acknowledgement: acknowledgement.clone(),
+            });
+        }
+        drop(acknowledgement);
+        assert_eq!(*observed.lock().unwrap(), vec!["alice", "bob"]);
+        assert_eq!(profiles::capture(), original_context);
+        assert!(
+            queue.lock().unwrap().next().is_none(),
+            "the selected profile still owns its queued delivery"
+        );
+        drop(retained.lock().unwrap().take());
+        assert_eq!(queue.lock().unwrap().next().unwrap().url, "pending");
     }
 
     #[test]

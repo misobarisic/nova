@@ -52,10 +52,11 @@ pub use models::{
 pub use registry::{
     ANIKOTO_PROVIDER_URL, ProviderCapabilities, SUPERNOVA_PROVIDER_URL,
     configure_provider_capabilities, configured_provider_manifest, fetch_builtin_addon,
-    fetch_builtin_addon_with_progress, fetch_builtin_addon_with_timeout, has_installed_provider,
-    installed_packages, mark_known_provider_ids, private_provider_id, provider_asset_bytes,
-    provider_capabilities, provider_owns_id, provider_settings_schema, resolve_provider_stream,
-    set_installed_packages, stable_stream_identity, stream_lookup_url, supports_capability_config,
+    fetch_builtin_addon_with_progress, fetch_builtin_addon_with_progress_for_generation,
+    fetch_builtin_addon_with_timeout, has_installed_provider, installed_packages,
+    mark_known_provider_ids, private_provider_id, provider_asset_bytes, provider_capabilities,
+    provider_owns_id, provider_settings_schema, resolve_provider_stream, set_installed_packages,
+    stable_stream_identity, stream_lookup_url, supports_capability_config,
     supports_contextual_streams, supports_provider_configuration,
 };
 pub use runtime::{

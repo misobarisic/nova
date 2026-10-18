@@ -29,6 +29,7 @@ mod merge;
 mod package;
 mod pair;
 mod playback;
+mod profiles;
 mod progress;
 mod protocol;
 mod store;
@@ -43,6 +44,7 @@ pub use package::{
 };
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
 pub use playback::{ALPN as PLAYBACK_ALPN, PreparedPlaybackRequest};
+pub use profiles::{is_progress_domain, parse_profile_domain, profile_domain};
 pub use protocol::ALPN;
 pub use store::{AckFloor, Store};
 pub use ticket::{decode_ticket, encode_ticket};

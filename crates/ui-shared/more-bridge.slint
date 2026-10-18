@@ -1,6 +1,19 @@
+import { ProfileRow } from "../ui/types.slint";
+
 // Persistent bindings connect backend state once; embedded roots share this object.
 export global MoreBridge {
     callback focus_shell();
+    in-out property <bool> profiles_open;
+    in-out property <[ProfileRow]> profiles;
+    in-out property <bool> profiles_busy;
+    in-out property <string> profiles_error;
+    in-out property <bool> profiles_remember_last: true;
+    in-out property <bool> profiles_require_selection;
+    callback profile_create(string);
+    callback profile_rename(string, string);
+    callback profile_switch(string);
+    callback profile_delete(string);
+    callback profile_remember_last_changed(bool);
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;

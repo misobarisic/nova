@@ -19,7 +19,7 @@ pub(super) fn pick_zip() {
 
 /// A delayed picker must never install into a replacement application root.
 fn deliver(bridge: Bridge, result: Result<Option<Vec<u8>>, &'static str>) {
-    let _ = slint::invoke_from_event_loop(move || {
+    let _ = crate::app::profiles::invoke_from_event_loop(move || {
         let current = super::bridge::with_global_bridge(|current| {
             Arc::ptr_eq(&current.shared, &bridge.shared)
         }) == Some(true);
@@ -41,7 +41,7 @@ fn deliver(bridge: Bridge, result: Result<Option<Vec<u8>>, &'static str>) {
 
 #[cfg(not(target_os = "android"))]
 fn launch(bridge: Bridge) {
-    std::thread::spawn(move || {
+    crate::app::profiles::thread::spawn(move || {
         use std::io::Read;
         let Some(path) = rfd::FileDialog::new()
             .set_title(text::tr("Choose an addon ZIP file…"))
@@ -52,7 +52,7 @@ fn launch(bridge: Bridge) {
             return;
         };
         let status_bridge = bridge.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if let Some(app) = status_bridge.app() {
                 app.set_addon_zip_import_status(text::tr("Reading addon ZIP…").into());
             }
@@ -85,11 +85,20 @@ mod android {
     const CLASS: &str = "dev.misob.nova.AddonImportActivity";
     static CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
     static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
-    static PENDING: Mutex<Option<(u64, Bridge)>> = Mutex::new(None);
+    struct Pending {
+        request: u64,
+        bridge: Bridge,
+        context: crate::app::profiles::Context,
+    }
+    static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
     pub(super) fn launch(bridge: Bridge) {
         let request = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
-        *PENDING.lock().unwrap() = Some((request, bridge));
+        *PENDING.lock().unwrap() = Some(Pending {
+            request,
+            bridge,
+            context: crate::app::profiles::capture(),
+        });
         let launched = super::super::android_bg::with_app_context(|env, raw| {
             let context = unsafe { JObject::from_raw(raw) };
             let class = super::super::android_bg::app_class(env, &context, CLASS, &CLASS_REF)?;
@@ -108,15 +117,22 @@ mod android {
     }
 
     fn complete(request: u64, result: Result<Option<Vec<u8>>, &'static str>) {
-        let bridge = {
+        let pending = {
             let mut pending = PENDING.lock().unwrap();
-            if pending.as_ref().is_none_or(|(id, _)| *id != request) {
+            if pending
+                .as_ref()
+                .is_none_or(|pending| pending.request != request)
+            {
                 return;
             }
-            pending.take().map(|(_, bridge)| bridge)
+            pending.take()
         };
-        if let Some(bridge) = bridge {
-            deliver(bridge, result);
+        if let Some(pending) = pending {
+            // JNI runs on a foreign thread. Preserve the profile that opened
+            // the picker so its queued completion is discarded after a switch.
+            crate::app::profiles::with_context(pending.context, || {
+                deliver(pending.bridge, result);
+            });
         }
     }
 

@@ -342,7 +342,7 @@ impl Coordinator {
         let publication = self.completion_publication.clone();
         let revision = publication.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         let error = self.completion_prompt_error.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::app::profiles::invoke_from_event_loop(move || {
             if publication.load(Ordering::Acquire) != revision {
                 return;
             }

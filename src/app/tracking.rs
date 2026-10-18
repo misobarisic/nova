@@ -17,6 +17,7 @@ struct CompletionPromptPolicy {
     revision: u64,
 }
 pub(super) struct TrackingHandle {
+    finished: Arc<AtomicBool>,
     tx: SyncSender<worker::Command>,
     alive: AtomicBool,
     rx: Mutex<Option<Receiver<worker::Command>>>,
@@ -29,6 +30,7 @@ impl TrackingHandle {
     pub(super) fn new() -> Self {
         let (tx, rx) = mpsc::sync_channel(64);
         Self {
+            finished: Arc::new(AtomicBool::new(true)),
             tx,
             alive: AtomicBool::new(true),
             rx: Mutex::new(Some(rx)),
@@ -62,6 +64,10 @@ impl TrackingHandle {
         if self.tx.try_send(command).is_err() {
             tracing::warn!("tracking command queue unavailable");
         }
+    }
+
+    pub(super) fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
     }
 }
 impl TrackingHandle {
@@ -118,13 +124,13 @@ impl Bridge {
             .unwrap()
             .cache_settings
             .completion_rating_prompts_enabled;
-        self.tracking.completion_policy_with(enabled, || {
+        self.tracking().completion_policy_with(enabled, || {
             let owner = nova_sync::local_store()
                 .map_err(|_| text::tr("Tracking event data needs recovery.").to_string())?;
             owner
                 .lock()
                 .unwrap()
-                .extra_value(nova_tracking::EVENT_COUNTER_KEY)
+                .extra_value(&profiles::storage_key(nova_tracking::EVENT_COUNTER_KEY))
                 .map_err(|_| text::tr("Tracking event data needs recovery.").to_string())?
                 .map(|raw| serde_json::from_str::<u64>(&raw))
                 .transpose()
@@ -136,20 +142,20 @@ impl Bridge {
         if self.tracking_completion_policy().is_err() {
             return;
         }
-        self.tracking
+        self.tracking()
             .send(worker::Command::CompletionPreferences { enabled });
     }
     pub(in crate::app) fn tracking_completion_sync_apply(&self) {
-        self.tracking.send(worker::Command::CompletionSync);
+        self.tracking().send(worker::Command::CompletionSync);
     }
     pub(in crate::app) fn refresh_completion_language_text(&self) {
-        self.tracking.send(worker::Command::CompletionRefresh);
+        self.tracking().send(worker::Command::CompletionRefresh);
     }
     pub(in crate::app) fn wire_completion_prompts(&self) {
         let Some(app) = self.app() else { return };
         let b = self.clone();
         app.on_completion_score_changed(move |token, id, value| {
-            b.tracking.send(worker::Command::CompletionScore {
+            b.tracking().send(worker::Command::CompletionScore {
                 token: token.to_string(),
                 id: id.to_string(),
                 value: value.to_string(),
@@ -157,32 +163,38 @@ impl Bridge {
         });
         let b = self.clone();
         app.on_completion_save(move |token| {
-            b.tracking.send(worker::Command::CompletionSave {
+            b.tracking().send(worker::Command::CompletionSave {
                 token: token.to_string(),
             });
         });
         let b = self.clone();
         app.on_completion_dismiss(move |token| {
-            b.tracking.send(worker::Command::CompletionDismiss {
+            b.tracking().send(worker::Command::CompletionDismiss {
                 token: token.to_string(),
             });
         });
     }
     pub(in crate::app) fn tracking_sync_apply(&self) {
-        self.tracking.send(worker::Command::Sync);
+        self.tracking().send(worker::Command::Sync);
     }
     pub(super) fn shutdown_tracking(&self) {
-        self.tracking.alive.store(false, Ordering::Release);
-        for epoch in &self.tracking.login_generation {
+        self.tracking().alive.store(false, Ordering::Release);
+        for epoch in &self.tracking().login_generation {
             epoch.fetch_add(1, Ordering::AcqRel);
         }
     }
     pub(super) fn initialize_tracking(&self) {
-        let Some(rx) = self.tracking.rx.lock().unwrap().take() else {
+        let handle = self.tracking();
+        let Some(rx) = handle.rx.lock().unwrap().take() else {
             return;
         };
+        handle.finished.store(false, Ordering::Release);
+        let done = profile_actions::WorkerDone(handle.finished.clone());
         let bridge = self.clone();
-        thread::spawn(move || worker::run(bridge, rx));
+        thread::spawn(move || {
+            let _done = done;
+            worker::run(bridge, rx);
+        });
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -477,20 +489,20 @@ pub(super) fn journal_progress(
     }
     changes.sort_by(|a, b| (&a.series_id, &a.episode_id).cmp(&(&b.series_id, &b.episode_id)));
     if store
-        .extra_value(nova_tracking::JOURNAL_ERROR_KEY)?
+        .extra_value(&profiles::storage_key(nova_tracking::JOURNAL_ERROR_KEY))?
         .is_some()
     {
         return Ok(());
     }
     let sequence = store
-        .extra_value(nova_tracking::EVENT_COUNTER_KEY)?
+        .extra_value(&profiles::storage_key(nova_tracking::EVENT_COUNTER_KEY))?
         .map(|raw| serde_json::from_str::<u64>(&raw))
         .transpose();
     let sequence = match sequence {
         Ok(value) => value.unwrap_or(0),
         Err(_) => {
             store.queue_extra(
-                nova_tracking::JOURNAL_ERROR_KEY,
+                &profiles::storage_key(nova_tracking::JOURNAL_ERROR_KEY),
                 Some("invalid event counter; primary retained".into()),
             );
             return Ok(());
@@ -498,7 +510,7 @@ pub(super) fn journal_progress(
     };
     let Some(sequence) = sequence.checked_add(1) else {
         store.queue_extra(
-            nova_tracking::JOURNAL_ERROR_KEY,
+            &profiles::storage_key(nova_tracking::JOURNAL_ERROR_KEY),
             Some("event counter exhausted; primary retained".into()),
         );
         return Ok(());
@@ -514,10 +526,13 @@ pub(super) fn journal_progress(
         date: Some(nova_tracking::ListDate::today()),
     };
     store.queue_extra(
-        &format!("{}{sequence:020}", nova_tracking::EVENT_PREFIX),
+        &profiles::storage_key(&format!("{}{sequence:020}", nova_tracking::EVENT_PREFIX)),
         Some(serde_json::to_string(&event)?),
     );
-    store.queue_extra(nova_tracking::EVENT_COUNTER_KEY, Some(sequence.to_string()));
+    store.queue_extra(
+        &profiles::storage_key(nova_tracking::EVENT_COUNTER_KEY),
+        Some(sequence.to_string()),
+    );
     Ok(())
 }
 

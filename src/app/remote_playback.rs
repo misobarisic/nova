@@ -494,7 +494,7 @@ impl Bridge {
             let bridge = bridge.clone();
             // Completion drops if the app event loop has shut down; the transport
             // times out. A headless job never installs this adapter.
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 bridge.receive_playback_request(peer, request, done)
             });
         })));
@@ -610,8 +610,8 @@ impl Bridge {
             return PlaybackSnapshot::default();
         };
         let state = self.shared.lock().unwrap();
-        // Opted-out devices do not expose titles, tracks or session details.
-        if !state.cache_settings.remote_control_enabled {
+        // Wait for a local profile choice before exposing its playback state.
+        if !state.cache_settings.remote_control_enabled || app.get_profiles_require_selection() {
             return PlaybackSnapshot::default();
         }
         let remote = &state.remote_playback;
@@ -743,7 +743,11 @@ impl Bridge {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
-        if !FOREGROUND.load(Ordering::Acquire) || self.app().is_none() {
+        if !FOREGROUND.load(Ordering::Acquire)
+            || self
+                .app()
+                .is_none_or(|app| app.get_profiles_require_selection())
+        {
             done(Response::Error(PlaybackError::Unavailable));
             return;
         }
@@ -913,7 +917,7 @@ impl Bridge {
                 .ok()
                 .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
                 .filter(|item| meta_matches_request(item, &media.media_type, &media.title_id));
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 b.apply_remote_metadata(peer, media, urls, item, done);
             });
         });
@@ -1027,7 +1031,7 @@ impl Bridge {
                     .ok()
                     .and_then(|bytes| Addon::parse_streams(&bytes).ok())
                     .unwrap_or_default();
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     if !peer.is_authorized() || !bridge.remote_control_enabled() {
                         if let Some(done) = batch.lock().unwrap().done.take() {
                             done(Response::Error(PlaybackError::Unauthorized));
@@ -1506,7 +1510,7 @@ impl Bridge {
         };
         thread::spawn(move || {
             let response = engine.request_prepared_playback(request);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if b.shared.lock().unwrap().remote_playback.generation != generation {
                     return;
                 }
@@ -1686,7 +1690,7 @@ impl Bridge {
         };
         thread::spawn(move || {
             let response = engine.request_prepared_playback(request);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if b.shared.lock().unwrap().remote_playback.generation != generation {
                     return;
                 }
@@ -2136,7 +2140,7 @@ impl Bridge {
                 } else {
                     Err(std::io::Error::other("playback controller backgrounded").into())
                 };
-                let _ = slint::invoke_from_event_loop(move || {
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     {
                         let mut state = b.shared.lock().unwrap();
                         if state.remote_playback.generation != generation {
@@ -2324,7 +2328,7 @@ impl Bridge {
                 .into_iter()
                 .filter_map(|h| h.join().ok())
                 .collect::<Vec<_>>();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 {
                     let mut state = b.shared.lock().unwrap();
                     let r = &mut state.remote_playback;

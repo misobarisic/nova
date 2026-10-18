@@ -188,7 +188,7 @@ impl Bridge {
             if session.is_none() {
                 // Matching the transport continuation keeps JSON decoding away
                 // from the UI thread and never logs a potentially signed URL.
-                std::thread::Builder::new()
+                crate::app::profiles::thread::Builder::new()
                     .name("stream-cache-hit".into())
                     .spawn(move || {
                         on_complete(Ok(StreamResponse {
@@ -437,7 +437,7 @@ mod tests {
         let url = format!("{owner}/stream/series/episode.json");
         let (accepted_tx, accepted_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let fixture = std::thread::spawn(move || {
+        let fixture = crate::app::profiles::thread::spawn(move || {
             let (mut socket, _) = server.accept().unwrap();
             let mut request = [0; 4096];
             // This fixture only needs to know the request started; a partial
