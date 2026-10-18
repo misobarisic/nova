@@ -276,13 +276,16 @@ export component SettingsAddonsModule inherits Window {
                     vertical-stretch: 0;
                     // As with install_box, wrapped text needs a measured
                     // height so Flickable includes every line in its extent.
-                    min-height: 52px + cinemeta_description_measure.height;
-                    Text {
+                    min-height: cinemeta_description_measure.height + 8px + cinemeta_add.height;
+                    // Plain children otherwise centre in the extra button space.
+                    cinemeta_description := Text {
+                        x: 0px; y: 0px;
                         width: 100%; height: cinemeta_description_measure.height;
                         text: @tr("Cinemeta supplies movie and series catalogs and metadata. It does not provide streams.");
                         font-size: 14px; wrap: word-wrap; color: Theme.current.text_secondary;
                     }
-                    PillButton {
+                    cinemeta_add := PillButton {
+                        x: 0px;
                         y: cinemeta_description_measure.height + 8px;
                         label: @tr("Add Cinemeta");
                         clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_added("https://v3-cinemeta.strem.io"); }

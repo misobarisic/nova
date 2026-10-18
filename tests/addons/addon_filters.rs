@@ -229,3 +229,73 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
     app.run().unwrap();
     assert!(completed.get());
 }
+
+#[test]
+fn cinemeta_install_button_stays_below_wrapped_description() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::cinemeta_install_button_stays_below_wrapped_description"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(0);
+    app.set_settings_detail_open(true);
+    app.set_cinemeta_installed(false);
+    let installs = Rc::new(RefCell::new(Vec::new()));
+    let recorded = installs.clone();
+    app.on_addon_added(move |url| recorded.borrow_mut().push(url.to_string()));
+    app.show().unwrap();
+    for locale in ["en", "hr"] {
+        slint::select_bundled_translation(locale).unwrap();
+        for android in [false, true] {
+            app.set_is_android(android);
+            for width in [320, 360, 1280] {
+                app.window().set_size(slint::PhysicalSize::new(width, 900));
+                app.set_settings_scroll_y(0.0);
+                for _ in 0..12 {
+                    for element in ElementQuery::from_root(&app)
+                        .match_predicate(|_| true)
+                        .find_all()
+                    {
+                        let _ = (element.absolute_position(), element.size());
+                    }
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(40));
+                }
+                let description = ElementHandle::find_by_element_id(
+                    &app,
+                    "SettingsAddonsModule::cinemeta_description",
+                )
+                .next()
+                .expect("Cinemeta description");
+                let button =
+                    ElementHandle::find_by_element_id(&app, "SettingsAddonsModule::cinemeta_add")
+                        .next()
+                        .expect("Add Cinemeta button");
+                let text_bottom = description.absolute_position().y + description.size().height;
+                assert!(
+                    button.absolute_position().y >= text_bottom + 7.5,
+                    "{locale}, Android={android}, width={width}: button overlaps description"
+                );
+                assert!(
+                    (button.absolute_position().x - description.absolute_position().x).abs() < 0.5,
+                    "button and description must share their left edge"
+                );
+                assert!(button.size().height >= 44.0);
+                assert!(button.absolute_position().x + button.size().width <= width as f32);
+                let before = installs.borrow().len();
+                button.mock_single_click(slint::platform::PointerEventButton::Left);
+                assert_eq!(installs.borrow().len(), before + 1);
+                assert_eq!(
+                    installs.borrow().last().unwrap(),
+                    "https://v3-cinemeta.strem.io"
+                );
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}
