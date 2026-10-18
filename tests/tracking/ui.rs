@@ -254,17 +254,45 @@ async fn scroll_down(app: &nova::AppWindow) {
 }
 fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     let width = app.window().size().width as f32;
+    let rail = ElementHandle::find_by_element_id(app, "TrackingPanel::service_rail").next();
+    let rail_children = rail
+        .as_ref()
+        .map(|rail| {
+            let p = rail.absolute_position();
+            assert!(
+                p.x >= 0.0 && p.x + rail.size().width <= width + 1.0,
+                "the service selector viewport must fit the phone"
+            );
+            rail.query_descendants()
+                .match_predicate(|_: &ElementHandle| true)
+                .find_all()
+        })
+        .unwrap_or_default();
     for element in ElementQuery::from_root(app)
         .match_predicate(|_: &ElementHandle| true)
         .find_all()
     {
         let p = element.absolute_position();
         let size = element.size();
-        if p.x >= 0.0 && p.x < width && size.width > 0.0 && p.x + size.width > width + 1.0 {
+        let mut right = p.x + size.width;
+        // The service selector deliberately pans horizontally. Inspection
+        // exposes its partially clipped layout/buttons at their full bounds;
+        // only their intersection with this bounded viewport can be overflow.
+        // Keep every other descendant checked, including the document itself.
+        if let Some(rail) = rail.as_ref()
+            && rail_children.iter().any(|child| {
+                child.id() == element.id()
+                    && child.type_name() == element.type_name()
+                    && child.absolute_position() == p
+                    && child.size() == size
+            })
+        {
+            right = right.min(rail.absolute_position().x + rail.size().width);
+        }
+        if p.x >= 0.0 && p.x < width && size.width > 0.0 && right > width + 1.0 {
             failures.borrow_mut().push(format!(
-                "element extends to {}, viewport {}",
-                p.x + size.width,
-                width
+                "element {:?} extends to {right}, viewport {width}",
+                element.id()
             ));
         }
     }

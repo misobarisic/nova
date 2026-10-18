@@ -77,6 +77,12 @@ export component HomeBindings {
 }
 
 export component DetailBindings {
+    in-out property <bool> list_services_title_selected <=> DetailBridge.list_services_title_selected;
+    in-out property <bool> list_services_title_connected <=> DetailBridge.list_services_title_connected;
+    in-out property <bool> list_services_title_busy <=> DetailBridge.list_services_title_busy;
+    in-out property <bool> list_services_title_resolved <=> DetailBridge.list_services_title_resolved;
+    in-out property <string> list_services_title_status <=> DetailBridge.list_services_title_status;
+    in-out property <string> list_services_title_identity <=> DetailBridge.list_services_title_identity;
     in-out property <int> tracking_service <=> DetailBridge.tracking_service;
     in-out property <bool> tracking_open <=> DetailBridge.tracking_open;
     in-out property <int> tracking_return_tab <=> DetailBridge.tracking_return_tab;

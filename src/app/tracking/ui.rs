@@ -3,6 +3,56 @@ use super::*;
 use nova_tracking::auth::{AuthReturn, ClientRegistration};
 use worker::Command;
 impl Bridge {
+    pub(in crate::app) fn tracking_library_policy_changed(&self) {
+        let handle = self.tracking();
+        for generation in &handle.library_generation {
+            generation.fetch_add(1, Ordering::AcqRel);
+        }
+        handle
+            .library_commands
+            .lock()
+            .unwrap()
+            .push_back(Command::LibraryPolicySync);
+    }
+    pub(in crate::app) fn tracking_library_action(
+        &self,
+        index: i32,
+        action: i32,
+        revision: String,
+        include_history: bool,
+    ) {
+        let Some(service) = service(index) else {
+            return;
+        };
+        let handle = self.tracking();
+        let generation = if matches!(action, 2 | 7) {
+            handle.library_generation[service_index(service)].fetch_add(1, Ordering::AcqRel) + 1
+        } else {
+            handle.library_generation[service_index(service)].load(Ordering::Acquire)
+        };
+        handle
+            .library_commands
+            .lock()
+            .unwrap()
+            .push_back(Command::LibraryAction {
+                service,
+                action,
+                revision,
+                include_history,
+                generation,
+            });
+        if matches!(action, 5 | 6)
+            && let Some(app) = self.app()
+        {
+            app.set_tracking_library_prompt_open(false);
+            if action == 5 {
+                app.invoke_settings_picked();
+                app.set_settings_selected_id(12);
+                app.set_settings_detail_open(true);
+            }
+        }
+    }
+
     pub(in crate::app) fn tracking_metadata(&self, id: String, type_: String, videos: &[Video]) {
         let source = SourceRef {
             provider_id: "nova".into(),

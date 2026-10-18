@@ -11,6 +11,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_tracking_complete => invoke_settings_bridge_tracking_complete(arg0, arg1),
         on_tracking_disconnect => invoke_settings_bridge_tracking_disconnect(arg0),
         on_tracking_cancel => invoke_settings_bridge_tracking_cancel(arg0),
+        on_tracking_library_action => invoke_settings_bridge_tracking_library_action(arg0,arg1,arg2,arg3),
         on_tracking_automatic => invoke_settings_bridge_tracking_automatic(arg0, arg1),
         on_playback_language_search => invoke_settings_bridge_playback_language_search(arg0, arg1),
         on_playback_language_picked => invoke_settings_bridge_playback_language_picked(arg0, arg1),

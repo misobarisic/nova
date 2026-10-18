@@ -415,6 +415,7 @@ mod tests {
                 account_generation: NonZeroU64::MIN,
                 mapping_revision: NonZeroU64::MIN,
                 enabled: true,
+                bulk_origin: false,
                 assignments: vec![Assignment {
                     episode_id: "ep".into(),
                     target_episode: n(1),

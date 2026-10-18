@@ -684,6 +684,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_tracking_automatic(move |service, enabled| b.tracking_automatic(service, enabled));
     let b = bridge.clone();
+    app.on_tracking_library_action(move |service, action, revision, history| {
+        b.tracking_library_action(service, action, revision.to_string(), history)
+    });
+    let b = bridge.clone();
     app.on_tracking_show(move || b.tracking_show());
     let b = bridge.clone();
     app.on_tracking_close(move || b.tracking_close());

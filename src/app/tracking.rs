@@ -1,8 +1,10 @@
 //! Tracking coordinator, peer projection and local semantic playback journal.
 use super::*;
 use crate::providers;
+mod library_policy;
 mod ui;
 mod worker;
+pub(super) const LIBRARY_POLICY_DOMAIN: &str = library_policy::DOMAIN;
 pub(super) fn sign_in_background() -> Result<Box<dyn Send>, String> {
     worker::sign_in_background()
 }
@@ -22,6 +24,8 @@ pub(super) struct TrackingHandle {
     alive: AtomicBool,
     rx: Mutex<Option<Receiver<worker::Command>>>,
     context_generation: AtomicU64,
+    library_generation: [AtomicU64; 2],
+    library_commands: Mutex<std::collections::VecDeque<worker::Command>>,
     context_evidence: Mutex<Option<(SourceRef, Vec<nova_tracking::EpisodeInfo>)>>,
     login_generation: [AtomicU64; 2],
     completion_policy: Mutex<Option<CompletionPromptPolicy>>,
@@ -35,6 +39,8 @@ impl TrackingHandle {
             alive: AtomicBool::new(true),
             rx: Mutex::new(Some(rx)),
             context_generation: AtomicU64::new(0),
+            library_generation: std::array::from_fn(|_| AtomicU64::new(0)),
+            library_commands: Mutex::new(std::collections::VecDeque::new()),
             context_evidence: Mutex::new(None),
             login_generation: [AtomicU64::new(0), AtomicU64::new(0)],
             completion_policy: Mutex::new(None),

@@ -271,6 +271,94 @@ impl Outbox {
 }
 
 impl TrackingState {
+    /// Revoke unsent contributions without losing valid offline progress from
+    /// another source sharing this target. Explicit replacement intents are
+    /// never reconstructed as automatic work.
+    pub fn restrict_automatic_sources(
+        &mut self,
+        key: &TargetKey,
+        allowed: &[SourceRef],
+    ) -> Result<(), TrackingError> {
+        let revoked = self
+            .bindings
+            .iter()
+            .any(|b| b.enabled && b.target == *key && !allowed.contains(&b.source));
+        let changed = self
+            .projections
+            .iter_mut()
+            .find(|p| p.target == *key)
+            .map(|p| p.retain_authorized_sources(allowed, revoked))
+            .transpose()?
+            .unwrap_or(false);
+        let target_allowed = self
+            .bindings
+            .iter()
+            .any(|b| b.enabled && b.target == *key && allowed.contains(&b.source));
+        if !target_allowed {
+            self.outbox.cancel_unsent(key);
+            return Ok(());
+        }
+        // Field edits express independent user consent for this target. Keep
+        // them while any authorized link remains; completion-only ratings
+        // additionally retain the scope captured by their completion event.
+        let bindings = &self.bindings;
+        self.outbox.edits.retain(|edit| {
+            edit.target != *key
+                || edit.state == DeliveryState::InFlight
+                || edit.completion_mappings.iter().all(|stamp| {
+                    allowed.contains(&stamp.source)
+                        && bindings.iter().any(|binding| {
+                            binding.enabled
+                                && binding.target == *key
+                                && binding.account_generation == edit.account_generation
+                                && stamp.matches(binding)
+                        })
+                })
+        });
+        let pending_revoked =
+            self.outbox.pending.iter().any(|p| {
+                p.target == *key && p.mappings.iter().any(|m| !allowed.contains(&m.source))
+            });
+        if !changed && !pending_revoked {
+            return Ok(());
+        }
+        let automatic = self
+            .outbox
+            .pending
+            .iter()
+            .any(|p| p.target == *key && p.intent == ProgressIntent::AutomaticForward);
+        self.outbox
+            .pending
+            .retain(|patch| patch.target != *key || patch.state == DeliveryState::InFlight);
+        let forward = self
+            .projections
+            .iter()
+            .find(|p| p.target == *key)
+            .zip(self.targets.iter().find(|t| t.key == *key))
+            .map(|(p, t)| p.proposal(t).map(|v| v.progress > p.remote_baseline()))
+            .transpose()?
+            .unwrap_or(false);
+        if automatic && forward && !allowed.is_empty() {
+            let masked = self
+                .bindings
+                .iter_mut()
+                .filter(|b| b.enabled && b.target == *key && !allowed.contains(&b.source))
+                .map(|b| {
+                    b.enabled = false;
+                    b.id.clone()
+                })
+                .collect::<Vec<_>>();
+            let result = self.enqueue_progress(key, ProgressIntent::AutomaticForward);
+            for b in &mut self.bindings {
+                if masked.contains(&b.id) {
+                    b.enabled = true;
+                }
+            }
+            result?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn enqueue_progress(
         &mut self,
         target_key: &TargetKey,

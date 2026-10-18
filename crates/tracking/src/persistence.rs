@@ -5,7 +5,7 @@ use crate::{TrackingState, ValidationError};
 pub const TRACKING_STATE_KEY: &str = "tracking:state:v1";
 // Keep the storage key stable so an older binary encounters the newer
 // envelope and refuses to overwrite durable intents it cannot understand.
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 /// Injection keeps recovery tests independent of the process-global database.
 pub trait StateStorage {
@@ -152,6 +152,20 @@ impl<S: StateStorage> Store<S> {
             }
             if version >= 4 && value["state"].get("completion").is_none() {
                 return Err("missing completion policy in tracking schema 4".into());
+            }
+            if version >= 5
+                && value["state"]["projections"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|p| p.get("accepted_by_source").is_none()))
+            {
+                return Err("missing accepted source contributions in tracking schema 5".into());
+            }
+            if version >= 5
+                && value["state"]["bindings"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|b| b.get("bulk_origin").is_none()))
+            {
+                return Err("missing binding ownership in tracking schema 5".into());
             }
             let envelope: Envelope = serde_json::from_value(value).map_err(|e| e.to_string())?;
             envelope.state.validate().map_err(|e| e.to_string())?;

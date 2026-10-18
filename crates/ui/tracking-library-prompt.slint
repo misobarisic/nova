@@ -1,0 +1,53 @@
+import { Theme } from "@NovaUiShared";
+import { PillButton } from "settings-controls.slint";
+import { ScrollView } from "scrollview.slint";
+
+// A new season never inherits an old release's mapping. The prompt only opens
+// a review; creating the additional link still requires explicit acceptance.
+export component TrackingLibraryPrompt inherits Rectangle {
+    in property <string> title;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback review();
+    callback dismiss();
+    background: #0009;
+    forward-focus: later;
+    init => { later.focus(); }
+    TouchArea { width: 100%; height: 100%; }
+    FocusScope {
+        width: 100%; height: 100%;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape || event.text == Key.Back || event.text == Key.Backspace {
+                if !event.repeat { root.dismiss(); }
+                accept
+            } else { reject }
+        }
+        Rectangle {
+            width: Math.min(Math.max(0px, parent.width - root.safe-left - root.safe-right - 32px), 560px);
+            height: Math.min(Math.max(0px, parent.height - root.safe-top - root.safe-bottom - 32px), 400px);
+            x: root.safe-left + (parent.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.safe-top + (parent.height - root.safe-top - root.safe-bottom - self.height) / 2;
+            background: Theme.current.settings_control;
+            border-radius: 16px;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                ScrollView {
+                    min-height: 0px;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 12px;
+                        Text { text: @tr("New anime release needs review"); color: Theme.current.text_settings; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                        Text { text: root.title; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+                        Text { text: @tr("You watched episodes outside the approved tracker links. Review the additional release before syncing them. Existing season links stay unchanged."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+                    }
+                }
+                PillButton { label: @tr("Review new releases"); primary: true; wrap_label: true; vertical-stretch: 0; clicked => { root.review(); } }
+                later := PillButton { label: @tr("Not now"); wrap_label: true; vertical-stretch: 0; clicked => { root.dismiss(); } }
+            }
+        }
+    }
+}

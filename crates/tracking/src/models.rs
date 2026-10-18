@@ -65,6 +65,10 @@ pub struct Binding {
     pub account_generation: NonZeroU64,
     pub mapping_revision: NonZeroU64,
     pub enabled: bool,
+    /// Travels with the link so a missing or reset policy record cannot turn
+    /// whole-library consent into an explicit title choice on another device.
+    #[serde(default)]
+    pub bulk_origin: bool,
     pub assignments: Vec<Assignment>,
 }
 

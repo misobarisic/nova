@@ -169,6 +169,7 @@ mod tests {
             account_generation: std::num::NonZeroU64::MIN,
             mapping_revision: std::num::NonZeroU64::MIN,
             enabled: true,
+            bulk_origin: false,
             assignments: vec![],
         });
         let candidates = vec![Media {

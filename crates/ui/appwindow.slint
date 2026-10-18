@@ -1,3 +1,4 @@
+import { TrackingLibraryPrompt } from "tracking-library-prompt.slint";
 import { CompletionRatingPrompt } from "completion-rating.slint";
 import { PlatformIcon } from "platform-icon.slint";
 import { PlaybackEnded } from "playback-ended.slint";
@@ -36,6 +37,17 @@ import { BottomNav } from "bottomnav.slint";
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    in-out property <bool> tracking_library_title_full <=> SettingsBridge.tracking_library_title_full;
+    in-out property <bool> tracking_library_title_excluded <=> SettingsBridge.tracking_library_title_excluded;
+    in-out property <string> tracking_library_title_token <=> SettingsBridge.tracking_library_title_token;
+    in-out property <bool> tracking_library_prompt_open;
+    in-out property <int> tracking_library_prompt_service;
+    in-out property <string> tracking_library_prompt_revision;
+    in-out property <string> tracking_library_prompt_title;
+    out property <bool> tracking_library_prompt_visible: root.tracking_library_prompt_open && !root.player_open && !root.stream_selector_open && !root.onboarding_visible && !root.completion_prompt_visible && !root.show_settings && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.resume_prompt_visible && !root.categories_modal && !root.library_duplicates_open && !SettingsSync.open && !DetailContent.entry_editing;
+    changed tracking_library_prompt_visible => { if !root.tracking_library_prompt_visible {prompt_focus_restore_timer.start();page_release_timer.start();} }
+    callback tracking_library_action(int,int,string,bool);
+    public function settings_bridge_tracking_library_action(service:int,action:int,revision:string,history:bool) {root.tracking_library_action(service,action,revision,history);}
     in-out property <bool> completion_prompt_open <=> CompletionBridge.open;
     in-out property <string> completion_prompt_token <=> CompletionBridge.token;
     in-out property <string> completion_prompt_title <=> CompletionBridge.title;
@@ -405,6 +417,12 @@ export component AppWindow inherits Window {
         upcoming_x <=> root.home_upcoming_x;
     }
     DetailBindings {
+        list_services_title_selected <=> root.list_services_title_selected;
+        list_services_title_connected <=> root.list_services_title_connected;
+        list_services_title_busy <=> root.list_services_title_busy;
+        list_services_title_resolved <=> root.list_services_title_resolved;
+        list_services_title_status <=> root.list_services_title_status;
+        list_services_title_identity <=> root.list_services_title_identity;
         tracking_service <=> root.tracking_service;
         tracking_open <=> root.tracking_open;
         tracking_return_tab <=> root.tracking_return_tab;
@@ -670,6 +688,12 @@ export component AppWindow inherits Window {
     callback onboarding_finished();
 
     property <int> back_focus_request: 0;
+    // Recover the underlying page after this additional popup closes.
+    prompt_focus_restore_timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.stop(); root.preserve_back_focus(); }
+    }
     changed back_focus_request => { if !root.completion_prompt_visible && !root.playback_end_menu_shown { system_back_scope.focus(); } }
     // Factory construction temporarily blocks focus changes. Recover native
     // keyboard navigation after publication only while the persistent scope
@@ -2131,6 +2155,8 @@ export component AppWindow inherits Window {
             if (!root.player_open && (e.text == "\u{e100}" || e.text == "\u{e101}" || e.text == "\u{e102}" || e.text == "\u{e103}" || e.text == "\u{e104}" || e.text == "\u{e105}" || e.text == "\u{e106}" || e.text == "\u{e107}")) {
                 // Transport events must never insert private-use characters in editors.
                 accept
+            } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.tracking_library_prompt_visible) {
+                if !e.repeat {root.tracking_library_action(root.tracking_library_prompt_service,6,root.tracking_library_prompt_revision,false);} accept
             } else if (e.text == Key.Escape && root.completion_prompt_visible) {
                 if !e.repeat { CompletionBridge.dismiss(CompletionBridge.token); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.playback_end_menu_shown) {
@@ -2162,6 +2188,8 @@ export component AppWindow inherits Window {
                     // page or overlay, including before its first pointer press.
                     root.system_back_request += 1;
                     accept
+                } else if (root.tracking_library_prompt_visible) {
+                    root.tracking_library_action(root.tracking_library_prompt_service,6,root.tracking_library_prompt_revision,false); accept
                 } else if (root.completion_prompt_visible) {
                     CompletionBridge.dismiss(CompletionBridge.token); accept
                 } else if (root.party_page_open) {
@@ -2264,12 +2292,6 @@ export component AppWindow inherits Window {
 
     // ---- Detail page ---------------------------------------------------
     if root.detail_page_mounted: DetailHost {
-        list_services_title_selected <=> root.list_services_title_selected;
-        list_services_title_connected <=> root.list_services_title_connected;
-        list_services_title_busy <=> root.list_services_title_busy;
-        list_services_title_resolved <=> root.list_services_title_resolved;
-        list_services_title_status <=> root.list_services_title_status;
-        list_services_title_identity <=> root.list_services_title_identity;
         viewport_width: self.width; viewport_height: self.height;
         tracking_links: root.tracking_links;
         tracking_candidates: root.tracking_candidates;
@@ -2678,6 +2700,13 @@ export component AppWindow inherits Window {
         view_release => { root.update_release_requested(); root.update_notice_visible = false; root.preserve_back_focus(); page_release_timer.start(); }
     }
 
+    if root.tracking_library_prompt_visible: TrackingLibraryPrompt {
+        width:parent.width;height:parent.height;title:root.tracking_library_prompt_title;
+        safe-top:root.safe-area-insets.top; safe-bottom:root.safe-area-insets.bottom;
+        safe-left:root.safe-area-insets.left; safe-right:root.safe-area-insets.right;
+        review => {root.tracking_library_action(root.tracking_library_prompt_service,5,root.tracking_library_prompt_revision,false);}
+        dismiss => {root.tracking_library_action(root.tracking_library_prompt_service,6,root.tracking_library_prompt_revision,false);}
+    }
     if root.completion_prompt_visible: CompletionRatingPrompt {
         width: parent.width; height: parent.height;
         phone: !InterfaceStyle.tv && (root.is_android || root.narrow_ui);

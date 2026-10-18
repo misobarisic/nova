@@ -42,6 +42,7 @@ fn binding(target: &Target, source: &str, id: &str, assignments: &[(&str, u32)])
         account_generation: rev(1),
         mapping_revision: rev(1),
         enabled: true,
+        bulk_origin: false,
         assignments: assignments
             .iter()
             .map(|(id, number)| Assignment {
@@ -107,6 +108,206 @@ fn merged_source_has_independent_release_coverage() {
         }
     );
     assert_eq!(projection.proposal(&a), Err(ProjectionError::WrongTarget));
+}
+
+#[test]
+fn scope_revocation_rebuilds_only_surviving_offline_progress() {
+    for (explicit_progress, bulk_progress) in [(1, 12), (12, 5)] {
+        let mut state = delivery_state();
+        let key = state.targets[0].key.clone();
+        let explicit = binding(
+            &state.targets[0],
+            "explicit",
+            "a",
+            &[("a", explicit_progress)],
+        );
+        let mut bulk = binding(&state.targets[0], "bulk", "c", &[("c", bulk_progress)]);
+        bulk.bulk_origin = true;
+        state.bindings = vec![explicit.clone(), bulk.clone()];
+        state
+            .observe_episode("a", &episode(&explicit, "a"), true)
+            .unwrap();
+        state
+            .observe_episode("c", &episode(&bulk, "c"), true)
+            .unwrap();
+        state
+            .restrict_automatic_sources(&key, std::slice::from_ref(&explicit.source))
+            .unwrap();
+        assert!(
+            state.bindings.iter().all(|b| b.enabled),
+            "scope must preserve mappings"
+        );
+        let pending = state
+            .outbox
+            .pending()
+            .iter()
+            .find(|p| p.target == key)
+            .unwrap();
+        assert_eq!(pending.progress, explicit_progress);
+        assert_eq!(pending.intent, ProgressIntent::AutomaticForward);
+        assert_eq!(pending.mappings.len(), 1);
+        assert_eq!(pending.mappings[0].source, explicit.source);
+        assert_eq!(
+            state.projections[0]
+                .proposal(&state.targets[0])
+                .unwrap()
+                .progress,
+            explicit_progress
+        );
+        state.validate().unwrap();
+    }
+}
+
+#[test]
+fn scope_revocation_preserves_manual_fields_and_only_authorized_completion_ratings() {
+    for completion_source in [None, Some("explicit"), Some("bulk")] {
+        let mut state = delivery_state();
+        let key = state.targets[0].key.clone();
+        let explicit = binding(&state.targets[0], "explicit", "a", &[("a", 1)]);
+        let mut bulk = binding(&state.targets[0], "bulk", "c", &[("c", 12)]);
+        bulk.bulk_origin = true;
+        state.bindings = vec![explicit.clone(), bulk.clone()];
+        state.snapshots.push(snapshot(&state));
+        state
+            .observe_episode("a", &episode(&explicit, "a"), true)
+            .unwrap();
+        state
+            .observe_episode("c", &episode(&bulk, "c"), true)
+            .unwrap();
+        let mut patch = EntryPatch {
+            score_tenths: Some(85),
+            ..Default::default()
+        };
+        if completion_source.is_none() {
+            patch.status = Some(ListStatus::OnHold);
+            patch.started = Some(ListDate {
+                year: Some(2026),
+                month: Some(10),
+                day: Some(18),
+            });
+        }
+        state.enqueue_edit(&key, patch).unwrap();
+        let edit = &mut state.outbox.edits[0];
+        edit.attempts = 3;
+        edit.next_attempt_at = 77;
+        if let Some(source) = completion_source {
+            edit.only_if_unrated = true;
+            edit.completion_mappings = vec![MappingStamp::from_binding(if source == "explicit" {
+                &explicit
+            } else {
+                &bulk
+            })];
+        }
+        let expected = edit.clone();
+        state
+            .restrict_automatic_sources(&key, std::slice::from_ref(&explicit.source))
+            .unwrap();
+        if completion_source == Some("bulk") {
+            assert!(
+                state.outbox.edits().is_empty(),
+                "revoked completion permission must not survive"
+            );
+        } else {
+            assert_eq!(
+                state.outbox.edits(),
+                &[expected],
+                "scope changes must retain independent fields and retry state"
+            );
+        }
+        state.validate().unwrap();
+        state.restrict_automatic_sources(&key, &[]).unwrap();
+        assert!(
+            state.outbox.edits().is_empty(),
+            "no remaining allowed link revokes unsent field work"
+        );
+        assert!(state.outbox.pending().is_empty());
+    }
+}
+
+#[test]
+fn scope_revocation_preserves_remote_baseline_and_checkpoint_allows_rewatch() {
+    let target = target(Service::AniList, 1);
+    let explicit = binding(&target, "explicit", "a", &[("a", 1)]);
+    let bulk = binding(&target, "bulk", "c", &[("c", 12)]);
+    let watched = episode(&bulk, "c");
+    let mut projection = Projection::new(target.key.clone(), rev(1), 8, vec![]);
+    projection.observe(&bulk, &watched, true).unwrap();
+    projection
+        .retain_authorized_sources(std::slice::from_ref(&explicit.source), true)
+        .unwrap();
+    assert_eq!(projection.proposal(&target).unwrap().progress, 8);
+    projection.checkpoint(&bulk, &watched, false).unwrap();
+    assert_eq!(projection.proposal(&target).unwrap().progress, 8);
+    assert!(projection.observe(&bulk, &watched, true).unwrap());
+    assert_eq!(projection.proposal(&target).unwrap().progress, 12);
+}
+
+#[test]
+fn legacy_unattributed_accepted_scalar_is_revoked_fail_closed() {
+    let target = target(Service::AniList, 1);
+    let old = binding(&target, "bulk", "c", &[("c", 12)]);
+    let mut projection = Projection::new(target.key.clone(), rev(1), 3, vec![]);
+    projection.observe(&old, &episode(&old, "c"), true).unwrap();
+    let mut value = serde_json::to_value(&projection).unwrap();
+    value.as_object_mut().unwrap().remove("accepted_by_source");
+    value["mappings"] = serde_json::json!([]);
+    let mut migrated: Projection = serde_json::from_value(value).unwrap();
+    assert!(migrated.retain_authorized_sources(&[], true).unwrap());
+    assert_eq!(migrated.proposal(&target).unwrap().progress, 3);
+}
+
+#[test]
+fn source_contribution_schema_rejects_duplicates_invalid_sources_and_missing_current_field() {
+    let mut state = delivery_state();
+    let b = state.bindings[0].clone();
+    state
+        .observe_episode(&b.id, &episode(&b, "episode-12"), true)
+        .unwrap();
+    let value = serde_json::to_value(&state).unwrap();
+    for invalid in ["duplicate", "empty"] {
+        let mut bad = value.clone();
+        if invalid == "duplicate" {
+            let row = bad["projections"][0]["accepted_by_source"][0].clone();
+            bad["projections"][0]["accepted_by_source"]
+                .as_array_mut()
+                .unwrap()
+                .push(row);
+        } else {
+            bad["projections"][0]["accepted_by_source"][0]["source"]["source_id"] = "".into();
+        }
+        let decoded: TrackingState = serde_json::from_value(bad).unwrap();
+        assert!(decoded.validate().is_err());
+    }
+    let mut without = value;
+    without["projections"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accepted_by_source");
+    for version in [4, 5] {
+        let storage = MemoryStorage::default();
+        storage
+            .write(&[(
+                TRACKING_STATE_KEY.into(),
+                Some(serde_json::json!({"version":version,"state":without}).to_string()),
+            )])
+            .unwrap();
+        assert_eq!(Store::load(storage).is_ok(), version == 4);
+    }
+    let mut without_owner = serde_json::to_value(&state).unwrap();
+    without_owner["bindings"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("bulk_origin");
+    for version in [4, 5] {
+        let storage = MemoryStorage::default();
+        storage
+            .write(&[(
+                TRACKING_STATE_KEY.into(),
+                Some(serde_json::json!({"version":version,"state":without_owner}).to_string()),
+            )])
+            .unwrap();
+        assert_eq!(Store::load(storage).is_ok(), version == 4);
+    }
 }
 
 #[test]
@@ -821,7 +1022,7 @@ fn schema_one_upgrades_on_save_and_schema_two_requires_an_outbox() {
     watch(&mut store, 1);
     let current: serde_json::Value =
         serde_json::from_str(&storage.read(TRACKING_STATE_KEY).unwrap().unwrap()).unwrap();
-    assert_eq!(current["version"], 4);
+    assert_eq!(current["version"], 5);
     legacy["version"] = serde_json::json!(2);
     storage
         .write(&[(TRACKING_STATE_KEY.into(), Some(legacy.to_string()))])
@@ -1589,7 +1790,7 @@ fn schema_three_upgrade_does_not_enable_completion_or_replay_old_events() {
     assert!(store.state().pending_completions().is_empty());
     let saved: serde_json::Value =
         serde_json::from_str(&storage.read(TRACKING_STATE_KEY).unwrap().unwrap()).unwrap();
-    assert_eq!(saved["version"], 4);
+    assert_eq!(saved["version"], 5);
 }
 
 #[test]

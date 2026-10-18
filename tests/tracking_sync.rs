@@ -110,6 +110,7 @@ fn paired_tracking_shares_links_tokens_rotation_and_disconnect_without_history_r
             account_generation: std::num::NonZeroU64::MIN,
             mapping_revision: std::num::NonZeroU64::MIN,
             enabled: true,
+            bulk_origin: false,
             assignments: vec![Assignment {
                 episode_id: "stable-episode".into(),
                 target_episode: 1.try_into().unwrap(),

@@ -13,7 +13,7 @@ impl Coordinator {
         }
         result.map_err(api_message)
     }
-    fn setup_details(
+    pub(super) fn setup_details(
         &mut self,
         service: Service,
         id: NonZeroU32,
@@ -322,6 +322,7 @@ impl Coordinator {
                 account_generation: self.session(draft.service)?.generation,
                 mapping_revision: NonZeroU64::MIN,
                 enabled: true,
+                bulk_origin: false,
                 assignments,
             });
         }

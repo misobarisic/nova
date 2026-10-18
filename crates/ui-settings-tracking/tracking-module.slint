@@ -45,6 +45,7 @@ export component SettingsTrackingModule inherits Window {
             cancel(service) => {SettingsBridge.tracking_cancel(service);}
             reset => {SettingsBridge.tracking_reset();}
             automatic(service,enabled) => {SettingsBridge.tracking_automatic(service,enabled);}
+            tracking_library_action(service,action,revision,history) => {SettingsBridge.tracking_library_action(service,action,revision,history);}
             StremioSettings {}
             ListServiceSettings { service: 0; blur: SettingsContent.tracking_blur; changed input_focused => { root.simkl_focused = self.input_focused; } }
             ListServiceSettings { service: 1; blur: SettingsContent.tracking_blur; changed input_focused => { root.mdblist_focused = self.input_focused; } }

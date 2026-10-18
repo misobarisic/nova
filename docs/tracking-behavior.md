@@ -78,12 +78,15 @@ must continue to pass with an injected credential backend.
 
 ## Paired-device tracking sync
 
-With Nova sync enabled and devices paired, the `tracking` domain carries version-1
-JSON records: one link per typed source/account/release identity, one paused
+With Nova sync enabled and devices paired, the `tracking` domain carries version-2
+JSON links (version-1 links remain readable): one link per typed source/account/release identity, one paused
 preference per service, and `credentials:mal` / `credentials:anilist` sign-in
 records. Start tracking, alignment repair, unlink, pause/resume, refresh-token
 rotation and Disconnect all propagate. Local-only tracking state remains a
-schema-4 envelope; the generic sync wire structure and ALPN do not change.
+schema-5 envelope, including accepted progress contributions per typed source;
+the generic sync wire structure and ALPN do not change. Each new link carries
+its intrinsic bulk ownership, so a missing or reset independent policy record
+cannot turn a bulk-only link into an explicit per-title grant.
 
 Receiving a link preserves stable episode IDs but uses the receiving device's
 account generation, mapping revision and current history checkpoint. Tokens are
@@ -305,3 +308,66 @@ for that final validation.
 Curated mapping datasets remain deferred pending a coverage and redistribution-
 license review. Current proposals use official service metadata and explicit
 source evidence; they do not require a third-party mapping dataset.
+
+## Whole-library anime tracking
+
+MyAnimeList and AniList each retain **Per-title tracking** as their default.
+Connect the account, expand its card, and choose **Review whole library** to
+prepare a bulk review. Nova considers supported anime movies and series;
+known non-anime titles are skipped. Current typed MAL/AniList identities and
+already approved tracker links anchor proposals. Eligible titles without those
+IDs can use a bounded exact-title search, whose candidates remain review-only.
+An ambiguous title match stays pending for the per-title alignment editor;
+title search never silently creates a link or authorizes progress.
+Eligibility is conservative: sparse Action/Drama-only metadata without an anime
+ID can be skipped. Use the title's Tracking page to approve the anime link, or
+refresh its metadata and rescan after anime evidence becomes available; an
+existing confirmed link overrides sparse genres on later library scans.
+
+The review lists the source title, tracker release, season and episode range.
+**Start whole-library tracking** explicitly accepts those additional links for
+the verified profile/account. Existing season assignments remain unchanged.
+The optional history checkbox authorizes saved watched progress; otherwise the
+semantic local-watch sequence at opt-in is the boundary, so paired-device
+observations and older history cannot become new upload permission. New local
+watches after that boundary can be applied when their additional mapping is
+accepted. Returning to per-title mode preserves explicit per-title grants and
+stops automatic work for links added only by whole-library mode. Their episode
+assignments are retained, so enabling full mode again restores the same mapping.
+The existing automatic-tracking preference still pauses recurring work.
+
+Mode/history choices, source exclusions and stable Bulk/Explicit ownership are
+shared through the profile-scoped `tracking_library` sync domain. Explicit
+per-title links without an ownership record retain their earlier permission.
+Intrinsic bulk ownership on shared links remains authoritative if an independent
+policy row is missing; a deliberate per-title confirmation clears that marker
+atomically with the mapping. Reset tombstones these shared preferences and links
+and clears local discovery decisions.
+Discovery decisions, including missing identities and unsupported titles, are
+persisted locally under `tracking:library:v1:<account>`. Their fingerprint
+includes the typed source identity, current metadata IDs, aliases/year, complete
+episode inventory and existing mapping revisions. Unchanged results do not
+repeat service discovery on every poll. Metadata changes, a new season, manual
+mapping changes and **Rescan library** reconsider the affected decisions.
+Each scan permits at most 72 discovery lookups and eight same-release automatic
+extensions. Remaining sources stay deferred, without negative cache entries;
+the next scan resumes after unchanged completed decisions. A visible open bulk
+review gets a new consent revision when additional proposals arrive.
+A first local watch in an uncovered season triggers one fresh metadata rescan;
+further episodes in that same uncovered season reuse the decision until its
+metadata/inventory changes. Source exclusions are account-scoped and survive cache/inventory changes;
+unlinking a release excludes that source from whole-library rediscovery.
+The title's Tracking page can explicitly allow it again.
+
+Recurring discovery can extend only the same approved, ongoing release, with
+proven dates/boundaries and every old episode assignment preserved. A separate
+MAL/AniList release always requires another review. Ambiguous splits, specials,
+missing episode inventories and conflicting identities stay unlinked. Watching
+an uncovered episode with a supported additional-release proposal queues a
+nonblocking **New anime release needs review** popup after playback, including
+for existing per-title links. **Not now**
+deduplicates it for that source/inventory/proposal fingerprint; new matching
+metadata or a manual review can reconsider it. The popup itself never links or
+uploads anything. Its review is limited to that source and preserves the current
+per-title/full-library mode; accepting an additional season does not opt the
+account into whole-library tracking.

@@ -6,6 +6,8 @@ use super::*;
 mod background;
 #[path = "completion.rs"]
 mod completion;
+#[path = "library.rs"]
+mod library;
 #[path = "peer.rs"]
 mod peer;
 #[path = "setup.rs"]
@@ -111,6 +113,14 @@ impl Registrations {
     }
 }
 pub(super) enum Command {
+    LibraryPolicySync,
+    LibraryAction {
+        service: Service,
+        action: i32,
+        revision: String,
+        include_history: bool,
+        generation: u64,
+    },
     CompletionPreferences {
         enabled: bool,
     },
@@ -268,6 +278,7 @@ struct Coordinator {
     choice: Option<Choice>,
     setup: Option<SetupDraft>,
     setup_revision: u64,
+    library: library::LibraryRuntime,
     notice: String,
     busy: bool,
     completion: Option<Completion>,
@@ -346,6 +357,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         choice: None,
         setup: None,
         setup_revision: 0,
+        library: library::LibraryRuntime::default(),
         notice: String::new(),
         busy: false,
         completion: None,
@@ -386,6 +398,21 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     loop {
         if !coordinator.live() {
             break;
+        }
+        let pending = std::mem::take(
+            &mut *coordinator
+                .bridge
+                .tracking()
+                .library_commands
+                .lock()
+                .unwrap(),
+        );
+        for command in pending {
+            if let Err(error) = coordinator.command(command) {
+                coordinator.notice = error;
+                coordinator.library.busy = None;
+            }
+            coordinator.publish();
         }
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(command) => {
@@ -441,6 +468,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             continue;
         }
         coordinator.restore_connections();
+        coordinator.library_tick();
         coordinator.deliver();
         if let Err(error) = coordinator.publish_shared(false) {
             coordinator.notice = error;
@@ -622,6 +650,17 @@ impl Coordinator {
             return Ok(());
         }
         match command {
+            Command::LibraryPolicySync => {
+                self.library_reconcile_policy()?;
+                super::library_policy::acknowledge()
+            }
+            Command::LibraryAction {
+                service,
+                action,
+                revision,
+                include_history,
+                generation,
+            } => self.library_action(service, action, revision, include_history, generation),
             Command::CompletionPreferences { enabled } => self.configure_completion(enabled),
             Command::CompletionScore { token, id, value } => {
                 self.completion_score(&token, &id, value)
@@ -666,6 +705,7 @@ impl Coordinator {
                 Ok(())
             }
             Command::Reset => {
+                self.library_reset()?;
                 self.cancel(Service::MyAnimeList);
                 self.cancel(Service::AniList);
                 let replacement = reset_store(&self.storage).map_err(|_| storage_message())?;
@@ -802,6 +842,7 @@ impl Coordinator {
                 context,
                 generation,
             } => {
+                self.library_manual_source(&context.source);
                 self.context = Some(context);
                 self.setup = None;
                 self.busy = false;
@@ -1485,6 +1526,7 @@ impl Coordinator {
             account_generation,
             mapping_revision: NonZeroU64::MIN,
             enabled: true,
+            bulk_origin: false,
             assignments: choice.assignments.clone(),
         });
         if let Err(_error) = validate_bindings(&state.bindings, &state.targets) {
@@ -1566,6 +1608,7 @@ impl Coordinator {
             account_generation: session.generation,
             mapping_revision: NonZeroU64::MIN,
             enabled: true,
+            bulk_origin: false,
             assignments: choice.assignments.clone(),
         });
         if validate_bindings(&state.bindings, &state.targets).is_err() {
@@ -1703,7 +1746,15 @@ impl Coordinator {
             .transpose()
             .map_err(|_| storage_message())?
             .unwrap_or_default();
-        let state = prepare_link_state(
+        let explicit_targets = fresh
+            .iter()
+            .map(|(choice, _, _)| TargetKey {
+                account: viewer.account.clone(),
+                media_kind: MediaKind::Anime,
+                remote_media_id: choice.media.id,
+            })
+            .collect::<Vec<_>>();
+        let mut state = prepare_link_state(
             self.store.state(),
             &context.source,
             &viewer,
@@ -1713,10 +1764,17 @@ impl Coordinator {
             fresh,
             include_history,
         )?;
+        for binding in &mut state.bindings {
+            if binding.source == context.source && explicit_targets.contains(&binding.target) {
+                binding.bulk_origin = false;
+            }
+        }
         if !self.current(generation) || self.session(service)?.epoch != epoch {
             return Err(input_message());
         }
         self.store.save(state).map_err(|_| storage_message())?;
+        drop(history);
+        self.library_explicit_source(&context.source, &explicit_targets)?;
         self.choice = None;
         self.candidates.clear();
         self.notice = text::tr(if include_history {
@@ -1951,6 +2009,12 @@ impl Coordinator {
                 self.notice = text::tr("Nova history explicitly queued for this release.").into();
             }
             3 => {
+                self.library_exclude_source(&binding.target.account, &binding.source, true)?;
+                super::library_policy::clear_origin(
+                    &binding.target.account,
+                    &binding.source,
+                    binding.target.remote_media_id.get(),
+                )?;
                 let mut state = self.store.state().clone();
                 state.bindings.retain(|b| b.id != id);
                 state.link_checkpoints.retain(|c| c.binding_id != id);
@@ -2020,10 +2084,71 @@ impl Coordinator {
             if event.sequence == 0 || key != format!("{EVENT_PREFIX}{:020}", event.sequence) {
                 return Err(text::tr("Tracking event data needs recovery.").into());
             }
+            // Scope is an overlay, not destructive mapping mutation. Keep
+            // explicit per-title grants when full-library mode is paused.
+            let blocked = state
+                .bindings
+                .iter()
+                .filter(|b| b.enabled)
+                .map(|b| Ok((b.id.clone(), !self.library_binding_allowed(b)?)))
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .filter_map(|(id, blocked)| blocked.then_some(id))
+                .collect::<Vec<_>>();
+            self.library_prune_projections(&mut state, &blocked)?;
+            let checkpoints = state
+                .bindings
+                .iter()
+                .filter(|b| blocked.contains(&b.id))
+                .cloned()
+                .collect::<Vec<_>>();
+            for binding in &mut state.bindings {
+                if blocked.contains(&binding.id) {
+                    binding.enabled = false;
+                }
+            }
+            for binding in checkpoints {
+                if !state
+                    .link_checkpoints
+                    .iter()
+                    .any(|c| c.binding_id == binding.id && event.sequence > c.sequence)
+                {
+                    continue;
+                }
+                for change in event.changes.iter().filter(|c| {
+                    c.series_id == binding.source.source_id
+                        && binding
+                            .assignments
+                            .iter()
+                            .any(|a| a.episode_id == c.episode_id)
+                }) {
+                    if let Some(projection) = state
+                        .projections
+                        .iter_mut()
+                        .find(|p| p.target == binding.target)
+                    {
+                        projection
+                            .checkpoint(
+                                &binding,
+                                &SourceEpisode {
+                                    source: binding.source.clone(),
+                                    episode_id: change.episode_id.clone(),
+                                },
+                                change.watched,
+                            )
+                            .map_err(|_| input_message())?;
+                    }
+                }
+            }
             if state.consume_event(&event).is_err() {
                 self.notice =
                     text::tr("Episode alignment needs review. Queued work is paused.").into();
                 return Err(self.notice.clone());
+            }
+            for binding in &mut state.bindings {
+                if blocked.contains(&binding.id) {
+                    binding.enabled = true;
+                }
             }
             consumed.push(key);
         }
@@ -2151,12 +2276,11 @@ impl Coordinator {
                 .iter()
                 .filter(|t| {
                     t.key.account == account
-                        && self
-                            .store
-                            .state()
-                            .bindings
-                            .iter()
-                            .any(|b| b.enabled && b.target == t.key)
+                        && self.store.state().bindings.iter().any(|b| {
+                            b.enabled
+                                && b.target == t.key
+                                && self.library_binding_allowed(b).unwrap_or(false)
+                        })
                 })
                 .map(|t| t.key.clone())
                 .collect();
@@ -2189,6 +2313,18 @@ impl Coordinator {
                                     != Some(self.sessions[index].client.viewer()?.score_format)
                             {
                                 return Err(ApiError::UnsupportedField);
+                            }
+                            if !self
+                                .library_target_allowed(&target)
+                                .map_err(|_| ApiError::Offline)?
+                                || !self
+                                    .library_mappings_allowed(
+                                        &target,
+                                        &attempt.edit().completion_mappings,
+                                    )
+                                    .map_err(|_| ApiError::Offline)?
+                            {
+                                return Err(ApiError::Offline);
                             }
                             self.sessions[index].client.update(
                                 target.remote_media_id,
@@ -2287,6 +2423,15 @@ impl Coordinator {
                         {
                             return Err(ApiError::Authentication);
                         }
+                        if !self
+                            .library_target_allowed(&target)
+                            .map_err(|_| ApiError::Offline)?
+                            || !self
+                                .library_mappings_allowed(&target, &attempt.patch().mappings)
+                                .map_err(|_| ApiError::Offline)?
+                        {
+                            return Err(ApiError::Offline);
+                        }
                         self.sessions[index].client.update(
                             target.remote_media_id,
                             remote.as_ref(),
@@ -2374,6 +2519,7 @@ impl Coordinator {
     fn publish(&mut self) {
         self.refresh_completion_prompt();
         self.publish_completion_prompt();
+        self.library_publish_prompt();
         use crate::{TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow};
         let state = self.store.state();
         let accounts = vec![Service::MyAnimeList, Service::AniList]
@@ -2392,7 +2538,22 @@ impl Coordinator {
                             == s.epoch
                 });
                 let registration = self.registrations.get(service);
+                let (
+                    library_enabled,
+                    library_busy,
+                    library_review,
+                    library_summary,
+                    library_details,
+                    library_revision,
+                ) = self.library_account_fields(service);
                 TrackingAccountRow {
+                    library_enabled,
+                    library_busy,
+                    library_review,
+                    library_scoped_review: self.library_scoped_review(service),
+                    library_summary: library_summary.into(),
+                    library_details: library_details.into(),
+                    library_revision: library_revision.into(),
                     service: service_index(service) as i32,
                     name: active
                         .map(|a| a.display_name.clone())
@@ -2468,6 +2629,8 @@ impl Coordinator {
                         });
                         let state_label = if !binding.enabled {
                             "Needs alignment"
+                        } else if !self.library_binding_allowed(binding).unwrap_or(false) {
+                            "Paused by tracking scope"
                         } else if !active {
                             "Inactive account"
                         } else if !connected {
@@ -2788,6 +2951,7 @@ impl Coordinator {
             .unwrap_or(1)
             .to_string();
         let notice = self.notice.clone();
+        let (library_full, library_excluded, library_title_token) = self.library_title_fields();
         let busy = self.busy;
         let selected_service = service_index(self.candidate_service) as i32;
         let bridge = self.bridge.clone();
@@ -2802,6 +2966,9 @@ impl Coordinator {
                     && app.get_tracking_service() < 2)
                     || !app.get_tracking_open()
                 {
+                    app.set_tracking_library_title_full(library_full);
+                    app.set_tracking_library_title_excluded(library_excluded);
+                    app.set_tracking_library_title_token(library_title_token.into());
                     app.set_tracking_notice(notice.into());
                     app.set_tracking_busy(busy);
                     app.set_tracking_service(selected_service);
@@ -3619,6 +3786,11 @@ fn prepare_link_state(
         } else {
             NonZeroU64::MIN
         };
+        let bulk_origin = state
+            .bindings
+            .iter()
+            .find(|b| b.id == binding_id)
+            .is_some_and(|b| b.bulk_origin);
         state.bindings.retain(|b| b.id != binding_id);
         let binding = Binding {
             id: binding_id.clone(),
@@ -3627,6 +3799,7 @@ fn prepare_link_state(
             account_generation,
             mapping_revision: revision,
             enabled: true,
+            bulk_origin,
             assignments: choice.assignments.clone(),
         };
         state.bindings.push(binding.clone());

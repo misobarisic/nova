@@ -34,7 +34,7 @@ pub struct ReleaseDetails {
     pub end: ListDate,
     pub relations: Vec<RelatedRelease>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposedRelease {
     pub details: ReleaseDetails,
     pub season: u32,
@@ -43,7 +43,7 @@ pub struct ProposedRelease {
     pub assignments: Vec<Assignment>,
     pub check_split: bool,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MappingProposal {
     pub releases: Vec<ProposedRelease>,
     pub unresolved: Vec<String>,

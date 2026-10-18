@@ -1,6 +1,6 @@
 import { StremioTitle } from "stremio-title.slint";
 import { ListServicesTitle } from "list-services-title.slint";
-import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent, DetailBridge } from "@NovaUiShared";
+import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent, DetailBridge, SettingsBridge } from "@NovaUiShared";
 import { CheckBox, Spinner } from "std-widgets.slint";
 import { SettingsInput } from "settings-controls.slint";
 import { TrackingButton, MappingChip, HistoryToggle } from "tracking-controls.slint";
@@ -242,6 +242,10 @@ export component TrackingPanel inherits Rectangle {
                         vertical-stretch: 0;
                         Spinner { width: 20px; height: 20px; }
                         Text { text: @tr("Loading tracker…"); color: Theme.current.text_secondary; vertical-alignment: center; }
+                    }
+                    if SettingsBridge.tracking_library_title_full && SettingsBridge.tracking_library_title_token != "": TrackingButton {
+                        text: SettingsBridge.tracking_library_title_excluded ? @tr("Allow this title in whole-library discovery") : @tr("Exclude this title from whole-library discovery");
+                        clicked => {SettingsBridge.tracking_library_action(root.selected_service,7,SettingsBridge.tracking_library_title_token,false);}
                     }
                     if root.notice != "": Text {
                         text: root.notice;

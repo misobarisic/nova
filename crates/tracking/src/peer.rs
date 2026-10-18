@@ -14,6 +14,8 @@ enum Record {
         target: Target,
         assignments: Vec<Assignment>,
         enabled: bool,
+        #[serde(default)]
+        bulk_origin: Option<bool>,
         account_name: String,
         media: Option<Box<Media>>,
     },
@@ -52,11 +54,12 @@ pub fn peer_records(state: &TrackingState) -> Result<Vec<(String, String, u64)>,
             .clone();
         target.remote_entry_id = None;
         let mut record = Record::Link {
-            version: 1,
+            version: 2,
             source: binding.source.clone(),
             target,
             assignments: binding.assignments.clone(),
             enabled: binding.enabled,
+            bulk_origin: Some(binding.bulk_origin),
             account_name: state
                 .accounts
                 .iter()
@@ -75,6 +78,7 @@ pub fn peer_records(state: &TrackingState) -> Result<Vec<(String, String, u64)>,
             if let Record::Link {
                 assignments,
                 enabled,
+                bulk_origin,
                 ..
             } = &mut existing
             {
@@ -84,6 +88,7 @@ pub fn peer_records(state: &TrackingState) -> Result<Vec<(String, String, u64)>,
                     }
                 }
                 *enabled &= binding.enabled;
+                *bulk_origin = Some(bulk_origin.unwrap_or(false) && binding.bulk_origin);
                 record = existing;
             }
             if let Record::Link { assignments, .. } = &mut record {
@@ -164,14 +169,19 @@ pub fn apply_peer_records(
                 }
             }
             Record::Link {
-                version: 1,
+                version,
                 source,
                 mut target,
                 assignments,
                 enabled,
+                bulk_origin,
                 account_name,
                 media,
-            } if *key == link_key(&source, &target.key)? => {
+            } if ((version == 1 && bulk_origin != Some(true))
+                || (version == 2 && bulk_origin.is_some()))
+                && *key == link_key(&source, &target.key)? =>
+            {
+                let bulk_origin = bulk_origin.unwrap_or(false);
                 if assignments.len() > 10000
                     || account_name.len() > 512
                     || [&source.provider_id, &source.source_id, &source.media_type]
@@ -261,6 +271,7 @@ pub fn apply_peer_records(
                     account_generation: generation,
                     mapping_revision: old.map(|b| b.mapping_revision).unwrap_or(NonZeroU64::MIN),
                     enabled,
+                    bulk_origin,
                     assignments,
                 });
             }
@@ -475,6 +486,7 @@ mod tests {
                 account_generation: NonZeroU64::new(3).unwrap(),
                 mapping_revision: NonZeroU64::new(9).unwrap(),
                 enabled: true,
+                bulk_origin: false,
                 assignments: vec![Assignment {
                     episode_id: "stable-episode".into(),
                     target_episode: 1.try_into().unwrap(),
@@ -490,6 +502,55 @@ mod tests {
             .into_iter()
             .map(|(k, v, _)| (k, v))
             .collect()
+    }
+    #[test]
+    fn bulk_provenance_travels_with_the_link_without_separate_policy_rows() {
+        let mut source = sample();
+        source.bindings[0].bulk_origin = true;
+        let records = snapshot(&source);
+        let restored =
+            apply_peer_records(&TrackingState::default(), &records, 42, |_| false).unwrap();
+        assert!(restored.bindings[0].bulk_origin);
+        let repeated = apply_peer_records(&restored, &records, 43, |_| false).unwrap();
+        assert_eq!(repeated.bindings, restored.bindings);
+        assert_eq!(repeated.link_checkpoints, restored.link_checkpoints);
+
+        // An explicit choice updates provenance in the very same link record.
+        source.bindings[0].bulk_origin = false;
+        let upgraded = apply_peer_records(&restored, &snapshot(&source), 44, |_| false).unwrap();
+        assert!(!upgraded.bindings[0].bulk_origin);
+        assert!(upgraded.outbox.pending().is_empty());
+    }
+    #[test]
+    fn legacy_links_are_explicit_but_cannot_claim_bulk_provenance() {
+        let mut records = snapshot(&sample());
+        let (_, raw) = records
+            .iter_mut()
+            .find(|(key, _)| key.starts_with("link:"))
+            .unwrap();
+        let mut record: serde_json::Value = serde_json::from_str(raw).unwrap();
+        record["version"] = 1.into();
+        record.as_object_mut().unwrap().remove("bulk_origin");
+        *raw = record.to_string();
+        let restored =
+            apply_peer_records(&TrackingState::default(), &records, 42, |_| false).unwrap();
+        assert!(!restored.bindings[0].bulk_origin);
+
+        let (_, raw) = records
+            .iter_mut()
+            .find(|(key, _)| key.starts_with("link:"))
+            .unwrap();
+        record["bulk_origin"] = true.into();
+        *raw = record.to_string();
+        assert!(apply_peer_records(&TrackingState::default(), &records, 42, |_| false).is_err());
+        let (_, raw) = records
+            .iter_mut()
+            .find(|(key, _)| key.starts_with("link:"))
+            .unwrap();
+        record["version"] = 2.into();
+        record.as_object_mut().unwrap().remove("bulk_origin");
+        *raw = record.to_string();
+        assert!(apply_peer_records(&TrackingState::default(), &records, 42, |_| false).is_err());
     }
     #[test]
     fn shared_media_keeps_its_existing_json_shape() {
@@ -522,7 +583,7 @@ mod tests {
             .find(|(key, _)| key.starts_with("link:"))
             .unwrap();
         let record: serde_json::Value = serde_json::from_str(raw).unwrap();
-        assert_eq!(record["version"], 1);
+        assert_eq!(record["version"], 2);
         assert_eq!(record["media"], media);
     }
     #[test]
