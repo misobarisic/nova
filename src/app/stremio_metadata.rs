@@ -57,7 +57,7 @@ pub(super) struct ResolvedTitle {
     /// An existing Nova inventory belongs to its installed metadata source.
     /// Matching parent IDs do not license replacing AIOmetadata/source episode
     /// IDs with the account's Cinemeta inventory.
-    preserve_native_metadata: bool,
+    pub(super) preserve_native_metadata: bool,
     pub local_inventory_revision: u64,
     /// Complete account-addon list, in its original order. Watched bitfields
     /// require the full list even when only one native season is mapped.
@@ -279,6 +279,63 @@ fn supported(descriptors: &[Value], media_type: &str, id: &str) -> bool {
     account_addons(descriptors)
         .iter()
         .any(|(_, manifest)| manifest.accepts("meta", media_type, id))
+}
+
+/// Search only the signed-in account's declared catalogs, without credentials.
+/// Results are proposals for explicit review, not identity evidence.
+pub(super) fn search(
+    media_type: &str,
+    query: &str,
+    descriptors: &[Value],
+    fetch: &impl Fn(&str, Duration, usize) -> Result<Vec<u8>, ()>,
+) -> Vec<LibraryItem> {
+    if query.len() > 512 {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+    if safe_segment(query) && supported(descriptors, media_type, query) {
+        results.push(LibraryItem::new(query, query, media_type, 0));
+    }
+    let started = Instant::now();
+    let mut requests = 0;
+    for (addon, manifest) in account_addons(descriptors) {
+        for catalog in manifest
+            .catalogs
+            .iter()
+            .filter(|c| c.type_ == media_type && c.supports_extra("search"))
+        {
+            let Some(remaining) = REQUEST_BUDGET.checked_sub(started.elapsed()) else {
+                return results;
+            };
+            if requests >= MAX_ADDONS {
+                return results;
+            }
+            requests += 1;
+            let Ok(bytes) = fetch(
+                &addon.catalog_url(media_type, &catalog.id, &[("search", query)]),
+                remaining,
+                BODY_LIMIT,
+            ) else {
+                continue;
+            };
+            if bytes.len() > BODY_LIMIT {
+                continue;
+            }
+            if let Ok(items) = Addon::parse_catalog(&bytes) {
+                for item in items.into_iter().take(100).filter(|i| {
+                    i.type_ == media_type
+                        && safe_segment(&i.id)
+                        && supported(descriptors, media_type, &i.id)
+                }) {
+                    results.push(LibraryItem::new(&item.id, &item.name, media_type, 0));
+                    if results.len() >= 30 {
+                        return results;
+                    }
+                }
+            }
+        }
+    }
+    results
 }
 
 fn fetch_metadata(

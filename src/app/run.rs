@@ -636,6 +636,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_stremio_connect(move || b.stremio_connect());
     let b = bridge.clone();
+    app.on_list_services_connect(move |a0, a1, a2| {
+        b.list_services_connect(a0, a1.into(), a2.into())
+    });
+    let b = bridge.clone();
+    app.on_list_services_disconnect(move |a0| b.list_services_disconnect(a0));
+    let b = bridge.clone();
+    app.on_list_services_cancel(move |a0| b.list_services_cancel(a0));
+    let b = bridge.clone();
+    app.on_list_services_sync(move |a0| b.list_services_sync(a0));
+    let b = bridge.clone();
+    app.on_list_services_automatic_changed(move |a0, a1| b.list_services_automatic_changed(a0, a1));
+    let b = bridge.clone();
+    app.on_list_services_scope_changed(move |a0, a1| b.list_services_scope_changed(a0, a1));
+    let b = bridge.clone();
+    app.on_list_services_open_account(move |a0| b.list_services_open_account(a0));
+    let b = bridge.clone();
+    app.on_list_services_title_open(move |a0| b.list_services_title_open(a0));
+    let b = bridge.clone();
+    app.on_list_services_title_select(move |a0, a1, a2| b.list_services_title_select(a0, a1, a2));
+    let b = bridge.clone();
+    app.on_list_services_title_sync(move |a0| b.list_services_title_sync(a0));
+    let b = bridge.clone();
     app.on_stremio_cancel(move || b.stremio_cancel());
     let b = bridge.clone();
     app.on_stremio_start(move || b.stremio_start());
@@ -643,6 +665,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_stremio_sync(move || b.stremio_sync());
     let b = bridge.clone();
     app.on_stremio_automatic_changed(move |enabled| b.stremio_automatic(enabled));
+    let b = bridge.clone();
+    app.on_stremio_mode_changed(move |index| b.stremio_mode(index));
+    let b = bridge.clone();
+    app.on_stremio_title_search(move |query| b.stremio_title_search(query.to_string()));
+    let b = bridge.clone();
+    app.on_stremio_title_pick(move |index| b.stremio_title_pick(index));
+    let b = bridge.clone();
+    app.on_stremio_title_assign(move |row, target| b.stremio_title_assign(row, target));
+    let b = bridge.clone();
+    app.on_stremio_title_confirm(move |history| b.stremio_title_confirm(history));
+    let b = bridge.clone();
+    app.on_stremio_title_unlink(move || b.stremio_title_unlink());
     let b = bridge.clone();
     app.on_stremio_disconnect(move || b.stremio_disconnect());
     let b = bridge.clone();
@@ -1469,6 +1503,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.party_leave();
     bridge.shutdown_tracking();
     bridge.shutdown_stremio();
+    bridge.shutdown_list_services();
     drop(persistence_worker);
     drop(image_gc_worker);
     result?;

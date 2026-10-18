@@ -454,9 +454,16 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
     }
     SettingsBindings {
+        list_services_account <=> root.list_services_account;
+        list_services_status <=> root.list_services_status;
+        list_services_connected <=> root.list_services_connected;
+        list_services_busy <=> root.list_services_busy;
+        list_services_automatic <=> root.list_services_automatic;
+        list_services_whole_library <=> root.list_services_whole_library;
         stremio_connected <=> root.stremio_connected;
         stremio_busy <=> root.stremio_busy;
         stremio_automatic <=> root.stremio_automatic;
+        stremio_mode_index <=> root.stremio_mode_index;
         stremio_status <=> root.stremio_status;
         stremio_account <=> root.stremio_account;
         stremio_link_code <=> root.stremio_link_code;
@@ -722,6 +729,7 @@ export component AppWindow inherits Window {
     in-out property <bool> stremio_connected;
     in-out property <bool> stremio_busy;
     in-out property <bool> stremio_automatic;
+    in-out property <int> stremio_mode_index;
     in-out property <string> stremio_status;
     in-out property <string> stremio_account;
     in-out property <string> stremio_link_code;
@@ -733,6 +741,14 @@ export component AppWindow inherits Window {
     in-out property <string> tracking_candidate_title;
     in-out property <bool> tracking_busy;
     in-out property <bool> tracking_can_confirm;
+    in-out property <bool> stremio_title_busy;
+    in-out property <bool> stremio_title_linked;
+    in-out property <bool> stremio_title_can_confirm;
+    in-out property <string> stremio_title_status;
+    in-out property <string> stremio_title_match;
+    in-out property <[TrackingCandidateRow]> stremio_title_candidates;
+    in-out property <[TrackingMappingRow]> stremio_title_mapping;
+    in-out property <[string]> stremio_title_options;
     in-out property <bool> tracking_open: false;
     changed tracking_open => {
         root.preserve_back_focus();
@@ -747,10 +763,33 @@ export component AppWindow inherits Window {
     callback tracking_cancel(int);
     callback tracking_reset();
     callback stremio_connect();
+    in-out property <[string]> list_services_account: ["", ""];
+    in-out property <[string]> list_services_status: ["", ""];
+    in-out property <[bool]> list_services_connected: [false, false];
+    in-out property <[bool]> list_services_busy: [false, false];
+    in-out property <[bool]> list_services_automatic: [true, true];
+    in-out property <[bool]> list_services_whole_library: [false, false];
+    in-out property <bool> list_services_title_selected;
+    in-out property <bool> list_services_title_connected;
+    in-out property <bool> list_services_title_busy;
+    in-out property <bool> list_services_title_resolved;
+    in-out property <string> list_services_title_status;
+    in-out property <string> list_services_title_identity;
+    callback list_services_connect(int, string, string);
+    callback list_services_disconnect(int);
+    callback list_services_cancel(int);
+    callback list_services_sync(int);
+    callback list_services_automatic_changed(int, bool);
+    callback list_services_scope_changed(int, bool);
+    callback list_services_open_account(int);
+    callback list_services_title_open(int);
+    callback list_services_title_select(int, bool, bool);
+    callback list_services_title_sync(int);
     callback stremio_cancel();
     callback stremio_start();
     callback stremio_sync();
     callback stremio_automatic_changed(bool);
+    callback stremio_mode_changed(int);
     callback stremio_disconnect();
     callback stremio_open_link();
 
@@ -761,6 +800,11 @@ export component AppWindow inherits Window {
     callback tracking_pick(int);
     callback tracking_preview(string,string,string);
     callback tracking_confirm();
+    callback stremio_title_search(string);
+    callback stremio_title_pick(int);
+    callback stremio_title_assign(int,int);
+    callback stremio_title_confirm(bool);
+    callback stremio_title_unlink();
     callback tracking_accept_setup(string,bool);
     callback tracking_adjust_setup(int);
     callback tracking_cancel_adjust();
@@ -1921,6 +1965,11 @@ export component AppWindow inherits Window {
     public function detail_bridge_tracking_pick(a0: int) {root.tracking_pick(a0);}
     public function detail_bridge_tracking_preview(a0: string, a1: string, a2: string) {root.tracking_preview(a0,a1,a2);}
     public function detail_bridge_tracking_confirm() {root.tracking_confirm();}
+    public function detail_bridge_stremio_title_unlink() { root.stremio_title_unlink(); }
+    public function detail_bridge_stremio_title_confirm(history: bool) { root.stremio_title_confirm(history); }
+    public function detail_bridge_stremio_title_assign(row: int, target: int) { root.stremio_title_assign(row,target); }
+    public function detail_bridge_stremio_title_pick(index: int) { root.stremio_title_pick(index); }
+    public function detail_bridge_stremio_title_search(query: string) { root.stremio_title_search(query); }
     public function detail_bridge_tracking_accept_setup(revision: string, history: bool) {root.tracking_accept_setup(revision,history);}
     public function detail_bridge_tracking_adjust_setup(index: int) {root.tracking_adjust_setup(index);}
     public function detail_bridge_tracking_cancel_adjust() {root.tracking_cancel_adjust();}
@@ -2003,10 +2052,21 @@ export component AppWindow inherits Window {
     public function settings_bridge_cancel_reencode() { root.cancel_reencode(); }
     public function settings_bridge_tracking_reset() { root.tracking_reset(); }
     public function settings_bridge_stremio_connect() { root.stremio_connect(); }
+    public function settings_bridge_list_services_connect(a0: int, a1: string, a2: string) { root.list_services_connect(a0, a1, a2); }
+    public function settings_bridge_list_services_disconnect(a0: int) { root.list_services_disconnect(a0); }
+    public function settings_bridge_list_services_cancel(a0: int) { root.list_services_cancel(a0); }
+    public function settings_bridge_list_services_sync(a0: int) { root.list_services_sync(a0); }
+    public function settings_bridge_list_services_automatic_changed(a0: int, a1: bool) { root.list_services_automatic_changed(a0, a1); }
+    public function settings_bridge_list_services_scope_changed(a0: int, a1: bool) { root.list_services_scope_changed(a0, a1); }
+    public function settings_bridge_list_services_open_account(a0: int) { root.list_services_open_account(a0); }
+    public function detail_bridge_list_services_title_open(a0: int) { root.list_services_title_open(a0); }
+    public function detail_bridge_list_services_title_select(a0: int, a1: bool, a2: bool) { root.list_services_title_select(a0, a1, a2); }
+    public function detail_bridge_list_services_title_sync(a0: int) { root.list_services_title_sync(a0); }
     public function settings_bridge_stremio_cancel() { root.stremio_cancel(); }
     public function settings_bridge_stremio_start() { root.stremio_start(); }
     public function settings_bridge_stremio_sync() { root.stremio_sync(); }
     public function settings_bridge_stremio_automatic_changed(value: bool) { root.stremio_automatic_changed(value); }
+    public function settings_bridge_stremio_mode_changed(value: int) { root.stremio_mode_changed(value); }
     public function settings_bridge_stremio_disconnect() { root.stremio_disconnect(); }
     public function settings_bridge_stremio_open_link() { root.stremio_open_link(); }
 
@@ -2204,6 +2264,12 @@ export component AppWindow inherits Window {
 
     // ---- Detail page ---------------------------------------------------
     if root.detail_page_mounted: DetailHost {
+        list_services_title_selected <=> root.list_services_title_selected;
+        list_services_title_connected <=> root.list_services_title_connected;
+        list_services_title_busy <=> root.list_services_title_busy;
+        list_services_title_resolved <=> root.list_services_title_resolved;
+        list_services_title_status <=> root.list_services_title_status;
+        list_services_title_identity <=> root.list_services_title_identity;
         viewport_width: self.width; viewport_height: self.height;
         tracking_links: root.tracking_links;
         tracking_candidates: root.tracking_candidates;
@@ -2222,6 +2288,14 @@ export component AppWindow inherits Window {
         tracking_candidate_title: root.tracking_candidate_title;
         tracking_busy: root.tracking_busy;
         tracking_can_confirm: root.tracking_can_confirm;
+        stremio_title_busy: root.stremio_title_busy;
+        stremio_title_linked: root.stremio_title_linked;
+        stremio_title_can_confirm: root.stremio_title_can_confirm;
+        stremio_title_status: root.stremio_title_status;
+        stremio_title_match: root.stremio_title_match;
+        stremio_title_candidates: root.stremio_title_candidates;
+        stremio_title_mapping: root.stremio_title_mapping;
+        stremio_title_options: root.stremio_title_options;
         selected_logo: root.selected_logo;
         is_movie: root.detail_is_movie;
         episode_reveal_request: root.detail_episode_reveal_request;

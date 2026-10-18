@@ -2,6 +2,15 @@ import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, H
 
 // The host keeps backend-owned state; the page shares this exact object.
 export global DetailBridge {
+    in-out property <bool> list_services_title_selected;
+    in-out property <bool> list_services_title_connected;
+    in-out property <bool> list_services_title_busy;
+    in-out property <bool> list_services_title_resolved;
+    in-out property <string> list_services_title_status;
+    in-out property <string> list_services_title_identity;
+    callback list_services_title_open(int);
+    callback list_services_title_select(int, bool, bool);
+    callback list_services_title_sync(int);
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;
@@ -23,6 +32,14 @@ export global DetailBridge {
     in-out property <string> tracking_candidate_title;
     in-out property <bool> tracking_busy;
     in-out property <bool> tracking_can_confirm;
+    in-out property <bool> stremio_title_busy;
+    in-out property <bool> stremio_title_linked;
+    in-out property <bool> stremio_title_can_confirm;
+    in-out property <string> stremio_title_status;
+    in-out property <string> stremio_title_match;
+    in-out property <[TrackingCandidateRow]> stremio_title_candidates;
+    in-out property <[TrackingMappingRow]> stremio_title_mapping;
+    in-out property <[string]> stremio_title_options;
     in-out property <bool> tracking_open;
     in-out property <int> tracking_return_tab;
     in-out property <image> selected_poster;
@@ -92,6 +109,11 @@ export global DetailBridge {
     callback tracking_pick(int);
     callback tracking_preview(string,string,string);
     callback tracking_confirm();
+    callback stremio_title_search(string);
+    callback stremio_title_pick(int);
+    callback stremio_title_assign(int,int);
+    callback stremio_title_confirm(bool);
+    callback stremio_title_unlink();
     callback tracking_accept_setup(string,bool);
     callback tracking_adjust_setup(int);
     callback tracking_cancel_adjust();

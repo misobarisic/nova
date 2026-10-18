@@ -2798,7 +2798,8 @@ impl Coordinator {
                     app.set_tracking_accounts(model);
                     bridge.refresh_setting_sync();
                 }
-                if bridge.tracking().context_generation.load(Ordering::Acquire) == generation
+                if (bridge.tracking().context_generation.load(Ordering::Acquire) == generation
+                    && app.get_tracking_service() < 2)
                     || !app.get_tracking_open()
                 {
                     app.set_tracking_notice(notice.into());

@@ -16,6 +16,9 @@ const MAPPING_VERSION: u32 = 3;
 
 #[path = "stremio_apply.rs"]
 mod materialize;
+#[path = "stremio_selection.rs"]
+mod selection;
+use selection::{Selection, SyncMode};
 
 #[cfg(test)]
 #[path = "stremio_ingress_tests.rs"]
@@ -38,6 +41,8 @@ struct Connection {
     automatic: bool,
     started: bool,
     bootstrap_done: bool,
+    #[serde(default)]
+    mode: SyncMode,
 }
 impl Connection {
     fn valid(&self) -> bool {
@@ -60,6 +65,7 @@ enum SessionFlag {
     Automatic(bool),
     Started,
     Bootstrap,
+    Mode(SyncMode),
 }
 fn session_key(connection: &Connection, field: &str) -> String {
     format!(
@@ -86,6 +92,15 @@ fn session_flags(store: &nova_sync::Store, connection: &mut Connection) -> Resul
     // cannot reset initial merge completion on an offline device's snapshot.
     connection.started |= started.unwrap_or(false);
     connection.bootstrap_done |= bootstrap.unwrap_or(false);
+    if let Some(raw) = store
+        .record(
+            &crate::app::sync::profile_domain(DOMAIN),
+            &session_key(connection, "mode"),
+        )
+        .and_then(|r| r.value.as_ref())
+    {
+        connection.mode = serde_json::from_str(raw).map_err(|_| ApiError::InvalidResponse)?;
+    }
     Ok(())
 }
 fn write_session_flag(
@@ -102,14 +117,18 @@ fn write_session_flag(
         .filter(|c| c.valid() && c.same_session(expected))
         .ok_or(ApiError::Authentication)?;
     let (name, value) = match flag {
-        SessionFlag::Automatic(value) => ("automatic", value),
-        SessionFlag::Started => ("started", true),
-        SessionFlag::Bootstrap => ("bootstrap", true),
+        SessionFlag::Automatic(value) => ("automatic", value.to_string()),
+        SessionFlag::Started => ("started", "true".into()),
+        SessionFlag::Bootstrap => ("bootstrap", "true".into()),
+        SessionFlag::Mode(value) => (
+            "mode",
+            serde_json::to_string(&value).map_err(|_| ApiError::InvalidInput)?,
+        ),
     };
     store.set(
         &crate::app::sync::profile_domain(DOMAIN),
         &session_key(&current, name),
-        Some(value.to_string()),
+        Some(value),
         0,
         device,
     );
@@ -155,6 +174,8 @@ struct Title {
     progress_merged: bool,
     #[serde(default)]
     binding: Option<NativeBinding>,
+    #[serde(default)]
+    selection: Option<Selection>,
 }
 impl Title {
     fn new(item: LibraryItem) -> Self {
@@ -173,6 +194,7 @@ impl Title {
             accepted_upload: None,
             progress_merged: false,
             binding: None,
+            selection: None,
         }
     }
 }
@@ -205,6 +227,8 @@ enum Command {
     Start(u64),
     Sync(u64),
     Automatic(bool, u64),
+    Mode(SyncMode, u64),
+    Review(selection::Request, u64),
     Disconnect(u64),
     OpenLink,
     Shutdown,
@@ -214,10 +238,13 @@ pub(super) struct Handle {
     tx: SyncSender<Command>,
     rx: Mutex<Option<Receiver<Command>>>,
     generation: AtomicU64,
+    review_generation: AtomicU64,
     urgent: Mutex<Option<Command>>,
+    mode_change: Mutex<Option<Command>>,
+    selection_change: Mutex<Option<Command>>,
     wake: AtomicBool,
     checkpoint: AtomicBool,
-    surfaces_dirty: AtomicBool,
+    pub(super) surfaces_dirty: AtomicBool,
 }
 impl Handle {
     pub(super) fn new() -> Self {
@@ -227,13 +254,32 @@ impl Handle {
             tx,
             rx: Mutex::new(Some(rx)),
             generation: AtomicU64::new(0),
+            review_generation: AtomicU64::new(0),
             urgent: Mutex::new(None),
+            mode_change: Mutex::new(None),
+            selection_change: Mutex::new(None),
             wake: AtomicBool::new(false),
             checkpoint: AtomicBool::new(false),
             surfaces_dirty: AtomicBool::new(false),
         }
     }
     fn send(&self, command: Command) {
+        // Consent changes must remain deliverable while HTTP blocks the actor.
+        // Only the latest choice for this single open review can be current.
+        if matches!(&command, Command::Mode(_, _)) {
+            *self.mode_change.lock().unwrap() = Some(command);
+            return;
+        }
+        if matches!(
+            &command,
+            Command::Review(
+                selection::Request::Confirm(_, _) | selection::Request::Unlink(_, _),
+                _
+            )
+        ) {
+            *self.selection_change.lock().unwrap() = Some(command);
+            return;
+        }
         if matches!(
             &command,
             Command::Connect(_) | Command::Cancel(_) | Command::Disconnect(_) | Command::Shutdown
@@ -350,6 +396,7 @@ struct Worker<T: nova_stremio::Transport> {
     preview_ready: bool,
     phase: &'static str,
     applied: std::collections::BTreeSet<(String, String)>,
+    review: Option<selection::Review>,
 }
 impl<T: nova_stremio::Transport> Worker<T> {
     fn new(bridge: Bridge, client: Client<T>) -> Self {
@@ -379,6 +426,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             preview_ready: false,
             phase: "",
             applied: Default::default(),
+            review: None,
         }
     }
     fn run(mut self, rx: Receiver<Command>) {
@@ -391,6 +439,20 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 if matches!(command, Command::Shutdown) {
                     return;
                 }
+                self.command(command);
+            }
+            let mode = self.bridge.stremio().mode_change.lock().unwrap().take();
+            if let Some(command) = mode {
+                self.command(command);
+            }
+            let selection = self
+                .bridge
+                .stremio()
+                .selection_change
+                .lock()
+                .unwrap()
+                .take();
+            if let Some(command) = selection {
                 self.command(command);
             }
             match rx.recv_timeout(Duration::from_millis(500)) {
@@ -501,6 +563,32 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     } else {
                         self.storage_failed();
                     }
+                }
+            }
+            Command::Mode(mode, generation)
+                if generation == self.bridge.stremio().generation.load(Ordering::Acquire) =>
+            {
+                if let Some(connection) = self.connection.clone() {
+                    if self.save_flag(&connection, SessionFlag::Mode(mode)).is_ok() {
+                        self.preview_ready = false;
+                        self.pending.clear();
+                        self.review = None;
+                        self.force = false;
+                        self.next_sync = Instant::now();
+                        self.publish_connection();
+                    } else {
+                        self.storage_failed();
+                    }
+                }
+            }
+            Command::Review(request, generation) => {
+                if let Err(error) = self.selection_request(request, generation) {
+                    let review = self
+                        .bridge
+                        .stremio()
+                        .review_generation
+                        .load(Ordering::Acquire);
+                    selection::review_error(&self.bridge, review, error);
                 }
             }
             Command::Disconnect(generation) => {
@@ -640,6 +728,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             automatic: true,
             started: false,
             bootstrap_done: false,
+            mode: SyncMode::default(),
         };
         self.write_connection(Some(&connection))
             .map_err(|_| ApiError::Rejected)?;
@@ -699,6 +788,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 a.automatic != b.automatic
                     || a.started != b.started
                     || a.bootstrap_done != b.bootstrap_done
+                    || a.mode != b.mode
             });
         if raw_changed || flags_changed {
             let same_account = loaded
@@ -716,6 +806,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 self.remote_items.clear();
                 self.pending.clear();
                 self.preview_ready = false;
+                self.review = None;
             }
             self.connection = loaded;
             self.connection_raw = raw.map(Secret::new);
@@ -812,6 +903,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     .into(),
             );
             app.set_stremio_automatic(connection.as_ref().is_some_and(|c| c.automatic));
+            app.set_stremio_mode_index(connection.as_ref().map_or(0, |c| c.mode.index()));
             if connection.as_ref().is_some_and(|c| !c.started) {
                 if !preview_ready {
                     app.set_stremio_preview(text::tr("Preparing library merge…").into());
@@ -829,6 +921,16 @@ impl<T: nova_stremio::Transport> Worker<T> {
     fn prepare_preview(&mut self, connection: &Connection) -> Result<(), ApiError> {
         let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
         self.check_current(connection, generation)?;
+        if connection.mode == SyncMode::SelectedTitles {
+            self.preview_ready = true;
+            ui(&self.bridge, |app| {
+                app.set_stremio_busy(false);
+                app.set_stremio_merge_ready(true);
+                app.set_stremio_preview(text::tr("Only explicitly enabled titles will sync. Enable a title from its Tracking page.").into());
+                app.set_stremio_status(text::tr("Selected titles mode").into());
+            });
+            return Ok(());
+        }
         ui(&self.bridge, |app| app.set_stremio_busy(true));
         self.set_phase("Reading Stremio addons…");
         self.descriptors = self
@@ -875,50 +977,64 @@ impl<T: nova_stremio::Transport> Worker<T> {
         Ok(())
     }
     fn local_changed(&self, connection: &Connection) -> bool {
+        let selections = nova_sync::local_store()
+            .ok()
+            .and_then(|owner| selection::load(&owner.lock().unwrap(), connection).ok())
+            .unwrap_or_default();
         let (entries, progress) = {
             let Some(state) = self.bridge.personal_state() else {
                 return false;
             };
             (state.entries.clone(), state.progress.clone())
         };
-        entries.iter().any(|e| {
-            !self.pending.contains_key(&e.id)
-                && !self
-                    .titles
-                    .values()
-                    .any(|t| t.mapping.id == e.id && t.mapping.media_type == e.type_)
-        }) || progress.values().any(|p| {
-            p.history.as_ref().is_some_and(|history| {
-                (p.watched || p.position_secs > 0.0)
-                    && !self.pending.contains_key(&p.series_id)
-                    && !self.titles.values().any(|title| {
-                        title.mapping.id == p.series_id && title.mapping.media_type == history.type_
+        (connection.mode == SyncMode::FullLibrary
+            && entries.iter().any(|e| {
+                !self.pending.contains_key(&e.id)
+                    && !self
+                        .titles
+                        .values()
+                        .any(|t| t.mapping.id == e.id && t.mapping.media_type == e.type_)
+            }))
+            || (connection.mode == SyncMode::FullLibrary
+                && progress.values().any(|p| {
+                    p.history.as_ref().is_some_and(|history| {
+                        (p.watched || p.position_secs > 0.0)
+                            && !self.pending.contains_key(&p.series_id)
+                            && !self.titles.values().any(|title| {
+                                title.mapping.id == p.series_id
+                                    && title.mapping.media_type == history.type_
+                            })
                     })
-            })
-        }) || self.titles.values().any(|title| {
-            let local = local_projection(&title.mapping, &entries, &progress);
-            let source = source_canonical(connection, title, &local, &entries, &progress);
-            let shared = read_shared(connection, title.item.id());
-            // Mesh field records can arrive independently of the native
-            // projection; Wake must notice them even if the UI is equal.
-            let shared_changed = shared.as_ref().is_ok_and(|value| {
-                nova_stremio::reconcile(&title.desired, value, false) != title.desired
-            });
-            let changed = source.as_ref().is_ok_and(|value| value != &title.local)
-                || source.is_err()
-                || shared_changed
-                || title.pending;
-            let only_position = source.as_ref().is_ok_and(|value| {
-                value.saved == title.local.saved
-                    && value.watched == title.local.watched
-                    && value.resume.value.is_some()
-            });
-            changed
-                && (shared_changed
-                    || title.pending
-                    || !only_position
-                    || self.last_position_upload.elapsed() >= Duration::from_secs(30))
-        }) || (!connection.bootstrap_done)
+                }))
+            || self
+                .titles
+                .values()
+                .filter(|title| selection::allowed(connection.mode, &selections, title))
+                .any(|title| {
+                    let local = local_projection(&title.mapping, &entries, &progress);
+                    let source = source_canonical(connection, title, &local, &entries, &progress);
+                    let shared = read_shared_for_title(connection, title);
+                    // Mesh field records can arrive independently of the native
+                    // projection; Wake must notice them even if the UI is equal.
+                    let shared_changed = shared.as_ref().is_ok_and(|value| {
+                        nova_stremio::reconcile(&title.desired, value, false) != title.desired
+                    });
+                    let changed = source.as_ref().is_ok_and(|value| value != &title.local)
+                        || source.is_err()
+                        || shared_changed
+                        || title.pending;
+                    let only_position = source.as_ref().is_ok_and(|value| {
+                        value.saved == title.local.saved
+                            && value.watched == title.local.watched
+                            && value.resume.value.is_some()
+                    });
+                    changed
+                        && (shared_changed
+                            || title.pending
+                            || !only_position
+                            || self.last_position_upload.elapsed() >= Duration::from_secs(30))
+                })
+            || (!connection.bootstrap_done)
     }
     fn synchronize(&mut self, connection: &Connection) -> Result<(), ApiError> {
         let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
@@ -937,6 +1053,16 @@ impl<T: nova_stremio::Transport> Worker<T> {
         let descriptor_revision = nova_config::fnv1a(
             &serde_json::to_vec(&self.descriptors).map_err(|_| ApiError::InvalidResponse)?,
         );
+        let selections = {
+            let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+            selection::load(&owner.lock().unwrap(), connection)?
+        };
+        self.titles.retain(|_, title| {
+            title
+                .selection
+                .as_ref()
+                .is_none_or(|s| selections.contains(s))
+        });
         self.set_phase("Reading Stremio library…");
         let meta = self.client.library_meta(&connection.auth_key, now_secs())?;
         if meta.len() > MAX_TITLES {
@@ -944,6 +1070,10 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
         let fetch_ids: Vec<_> = meta
             .iter()
+            .filter(|(id, _)| {
+                connection.mode == SyncMode::FullLibrary
+                    || selections.iter().any(|s| s.remote_id == *id)
+            })
             .filter(|(id, stamp)| {
                 self.remote_items
                     .get(id)
@@ -977,9 +1107,19 @@ impl<T: nova_stremio::Transport> Worker<T> {
             )
         };
         let mut locals = local_titles(&entries, &progress);
+        if connection.mode == SyncMode::SelectedTitles {
+            locals.retain(|local| {
+                selections
+                    .iter()
+                    .any(|s| s.native_id == local.id && s.native_type == local.media_type)
+            });
+        }
         // A removed title can still own an explicit unwatch/removal event.
         // Keep its binding's cached identity evidence available for delivery.
         for title in self.titles.values() {
+            if !selection::allowed(connection.mode, &selections, title) {
+                continue;
+            }
             if let Some(binding) = &title.binding
                 && !locals
                     .iter()
@@ -989,6 +1129,19 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     id: binding.id.clone(),
                     media_type: binding.media_type.clone(),
                     videos: read_episodes_cache_for(&binding.media_type, &binding.id)
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        // A selected title need not have local history yet.
+        for selected in selections.iter().filter(|s| s.enabled) {
+            if !locals.iter().any(|local| {
+                local.id == selected.native_id && local.media_type == selected.native_type
+            }) {
+                locals.push(stremio_metadata::LocalTitle {
+                    id: selected.native_id.clone(),
+                    media_type: selected.native_type.clone(),
+                    videos: read_episodes_cache_for(&selected.native_type, &selected.native_id)
                         .unwrap_or_default(),
                 });
             }
@@ -1035,12 +1188,73 @@ impl<T: nova_stremio::Transport> Worker<T> {
             }
         }
         for item in self.remote_items.values() {
+            if connection.mode == SyncMode::SelectedTitles {
+                continue;
+            }
             self.titles
                 .entry(item.id().into())
                 .or_insert_with(|| Title::new(item.clone()));
         }
+        for selected in selections.iter().filter(|s| s.enabled) {
+            let Some(local) = locals
+                .iter()
+                .find(|l| l.id == selected.native_id && l.media_type == selected.native_type)
+            else {
+                continue;
+            };
+            let item = self
+                .remote_items
+                .get(&selected.remote_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    LibraryItem::new(
+                        &selected.remote_id,
+                        &selected.name,
+                        &selected.remote_type,
+                        nova_config::now_ms(),
+                    )
+                });
+            let mut title = Title::new(item);
+            title.binding = Some(NativeBinding {
+                media_type: selected.native_type.clone(),
+                id: selected.native_id.clone(),
+            });
+            title.selection = Some(selected.clone());
+            let slot = title_slot(&title);
+            if self
+                .titles
+                .get(&slot)
+                .is_some_and(|t| t.selection.as_ref() == Some(selected))
+            {
+                continue;
+            }
+            match selection::resolve(selected, local, &title.item, &self.descriptors, &fetch) {
+                Ok(resolved) => {
+                    title.mapping = mapping(resolved, descriptor_revision);
+                    self.titles.insert(slot, title);
+                }
+                Err(reason) => {
+                    self.pending.insert(
+                        slot,
+                        PendingTitle::new(
+                            &selected.name,
+                            &selected.native_type,
+                            &selected.native_id,
+                            reason,
+                        ),
+                    );
+                }
+            }
+        }
         for local in &locals {
             self.check_current(connection, generation)?;
+            if connection.mode == SyncMode::SelectedTitles
+                || selections
+                    .iter()
+                    .any(|s| s.native_id == local.id && s.native_type == local.media_type)
+            {
+                continue;
+            }
             if self
                 .titles
                 .values()
@@ -1129,6 +1343,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
         for slot in ids {
             self.check_current(connection, generation)?;
             let mut title = self.titles.get(&slot).unwrap().clone();
+            if !selection::allowed(connection.mode, &selections, &title) {
+                continue;
+            }
             let id = title.item.id().to_owned();
             let pending_export = title
                 .pending
@@ -1151,7 +1368,24 @@ impl<T: nova_stremio::Transport> Worker<T> {
             let mut progress_available = true;
             if stale_metadata {
                 self.set_phase("Resolving Stremio episode metadata…");
-                let resolved = if let Some(binding) = &title.binding {
+                let resolved = if let Some(selected) = &title.selection {
+                    locals
+                        .iter()
+                        .find(|local| {
+                            local.id == selected.native_id
+                                && local.media_type == selected.native_type
+                        })
+                        .ok_or(stremio_metadata::PendingReason::UnsupportedIdentity)
+                        .and_then(|local| {
+                            selection::resolve(
+                                selected,
+                                local,
+                                &title.item,
+                                &self.descriptors,
+                                &fetch,
+                            )
+                        })
+                } else if let Some(binding) = &title.binding {
                     locals
                         .iter()
                         .find(|local| {
@@ -1217,7 +1451,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 &current_entries,
                 &current_progress,
             )?;
-            let shared = read_shared(connection, &id)?;
+            let shared = read_shared_for_title(connection, &title)?;
             let acknowledged = {
                 let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
                 let store = owner.lock().unwrap();
@@ -1380,7 +1614,11 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 };
                 let native = local_projection(&title.mapping, &entries, &progress);
                 let source = source_canonical(connection, &title, &native, &entries, &progress)?;
-                let fresh = nova_stremio::reconcile(&source, &read_shared(connection, &id)?, false);
+                let fresh = nova_stremio::reconcile(
+                    &source,
+                    &read_shared_for_title(connection, &title)?,
+                    false,
+                );
                 let fresh = nova_stremio::reconcile(&title.desired, &fresh, false);
                 if fresh != title.desired {
                     title.desired = fresh;
@@ -1547,6 +1785,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         generation: u64,
     ) -> Result<(), ApiError> {
         self.check_current(connection, generation)?;
+        self.authorize_title(connection, title)?;
         title.accepted_upload = None;
         self.owner.run(|| save_title(connection, title))?;
         self.check_current(connection, generation)?;
@@ -1558,6 +1797,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     .as_bytes()
             )
         );
+        self.authorize_title(connection, title)?;
         self.client.library_put(
             &connection.auth_key,
             std::slice::from_ref(&title.item),
@@ -1580,17 +1820,27 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
         let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
         let store = owner.lock().unwrap();
-        let current = store
+        let mut current = store
             .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
             .and_then(|r| r.value.as_ref())
             .and_then(|raw| serde_json::from_str::<Connection>(raw).ok());
+        if let Some(current) = current.as_mut() {
+            session_flags(&store, current)?;
+        }
         if current
             .as_ref()
             .is_none_or(|c| !c.valid() || !c.same_session(connection))
         {
             return Err(ApiError::Authentication);
         }
+        if current.as_ref().is_some_and(|c| c.mode != connection.mode) {
+            return Err(ApiError::Rejected);
+        }
         Ok(())
+    }
+    fn authorize_title(&self, connection: &Connection, title: &Title) -> Result<(), ApiError> {
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        selection::authorize(&owner.lock().unwrap(), connection, title)
     }
     fn apply_local(
         &mut self,
@@ -1602,6 +1852,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             self.check_current(connection, generation)?;
+            self.authorize_title(connection, title)?;
             persistence::flush().map_err(|_| ApiError::Rejected)?;
             if Instant::now() >= deadline {
                 return Err(ApiError::Rejected);
@@ -1970,6 +2221,7 @@ fn source_canonical(
             };
         }
     }
+    selection::restrict_for_mode(connection.mode, title.selection.as_ref(), &mut state);
     Ok(state)
 }
 fn membership_projection(item: &LibraryItem) -> Projection {
@@ -2105,6 +2357,11 @@ fn read_shared(connection: &Connection, id: &str) -> Result<Canonical, ApiError>
     }
     Ok(result)
 }
+fn read_shared_for_title(connection: &Connection, title: &Title) -> Result<Canonical, ApiError> {
+    let mut state = read_shared(connection, title.item.id())?;
+    selection::restrict_for_mode(connection.mode, title.selection.as_ref(), &mut state);
+    Ok(state)
+}
 fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError> {
     if max_stamp(&title.desired) > nova_config::now_ms().saturating_add(60 * 60 * 1000)
         || title.desired.watched.len() > nova_stremio::MAX_VIDEOS
@@ -2117,6 +2374,18 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         .record("profile_deletions", &profiles::current_id())
         .is_some_and(|r| !r.is_deleted())
     {
+        return Err(ApiError::Rejected);
+    }
+    if selection::authorize(&store, connection, title).is_err() {
+        // A request already accepted while a selection was removed still
+        // keeps its durable receipt; it must not republish upload authority.
+        if title.accepted_upload.is_some() {
+            store.queue_extra(
+                &profiles::storage_key(&title_storage_key(&connection.account_id, title)),
+                Some(serde_json::to_string(title).map_err(|_| ApiError::InvalidResponse)?),
+            );
+            return store.save().map_err(|_| ApiError::Rejected);
+        }
         return Err(ApiError::Rejected);
     }
     let prefix = shared_prefix(&connection.account_id, title.item.id());
@@ -2207,6 +2476,13 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         false,
     )?;
     for (id, value) in &mut title.desired.watched {
+        if title.selection.as_ref().is_some_and(|s| {
+            !s.episode_ids.contains_key(id)
+                || (connection.mode == SyncMode::SelectedTitles
+                    && value.changed_at <= s.history_since_ms)
+        }) {
+            continue;
+        }
         let initial_union = !title.progress_merged && value.value;
         field(
             &mut store,
@@ -2226,6 +2502,15 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             let episode: String =
                 serde_json::from_str(episode).map_err(|_| ApiError::InvalidResponse)?;
             let value = serde_json::from_str(&raw).map_err(|_| ApiError::InvalidResponse)?;
+            if title.selection.as_ref().is_some_and(|s| {
+                !s.episode_ids.contains_key(&episode) || {
+                    let field: &Stamped<bool> = &value;
+                    connection.mode == SyncMode::SelectedTitles
+                        && field.changed_at <= s.history_since_ms
+                }
+            }) {
+                continue;
+            }
             title.desired.watched.insert(episode, value);
         }
     }

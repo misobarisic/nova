@@ -11,3 +11,6 @@ mod detail_tab;
 
 #[path = "tracking/completion_rating.rs"]
 mod completion_rating;
+
+#[path = "tracking/services_scope.rs"]
+mod services_scope;

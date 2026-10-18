@@ -85,6 +85,79 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Sync mode" => "Način sinkronizacije",
+        "Full library sync" => "Sinkronizacija cijele zbirke",
+        "Selected titles" => "Odabrani naslovi",
+        "Selected titles mode" => "Način odabranih naslova",
+        "Only explicitly enabled titles will sync. Enable a title from its Tracking page." => {
+            "Sinkronizirat će se samo izričito omogućeni naslovi. Omogućite naslov na njegovoj stranici Praćenje."
+        }
+        "Sync only titles you explicitly enable from their Tracking page." => {
+            "Sinkronizirajte samo naslove koje izričito omogućite na njihovoj stranici Praćenje."
+        }
+        "Loading Stremio matches…" => "Učitavanje Stremio podudaranja…",
+        "Connect Stremio in Settings → Tracking first." => {
+            "Prvo povežite Stremio u Postavke → Praćenje."
+        }
+        "Could not prepare Stremio tracking. Try again." => {
+            "Nije moguće pripremiti Stremio praćenje. Pokušajte ponovno."
+        }
+        "Choose a Stremio match, then review episode alignment." => {
+            "Odaberite Stremio podudaranje, a zatim pregledajte povezivanje epizoda."
+        }
+        "This title is enabled for Stremio sync." => {
+            "Za ovaj naslov omogućena je Stremio sinkronizacija."
+        }
+        "Stremio tracking stopped for this title. Existing history is kept." => {
+            "Stremio praćenje ovog naslova je zaustavljeno. Postojeća povijest je sačuvana."
+        }
+        "Not mapped" => "Nije povezano",
+        "Only mapped episodes will sync. Review the match before enabling it." => {
+            "Sinkronizirat će se samo povezane epizode. Pregledajte podudaranje prije omogućavanja."
+        }
+        "Only titles enabled here sync with Stremio." => {
+            "Sa Stremiom se sinkroniziraju samo ovdje omogućeni naslovi."
+        }
+        "Full library sync is enabled. You can also review a specific title's match here." => {
+            "Omogućena je sinkronizacija cijele zbirke. Ovdje možete pregledati i podudaranje određenog naslova."
+        }
+        "Search Stremio titles or enter a catalog ID" => {
+            "Pretražite Stremio naslove ili unesite ID kataloga"
+        }
+        "Find Stremio matches" => "Pronađi Stremio podudaranja",
+        "Enable Stremio for this title" => "Omogući Stremio za ovaj naslov",
+        "Stop tracking this title" => "Zaustavi praćenje ovog naslova",
+        "Stremio tracking" => "Stremio praćenje",
+        "Choose what to sync for this title." => "Odaberite što sinkronizirati za ovaj naslov.",
+        "Verifying account…" => "Provjera računa…",
+        "Enter an API key or access token first." => "Prvo unesite API ključ ili pristupni token.",
+        "Service unavailable. Try again." => "Usluga nije dostupna. Pokušajte ponovno.",
+        "Sync paused. Select Sync now to resume." => {
+            "Sinkronizacija je zaustavljena. Odaberite Sinkroniziraj sada za nastavak."
+        }
+        "Merging saved titles and watched history…" => {
+            "Spajanje spremljenih naslova i povijesti gledanja…"
+        }
+        "Library and watched history merged" => "Zbirka i povijest gledanja su spojene",
+        "Reconnect this account to continue" => "Ponovno povežite ovaj račun za nastavak",
+        "Service rate limit reached. Sync will retry." => {
+            "Dosegnuto je ograničenje zahtjeva. Sinkronizacija će se ponoviti."
+        }
+        "Sync interrupted or local save failed. Try Sync now." => {
+            "Sinkronizacija je prekinuta ili spremanje nije uspjelo. Pokušajte Sinkroniziraj sada."
+        }
+        "Unsupported or invalid service data. Some titles remain pending." => {
+            "Nepodržani ili nevaljani podaci usluge. Neki naslovi ostaju na čekanju."
+        }
+        "This operation is unavailable for this service." => {
+            "Ova radnja nije dostupna za ovu uslugu."
+        }
+        "Service unavailable. Sync will retry." => {
+            "Usluga nije dostupna. Sinkronizacija će se ponoviti."
+        }
+        "No confirmed IMDb or TMDB identity. Refresh this title's metadata." => {
+            "Nema potvrđenog IMDb ili TMDB identiteta. Osvježite metapodatke naslova."
+        }
         "Default" => "Zadano",
         "Accent-tinted" => "Ton naglaska",
         "True black" => "Prava crna",
@@ -2079,6 +2152,14 @@ pub fn stremio_preview(titles: usize) -> String {
         format!("Spojit će se {titles} naslova. Već pogledane epizode bit će sačuvane.")
     } else {
         format!("{titles} titles will be merged. Existing watched episodes will be kept.")
+    }
+}
+
+pub fn list_services_pending(titles: usize) -> String {
+    if croatian() {
+        format!("Neki naslovi čekaju potvrđene identitete ili podatke o epizodama ({titles}).")
+    } else {
+        format!("Some titles need confirmed identities or episode metadata ({titles}).")
     }
 }
 

@@ -3,6 +3,12 @@ import { DetailBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, 
 // by page-bindings.slint, outside the conditional ComponentContainer.
 
 export component DetailHost inherits Rectangle {
+    in-out property <bool> list_services_title_selected <=> DetailBridge.list_services_title_selected;
+    in-out property <bool> list_services_title_connected <=> DetailBridge.list_services_title_connected;
+    in-out property <bool> list_services_title_busy <=> DetailBridge.list_services_title_busy;
+    in-out property <bool> list_services_title_resolved <=> DetailBridge.list_services_title_resolved;
+    in-out property <string> list_services_title_status <=> DetailBridge.list_services_title_status;
+    in-out property <string> list_services_title_identity <=> DetailBridge.list_services_title_identity;
     preferred-width: 100%; preferred-height: 100%;
     in-out property <[TrackingLinkRow]> tracking_links <=> DetailBridge.tracking_links;
     in-out property <[TrackingCandidateRow]> tracking_candidates <=> DetailBridge.tracking_candidates;
@@ -21,6 +27,14 @@ export component DetailHost inherits Rectangle {
     in-out property <string> tracking_candidate_title <=> DetailBridge.tracking_candidate_title;
     in-out property <bool> tracking_busy <=> DetailBridge.tracking_busy;
     in-out property <bool> tracking_can_confirm <=> DetailBridge.tracking_can_confirm;
+    in-out property <bool> stremio_title_busy <=> DetailBridge.stremio_title_busy;
+    in-out property <bool> stremio_title_linked <=> DetailBridge.stremio_title_linked;
+    in-out property <bool> stremio_title_can_confirm <=> DetailBridge.stremio_title_can_confirm;
+    in-out property <string> stremio_title_status <=> DetailBridge.stremio_title_status;
+    in-out property <string> stremio_title_match <=> DetailBridge.stremio_title_match;
+    in-out property <[TrackingCandidateRow]> stremio_title_candidates <=> DetailBridge.stremio_title_candidates;
+    in-out property <[TrackingMappingRow]> stremio_title_mapping <=> DetailBridge.stremio_title_mapping;
+    in-out property <[string]> stremio_title_options <=> DetailBridge.stremio_title_options;
     in-out property <image> selected_logo <=> DetailBridge.selected_logo;
     in-out property <bool> is_movie <=> DetailBridge.is_movie;
     in-out property <int> episode_reveal_request <=> DetailBridge.episode_reveal_request;

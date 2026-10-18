@@ -2,7 +2,8 @@
 
 Settings → Tracking connects one Stremio account through a browser/code flow.
 Nova verifies the account before showing the initial library merge preview;
-Start begins the two-way merge. Stremio addons remain managed in Stremio.
+Start begins the two-way merge. Settings offers **Full library sync** and
+**Selected titles**; existing connections retain full-library mode. Stremio addons remain managed in Stremio.
 Connecting an account does not install addons in Nova.
 
 After Start is saved, the initial preview becomes Sync now even if the first
@@ -38,6 +39,39 @@ and database writes under the external-origin guards. Delivery is acknowledged
 only after its background save succeeds. Unchanged projections do not save or
 refresh models. UI updates coalesce per changed pass; unrelated Detail pages are
 left alone, and hidden Home/Library models refresh when revealed.
+
+## Selected titles and exclusions
+
+In Selected titles mode, only explicitly enabled native titles are imported or
+exported. Cached canonical imports, unrelated native bindings and old pending
+uploads do not gain permission merely because they were previously synchronized.
+The account's other library titles remain untouched.
+
+Open a saved title's **Tracking → Stremio** page, choose an account-catalog
+match and review its episode alignment. Catalog searches use only the connected
+account's declared searchable addons; a catalog ID can also be entered directly.
+Exact episode IDs and current confirmed aliases prefill matches; other episode
+pairs require explicit selection. Duplicate target assignments cannot be enabled.
+A movie needs one title match. Choosing a result alone does not upload anything.
+
+**Enable Stremio for this title** saves the reviewed native/remote mapping.
+In Selected titles mode, **Include watched episodes** defaults off; existing
+history is excluded from new native upload authority unless enabled. Remote
+history remains independently observed. Full-library mode authorizes existing
+history. **Stop tracking this title** stores a per-title exclusion that takes
+precedence in either mode, preserving existing local and remote history. Its
+canonical coordination row cannot bypass that exclusion.
+
+Selected mappings retain their approved episode IDs when additional seasons or
+episodes appear. New inventory does not extend approval automatically; missing
+or replaced approved episode IDs require review. Native metadata is never
+replaced by the selected account catalog's inventory.
+
+Mode choices and selections synchronize with paired devices within the Nova
+profile. Mode changes and per-title consent are reread at delivery boundaries,
+including immediately before local materialization and remote upload. A peer's
+exclusion or mode change cancels stale work. Control mailboxes retain the latest
+mode/enrolment choice even when ordinary request queues fill during HTTP.
 
 ## Identity and episode coverage
 
@@ -113,7 +147,14 @@ sign-in session. Native actions use
 `event:<JSON(account,type,native ID)>:<field>`; merged remote-title state uses
 `title:<JSON(account,remote ID)>:<field>`. Each field is an independent record:
 `saved`, `resume`, or `watched:<JSON episode ID>`. Separate field records preserve
-concurrent changes to different episodes across paired devices.
+concurrent changes to different episodes across paired devices. The independent
+`session:<JSON(epoch)>:mode` record stores `full_library` or `selected_titles`.
+Account-bound `selection:<JSON account>:<JSON(native type,native ID)>` records
+store explicit enable/exclusion, the reviewed episode pairs, inventory snapshots,
+history cutoff and consent revision. `excluded_remote:<JSON(account,type,remote
+ID)>:<JSON(native type,native ID)>` is an atomic exclusion index that also gates
+canonical imports. Local title snapshots default their optional `selection`
+field for legacy data.
 `title:<JSON(account,remote ID)>:remote` stores the acknowledged server
 `_mtime` milliseconds and canonical per-field clocks as a JSON tuple. Paired
 devices reuse those original action times only when the server revision and
@@ -143,6 +184,7 @@ reuse their old key. Shared field records remain keyed by remote title/episode.
 - `crates/stremio/src/library.rs`: raw library items, watched bitfields and progress projection.
 - `crates/stremio/src/lib.rs`: pure timestamped field reconciliation.
 - `src/app/stremio.rs`: account actor, batched UI publication and persisted work.
+- `src/app/stremio_selection.rs`: mode policy, explicit title review and durable authorization; `stremio_selection_tests.rs` covers stale consent, exclusions and preserved season coverage.
 - `src/app/stremio_apply.rs`: background materialization, optimistic UI acceptance and durable receipts.
 - `src/app/persistence.rs`: ordered local snapshots and external record patches.
 - `src/app/stremio_events.rs`: atomic native action clocks and origin guards.

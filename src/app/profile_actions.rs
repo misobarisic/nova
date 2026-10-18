@@ -266,6 +266,7 @@ impl Bridge {
             self.player.close();
             self.shutdown_tracking();
             self.shutdown_stremio();
+            self.shutdown_list_services();
             self.catalog_gen.fetch_add(1, Ordering::AcqRel);
             self.home_showcase_gen.fetch_add(1, Ordering::AcqRel);
             self.home_catalog_rows_gen.fetch_add(1, Ordering::AcqRel);
@@ -323,6 +324,16 @@ impl Bridge {
             app.set_tracking_busy(false);
             app.set_tracking_can_confirm(false);
             app.set_stremio_connected(false);
+            app.set_stremio_mode_index(0);
+            app.set_stremio_title_busy(false);
+            app.set_stremio_title_linked(false);
+            app.set_stremio_title_can_confirm(false);
+            app.set_stremio_title_status("".into());
+            app.set_stremio_title_match("".into());
+            app.set_stremio_title_candidates(Default::default());
+            app.set_stremio_title_mapping(Default::default());
+            app.set_stremio_title_options(Default::default());
+            list_services::clear_ui(&app);
             app.set_stremio_busy(false);
             app.set_stremio_account("".into());
             app.set_stremio_status("".into());

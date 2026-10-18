@@ -49,6 +49,7 @@ pub(super) struct ProfileSession {
     state: Arc<parking_lot::Mutex<Shared>>,
     pub tracking: tracking::StateHandle,
     pub stremio: Arc<stremio::Handle>,
+    pub list_services: Arc<list_services::Handle>,
     pub cancelled: AtomicBool,
     pub services_requested: AtomicBool,
 }
@@ -67,6 +68,7 @@ impl ProfileSession {
             providers: std::sync::OnceLock::new(),
             tracking: Arc::new(tracking::TrackingHandle::new()),
             stremio: Arc::new(stremio::Handle::new()),
+            list_services: Arc::new(list_services::Handle::new()),
             cancelled: AtomicBool::new(false),
             services_requested: AtomicBool::new(false),
         })
@@ -81,7 +83,9 @@ impl ProfileSession {
         }
     }
     pub fn is_finished(&self) -> bool {
-        self.tracking.is_finished() && self.stremio.is_finished()
+        self.tracking.is_finished()
+            && self.stremio.is_finished()
+            && self.list_services.is_finished()
     }
     pub fn provider_inventory(&self) -> Result<nova_providers::OwnedProviderSnapshot, String> {
         let (packages, metadata) = {
@@ -218,6 +222,7 @@ impl Bridge {
             profiles::with_context(session.context(), || {
                 self.initialize_tracking();
                 self.start_stremio();
+                self.start_list_services();
             });
         }
     }

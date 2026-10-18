@@ -1,0 +1,77 @@
+import { DetailBridge, SettingsBridge, Theme } from "@NovaUiShared";
+import { SettingsInput, PillButton } from "settings-controls.slint";
+import { Dropdown } from "dropdown.slint";
+import { TrackingButton, HistoryToggle } from "tracking-controls.slint";
+
+// This body shares the Tracking page's scroll viewport and stable Back owner.
+export component StremioTitle inherits VerticalLayout {
+    spacing: 12px;
+    alignment: start;
+    property <bool> include_history: false;
+    property <string> query_text;
+    Text {
+        text: SettingsBridge.stremio_mode_index == 1
+            ? @tr("Only titles enabled here sync with Stremio.")
+            : @tr("Full library sync is enabled. You can also review a specific title's match here.");
+        wrap: word-wrap; min-width: 0px; color: Theme.current.text_settings;
+    }
+    if !SettingsBridge.stremio_connected: Text {
+        text: @tr("Connect Stremio in Settings → Tracking first.");
+        wrap: word-wrap; min-width: 0px; color: Theme.current.text_settings;
+    }
+    if SettingsBridge.stremio_connected: SettingsInput {
+        placeholder-text: @tr("Search Stremio titles or enter a catalog ID");
+        enabled: !DetailBridge.stremio_title_busy;
+        accepted => { DetailBridge.stremio_title_search(self.full-text); }
+        changed full-text => { root.query_text = self.full-text; root.include_history = false; }
+    }
+    // Searching is an explicit action; typing never sends account requests.
+    if SettingsBridge.stremio_connected: PillButton {
+        label: @tr("Find Stremio matches");
+        enabled: !DetailBridge.stremio_title_busy;
+        clicked => { DetailBridge.stremio_title_search(root.query_text); }
+    }
+    if DetailBridge.stremio_title_status != "": Text {
+        text: DetailBridge.stremio_title_status;
+        wrap: word-wrap; min-width: 0px; color: Theme.current.text_tracking_notice;
+    }
+    if SettingsBridge.stremio_connected && DetailBridge.stremio_title_match == "": VerticalLayout {
+        spacing: 8px;
+        for row[index] in DetailBridge.stremio_title_candidates: TrackingButton {
+            text: row.title + " · " + row.detail;
+            enabled: !DetailBridge.stremio_title_busy;
+            clicked => { DetailBridge.stremio_title_pick(index); }
+        }
+    }
+    if DetailBridge.stremio_title_match != "": Text {
+        text: DetailBridge.stremio_title_match;
+        color: Theme.current.text_bright; font-weight: 600; wrap: word-wrap; min-width: 0px;
+    }
+    if DetailBridge.stremio_title_match != "": VerticalLayout {
+        spacing: 10px;
+        for row[index] in DetailBridge.stremio_title_mapping: VerticalLayout {
+            spacing: 4px;
+            Text { text: row.label; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+            Dropdown {
+                model: DetailBridge.stremio_title_options;
+                current-index: row.source_row;
+                roomy: true;
+                selected(_) => { DetailBridge.stremio_title_assign(index, self.current-index); }
+            }
+        }
+    }
+    if DetailBridge.stremio_title_can_confirm && SettingsBridge.stremio_mode_index == 1: HistoryToggle { checked <=> root.include_history; }
+    if DetailBridge.stremio_title_can_confirm: TrackingButton {
+        text: @tr("Enable Stremio for this title"); primary: true;
+        enabled: !DetailBridge.stremio_title_busy;
+        clicked => { DetailBridge.stremio_title_confirm(SettingsBridge.stremio_mode_index == 0 || root.include_history); }
+    }
+    if DetailBridge.stremio_title_linked && SettingsBridge.stremio_mode_index == 1: PillButton {
+        label: @tr("Sync now"); enabled: !SettingsBridge.stremio_busy;
+        clicked => { SettingsBridge.stremio_sync(); }
+    }
+    if DetailBridge.stremio_title_linked: PillButton {
+        label: @tr("Stop tracking this title"); destructive: true;
+        clicked => { DetailBridge.stremio_title_unlink(); }
+    }
+}

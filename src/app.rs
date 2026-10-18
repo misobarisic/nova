@@ -805,6 +805,7 @@ mod clipboard;
 mod episodes;
 mod i18n;
 mod io;
+mod list_services;
 mod streams;
 mod stremio;
 mod stremio_events;

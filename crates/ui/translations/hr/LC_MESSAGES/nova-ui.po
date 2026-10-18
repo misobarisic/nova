@@ -3337,3 +3337,120 @@ msgstr "Vrlo visoka (95%)"
 
 msgid "Dismiss skip prompt"
 msgstr "Sakrij gumb za preskakanje"
+
+msgid "Sync mode"
+msgstr "Način sinkronizacije"
+
+msgid "Full library sync"
+msgstr "Sinkronizacija cijele zbirke"
+
+msgid "Selected titles"
+msgstr "Odabrani naslovi"
+
+msgid "Selected titles mode"
+msgstr "Način odabranih naslova"
+
+msgid "Only explicitly enabled titles will sync. Enable a title from its Tracking page."
+msgstr "Sinkronizirat će se samo izričito omogućeni naslovi. Omogućite naslov na njegovoj stranici Praćenje."
+
+msgid "Sync only titles you explicitly enable from their Tracking page."
+msgstr "Sinkronizirajte samo naslove koje izričito omogućite na njihovoj stranici Praćenje."
+
+msgid "Loading Stremio matches…"
+msgstr "Učitavanje Stremio podudaranja…"
+
+msgid "Connect Stremio in Settings → Tracking first."
+msgstr "Prvo povežite Stremio u Postavke → Praćenje."
+
+msgid "Could not prepare Stremio tracking. Try again."
+msgstr "Nije moguće pripremiti Stremio praćenje. Pokušajte ponovno."
+
+msgid "Choose a Stremio match, then review episode alignment."
+msgstr "Odaberite Stremio podudaranje, a zatim pregledajte povezivanje epizoda."
+
+msgid "This title is enabled for Stremio sync."
+msgstr "Za ovaj naslov omogućena je Stremio sinkronizacija."
+
+msgid "Stremio tracking stopped for this title. Existing history is kept."
+msgstr "Stremio praćenje ovog naslova je zaustavljeno. Postojeća povijest je sačuvana."
+
+msgid "Not mapped"
+msgstr "Nije povezano"
+
+msgid "Only mapped episodes will sync. Review the match before enabling it."
+msgstr "Sinkronizirat će se samo povezane epizode. Pregledajte podudaranje prije omogućavanja."
+
+msgid "Only titles enabled here sync with Stremio."
+msgstr "Sa Stremiom se sinkroniziraju samo ovdje omogućeni naslovi."
+
+msgid "Full library sync is enabled. You can also review a specific title's match here."
+msgstr "Omogućena je sinkronizacija cijele zbirke. Ovdje možete pregledati i podudaranje određenog naslova."
+
+msgid "Search Stremio titles or enter a catalog ID"
+msgstr "Pretražite Stremio naslove ili unesite ID kataloga"
+
+msgid "Find Stremio matches"
+msgstr "Pronađi Stremio podudaranja"
+
+msgid "Enable Stremio for this title"
+msgstr "Omogući Stremio za ovaj naslov"
+
+msgid "Stop tracking this title"
+msgstr "Zaustavi praćenje ovog naslova"
+
+msgid "Stremio tracking"
+msgstr "Stremio praćenje"
+
+msgid "Choose what to sync for this title."
+msgstr "Odaberite što sinkronizirati za ovaj naslov."
+
+msgid "Choose titles on their Tracking page. Connecting an account does not upload your library."
+msgstr "Odaberite naslove na njihovoj stranici Praćenje. Povezivanje računa ne prenosi vašu zbirku."
+
+msgid "Enter your Simkl application client ID and access token. Tokens are verified before use."
+msgstr "Unesite ID svoje Simkl aplikacije i pristupni token. Tokeni se provjeravaju prije upotrebe."
+
+msgid "Create an API key in MDBList preferences and paste it below."
+msgstr "Izradite API ključ u postavkama MDBLista i zalijepite ga ispod."
+
+msgid "Simkl client ID"
+msgstr "ID Simkl aplikacije"
+
+msgid "Simkl access token"
+msgstr "Simkl pristupni token"
+
+msgid "MDBList API key"
+msgstr "MDBList API ključ"
+
+msgid "Open account settings"
+msgstr "Otvori postavke računa"
+
+msgid "Automatic sync for selected titles"
+msgstr "Automatska sinkronizacija odabranih naslova"
+
+msgid "Sync the full library"
+msgstr "Sinkroniziraj cijelu zbirku"
+
+msgid "Full-library sync imports and exports all supported saved titles and watched episodes. Custom lists and ratings are preserved."
+msgstr "Sinkronizacija cijele zbirke uvozi i izvozi sve podržane spremljene naslove i odgledane epizode. Prilagođeni popisi i ocjene ostaju sačuvani."
+
+msgid "Start full-library sync"
+msgstr "Pokreni sinkronizaciju cijele zbirke"
+
+msgid "Use selected titles only"
+msgstr "Koristi samo odabrane naslove"
+
+msgid "Sync this title's library membership and watched history. Only confirmed catalog and episode identities are shared."
+msgstr "Sinkronizirajte ovaj naslov u zbirci i povijest gledanja. Dijele se samo potvrđeni identiteti kataloga i epizoda."
+
+msgid "Start syncing this title"
+msgstr "Pokreni sinkronizaciju ovog naslova"
+
+msgid "Sync this title now"
+msgstr "Sinkroniziraj ovaj naslov sada"
+
+msgid "Stop syncing this title"
+msgstr "Zaustavi sinkronizaciju ovog naslova"
+
+msgid "Sync combines saved titles and watched episodes. Removing a title or marking it unwatched does not delete the other service's history."
+msgstr "Sinkronizacija spaja spremljene naslove i odgledane epizode. Uklanjanje naslova ili označavanje kao neodgledanog ne briše povijest druge usluge."

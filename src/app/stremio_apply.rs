@@ -80,6 +80,7 @@ pub(super) fn prepare(
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
     let clock = {
         let store = owner.lock().unwrap();
+        selection::authorize(&store, connection, title)?;
         let current = store
             .record(&crate::app::sync::profile_domain(DOMAIN), CONNECTION)
             .and_then(|row| row.value.as_ref())
@@ -99,7 +100,7 @@ pub(super) fn prepare(
     let entries: Vec<_> = before.entry.iter().cloned().collect();
     let projection = local_projection(&title.mapping, &entries, &before.progress);
     let local = source_canonical(connection, title, &projection, &entries, &before.progress)?;
-    let shared = read_shared(connection, title.item.id())?;
+    let shared = read_shared_for_title(connection, title)?;
     let mut title = title.clone();
     title.desired = nova_stremio::reconcile(&local, &title.desired, false);
     title.desired = nova_stremio::reconcile(&title.desired, &shared, false);
@@ -144,6 +145,14 @@ pub(super) fn prepare(
     if with_progress {
         let mut progress = before.progress.clone();
         for (remote, field) in &title.desired.watched {
+            if connection.mode == SyncMode::SelectedTitles
+                && title
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| !field.value && field.changed_at <= s.history_since_ms)
+            {
+                continue;
+            }
             let Some(native) = title.mapping.episode_ids.get(remote) else {
                 continue;
             };

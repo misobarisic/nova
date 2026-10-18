@@ -177,8 +177,15 @@ impl Bridge {
             context,
             generation,
         });
+        match self.app().map(|app| app.get_tracking_service()) {
+            Some(2) => self.stremio_title_search(String::new()),
+            Some(3) => self.list_services_title_open(0),
+            Some(4) => self.list_services_title_open(1),
+            _ => {}
+        }
     }
     pub(in crate::app) fn tracking_close(&self) {
+        self.stremio_title_close();
         *self.tracking().context_evidence.lock().unwrap() = None;
         self.tracking()
             .context_generation

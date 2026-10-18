@@ -10,6 +10,7 @@ fn connection(epoch: &str) -> Connection {
         automatic: true,
         started: false,
         bootstrap_done: false,
+        mode: SyncMode::default(),
     }
 }
 fn install(store: &mut nova_sync::Store, connection: &Connection) {

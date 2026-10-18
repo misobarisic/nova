@@ -3,6 +3,19 @@
 import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
+    in-out property <[string]> list_services_account: ["", ""];
+    in-out property <[string]> list_services_status: ["", ""];
+    in-out property <[bool]> list_services_connected: [false, false];
+    in-out property <[bool]> list_services_busy: [false, false];
+    in-out property <[bool]> list_services_automatic: [true, true];
+    in-out property <[bool]> list_services_whole_library: [false, false];
+    callback list_services_connect(int, string, string);
+    callback list_services_disconnect(int);
+    callback list_services_cancel(int);
+    callback list_services_sync(int);
+    callback list_services_automatic_changed(int, bool);
+    callback list_services_scope_changed(int, bool);
+    callback list_services_open_account(int);
     in-out property <bool> completion_rating_prompts_enabled: true;
     callback focus_shell();
     in-out property <component-factory> factory;
@@ -31,6 +44,7 @@ export global SettingsBridge {
     in-out property <bool> stremio_connected;
     in-out property <bool> stremio_busy;
     in-out property <bool> stremio_automatic;
+    in-out property <int> stremio_mode_index;
     in-out property <string> stremio_status;
     in-out property <string> stremio_account;
     in-out property <string> stremio_link_code;
@@ -234,6 +248,7 @@ export global SettingsBridge {
     callback stremio_start();
     callback stremio_sync();
     callback stremio_automatic_changed(bool);
+    callback stremio_mode_changed(int);
     callback stremio_disconnect();
     callback stremio_open_link();
 

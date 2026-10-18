@@ -127,9 +127,16 @@ export component DetailBindings {
 }
 
 export component SettingsBindings {
+    in-out property <[string]> list_services_account <=> SettingsBridge.list_services_account;
+    in-out property <[string]> list_services_status <=> SettingsBridge.list_services_status;
+    in-out property <[bool]> list_services_connected <=> SettingsBridge.list_services_connected;
+    in-out property <[bool]> list_services_busy <=> SettingsBridge.list_services_busy;
+    in-out property <[bool]> list_services_automatic <=> SettingsBridge.list_services_automatic;
+    in-out property <[bool]> list_services_whole_library <=> SettingsBridge.list_services_whole_library;
     in-out property <bool> stremio_connected <=> SettingsBridge.stremio_connected;
     in-out property <bool> stremio_busy <=> SettingsBridge.stremio_busy;
     in-out property <bool> stremio_automatic <=> SettingsBridge.stremio_automatic;
+    in-out property <int> stremio_mode_index <=> SettingsBridge.stremio_mode_index;
     in-out property <string> stremio_status <=> SettingsBridge.stremio_status;
     in-out property <string> stremio_account <=> SettingsBridge.stremio_account;
     in-out property <string> stremio_link_code <=> SettingsBridge.stremio_link_code;

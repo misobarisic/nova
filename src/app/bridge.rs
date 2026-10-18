@@ -78,4 +78,12 @@ impl Bridge {
             .stremio
             .clone()
     }
+
+    pub(super) fn list_services(&self) -> Arc<list_services::Handle> {
+        self.sessions
+            .resolve()
+            .expect("list services require a profile session")
+            .list_services
+            .clone()
+    }
 }

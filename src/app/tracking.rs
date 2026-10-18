@@ -528,6 +528,7 @@ pub(super) fn journal_progress(
         changes,
         date: Some(nova_tracking::ListDate::today()),
     };
+    list_services::record_watched_events(store, &before, &event.changes, sequence, remote);
     store.queue_extra(
         &profiles::storage_key(&format!("{}{sequence:020}", nova_tracking::EVENT_PREFIX)),
         Some(serde_json::to_string(&event)?),

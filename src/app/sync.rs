@@ -55,6 +55,7 @@ pub(super) const SCOPED_DOMAINS: &[&str] = &[
     nova_tracking::peer::TRACKING_DOMAIN,
     nova_tracking::TRACKING_COMPLETION_DOMAIN,
     stremio::DOMAIN,
+    list_services::DOMAIN,
 ];
 
 pub(super) fn profile_domain(domain: &str) -> String {
@@ -1434,6 +1435,10 @@ impl Bridge {
             match domain.as_str() {
                 stremio::DOMAIN => {
                     self.stremio_wake();
+                    continue;
+                }
+                list_services::DOMAIN => {
+                    self.list_services_wake();
                     continue;
                 }
                 DOMAIN_LIBRARY => self.sync_apply_library(),

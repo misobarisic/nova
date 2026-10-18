@@ -1,4 +1,6 @@
-import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent } from "@NovaUiShared";
+import { StremioTitle } from "stremio-title.slint";
+import { ListServicesTitle } from "list-services-title.slint";
+import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent, DetailBridge } from "@NovaUiShared";
 import { CheckBox, Spinner } from "std-widgets.slint";
 import { SettingsInput } from "settings-controls.slint";
 import { TrackingButton, MappingChip, HistoryToggle } from "tracking-controls.slint";
@@ -78,7 +80,8 @@ export component TrackingPanel inherits Rectangle {
         }
     }
     public function nested_back() {
-        if root.active_entry_id != "" && root.entry_unlink_confirm { root.entry_unlink_confirm = false; }
+        if root.selected_service >= 2 { root.back_to_details(); }
+        else if root.active_entry_id != "" && root.entry_unlink_confirm { root.entry_unlink_confirm = false; }
         else if root.active_entry_id != "" && root.entry_history_confirm { root.entry_history_confirm = false; }
         // Same Cancel behavior as the entry editor: discard unsaved inputs.
         else if root.active_entry_id != "" && root.entry_editing { root.entry_editing = false; }
@@ -154,7 +157,7 @@ export component TrackingPanel inherits Rectangle {
                 VerticalLayout {
                     spacing: 4px;
                     Text {
-                        text: root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
+                        text: root.selected_service == 2 ? @tr("Stremio tracking") : root.selected_service == 3 ? "Simkl" : root.selected_service == 4 ? "MDBList" : root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
                         color: Theme.current.text_tracking_primary;
                         font-size: root.wide ? 26px : 22px;
                         font-weight: 700;
@@ -162,53 +165,59 @@ export component TrackingPanel inherits Rectangle {
                         min-width: 0px;
                     }
                     Text {
-                        text: root.candidate_title != "" ? @tr("Review which episodes update this release.") : @tr("Link this title to your anime list.");
+                        text: root.selected_service >= 2 ? @tr("Choose what to sync for this title.") : root.candidate_title != "" ? @tr("Review which episodes update this release.") : @tr("Link this title to your anime list.");
                         color: Theme.current.text_detail_metadata;
                         font-size: 14px;
                         wrap: word-wrap;
                         min-width: 0px;
                     }
                 }
-                if root.candidate_title != "": TrackingButton {
+                if root.selected_service < 2 && root.candidate_title != "": TrackingButton {
                     width: 120px;
                     text: @tr("Back to review");
                     quiet: true;
                     clicked => { root.cancel_adjust(); }
                 }
             }
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                service_mal := TrackingButton {
-                    width: 144px;
-                    text: "MyAnimeList";
-                    icon: 4;
-                    selected: root.selected_service == 0;
-                    enabled: !root.busy;
-                    clicked => {
-                        if root.selected_service != 0 {
-                            root.selected_service = 0;
-                            root.query_text = "";
-                            root.search(0, "");
-                        }
+            service_rail := Flickable {
+                height: service_buttons.preferred-height;
+                vertical-stretch: 0;
+                content-width: service_buttons.preferred-width;
+                content-height: self.height;
+                content-y: 0px;
+                mouse-drag-pan-enabled: true;
+                service_buttons := HorizontalLayout {
+                    x: 0px; y: 0px; width: self.preferred-width; height: self.preferred-height;
+                    spacing: 8px; alignment: start;
+                    service_mal := TrackingButton {
+                        width: 144px; text: "MyAnimeList"; icon: 4;
+                        selected: root.selected_service == 0;
+                        enabled: root.selected_service >= 2 || !root.busy;
+                        clicked => { if root.selected_service != 0 { root.selected_service = 0; root.query_text = ""; root.search(0, ""); } }
                     }
-                }
-                TrackingButton {
-                    width: 104px;
-                    text: "AniList";
-                    icon: 5;
-                    selected: root.selected_service == 1;
-                    enabled: !root.busy;
-                    clicked => {
-                        if root.selected_service != 1 {
-                            root.selected_service = 1;
-                            root.query_text = "";
-                            root.search(1, "");
-                        }
+                    TrackingButton {
+                        width: 104px; text: "AniList"; icon: 5;
+                        selected: root.selected_service == 1;
+                        enabled: root.selected_service >= 2 || !root.busy;
+                        clicked => { if root.selected_service != 1 { root.selected_service = 1; root.query_text = ""; root.search(1, ""); } }
+                    }
+                    TrackingButton {
+                        width: 104px; text: "Stremio"; selected: root.selected_service == 2;
+                        clicked => { if root.selected_service != 2 { root.recover_entry_focus(); root.selected_service = 2; DetailBridge.stremio_title_search(""); } }
+                    }
+                    TrackingButton {
+                        width: 88px; text: "Simkl"; selected: root.selected_service == 3;
+                        clicked => { if root.selected_service != 3 { root.recover_entry_focus(); root.selected_service = 3; DetailBridge.list_services_title_open(0); } }
+                    }
+                    TrackingButton {
+                        width: 104px; text: "MDBList"; selected: root.selected_service == 4;
+                        clicked => { if root.selected_service != 4 { root.recover_entry_focus(); root.selected_service = 4; DetailBridge.list_services_title_open(1); } }
                     }
                 }
             }
-            scroll := Rectangle {
+            if root.selected_service == 2: StremioTitle { }
+            if root.selected_service >= 3: ListServicesTitle { service: root.selected_service - 3; }
+            if root.selected_service < 2: scroll := Rectangle {
                 min-width: 0px;
                 max-width: 100000px;
                 preferred-width: 0px;

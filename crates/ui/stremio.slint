@@ -1,6 +1,7 @@
 import { SettingsBridge, Theme } from "@NovaUiShared";
 import { PillButton, ToggleSwitch, SettingsRow } from "settings-controls.slint";
 import { TrackingAccountCard } from "tracking-account-card.slint";
+import { Dropdown } from "dropdown.slint";
 
 // Embedded in Tracking; the compiled submenu owns measurement and scrolling.
 export component StremioSettings inherits TrackingAccountCard {
@@ -19,7 +20,7 @@ export component StremioSettings inherits TrackingAccountCard {
         alignment: start;
         spacing: 14px;
         Text {
-            text: @tr("Merge both libraries first, then keep library changes and watch progress in sync. The latest change wins conflicts.");
+            text: SettingsBridge.stremio_mode_index == 1 ? @tr("Sync only titles you explicitly enable from their Tracking page.") : @tr("Merge both libraries first, then keep library changes and watch progress in sync. The latest change wins conflicts.");
             color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
         }
         if SettingsBridge.stremio_status != "": Text {
@@ -55,6 +56,16 @@ export component StremioSettings inherits TrackingAccountCard {
             clicked => {
                 if SettingsBridge.stremio_preview == "" { SettingsBridge.stremio_sync(); }
                 else { SettingsBridge.stremio_start(); }
+            }
+        }
+        if SettingsBridge.stremio_connected: SettingsRow {
+            row-title: @tr("Sync mode");
+            Dropdown {
+                model: [@tr("Full library sync"), @tr("Selected titles")];
+                current-index: SettingsBridge.stremio_mode_index;
+                roomy: true;
+                enabled: !SettingsBridge.stremio_busy;
+                selected(_) => { SettingsBridge.stremio_mode_changed(self.current-index); }
             }
         }
         if SettingsBridge.stremio_connected: SettingsRow {

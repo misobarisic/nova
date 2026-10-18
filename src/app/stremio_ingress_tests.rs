@@ -453,6 +453,7 @@ fn isolated_with_options(
         automatic: true,
         started: true,
         bootstrap_done: true,
+        mode: SyncMode::default(),
     };
     let owner = nova_sync::local_store().unwrap();
     let mut store = owner.lock().unwrap();

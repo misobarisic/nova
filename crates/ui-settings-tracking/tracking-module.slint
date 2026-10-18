@@ -2,11 +2,17 @@ import { SettingsBridge, SettingsContent } from "@NovaUiShared";
 
 import { TrackingSettings } from "../ui/tracking.slint";
 import { StremioSettings } from "../ui/stremio.slint";
+import { ListServiceSettings } from "../ui/list-services.slint";
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
 export component SettingsTrackingModule inherits Window {
     default-font-family: "Roboto";
+    private property <bool> tracker_focused;
+    private property <bool> simkl_focused;
+    private property <bool> mdblist_focused;
+    private property <bool> any_input_focused: root.tracker_focused || root.simkl_focused || root.mdblist_focused;
+    changed any_input_focused => { SettingsContent.tracking_input_focused = root.any_input_focused; }
     background: transparent;
     width: SettingsContent.slot_width; height: SettingsContent.slot_height;
     private property <length> measured_min: body_layout.min-height;
@@ -25,10 +31,10 @@ export component SettingsTrackingModule inherits Window {
         alignment: start;
         tracking_settings := TrackingSettings {
 
-            init => { SettingsContent.tracking_input_focused = self.input_focused; }
+            init => { root.tracker_focused = self.input_focused; }
             accounts: SettingsBridge.tracking_accounts;
             reset_confirm <=> SettingsContent.tracking_reset_confirm;
-            changed input_focused => {SettingsContent.tracking_input_focused=self.input_focused;}
+            changed input_focused => {root.tracker_focused=self.input_focused;}
             blur: SettingsContent.tracking_blur;
             notice: SettingsBridge.tracking_notice;
             completion_rating_prompts_enabled <=> SettingsBridge.completion_rating_prompts_enabled;
@@ -40,6 +46,8 @@ export component SettingsTrackingModule inherits Window {
             reset => {SettingsBridge.tracking_reset();}
             automatic(service,enabled) => {SettingsBridge.tracking_automatic(service,enabled);}
             StremioSettings {}
+            ListServiceSettings { service: 0; blur: SettingsContent.tracking_blur; changed input_focused => { root.simkl_focused = self.input_focused; } }
+            ListServiceSettings { service: 1; blur: SettingsContent.tracking_blur; changed input_focused => { root.mdblist_focused = self.input_focused; } }
         }
     }
 }
