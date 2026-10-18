@@ -15,6 +15,7 @@ struct Segment {
     start: f64,
     end: f64,
     consumed: bool,
+    dismissed: bool,
     confidence_percent: Option<u8>,
 }
 
@@ -42,9 +43,16 @@ pub(super) struct Session {
 
 impl Session {
     fn active(&self, position: f64) -> Option<usize> {
-        self.segments
-            .iter()
-            .position(|s| position.is_finite() && position >= s.start && position < s.end - 0.5)
+        self.segments.iter().position(|s| {
+            !s.dismissed && position.is_finite() && position >= s.start && position < s.end - 0.5
+        })
+    }
+
+    fn dismiss(&mut self, position: f64) {
+        if let Some(index) = self.active(position) {
+            self.segments[index].dismissed = true;
+            self.segments[index].consumed = true;
+        }
     }
 
     fn offer(&mut self, position: f64, auto: bool, minimum: u8) -> Option<(i32, f64, bool)> {
@@ -328,6 +336,7 @@ fn restore_segments(timings: &DownloadIntroTimings, duration: f64) -> Vec<Segmen
             start,
             end,
             consumed: false,
+            dismissed: false,
             // The first prompt-only APK did not retain the exact score. Keep
             // those legacy entries manual unless the viewer chooses Any.
             confidence_percent: if saved.prompt_only {
@@ -371,6 +380,7 @@ fn parse(lookup: &Lookup, bytes: &[u8], duration: f64) -> Vec<Segment> {
                 start,
                 end,
                 consumed: false,
+                dismissed: false,
                 confidence_percent,
             });
         }
@@ -648,6 +658,25 @@ impl Bridge {
         app.set_skip_segment_kind(0);
         let _ = self.dispatch_playback_action(nova_playback_api::PlaybackAction::SeekAbsolute(end));
     }
+
+    pub(super) fn dismiss_current_segment(&self) {
+        let Some(app) = self.app() else { return };
+        if !self.intro_skip_eligible(&app) {
+            return;
+        }
+        let native = self.player.screenshot_session();
+        if let Some(target) = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback
+            .as_mut()
+            .filter(|p| p.intro_skip.native == native)
+        {
+            target.intro_skip.dismiss(app.get_position() as f64);
+        }
+        app.set_skip_segment_kind(0);
+    }
 }
 
 #[cfg(test)]
@@ -674,6 +703,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                dismissed: false,
                 confidence_percent: None,
             }],
             ..Session::default()
@@ -699,6 +729,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                dismissed: false,
                 confidence_percent: None,
             }],
         );
@@ -719,6 +750,7 @@ mod tests {
                 start: 10.0,
                 end: 90.0,
                 consumed: false,
+                dismissed: false,
                 confidence_percent: None,
             }],
         );
@@ -966,6 +998,28 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn dismissing_one_segment_hides_it_on_replay_and_leaves_later_segments_available() {
+        let bytes = br#"{"found":true,"results":[{"skipType":"recap","episodeLength":1444,"interval":{"startTime":0,"endTime":30}},{"skipType":"op","episodeLength":1444,"interval":{"startTime":60,"endTime":150}}]}"#;
+        let mut session = Session {
+            segments: parse(&anime(), bytes, 1444.0),
+            ..Session::default()
+        };
+        session.dismiss(5.0);
+        assert_eq!(session.offer(5.0, false, 0), None);
+        session.seek(20.0, 0.0);
+        assert_eq!(session.offer(5.0, true, 0), None);
+        assert_eq!(session.offer(65.0, true, 95), Some((1, 150.0, true)));
+        assert_eq!(session.offer(65.0, true, 0), Some((1, 150.0, false)));
+        session.dismiss(65.0);
+        assert_eq!(session.offer(65.0, false, 0), None);
+        let mut reopened = Session {
+            segments: parse(&anime(), bytes, 1444.0),
+            ..Session::default()
+        };
+        assert_eq!(reopened.offer(5.0, true, 50), Some((2, 30.0, true)));
     }
 
     #[test]

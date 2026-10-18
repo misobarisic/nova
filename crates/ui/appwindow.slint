@@ -196,6 +196,7 @@ export component AppWindow inherits Window {
     public function remote_bridge_replacement_confirmed(a0: string, a1: bool) { root.remote_replacement_confirmed(a0, a1); }
     public function player_bridge_intro_skip_mode_changed(i: int) { root.intro_skip_mode_changed(i); }
     public function player_bridge_skip_segment() { root.skip_segment(); }
+    public function player_bridge_dismiss_skip_segment() { root.dismiss_skip_segment(); }
     public function player_bridge_next_episode_streams(t: string) { root.next_episode_streams(t); }
     public function player_bridge_next_episode_dismiss(t: string) { root.next_episode_dismiss(t); }
     public function player_bridge_restore_playback_default(control: int) { root.restore_playback_default(control); }
@@ -1586,6 +1587,7 @@ export component AppWindow inherits Window {
     callback intro_skip_mode_changed(int);
     in-out property <int> skip_segment_kind;
     callback skip_segment();
+    callback dismiss_skip_segment();
     in-out property <bool> next_episode_visible: false;
     in-out property <string> next_episode_token: "";
     in-out property <string> next_episode_title: "";

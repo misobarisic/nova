@@ -35,6 +35,13 @@ fn intro_prompt_fits_routes_taps_and_keeps_subtitles_clear() {
     let skipped = Rc::new(Cell::new(0));
     let recorded = skipped.clone();
     app.on_skip_segment(move || recorded.set(recorded.get() + 1));
+    let dismissed = Rc::new(Cell::new(0));
+    let recorded = dismissed.clone();
+    let weak = app.as_weak();
+    app.on_dismiss_skip_segment(move || {
+        recorded.set(recorded.get() + 1);
+        weak.upgrade().unwrap().set_skip_segment_kind(0);
+    });
     app.on_toggle_pause(|| panic!("a Skip tap must not toggle the video backdrop"));
     let clearance = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
     let recorded = clearance.clone();
@@ -67,6 +74,16 @@ fn intro_prompt_fits_routes_taps_and_keeps_subtitles_clear() {
                     let before = skipped.get();
                     button.mock_single_click(slint::platform::PointerEventButton::Left);
                     assert_eq!(skipped.get(), before + 1);
+                    let dismiss =
+                        ElementHandle::find_by_element_id(&app, "PlayerOverlay::skip_dismiss")
+                            .next()
+                            .expect("dismiss timing prompt");
+                    assert!(dismiss.size().width >= 44.0 && dismiss.size().height >= 44.0);
+                    let before_dismiss = dismissed.get();
+                    dismiss.mock_single_click(slint::platform::PointerEventButton::Left);
+                    settle(&app);
+                    assert_eq!(dismissed.get(), before_dismiss + 1);
+                    assert_eq!(skipped.get(), before + 1, "dismiss must never seek");
                     // Closing/hiding a prompt restores normal subtitle clearance.
                     app.set_skip_segment_kind(0);
                     app.set_osd_visible(false);

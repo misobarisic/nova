@@ -12,6 +12,7 @@ export global PlayerOsdBridge {
     callback intro_skip_mode_changed(int);
     in-out property <int> skip_segment_kind;
     callback skip_segment();
+    callback dismiss_skip_segment();
     in-out property <bool> next_episode_visible;
     in-out property <string> next_episode_token;
     in-out property <string> next_episode_title;

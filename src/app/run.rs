@@ -1138,6 +1138,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_skip_segment(move || b.skip_current_segment());
     let b = bridge.clone();
+    app.on_dismiss_skip_segment(move || b.dismiss_current_segment());
+    let b = bridge.clone();
     app.on_next_episode_streams(move |token| {
         let _ = b.dispatch_playback_action(PlaybackAction::NextEpisode {
             token: token.to_string(),

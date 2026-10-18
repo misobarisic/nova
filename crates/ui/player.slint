@@ -662,6 +662,7 @@ export component PlayerOverlay {
     callback intro_skip_mode_changed(int);
     in property <int> skip_segment_kind;
     callback skip_segment();
+    callback dismiss_skip_segment();
     in property <bool> next_episode_visible;
     in property <string> next_episode_title;
     in property <string> next_episode_context;
@@ -896,7 +897,7 @@ export component PlayerOverlay {
         if index == 7 { return true; }
         if index == 9 { return root.playback_started && !root.screenshot_busy; }
         if index == 10 { return (root.next_episode_shown || root.skip_segment_shown) && root.timeline_control_allowed; }
-        return index == 11 && root.next_episode_shown;
+        return index == 11 && (root.next_episode_shown || root.skip_segment_shown);
     }
     function tv_step_control(direction: int) {
         // Bound the walk: unavailable track/screenshot/party actions cannot trap focus.
@@ -989,7 +990,7 @@ export component PlayerOverlay {
     // Screenshot keeps index 9 on both platforms; fullscreen (8) is desktop-only.
     function kb_control_max() -> int {
         if (root.next_episode_shown) { return 11; }
-        if (root.skip_segment_shown) { return 10; }
+        if (root.skip_segment_shown) { return 11; }
         return 9;
     }
 
@@ -1051,6 +1052,8 @@ export component PlayerOverlay {
     function kb_activate() {
         if (root.kb_idx == 10 && root.skip_segment_shown) {
             root.skip_segment();
+        } else if (root.kb_idx == 11 && root.skip_segment_shown) {
+            root.dismiss_skip_segment();
         } else if (root.kb_idx == 10 && root.next_episode_shown) {
             root.next_episode_streams(root.next_episode_token);
         } else if (root.kb_idx == 11 && root.next_episode_shown) {
@@ -2628,10 +2631,10 @@ export component PlayerOverlay {
             dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }
 
-        // Share the offer lane and keyboard index: validated intro/recap intervals
+        // Share the offer lane and keyboard indices: validated intro/recap intervals
         // end in the first 60% of an episode, away from the next-episode offer.
         if root.skip_segment_shown: skip_button := Rectangle {
-            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 260px : 180px,
+            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 320px : 232px,
                 root.width - root.safe-left - root.safe-right - 32px));
             height: InterfaceStyle.tv ? 56px : 48px;
             x: root.width - root.safe-right - self.width - 16px;
@@ -2644,20 +2647,33 @@ export component PlayerOverlay {
             property <length> clearance: root.height - self.y + 8px;
             init => { root.skip_segment_clearance = self.clearance; }
             changed clearance => { root.skip_segment_clearance = self.clearance; }
-            accessible-role: button;
-            accessible-label: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
-            accessible-action-default => { root.skip_segment(); }
-            Text {
-                width: 100%; height: 100%;
-                text: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
-                color: Theme.current.text_bright;
-                font-size: InterfaceStyle.tv ? 22px : 16px;
-                horizontal-alignment: center; vertical-alignment: center;
-                overflow: elide;
+            skip_action := Rectangle {
+                width: parent.width - parent.height; height: 100%;
+                accessible-role: button;
+                accessible-label: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
+                accessible-action-default => { root.skip_segment(); }
+                Text {
+                    x: 8px; width: parent.width - 16px; height: 100%;
+                    text: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
+                    color: Theme.current.text_bright;
+                    font-size: InterfaceStyle.tv ? 22px : 16px;
+                    horizontal-alignment: center; vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea {
+                    width: 100%; height: 100%; mouse-cursor: pointer;
+                    clicked => { root.skip_segment(); }
+                }
             }
-            TouchArea {
-                width: 100%; height: 100%; mouse-cursor: pointer;
-                clicked => { root.skip_segment(); }
+            skip_dismiss := IconBtn {
+                x: parent.width - self.width;
+                width: parent.height; height: parent.height;
+                focused: root.kb_active && root.kb_idx == 11;
+                accessible-role: button;
+                accessible-label: @tr("Dismiss skip prompt");
+                accessible-action-default => { root.dismiss_skip_segment(); }
+                clicked => { root.dismiss_skip_segment(); }
+                IcClose { width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_player_muted; }
             }
         }
 

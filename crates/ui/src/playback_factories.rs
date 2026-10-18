@@ -8,6 +8,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         crate::forward_app_callbacks!(app, &bridge;
             on_intro_skip_mode_changed => invoke_player_bridge_intro_skip_mode_changed(arg0),
             on_skip_segment => invoke_player_bridge_skip_segment(),
+            on_dismiss_skip_segment => invoke_player_bridge_dismiss_skip_segment(),
             on_next_episode_streams => invoke_player_bridge_next_episode_streams(arg0),
             on_next_episode_dismiss => invoke_player_bridge_next_episode_dismiss(arg0),
             on_restore_playback_default => invoke_player_bridge_restore_playback_default(arg0),

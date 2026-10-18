@@ -3334,3 +3334,6 @@ msgstr "Visoka (80%)"
 
 msgid "Very high (95%)"
 msgstr "Vrlo visoka (95%)"
+
+msgid "Dismiss skip prompt"
+msgstr "Sakrij gumb za preskakanje"
