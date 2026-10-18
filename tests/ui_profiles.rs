@@ -253,3 +253,54 @@ fn failed_startup_preference_write_restores_the_saved_toggle_value() {
     assert!(app.get_profiles_remember_last());
     assert_eq!(toggle.accessible_checked(), Some(true));
 }
+
+#[test]
+fn compact_profile_actions_keep_readable_widths_and_touch_targets() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::compact_profile_actions_keep_readable_widths_and_touch_targets"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = picker(false);
+    app.set_is_android(true);
+    for (language, rename, delete) in [
+        ("en", "Rename profile", "Delete profile"),
+        ("hr", "Preimenuj profil", "Izbriši profil"),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        for (width, tv) in [(320, false), (390, false), (1280, true)] {
+            app.global::<nova_ui::InterfaceStyle>().set_tv(tv);
+            app.window().set_size(slint::PhysicalSize::new(width, 900));
+            for required in [false, true] {
+                app.set_profiles_require_selection(required);
+                settle(&app);
+                let rename = button(&app, &format!("{rename}: {PROFILE_NAME}"));
+                let delete = button(&app, &format!("{delete}: {PROFILE_NAME}"));
+                for action in [&rename, &delete] {
+                    let size = action.size();
+                    let position = action.absolute_position();
+                    let minimum = if tv { 120.0 } else { 88.0 };
+                    assert!(
+                        size.width >= minimum - 0.5,
+                        "{language} action at {width}px needs room for a single-line label: {size:?}"
+                    );
+                    assert!(
+                        (size.height - if tv { 56.0 } else { 44.0 }).abs() < 0.5,
+                        "short actions retain the normal one-line hit target"
+                    );
+                    assert!(position.x >= 0.0);
+                    assert!(position.x + size.width <= width as f32 + 0.5);
+                }
+                assert!(
+                    rename.absolute_position().x + rename.size().width
+                        <= delete.absolute_position().x - 7.5,
+                    "profile actions retain their gap without overlapping"
+                );
+                assert!((rename.absolute_position().y - delete.absolute_position().y).abs() < 0.5);
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

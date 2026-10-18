@@ -181,13 +181,18 @@ export component ProfilesPage inherits Rectangle {
                             }
                             HorizontalLayout { spacing: 8px; alignment: start;
                                 PillButton {
-                                    label: @tr("Rename"); accessible-label: @tr("Rename profile: {}", profile.name); compact: true; wrap_label: true; enabled: !MoreBridge.profiles_busy;
+                                    // Short actions stay on one line; the shared wrapping pill's
+                                    // label inset is wider than its compact sizing allowance.
+                                    label: @tr("Rename"); accessible-label: @tr("Rename profile: {}", profile.name); compact: true;
+                                    btn_min_width: InterfaceStyle.tv ? 120px : 88px;
+                                    enabled: !MoreBridge.profiles_busy;
                                     focused: root.keyboard && root.choice == 3 + index * 3;
                                     changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
                                     clicked => { root.start_editor(2, profile.id, profile.name); }
                                 }
                                 PillButton {
-                                    label: @tr("Delete"); accessible-label: @tr("Delete profile: {}", profile.name); compact: true; wrap_label: true; destructive: true;
+                                    label: @tr("Delete"); accessible-label: @tr("Delete profile: {}", profile.name); compact: true; destructive: true;
+                                    btn_min_width: InterfaceStyle.tv ? 120px : 88px;
                                     enabled: !MoreBridge.profiles_busy && root.profiles.length > 1;
                                     focused: root.keyboard && root.choice == 4 + index * 3;
                                     changed focused => { if self.focused { root.reveal(self.absolute-position.y, self.height); } }
