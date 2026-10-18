@@ -2802,6 +2802,27 @@ mod tests {
     }
 
     #[test]
+    fn automatic_intro_skip_is_independent_and_can_be_overridden() {
+        let settings = CacheSettings {
+            intro_skip_mode: nova_config::IntroSkipMode::Auto,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&settings)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields.get("intro_skip_mode").map(String::as_str),
+            Some("\"auto\"")
+        );
+        assert!(setting_can_override("intro_skip_mode"));
+        assert_eq!(
+            CacheSettings::default().intro_skip_mode,
+            nova_config::IntroSkipMode::Prompt
+        );
+    }
+
+    #[test]
     fn next_episode_prefetch_syncs_and_can_be_overridden() {
         let settings = CacheSettings {
             prefetch_next_episode_streams: false,

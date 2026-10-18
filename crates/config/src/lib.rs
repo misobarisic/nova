@@ -388,6 +388,35 @@ pub enum CacheImageFormat {
     Webp,
 }
 
+/// Global and per-title intro/recap behavior. Timings are never required to play.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntroSkipMode {
+    Off,
+    #[default]
+    Prompt,
+    Auto,
+}
+
+impl IntroSkipMode {
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::Prompt => 1,
+            Self::Auto => 2,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Off),
+            1 => Some(Self::Prompt),
+            2 => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+
 /// Android video decoder preference (Settings → Player). The player starts at
 /// the chosen decoder and steps down the chain automatically when it fails:
 /// `HwPlus` → `Hw` → `Sw`, `Hw` → `Sw`, `Sw` alone. Unused on other platforms.
@@ -761,6 +790,9 @@ cache_settings_type! {
     /// Offer an eight-second automatic successor preview at native EOF.
     #[serde(default)]
     pub auto_next_episode: bool,
+    /// Intro/recap timing behavior; explicit per-title choices override this.
+    #[serde(default)]
+    pub intro_skip_mode: IntroSkipMode,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -933,6 +965,7 @@ impl Default for CacheSettings {
             default_subtitle_language: String::new(),
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
+            intro_skip_mode: IntroSkipMode::Prompt,
             prefetch_next_episode_streams: true,
             auto_next_episode: false,
             animations: true,
@@ -1486,6 +1519,7 @@ mod tests {
         assert_eq!(settings.language, Language::English);
         assert_eq!(settings.desktop_hwdec, DesktopHwdec::default());
         assert!(!settings.android_auto_continue);
+        assert_eq!(settings.intro_skip_mode, IntroSkipMode::Prompt);
         assert!(settings.prefetch_next_episode_streams);
         assert!(!settings.auto_next_episode);
         assert_eq!(

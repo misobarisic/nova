@@ -7,9 +7,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::download::{
-    CancellationToken, DownloadJob, DownloadManifest, DownloadOutcome, DownloadPhase,
-    DownloadProgress, DownloadSource as JobSource, artifact_filename, format_bytes, format_percent,
-    part_path, sanitize_filename,
+    CancellationToken, DownloadIntroTimings, DownloadJob, DownloadManifest, DownloadOutcome,
+    DownloadPhase, DownloadProgress, DownloadSource as JobSource, artifact_filename, format_bytes,
+    format_percent, part_path, sanitize_filename,
 };
 use crate::torrent::TorrentStats;
 use nova_config::DownloadSettings;
@@ -119,6 +119,23 @@ impl Drop for WorkerDone {
     }
 }
 
+fn same_download_identity(job: &DownloadJob, snapshot: &DownloadJob) -> bool {
+    job.id == snapshot.id
+        && job.created_at == snapshot.created_at
+        && job.source == snapshot.source
+        && job.intro_request == snapshot.intro_request
+        && job.artifact_path == snapshot.artifact_path
+        && job.media_type == snapshot.media_type
+        && job.media_id == snapshot.media_id
+        && job.request_id == snapshot.request_id
+}
+
+fn completed_snapshot_matches(job: &DownloadJob, snapshot: &DownloadJob) -> bool {
+    job.phase == DownloadPhase::Completed
+        && snapshot.phase == DownloadPhase::Completed
+        && same_download_identity(job, snapshot)
+}
+
 impl DownloadCoordinator {
     pub(crate) fn new(root: PathBuf) -> Self {
         if let Err(error) = std::fs::create_dir_all(&root) {
@@ -145,6 +162,57 @@ impl DownloadCoordinator {
 
     pub(crate) fn jobs(&self) -> Vec<DownloadJob> {
         self.inner.state().manifest.jobs.clone()
+    }
+
+    /// A playback worker can reuse only the completed artifact it inspected.
+    pub(crate) fn cached_intro(&self, snapshot: &DownloadJob) -> Option<DownloadIntroTimings> {
+        let timings = {
+            let state = self.inner.state();
+            let job = state
+                .manifest
+                .jobs
+                .iter()
+                .find(|job| completed_snapshot_matches(job, snapshot))?;
+            job.intro_timings.clone()?
+        };
+        timings
+            .matches_path(snapshot.artifact_path.as_deref()?)
+            .then_some(timings)
+    }
+
+    /// Online playback may upgrade an older download, but neither removal nor
+    /// ID reuse may be undone by the response arriving afterward.
+    pub(crate) fn retain_intro(
+        &self,
+        snapshot: &DownloadJob,
+        timings: DownloadIntroTimings,
+    ) -> bool {
+        let Some(path) = snapshot.artifact_path.as_deref() else {
+            return false;
+        };
+        if !timings.matches_path(path) {
+            return false;
+        }
+        let mut state = self.inner.state();
+        let Some(job) = state
+            .manifest
+            .jobs
+            .iter_mut()
+            .find(|job| completed_snapshot_matches(job, snapshot))
+        else {
+            return false;
+        };
+        if !timings.matches_path(path) {
+            return false;
+        }
+        if job.intro_timings.as_ref() == Some(&timings) {
+            return true;
+        }
+        job.intro_timings = Some(timings);
+        job.updated_at = crate::download::unix_timestamp();
+        persist_manifest(&state.manifest);
+        self.bump_revision();
+        true
     }
 
     pub(crate) fn torrent_owners(&self) -> Vec<crate::torrent::RetainedDownload> {
@@ -283,6 +351,7 @@ impl DownloadCoordinator {
             addon,
             source,
         } = request;
+        let intro_request = intro_skip::download_request(&media_type, &media_id, &request_id);
         let id = {
             let mut state = self.inner.state();
             if let Some(index) = state
@@ -336,6 +405,7 @@ impl DownloadCoordinator {
                 }
             };
             let mut job = DownloadJob::new(id.clone(), source);
+            job.intro_request = intro_request;
             job.media_type = media_type;
             job.media_id = media_id;
             job.request_id = request_id;
@@ -413,7 +483,11 @@ impl DownloadCoordinator {
             let Some(index) = state.manifest.jobs.iter().position(|job| job.id == id) else {
                 return;
             };
-            let job = state.manifest.jobs.remove(index);
+            let mut job = state.manifest.jobs.remove(index);
+            // Removal also drops metadata if filesystem cleanup must restore
+            // the row with an error. A late lookup cannot reattach it.
+            job.intro_request = None;
+            job.intro_timings = None;
             state.resolvers.remove(id);
             if let Some(active) = state.active.as_ref().filter(|active| active.id == id) {
                 active.remove.store(true, Ordering::Release);
@@ -858,24 +932,67 @@ impl DownloadCoordinator {
     }
 
     fn finish(&self, id: String, result: Result<DownloadOutcome, String>) {
+        // Keep the transfer's active slot/foreground-service lease throughout
+        // bounded timing preparation; network/probing work never holds state.
+        let (active_snapshot, job_snapshot) = {
+            let state = self.inner.state();
+            let Some(active) = state.active.as_ref().filter(|active| active.id == id) else {
+                return;
+            };
+            (active.clone(), self.job_unlocked(&state, &id))
+        };
+        let intro_timings = result.as_ref().ok().and_then(|outcome| {
+            let job = job_snapshot.as_ref()?;
+            if active_snapshot.cancel.is_cancelled()
+                || active_snapshot.remove.load(Ordering::Acquire)
+                || !matches!(
+                    job.phase,
+                    DownloadPhase::Resolving | DownloadPhase::Downloading
+                )
+            {
+                return None;
+            }
+            let request = job.intro_request.as_ref()?;
+            intro_skip::prepare_download(request, &outcome.path, &active_snapshot.cancel)
+                .filter(|timings| timings.matches_path(&outcome.path))
+        });
         let (remove, job) = {
             let mut state = self.inner.state();
             let Some(active) = state.active.take() else {
                 return;
             };
-            if active.id != id {
+            if active.id != id || !Arc::ptr_eq(&active.finished, &active_snapshot.finished) {
                 state.active = Some(active);
                 return;
             }
-            let job = state.manifest.jobs.iter_mut().find(|job| job.id == id);
+            let job = state.manifest.jobs.iter_mut().find(|job| {
+                job.id == id
+                    && job_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| same_download_identity(job, snapshot))
+            });
             if let Some(job) = job {
+                let unchanged_phase = job_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| job.phase == snapshot.phase);
+                let result = if result.is_ok() && (active.cancel.is_cancelled() || !unchanged_phase)
+                {
+                    Err("cancelled".to_owned())
+                } else {
+                    result
+                };
                 if active.remove.load(Ordering::Acquire) {
                     state.manifest.jobs.retain(|job| job.id != id);
-                } else {
+                } else if unchanged_phase || active.cancel.is_cancelled() {
                     match result {
                         Ok(outcome) => {
                             job.apply_outcome(&outcome);
                             job.phase = DownloadPhase::Completed;
+                            job.intro_timings = intro_timings.filter(|timings| {
+                                !active.cancel.is_cancelled()
+                                    && !active.remove.load(Ordering::Acquire)
+                                    && timings.matches_path(&outcome.path)
+                            });
                         }
                         Err(error) => {
                             if error == RESOLVER_RESELECT {
@@ -904,10 +1021,11 @@ impl DownloadCoordinator {
             }
             persist_manifest(&state.manifest);
             self.bump_revision();
-            (
-                active.remove.load(Ordering::Acquire),
-                self.job_unlocked(&state, &id),
-            )
+            // A replacement may reuse the removed ID while this worker
+            // finishes. Its files belong to the new row, not this cleanup.
+            let remove = active.remove.load(Ordering::Acquire)
+                && !state.manifest.jobs.iter().any(|job| job.id == id);
+            (remove, job_snapshot)
         };
         if remove {
             if let Some(job) = job {
@@ -1991,6 +2109,131 @@ fn fallback_episode_label(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completed_intro_fixture(
+        name: &str,
+    ) -> (
+        DownloadCoordinator,
+        DownloadJob,
+        DownloadIntroTimings,
+        PathBuf,
+    ) {
+        let root = temp_root(name);
+        let coordinator = DownloadCoordinator::new(root.clone());
+        let path = root.join("http/intro/episode.mkv");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"downloaded episode").unwrap();
+        let mut job = DownloadJob::new("intro", JobSource::http("https://example.test/episode"));
+        job.phase = DownloadPhase::Completed;
+        job.artifact_path = Some(path.clone());
+        let timings = DownloadIntroTimings::capture(
+            &path,
+            1_440_000,
+            vec![crate::download::DownloadIntroSegment {
+                kind: 0,
+                start_ms: 10_000,
+                end_ms: 100_000,
+            }],
+        )
+        .unwrap();
+        coordinator.inner.state().manifest.jobs = vec![job.clone()];
+        (coordinator, job, timings, root)
+    }
+
+    #[test]
+    fn downloaded_intro_upgrades_cache_and_removal_rejects_late_publication() {
+        let (coordinator, snapshot, timings, root) = completed_intro_fixture("intro-removal");
+        assert!(coordinator.cached_intro(&snapshot).is_none());
+        assert!(coordinator.retain_intro(&snapshot, timings.clone()));
+        assert_eq!(coordinator.cached_intro(&snapshot), Some(timings.clone()));
+        let manifest = coordinator.inner.state().manifest.to_json().unwrap();
+        assert!(
+            DownloadManifest::from_json(&manifest)
+                .unwrap()
+                .jobs
+                .iter()
+                .any(|job| job.intro_timings.is_some())
+        );
+        coordinator.remove(&snapshot.id);
+        assert!(!snapshot.artifact_path.as_ref().unwrap().exists());
+        assert!(coordinator.cached_intro(&snapshot).is_none());
+        assert!(!coordinator.retain_intro(&snapshot, timings));
+        assert!(coordinator.job(&snapshot.id).is_none());
+        assert!(
+            !coordinator
+                .inner
+                .state()
+                .manifest
+                .to_json()
+                .unwrap()
+                .contains("intro_timings")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn downloaded_intro_rejects_reused_identity_phase_and_artifact_changes() {
+        let (coordinator, snapshot, timings, root) = completed_intro_fixture("intro-stale");
+        for change in 0..4 {
+            let mut replacement = snapshot.clone();
+            match change {
+                0 => replacement.created_at += 1,
+                1 => replacement.source = JobSource::http("https://example.test/replacement"),
+                2 => replacement.phase = DownloadPhase::Paused,
+                _ => replacement.artifact_path = Some(root.join("replacement.mkv")),
+            }
+            coordinator.inner.state().manifest.jobs = vec![replacement];
+            assert!(!coordinator.retain_intro(&snapshot, timings.clone()));
+            assert!(coordinator.cached_intro(&snapshot).is_none());
+            assert!(
+                coordinator
+                    .job(&snapshot.id)
+                    .unwrap()
+                    .intro_timings
+                    .is_none()
+            );
+        }
+        coordinator.inner.state().manifest.jobs = vec![snapshot.clone()];
+        std::fs::write(
+            snapshot.artifact_path.as_ref().unwrap(),
+            b"a different encode with a new size",
+        )
+        .unwrap();
+        assert!(!coordinator.retain_intro(&snapshot, timings));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_successful_download_does_not_publish_completed_or_revive_removed_job() {
+        let coordinator = DownloadCoordinator::new(temp_root("intro-cancel-finish"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "cancelled", DownloadPhase::Downloading, false);
+        let path = coordinator.inner.root.join("http/cancelled/episode.mkv");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"finished bytes").unwrap();
+        let outcome = DownloadOutcome {
+            path: path.clone(),
+            part_path: part_path(&path),
+            file_name: "episode.mkv".into(),
+            bytes_downloaded: 14,
+            total_bytes: Some(14),
+            bytes_per_second: 0,
+            etag: None,
+            last_modified: None,
+        };
+        coordinator.pause("cancelled");
+        coordinator.finish("cancelled".into(), Ok(outcome.clone()));
+        assert_eq!(
+            coordinator.job("cancelled").unwrap().phase,
+            DownloadPhase::Paused
+        );
+        install_active(&coordinator, "removed", DownloadPhase::Downloading, false);
+        coordinator.remove("removed");
+        coordinator.finish("removed".into(), Ok(outcome));
+        assert!(coordinator.job("removed").is_none());
+        assert!(coordinator.inner.state().active.is_none());
+        std::fs::remove_dir_all(&coordinator.inner.root).unwrap();
+    }
 
     #[test]
     fn job_status_exposes_progress_and_action() {

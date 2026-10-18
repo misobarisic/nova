@@ -152,6 +152,8 @@ component SettingsMenu inherits Rectangle {
     // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
+    in property <int> intro_skip_override_index: -1;
+    callback intro_skip_mode_changed(int);
     // A submenu can remove a slider before its delayed pointer-up/cancel is
     // delivered. Its gesture lease must not outlive the page that owned it.
     changed page => { SliderGesture.active = false; SliderGesture.hovered = false; }
@@ -212,6 +214,7 @@ component SettingsMenu inherits Rectangle {
             return @tr("Playback speed");
         }
         if root.page == 5 { return @tr("Subtitle appearance and timing"); }
+        if root.page == 6 { return @tr("Intro skipping"); }
         return @tr("Playback settings");
     }
 
@@ -379,6 +382,39 @@ component SettingsMenu inherits Rectangle {
                             label: @tr("Subtitle appearance and timing");
                             focused: root.focused_idx == (root.decoder_available ? 4 : 3);
                             activate => { root.page = 5; }
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            icon_kind: 3; submenu: true;
+                            label: @tr("Intro skipping");
+                            value: root.intro_skip_override_index < 0 ? @tr("Use global default")
+                                : root.intro_skip_override_index == 0 ? @tr("Off")
+                                : root.intro_skip_override_index == 1 ? @tr("Show skip prompt") : @tr("Auto skip");
+                            focused: root.focused_idx == (root.decoder_available ? 5 : 4);
+                            activate => { root.page = 6; }
+                        }
+                    }
+
+                    if root.page == 6: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: @tr("Applies to this show. Other playback preferences stay unchanged.");
+                            color: Theme.current.text_secondary;
+                            font-size: 13px; wrap: word-wrap;
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Use global default");
+                            selected: root.intro_skip_override_index == -1;
+                            focused: root.focused_idx == 0;
+                            activate => { root.restore_playback_default(4); }
+                        }
+                        for choice[index] in [@tr("Off"), @tr("Show skip prompt"), @tr("Auto skip")]: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: choice;
+                            selected: root.intro_skip_override_index == index;
+                            focused: root.focused_idx == index + 1;
+                            activate => { root.intro_skip_mode_changed(index); }
                         }
                     }
 
@@ -622,12 +658,17 @@ export component PlayerOverlay {
     // Called after publication only while AppWindow retains baseline focus.
     public function focus_shell() { key_scope.focus(); }
 
+    in property <int> intro_skip_override_index: -1;
+    callback intro_skip_mode_changed(int);
+    in property <int> skip_segment_kind;
+    callback skip_segment();
     in property <bool> next_episode_visible;
     in property <string> next_episode_title;
     in property <string> next_episode_context;
     in property <string> next_episode_token;
     callback next_episode_streams(string);
     callback next_episode_dismiss(string);
+    private property <bool> skip_segment_shown: root.skip_segment_kind > 0 && root.open_popup == 0 && root.timeline_control_allowed;
     property <bool> next_episode_shown: root.next_episode_visible && root.open_popup == 0;
     preferred-width: 100%;
     preferred-height: 100%;
@@ -854,7 +895,7 @@ export component PlayerOverlay {
         if index == 5 || index == 6 { return !root.narrow; }
         if index == 7 { return true; }
         if index == 9 { return root.playback_started && !root.screenshot_busy; }
-        if index == 10 { return root.next_episode_shown && root.timeline_control_allowed; }
+        if index == 10 { return (root.next_episode_shown || root.skip_segment_shown) && root.timeline_control_allowed; }
         return index == 11 && root.next_episode_shown;
     }
     function tv_step_control(direction: int) {
@@ -891,7 +932,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return root.decoder_available ? 5 : 4;
+                return root.decoder_available ? 6 : 5;
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -903,6 +944,7 @@ export component PlayerOverlay {
                 return root.audio_tracks.length + 1;
             }
             if root.settings_page == 5 { return 8; }
+            if root.settings_page == 6 { return 4; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -947,6 +989,7 @@ export component PlayerOverlay {
     // Screenshot keeps index 9 on both platforms; fullscreen (8) is desktop-only.
     function kb_control_max() -> int {
         if (root.next_episode_shown) { return 11; }
+        if (root.skip_segment_shown) { return 10; }
         return 9;
     }
 
@@ -1006,7 +1049,9 @@ export component PlayerOverlay {
     }
 
     function kb_activate() {
-        if (root.kb_idx == 10 && root.next_episode_shown) {
+        if (root.kb_idx == 10 && root.skip_segment_shown) {
+            root.skip_segment();
+        } else if (root.kb_idx == 10 && root.next_episode_shown) {
             root.next_episode_streams(root.next_episode_token);
         } else if (root.kb_idx == 11 && root.next_episode_shown) {
             root.next_episode_dismiss(root.next_episode_token);
@@ -1072,6 +1117,9 @@ export component PlayerOverlay {
                 } else if (root.decoder_available && root.kb_menu == 2) {
                     root.settings_page = 1;
                     root.kb_menu = root.hw_plus_available ? 0 : 1;
+                } else if root.kb_menu == (root.decoder_available ? 5 : 4) {
+                    root.settings_page = 6;
+                    root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 4 : 3) {
                     root.settings_page = 5;
                     root.kb_menu = 0;
@@ -1101,6 +1149,9 @@ export component PlayerOverlay {
                     root.pick_audio_track(root.audio_tracks[root.kb_menu - 1].index);
                     root.open_popup = 0;
                 }
+            } else if root.settings_page == 6 {
+                if root.kb_menu == 0 { root.restore_playback_default(4); }
+                else { root.intro_skip_mode_changed(root.kb_menu - 1); }
             } else if root.settings_page == 5 && root.kb_menu == 0 {
                 root.restore_playback_default(3);
             } else if root.settings_page == 5 && root.kb_menu == 6 {
@@ -1141,7 +1192,7 @@ export component PlayerOverlay {
             if !root.tv_control_available(root.kb_idx) { root.kb_idx = 7; }
             return;
         }
-        if (!root.next_episode_shown && root.kb_idx > 9) { root.kb_idx = 1; }
+        if (root.kb_idx > root.kb_control_max()) { root.kb_idx = 1; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
             root.kb_idx = 7;
         }
@@ -1154,6 +1205,7 @@ export component PlayerOverlay {
     }
     changed narrow => { root.kb_clamp_focus(); }
     changed is_android => { root.kb_clamp_focus(); }
+    changed skip_segment_shown => { root.kb_clamp_focus(); }
     changed next_episode_shown => { root.kb_clamp_focus(); }
     changed playback_started => {
         if !root.playback_started { root.tv_cancel_seek(); }
@@ -1210,11 +1262,13 @@ export component PlayerOverlay {
     // up the viewport even on short landscape screens.
     private property <float> subtitle_clearance_fraction: root.height > 0px
         ? Math.clamp(Math.max(osd.height + 8px,
-            root.next_episode_shown ? root.next_episode_clearance : 0px) / root.height, 0, 0.5) : 0;
+            Math.max(root.next_episode_shown ? root.next_episode_clearance : 0px,
+                root.skip_segment_shown ? root.skip_segment_clearance : 0px)) / root.height, 0, 0.5) : 0;
     // A conditional banner's id is scoped to its own subtree. It publishes
     // its measured top edge here rather than escaping that Slint scope.
     private property <length> next_episode_clearance;
-    private property <float> subtitle_clearance_opacity: root.next_episode_shown ? 1 : osd_current_opacity;
+    private property <length> skip_segment_clearance;
+    private property <float> subtitle_clearance_opacity: (root.next_episode_shown || root.skip_segment_shown) ? 1 : osd_current_opacity;
     function publish_subtitle_clearance() {
         root.subtitle_clearance_changed(root.subtitle_clearance_fraction, root.subtitle_clearance_opacity);
     }
@@ -2574,6 +2628,39 @@ export component PlayerOverlay {
             dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }
 
+        // Share the offer lane and keyboard index: validated intro/recap intervals
+        // end in the first 60% of an episode, away from the next-episode offer.
+        if root.skip_segment_shown: skip_button := Rectangle {
+            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 260px : 180px,
+                root.width - root.safe-left - root.safe-right - 32px));
+            height: InterfaceStyle.tv ? 56px : 48px;
+            x: root.width - root.safe-right - self.width - 16px;
+            y: Math.max(root.safe-top + 16px,
+                root.height - self.height - (root.controls_active ? osd.height + 12px : 16px));
+            background: Theme.current.player_control_hover;
+            border-radius: 10px;
+            border-width: root.kb_active && root.kb_idx == 10 ? 2px : 1px;
+            border-color: root.kb_active && root.kb_idx == 10 ? Theme.current.focus_ring : Theme.current.text_player_muted;
+            property <length> clearance: root.height - self.y + 8px;
+            init => { root.skip_segment_clearance = self.clearance; }
+            changed clearance => { root.skip_segment_clearance = self.clearance; }
+            accessible-role: button;
+            accessible-label: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
+            accessible-action-default => { root.skip_segment(); }
+            Text {
+                width: 100%; height: 100%;
+                text: root.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
+                color: Theme.current.text_bright;
+                font-size: InterfaceStyle.tv ? 22px : 16px;
+                horizontal-alignment: center; vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                width: 100%; height: 100%; mouse-cursor: pointer;
+                clicked => { root.skip_segment(); }
+            }
+        }
+
         // Player settings panel (gear button): subtitle + audio track pickers
         // on every platform, plus the Android/Windows/Linux decoder submenu. On narrow
         // layouts the track pickers live here instead of the control row.
@@ -2594,6 +2681,8 @@ export component PlayerOverlay {
             audio_preference_saved: root.audio_preference_saved;
             subtitle_preference_saved: root.subtitle_preference_saved;
             speed_preference_saved: root.speed_preference_saved;
+            intro_skip_override_index: root.intro_skip_override_index;
+            intro_skip_mode_changed(i) => { root.intro_skip_mode_changed(i); }
             playback_speed <=> root.playback_speed;
             subtitle_style <=> root.subtitle_style;
             subtitle_style_preference_saved: root.subtitle_style_preference_saved;

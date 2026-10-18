@@ -1086,6 +1086,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = b.dispatch_playback_action(PlaybackAction::Stop);
     });
     let b = bridge.clone();
+    app.on_intro_skip_mode_changed(move |index| b.change_intro_skip_mode(index));
+    let b = bridge.clone();
+    app.on_skip_segment(move || b.skip_current_segment());
+    let b = bridge.clone();
     app.on_next_episode_streams(move |token| {
         let _ = b.dispatch_playback_action(PlaybackAction::NextEpisode {
             token: token.to_string(),
@@ -1165,7 +1169,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let b = bridge.clone();
     app.on_restore_playback_default(move |control| {
-        if control == 3 {
+        if control == 3 || control == 4 {
             b.restore_playback_default(control);
             return;
         }
@@ -1349,6 +1353,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.refresh_playback_end_menu();
+            tick_bridge.refresh_intro_skip();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();
             if tick_bridge

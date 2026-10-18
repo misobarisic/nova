@@ -29,6 +29,9 @@ mod android_recovery;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod media_probe;
+pub use media_probe::probe_local_duration;
+
 mod screenshot;
 pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
@@ -2427,6 +2430,30 @@ impl Player {
             .lock()
             .unwrap()
             .map_or(base, |rate| rate as f32)
+    }
+
+    /// App-level timing policy reads the cached typed title choice, without
+    /// touching mpv or re-reading the preference store on each playback tick.
+    pub fn intro_skip_mode(
+        &self,
+        global: nova_config::IntroSkipMode,
+    ) -> nova_config::IntroSkipMode {
+        self.state
+            .preferences
+            .lock()
+            .unwrap()
+            .preferences
+            .intro_skip_mode(global)
+    }
+
+    pub fn set_title_intro_skip_mode(&self, mode: Option<nova_config::IntroSkipMode>) {
+        self.state
+            .preferences
+            .lock()
+            .unwrap()
+            .preferences
+            .title
+            .intro_skip = mode;
     }
 
     pub fn effective_subtitle_style(&self) -> nova_config::playback_preferences::SubtitleStyle {

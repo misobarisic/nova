@@ -30,6 +30,9 @@ mod subtitle_lift;
 #[path = "player/end_menu.rs"]
 mod end_menu;
 
+#[path = "player/intro_skip.rs"]
+mod intro_skip;
+
 #[path = "player/remote_controls.rs"]
 mod remote_controls;
 

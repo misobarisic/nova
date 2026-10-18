@@ -10,6 +10,10 @@ type Preferences = HashMap<String, PreferenceValue>;
 
 fn title_preferences(values: &Preferences, media_type: &str, id: &str) -> TitlePreferences {
     TitlePreferences {
+        intro_skip: match values.get(&preference_key(media_type, id, 4)) {
+            Some(PreferenceValue::IntroSkip(mode)) => Some(*mode),
+            _ => None,
+        },
         subtitle_style: match values.get(&preference_key(media_type, id, 3)) {
             Some(PreferenceValue::SubtitleStyle(v)) => Some(*v),
             _ => None,
@@ -58,6 +62,11 @@ impl Bridge {
 
     fn preference_status_to_ui(&self, title: &TitlePreferences) {
         if let Some(app) = self.app() {
+            app.set_intro_skip_override_index(
+                title
+                    .intro_skip
+                    .map_or(-1, nova_config::IntroSkipMode::index),
+            );
             app.set_audio_preference_saved(title.audio.is_some());
             app.set_subtitle_preference_saved(title.subtitles.is_some());
             app.set_speed_preference_saved(title.speed.is_some());
@@ -136,7 +145,29 @@ impl Bridge {
         self.remember_playback_preference(2, Some(PreferenceValue::Speed(speed)), false);
     }
 
+    pub(super) fn change_intro_skip_mode(&self, index: i32) {
+        if self.playback_preference_identity(false).is_none() {
+            return;
+        }
+        if index == -1 {
+            self.restore_playback_default(4);
+        } else if let Some(mode) = nova_config::IntroSkipMode::from_index(index) {
+            self.player.set_title_intro_skip_mode(Some(mode));
+            self.remember_playback_preference(4, Some(PreferenceValue::IntroSkip(mode)), true);
+        }
+        self.refresh_intro_skip();
+    }
+
     pub(super) fn restore_playback_default(&self, control: i32) {
+        if control == 4 {
+            if self.playback_preference_identity(false).is_none() {
+                return;
+            }
+            self.player.set_title_intro_skip_mode(None);
+            self.remember_playback_preference(4, None, true);
+            self.refresh_intro_skip();
+            return;
+        }
         if control == 1 {
             self.cancel_subtitle_download();
         }
@@ -409,6 +440,43 @@ mod tests {
         assert_eq!(edit_language_preferences("en", "en", 3), None);
         assert_eq!(edit_language_preferences("en", "invalid", 0), None);
     }
+    #[test]
+    fn intro_override_reset_is_one_field_of_one_typed_show() {
+        use nova_config::IntroSkipMode;
+        let mut values = Preferences::new();
+        values.insert(
+            preference_key("series", "show", 2),
+            PreferenceValue::Speed(1.3),
+        );
+        values.insert(
+            preference_key("series", "show", 4),
+            PreferenceValue::IntroSkip(IntroSkipMode::Off),
+        );
+        values.insert(
+            preference_key("series", "other", 4),
+            PreferenceValue::IntroSkip(IntroSkipMode::Auto),
+        );
+        let raw = serde_json::to_string(&values).unwrap();
+        let mut values: Preferences = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            title_preferences(&values, "series", "show").intro_skip,
+            Some(IntroSkipMode::Off)
+        );
+        assert!(
+            title_preferences(&values, "movie", "show")
+                .intro_skip
+                .is_none()
+        );
+        values.remove(&preference_key("series", "show", 4));
+        let title = title_preferences(&values, "series", "show");
+        assert!(title.intro_skip.is_none());
+        assert_eq!(title.speed, Some(1.3));
+        assert_eq!(
+            title_preferences(&values, "series", "other").intro_skip,
+            Some(IntroSkipMode::Auto)
+        );
+    }
+
     #[test]
     fn title_fields_and_typed_identity_are_independent() {
         let mut values = Preferences::new();

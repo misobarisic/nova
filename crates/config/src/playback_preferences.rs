@@ -172,6 +172,7 @@ pub enum PreferenceValue {
     Subtitles(TrackChoice),
     Speed(f32),
     SubtitleStyle(SubtitleStylePatch),
+    IntroSkip(crate::IntroSkipMode),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -180,6 +181,7 @@ pub struct TitlePreferences {
     pub subtitles: Option<TrackChoice>,
     pub speed: Option<f32>,
     pub subtitle_style: Option<SubtitleStylePatch>,
+    pub intro_skip: Option<crate::IntroSkipMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +202,10 @@ impl SessionPreferences {
             default_subtitle_style: settings.subtitle_style.normalized(),
             title,
         }
+    }
+
+    pub fn intro_skip_mode(&self, global: crate::IntroSkipMode) -> crate::IntroSkipMode {
+        self.title.intro_skip.unwrap_or(global)
     }
 
     pub fn subtitle_style(&self) -> SubtitleStyle {
@@ -409,6 +415,46 @@ pub fn language_label(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn intro_modes_roundtrip_and_title_override_inherits_current_global() {
+        use crate::IntroSkipMode;
+        let mut prefs = SessionPreferences::from_settings(
+            &crate::CacheSettings::default(),
+            TitlePreferences::default(),
+        );
+        assert_eq!(
+            prefs.intro_skip_mode(IntroSkipMode::Prompt),
+            IntroSkipMode::Prompt
+        );
+        assert_eq!(
+            prefs.intro_skip_mode(IntroSkipMode::Off),
+            IntroSkipMode::Off
+        );
+        for mode in [
+            IntroSkipMode::Off,
+            IntroSkipMode::Prompt,
+            IntroSkipMode::Auto,
+        ] {
+            assert_eq!(IntroSkipMode::from_index(mode.index()), Some(mode));
+            let value = PreferenceValue::IntroSkip(mode);
+            assert_eq!(
+                serde_json::from_str::<PreferenceValue>(&serde_json::to_string(&value).unwrap())
+                    .unwrap(),
+                value
+            );
+            prefs.title.intro_skip = Some(mode);
+            assert_eq!(prefs.intro_skip_mode(IntroSkipMode::Off), mode);
+            assert_eq!(prefs.intro_skip_mode(IntroSkipMode::Auto), mode);
+        }
+        prefs.title.intro_skip = None;
+        assert_eq!(
+            prefs.intro_skip_mode(IntroSkipMode::Prompt),
+            IntroSkipMode::Prompt
+        );
+        assert_eq!(IntroSkipMode::from_index(-1), None);
+        assert_eq!(IntroSkipMode::from_index(3), None);
+    }
+
     #[test]
     fn subtitle_defaults_migrate_and_partial_title_edits_inherit() {
         let settings: crate::CacheSettings =

@@ -104,6 +104,7 @@ export global SettingsBridge {
     in-out property <float> playback_speed: 1.0;
     in-out property <[float]> subtitle_style: [0, 55, 19, 100, 3, 0, 0];
     callback subtitle_style_changed(int, float);
+    in-out property <int> intro_skip_mode_index: 1;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> auto_next_episode: false;

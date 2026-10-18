@@ -592,6 +592,9 @@ struct PlaybackTarget {
     /// Ephemeral identity: callbacks and artwork from an older opening cannot
     /// act on a replacement stream, even when its episode ID is unchanged.
     session: u64,
+    intro_skip: intro_skip::Session,
+    /// Exact local artifact captured at open time, never inferred from browsing.
+    intro_download: Option<crate::download::DownloadJob>,
     next_episode_dismissed: bool,
     /// One-shot automatic successor intent; captured into ordinary playback.
     force_start_over: bool,
@@ -781,6 +784,7 @@ mod detail;
 mod downloads;
 mod downloads_page;
 mod home;
+mod intro_skip;
 mod last_stream;
 mod library;
 mod next_episode;

@@ -332,6 +332,65 @@ settings fields store comma-separated codes, so old single-language values and
 device overrides remain valid. Supernova already exposes separate ordered audio
 and subtitle language lists through the generic addon configuration editor.
 
+## Intro and recap skipping
+
+When trustworthy timing data matches the current episode and cut, the in-app
+player offers **Skip intro** or **Skip recap** during that interval. The button
+stays above controls, reserves subtitle clearance even with the OSD hidden, and
+uses the existing offer navigation lane. It seeks the existing player; it never
+reopens a stream or selects a next episode.
+
+**Settings → Player → Intro skipping** offers **Off**, **Show skip prompt**
+(the default), and **Auto skip**. The global `intro_skip_mode` setting syncs
+independently of next-episode behavior. Off hides the button and avoids playback
+lookups. Player settings → Intro skipping applies an explicit Off/Prompt/Auto
+choice to the current show; **Use global default** clears only that field. These
+choices use control 4 in the existing typed-title `playback_preferences:v1` store
+and sync domain, independently of audio, subtitle, appearance and speed choices.
+The running player caches the typed override; each tick combines it with the
+current global setting without reading the preference database.
+
+Auto skip seeks past each intro/recap at most once in the current native/logical
+playback session. Explicit seeks and replays retain manual control: going back
+never immediately skips the segment again. Automatic action requires foreground,
+started, unpaused, seekable local playback outside watch parties and remote-control
+surfaces. Credits and mixed-story openings are never skipped.
+
+Timing lookup uses the public [IntroDB v4 API](https://theintrodb.github.io/theintrodb-npm/getting-started.html)
+for explicit IMDb or TV-typed TMDB identities and captured season/episode
+coordinates, or [AniSkip v2](https://api.aniskip.com/api-docs) for a confirmed MAL
+anime ID with season-one episode numbering. Other anime seasons need confirmed
+release-specific numbering and are left unsupported. It uses current source
+evidence, excluding historical identity hints; it never searches for identities.
+One bounded playback request runs at a time (eight seconds, 128 KiB), without
+keys or accounts. Streaming timings remain session-local. Missing data, errors, ambiguous IDs,
+overlapping segments, duration differences over five seconds, and IntroDB
+confidence below 0.8 produce no action. Only finite intro/recap intervals ending
+within the first 60% of the episode and leaving content afterwards are accepted.
+Native and logical session guards discard old source responses.
+
+Episode downloads capture verified timing-provider coordinates in `downloads:v1`.
+After the video transfer, an isolated mpv core reads local container duration
+before decoder creation (`crates/player/src/media_probe.rs`); local HLS is
+supported and nested network access is disabled. A probe that cannot determine
+duration safely leaves timings unavailable. Preparation stays inside the existing
+download worker so Android's foreground download service remains active. Timing
+transport failures get up to three attempts with one- and three-second backoff;
+each request is bounded to eight seconds and 128 KiB. Pause/removal cancels retries.
+Missing timings or failed preparation never fail the video download.
+
+Downloads prepare timings independently of the selected skip mode, so Off can
+be changed later while offline. Only validated intro/recap intervals are saved
+alongside their duration and artifact size/modification fingerprint in the job;
+there are no sidecars or separate timing-cache keys. Offline playback checks the
+fingerprint and actual native duration again and can restore numbering even after
+the episode cache is evicted. A later online playback can fill missing timings.
+Removing a download clears its timing data with the job; late workers cannot
+restore removed jobs or attach data to a reused job ID or changed artifact.
+
+Implementation and policy tests: `src/app/intro_skip.rs`; headless overlay
+regression: `tests/player/intro_skip.rs` in `ui_player`.
+
 ## Next-episode banner
 
 In-app episodic playback offers the next episode during the final two minutes,

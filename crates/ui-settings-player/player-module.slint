@@ -459,6 +459,26 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
             }
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                SettingsRow {
+                    setting-key: "intro_skip_mode";
+                    row-title: @tr("Intro skipping");
+                    row-desc: @tr("Choose whether matching intro and recap timings show a prompt or skip automatically. Each show can override this default.");
+                    Dropdown {
+                        width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
+                        model: [@tr("Off"), @tr("Show skip prompt"), @tr("Auto skip")];
+                        current-index <=> SettingsBridge.intro_skip_mode_index;
+                        roomy: true;
+                        border-color: SettingsBridge.kb_zone == 9 && SettingsBridge.kb_active && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8 ? Theme.current.focus_ring : Theme.current.control_border;
+                        selected(_) => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8;
+                            SettingsContent.schedule_setting("intro_skip_mode");
+                        }
+                    }
+                }
+            }
         }
     }
 }

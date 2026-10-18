@@ -194,6 +194,8 @@ export component AppWindow inherits Window {
     public function remote_bridge_device_close() { root.remote_device_close(); }
     public function remote_bridge_stream_picked(a0: int) { root.remote_stream_picked(a0); }
     public function remote_bridge_replacement_confirmed(a0: string, a1: bool) { root.remote_replacement_confirmed(a0, a1); }
+    public function player_bridge_intro_skip_mode_changed(i: int) { root.intro_skip_mode_changed(i); }
+    public function player_bridge_skip_segment() { root.skip_segment(); }
     public function player_bridge_next_episode_streams(t: string) { root.next_episode_streams(t); }
     public function player_bridge_next_episode_dismiss(t: string) { root.next_episode_dismiss(t); }
     public function player_bridge_restore_playback_default(control: int) { root.restore_playback_default(control); }
@@ -234,6 +236,8 @@ export component AppWindow inherits Window {
     public function onboarding_bridge_finished() { root.onboarding_finished(); }
     public function onboarding_bridge_background_requested() { root.exit_to_background(); }
     PlayerOsdBindings {
+        intro_skip_override_index <=> root.intro_skip_override_index;
+        skip_segment_kind <=> root.skip_segment_kind;
         playback_started <=> root.playback_started;
         is_paused <=> root.is_paused;
         position <=> root.position;
@@ -514,6 +518,7 @@ export component AppWindow inherits Window {
         subtitle_language_choice_index <=> root.subtitle_language_choice_index;
         playback_speed <=> root.playback_speed;
         subtitle_style <=> root.subtitle_style;
+        intro_skip_mode_index <=> root.intro_skip_mode_index;
         android_auto_continue <=> root.android_auto_continue;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
         auto_next_episode <=> root.auto_next_episode;
@@ -1187,6 +1192,7 @@ export component AppWindow inherits Window {
     in property <[string]> audio_language_selected_names;
     in property <[string]> subtitle_language_selected_codes;
     in property <[string]> subtitle_language_selected_names;
+    in-out property <int> intro_skip_mode_index: 1;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> auto_next_episode: false;
@@ -1500,6 +1506,10 @@ export component AppWindow inherits Window {
     // web) and the Slint scene only draws this overlay on top. The window
     // background flips to transparent once `playback_started`, so the
     // video shows through. `player_open` = overlay up (catalog hidden).
+    in-out property <int> intro_skip_override_index: -1;
+    callback intro_skip_mode_changed(int);
+    in-out property <int> skip_segment_kind;
+    callback skip_segment();
     in-out property <bool> next_episode_visible: false;
     in-out property <string> next_episode_token: "";
     in-out property <string> next_episode_title: "";

@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Default)]
 struct PlaybackContext {
+    intro_download: Option<crate::download::DownloadJob>,
     subtitle_hints: Vec<(String, String)>,
     title: String,
     episode_label: String,
@@ -847,6 +848,10 @@ impl Bridge {
         }
         let episode = read_episodes_cache_for(&job.media_type, &job.media_id)
             .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id));
+        let saved_coordinates = job
+            .intro_request
+            .as_ref()
+            .map(|request| request.coordinates());
         let mut state = self.shared.lock().unwrap();
         let rewatch = state
             .progress
@@ -859,6 +864,7 @@ impl Bridge {
         });
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
+                intro_download: Some(job.clone()),
                 history_resume: force_start_over.then_some(0.0),
                 title: job.title.clone(),
                 episode_label: episode
@@ -878,7 +884,7 @@ impl Bridge {
                 media_type: job.media_type.clone(),
                 media_id: job.media_id.clone(),
                 request_id: job.request_id.clone(),
-                is_episode: job.media_type == "series",
+                is_episode: job.media_type == "series" || saved_coordinates.is_some(),
                 is_movie: job.media_type == "movie",
                 history: Some(PlaybackHistory {
                     type_: job.media_type.clone(),
@@ -890,8 +896,14 @@ impl Bridge {
                         .as_ref()
                         .map(episode_context_label)
                         .unwrap_or_default(),
-                    season: episode.as_ref().and_then(|video| video.season),
-                    episode: episode.as_ref().and_then(Video::episode_number),
+                    season: episode
+                        .as_ref()
+                        .and_then(|video| video.season)
+                        .or(saved_coordinates.map(|(season, _)| season)),
+                    episode: episode
+                        .as_ref()
+                        .and_then(Video::episode_number)
+                        .or(saved_coordinates.map(|(_, episode)| episode)),
                     rewatch,
                     ..Default::default()
                 }),
@@ -1151,6 +1163,7 @@ impl Bridge {
                 series_id,
                 episode_id: request_id,
                 session: next_episode::new_session(),
+                intro_download: context.intro_download.clone(),
                 resume_pos: if party_active {
                     party_start
                 } else if let Some(position) = context.history_resume {

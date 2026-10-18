@@ -3,6 +3,8 @@ import { PlayerOsdBridge, OnboardingBridge, TrackRow } from "@NovaUiShared";
 // must never reconnect an already-joined backend/global property pool.
 
 export component PlayerOsdBindings {
+    in-out property <int> intro_skip_override_index <=> PlayerOsdBridge.intro_skip_override_index;
+    in-out property <int> skip_segment_kind <=> PlayerOsdBridge.skip_segment_kind;
     in-out property <bool> playback_started <=> PlayerOsdBridge.playback_started;
     in-out property <bool> is_paused <=> PlayerOsdBridge.is_paused;
     in-out property <float> position <=> PlayerOsdBridge.position;

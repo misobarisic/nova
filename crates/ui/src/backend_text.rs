@@ -347,6 +347,8 @@ pub fn tr(english: &str) -> &str {
         "TorBox returned an invalid playback URL." => "TorBox je vratio nevaljan URL reprodukcije.",
         "On" => "Uključeno",
         "Off" => "Isključeno",
+        "Show skip prompt" => "Prikaži gumb za preskakanje",
+        "Auto skip" => "Automatski preskoči",
         "Automatic" => "Automatski",
         "Unlimited" => "Neograničeno",
         "Image disk-cache limit" => "Ograničenje slikovne predmemorije na disku",
@@ -1551,6 +1553,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "intro_skip_mode" => match value.as_str() {
+            Some("off") => tr("Off").into(),
+            Some("auto") => tr("Auto skip").into(),
+            _ => tr("Show skip prompt").into(),
+        },
         "background_style" => match value.as_str() {
             Some("accent_tinted") => tr("Accent-tinted").into(),
             Some("true_black") => tr("True black").into(),
@@ -1837,6 +1844,26 @@ mod tests {
 
     #[test]
     fn setting_comparisons_translate_values_and_format_units() {
+        for (language, labels) in [
+            (Language::English, ["Off", "Show skip prompt", "Auto skip"]),
+            (
+                Language::Croatian,
+                [
+                    "Isključeno",
+                    "Prikaži gumb za preskakanje",
+                    "Automatski preskoči",
+                ],
+            ),
+        ] {
+            with_language(language, || {
+                for (mode, label) in ["off", "prompt", "auto"].into_iter().zip(labels) {
+                    assert_eq!(
+                        setting_sync_value("intro_skip_mode", &serde_json::json!(mode)),
+                        label
+                    );
+                }
+            });
+        }
         with_language(Language::English, || {
             assert_eq!(setting_sync_value("quality", &serde_json::json!(60)), "60%");
             assert_eq!(

@@ -8,6 +8,10 @@ export component PlayerOsdModule inherits Window {
     width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;
     page := PlayerOverlay {
         width: 100%; height: 100%;
+        intro_skip_override_index <=> PlayerOsdBridge.intro_skip_override_index;
+        intro_skip_mode_changed(i) => { PlayerOsdBridge.intro_skip_mode_changed(i); }
+        skip_segment_kind <=> PlayerOsdBridge.skip_segment_kind;
+        skip_segment => { PlayerOsdBridge.skip_segment(); }
         next_episode_visible <=> PlayerOsdBridge.next_episode_visible;
         next_episode_token <=> PlayerOsdBridge.next_episode_token;
         next_episode_title <=> PlayerOsdBridge.next_episode_title;

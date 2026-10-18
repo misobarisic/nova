@@ -62,6 +62,7 @@ impl Bridge {
             PlaybackAction::SeekRelative(delta) => {
                 finite(delta)?;
                 self.clear_playback_end_menu();
+                self.note_intro_seek(app.get_position() as f64, app.get_position() as f64 + delta);
                 self.player.seek_relative(delta);
                 self.refresh_next_episode_prompt();
             }
@@ -74,6 +75,7 @@ impl Bridge {
                 } else {
                     position.max(0.0)
                 };
+                self.note_intro_seek(app.get_position() as f64, position);
                 self.player.seek(position.min(f32::MAX as f64) as f32);
                 self.refresh_next_episode_prompt();
             }

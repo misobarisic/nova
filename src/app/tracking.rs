@@ -199,6 +199,14 @@ struct SourceEvidence {
     year: Option<u16>,
     retrieved_at: u64,
 }
+pub(super) fn current_source_ids(type_: &str, id: &str) -> providers::ExternalIds {
+    read_json_result::<SourceEvidence>(&evidence_key(type_, id))
+        .ok()
+        .flatten()
+        .map(|e| e.ids)
+        .unwrap_or_else(|| providers::normalize_external_ids(&HashMap::new(), id, type_))
+}
+
 fn evidence_key(type_: &str, id: &str) -> String {
     format!(
         "tracking:source:{}",

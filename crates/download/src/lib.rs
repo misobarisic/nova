@@ -108,6 +108,86 @@ impl DownloadPhase {
     }
 }
 
+/// Confirmed provider coordinates captured when a download is requested.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadIntroRequest {
+    IntroDb {
+        key: String,
+        id: String,
+        season: u32,
+        episode: u32,
+    },
+    AniSkip {
+        mal: u32,
+        episode: u32,
+    },
+}
+
+impl DownloadIntroRequest {
+    pub fn coordinates(&self) -> (u32, u32) {
+        match self {
+            Self::IntroDb {
+                season, episode, ..
+            } => (*season, *episode),
+            Self::AniSkip { episode, .. } => (1, *episode),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadIntroSegment {
+    pub kind: i32,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// Local timing evidence belongs to this exact completed artifact, never to a
+/// different encode that happens to reuse a download ID or filename.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadIntroTimings {
+    pub duration_ms: u64,
+    pub segments: Vec<DownloadIntroSegment>,
+    pub artifact_size: u64,
+    pub artifact_modified_ns: u128,
+}
+
+impl DownloadIntroTimings {
+    pub fn capture(
+        path: &Path,
+        duration_ms: u64,
+        segments: Vec<DownloadIntroSegment>,
+    ) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        Some(Self {
+            duration_ms,
+            segments,
+            artifact_size: metadata.len(),
+            artifact_modified_ns: metadata
+                .modified()
+                .ok()?
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+        })
+    }
+
+    pub fn matches_path(&self, path: &Path) -> bool {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return false;
+        };
+        metadata.is_file()
+            && metadata.len() == self.artifact_size
+            && metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .is_some_and(|time| time.as_nanos() == self.artifact_modified_ns)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DownloadJob {
@@ -140,6 +220,10 @@ pub struct DownloadJob {
     pub error: Option<String>,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default)]
+    pub intro_request: Option<DownloadIntroRequest>,
+    #[serde(default)]
+    pub intro_timings: Option<DownloadIntroTimings>,
 }
 
 impl Default for DownloadJob {
@@ -168,6 +252,8 @@ impl Default for DownloadJob {
             error: None,
             etag: None,
             last_modified: None,
+            intro_request: None,
+            intro_timings: None,
         }
     }
 }
@@ -773,6 +859,80 @@ pub fn part_path(destination: impl AsRef<Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intro_metadata_preserves_legacy_json_and_round_trips_provider_coordinates() {
+        let legacy: DownloadJob =
+            serde_json::from_str(r#"{"id":"legacy","phase":"completed"}"#).unwrap();
+        assert!(legacy.intro_request.is_none());
+        assert!(legacy.intro_timings.is_none());
+        for request in [
+            DownloadIntroRequest::IntroDb {
+                key: "imdb".into(),
+                id: "tt123".into(),
+                season: 2,
+                episode: 3,
+            },
+            DownloadIntroRequest::AniSkip {
+                mal: 123,
+                episode: 3,
+            },
+        ] {
+            let coordinates = request.coordinates();
+            let mut job = legacy.clone();
+            job.intro_request = Some(request);
+            job.intro_timings = Some(DownloadIntroTimings {
+                duration_ms: 1_440_000,
+                segments: vec![DownloadIntroSegment {
+                    kind: 0,
+                    start_ms: 30_000,
+                    end_ms: 120_000,
+                }],
+                artifact_size: 123,
+                artifact_modified_ns: 1_777_777_777_000_000_000,
+            });
+            let decoded: DownloadJob =
+                serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+            assert_eq!(decoded, job);
+            assert_eq!(decoded.intro_request.unwrap().coordinates(), coordinates);
+        }
+    }
+
+    #[test]
+    fn intro_fingerprint_rejects_changed_missing_and_non_file_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "nova-intro-fingerprint-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("episode.mkv");
+        std::fs::write(&path, b"same size").unwrap();
+        let timings = DownloadIntroTimings::capture(&path, 1000, vec![]).unwrap();
+        assert!(timings.matches_path(&path));
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap()
+            + std::time::Duration::from_secs(1);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(
+            !timings.matches_path(&path),
+            "same-length replacement is invalidated by mtime"
+        );
+        let timings = DownloadIntroTimings::capture(&path, 1000, vec![]).unwrap();
+        std::fs::write(&path, b"new longer encode").unwrap();
+        assert!(!timings.matches_path(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!timings.matches_path(&path));
+        assert!(DownloadIntroTimings::capture(&root, 1000, vec![]).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn legacy_http_jobs_default_headers_and_new_jobs_preserve_them() {
