@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 use crate::app::profiles::thread;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -18,10 +19,18 @@ const RESOLVER_DOWNLOAD_PREFIX: &str = "nova-resolver:";
 const RESOLVER_RESELECT: &str =
     "Reload streams and select Download again to refresh this download.";
 
+type ResolverCancellation = Arc<dyn Fn() -> bool + Send + Sync>;
+type ResolveDownload = dyn Fn(
+        &str,
+        Duration,
+        ResolverCancellation,
+    ) -> Result<addons::Stream, nova_providers::ProviderResolveError>
+    + Send
+    + Sync;
 #[derive(Clone)]
 struct ResolverDownload {
-    provider_url: String,
     token: String,
+    resolve: Arc<ResolveDownload>,
     /// Only provider configuration changes invalidate an already queued
     /// download. Navigation may continue while the captured episode transfers.
     is_current: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -246,8 +255,8 @@ impl DownloadCoordinator {
                 })
                 .collect()
         };
-        // Owner guards read the app state; never hold the coordinator lock
-        // while checking them, since UI projections read these locks too.
+        // Owner guards inspect retained provider/backend state; never hold the
+        // coordinator lock while checking ownership or durable membership.
         for (id, resolver) in pending {
             if (resolver.is_current)() {
                 continue;
@@ -666,22 +675,25 @@ impl DownloadCoordinator {
             JobSource::Http { .. } => "download-http",
             JobSource::Torrent { .. } => "download-torrent",
         };
-        let spawned = thread::Builder::new().name(name.into()).spawn(move || {
-            // Marks the worker ended even if the transfer panics; the tick
-            // reaps a slot whose worker died before `finish` cleared it.
-            let _done = WorkerDone(done);
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match source {
-                JobSource::Http { .. } => coordinator.run_http(job, active),
-                JobSource::Torrent {
-                    info_hash,
-                    file_idx,
-                } => coordinator.run_torrent(job, info_hash, file_idx, active),
-            }));
-            if outcome.is_err() {
-                eprintln!("nova downloads: worker for {worker_job_id} panicked; recovering");
-                coordinator.recover_failed_worker(&worker_job_id);
-            }
-        });
+        let spawned = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                // Marks the worker ended even if the transfer panics; the tick
+                // reaps a slot whose worker died before `finish` cleared it.
+                let _done = WorkerDone(done);
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match source {
+                        JobSource::Http { .. } => coordinator.run_http(job, active),
+                        JobSource::Torrent {
+                            info_hash,
+                            file_idx,
+                        } => coordinator.run_torrent(job, info_hash, file_idx, active),
+                    }));
+                if outcome.is_err() {
+                    eprintln!("nova downloads: worker for {worker_job_id} panicked; recovering");
+                    coordinator.recover_failed_worker(&worker_job_id);
+                }
+            });
         if let Err(error) = spawned {
             self.finish(
                 job_id,
@@ -716,12 +728,8 @@ impl DownloadCoordinator {
                 self.finish(job.id, Err(error));
                 return;
             }
-            let resolved = nova_providers::resolve_provider_stream(
-                &resolver.provider_url,
-                &resolver.token,
-                Duration::from_secs(30),
-                cancelled.clone(),
-            );
+            let resolved =
+                (resolver.resolve)(&resolver.token, Duration::from_secs(30), cancelled.clone());
             if cancelled() {
                 let error = if (resolver.is_current)() {
                     crate::download::DownloadError::Cancelled.to_string()
@@ -1903,31 +1911,33 @@ impl Bridge {
                 settings_generation,
                 addon_generation,
             } => {
-                let shared = Arc::downgrade(&self.shared);
-                let owner = provider_url.clone();
-                let settings_generation = *settings_generation;
-                let addon_generation = *addon_generation;
-                let is_current: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
-                    nova_providers::plugin_settings::settings_generation() == settings_generation
-                        && shared.upgrade().is_some_and(|shared| {
-                            shared.lock().unwrap().installed.iter().any(|addon| {
-                                addon.url == owner
-                                    && addon.enabled
-                                    && addon.available
-                                    && addon.generation == addon_generation
-                            })
-                        })
+                let valid_selection = self.shared.lock().unwrap().installed.iter().any(|addon| {
+                    addon.url == *provider_url
+                        && addon.enabled
+                        && addon.available
+                        && addon.generation == *addon_generation
                 });
-                if !is_current() {
+                let capability = valid_selection
+                    .then(|| {
+                        nova_providers::capture_resolver_capability(
+                            provider_url,
+                            *settings_generation,
+                        )
+                    })
+                    .transpose();
+                let Ok(Some(capability)) = capability else {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This stream selection is out of date. Reload streams.",
                     )));
                     return;
-                }
+                };
+                let authority = capability.clone();
                 Some(ResolverDownload {
-                    provider_url: provider_url.clone(),
                     token: token.clone(),
-                    is_current,
+                    is_current: Arc::new(move || authority.is_current()),
+                    resolve: Arc::new(move |token, timeout, cancelled| {
+                        capability.resolve(token, timeout, cancelled)
+                    }),
                 })
             }
             _ => None,
@@ -2357,8 +2367,10 @@ mod tests {
             state.resolvers.insert(
                 "private".into(),
                 ResolverDownload {
-                    provider_url: "nova://supernova".into(),
                     token: "runtime-only-private-token".into(),
+                    resolve: Arc::new(|_, _, _| {
+                        panic!("owner invalidation test must not start resolver transport")
+                    }),
                     is_current: Arc::new(move || check.load(Ordering::Acquire)),
                 },
             );

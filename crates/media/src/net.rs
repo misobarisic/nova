@@ -60,27 +60,85 @@ mod imp {
         on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
-        // A queued provider request belongs to the settings snapshot that
-        // dispatched it; switching profiles must not run it with new secrets.
-        let settings_generation = nova_providers::plugin_settings::settings_generation();
+        fetch_bytes_with_progress_for_settings(
+            url,
+            on_progress,
+            nova_providers::plugin_settings::capture_settings_capability(),
+            then,
+        );
+    }
+
+    /// Dispatch with the originating profile's authority, even if another
+    /// profile is published before this worker starts.
+    pub fn fetch_bytes_with_progress_for_settings(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        fetch_bytes_with_progress_for_owner(
+            url,
+            on_progress,
+            settings,
+            nova_providers::OwnedProviderSnapshot::capture(),
+            then,
+        );
+    }
+
+    /// Dispatch and enrich with the exact installed inventory selected by the
+    /// originating session, including ordinary HTTP addons and nested lookups.
+    pub fn fetch_bytes_with_progress_for_owner(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        inventory: nova_providers::OwnedProviderSnapshot,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        let settings_generation =
+            settings.with(nova_providers::plugin_settings::settings_generation);
+        let progress_settings = settings.clone();
+        let on_progress = std::sync::Arc::new(move |bytes| {
+            progress_settings.with(|| {
+                if progress_settings.is_current() {
+                    on_progress(bytes);
+                }
+            });
+        });
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
-                if nova_providers::plugin_settings::settings_generation() != settings_generation {
-                    then(Err(FetchError::new(None, "Provider configuration changed")));
-                    return;
-                }
-                let result = if let Some(result) =
-                    nova_providers::fetch_builtin_addon_with_progress_for_generation(
-                        &url,
-                        on_progress,
-                        settings_generation,
-                    ) {
-                    result.map_err(|error| FetchError::new(None, error.to_string()))
-                } else {
-                    get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
-                };
-                then(result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes)));
+                inventory.with(|| {
+                    settings.with(|| {
+                        if !settings.is_current()
+                            || nova_providers::plugin_settings::settings_generation()
+                                != settings_generation
+                        {
+                            then(Err(FetchError::new(None, "Provider configuration changed")));
+                            return;
+                        }
+                        let result = if let Some(result) =
+                            nova_providers::fetch_builtin_addon_with_progress_for_generation(
+                                &url,
+                                on_progress,
+                                settings_generation,
+                            ) {
+                            result.map_err(|error| FetchError::new(None, error.to_string()))
+                        } else {
+                            get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
+                        };
+                        if !settings.is_current() {
+                            then(Err(FetchError::new(None, "Provider configuration changed")));
+                            return;
+                        }
+                        let result =
+                            result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes));
+                        then(if settings.is_current() {
+                            result
+                        } else {
+                            Err(FetchError::new(None, "Provider configuration changed"))
+                        });
+                    })
+                })
             })
             .expect("spawn fetch thread");
     }
@@ -252,48 +310,102 @@ mod imp {
         on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
-        // A queued provider request belongs to the settings snapshot that
-        // dispatched it; switching profiles must not run it with new secrets.
-        let settings_generation = nova_providers::plugin_settings::settings_generation();
+        fetch_bytes_with_progress_for_settings(
+            url,
+            on_progress,
+            nova_providers::plugin_settings::capture_settings_capability(),
+            then,
+        );
+    }
+
+    /// Dispatch with the originating profile's authority, even if another
+    /// profile is published before this worker starts.
+    pub fn fetch_bytes_with_progress_for_settings(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        fetch_bytes_with_progress_for_owner(
+            url,
+            on_progress,
+            settings,
+            nova_providers::OwnedProviderSnapshot::capture(),
+            then,
+        );
+    }
+
+    /// Dispatch and enrich with the exact installed inventory selected by the
+    /// originating session, including ordinary HTTP addons and nested lookups.
+    pub fn fetch_bytes_with_progress_for_owner(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        inventory: nova_providers::OwnedProviderSnapshot,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        let settings_generation =
+            settings.with(nova_providers::plugin_settings::settings_generation);
+        let progress_settings = settings.clone();
+        let on_progress = std::sync::Arc::new(move |bytes| {
+            progress_settings.with(|| {
+                if progress_settings.is_current() {
+                    on_progress(bytes);
+                }
+            });
+        });
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
-                if nova_providers::plugin_settings::settings_generation() != settings_generation {
-                    then(Err(FetchError::new(None, "Provider configuration changed")));
-                    return;
-                }
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let result = if let Some(result) =
-                        nova_providers::fetch_builtin_addon_with_progress_for_generation(
-                            &url,
-                            on_progress,
-                            settings_generation,
-                        ) {
-                        result.map_err(|error| FetchError::new(None, error.to_string()))
-                    } else {
-                        get_with_retries(&url)
-                    };
-                    result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes))
-                }));
-                then(match result {
-                    Ok(r) => r,
-                    Err(payload) => {
-                        let outer = panic_message(payload);
-                        let mut msg = format!("fetch thread panicked: {outer}");
-                        // The payload above is usually just reqwest's
-                        // "event loop thread panicked" (its background
-                        // runtime died); the hook log holds the real
-                        // cause (earlier entries). Skip entries that
-                        // merely repeat the outer message.
-                        let causes: Vec<String> = take_recent_panics()
-                            .into_iter()
-                            .filter(|e| !e.contains(&outer))
-                            .collect();
-                        if !causes.is_empty() {
-                            msg.push_str(&format!(" [cause: {}]", causes.join(" | ")));
+                inventory.with(|| {
+                    settings.with(|| {
+                        if !settings.is_current()
+                            || nova_providers::plugin_settings::settings_generation()
+                                != settings_generation
+                        {
+                            then(Err(FetchError::new(None, "Provider configuration changed")));
+                            return;
                         }
-                        Err(FetchError::new(None, msg))
-                    }
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let result = if let Some(result) =
+                                nova_providers::fetch_builtin_addon_with_progress_for_generation(
+                                    &url,
+                                    on_progress,
+                                    settings_generation,
+                                ) {
+                                result.map_err(|error| FetchError::new(None, error.to_string()))
+                            } else {
+                                get_with_retries(&url)
+                            };
+                            let result = result
+                                .map(|bytes| nova_providers::enrich_addon_response(&url, bytes));
+                            if settings.is_current() {
+                                result
+                            } else {
+                                Err(FetchError::new(None, "Provider configuration changed"))
+                            }
+                        }));
+                        then(match result {
+                            Ok(r) => r,
+                            Err(payload) => {
+                                let outer = panic_message(payload);
+                                let mut msg = format!("fetch thread panicked: {outer}");
+                                // The payload above is usually just reqwest's
+                                // "event loop thread panicked" (its background
+                                // runtime died); the hook log holds the real
+                                // cause (earlier entries). Skip entries that
+                                // merely repeat the outer message.
+                                let causes: Vec<String> = take_recent_panics()
+                                    .into_iter()
+                                    .filter(|e| !e.contains(&outer))
+                                    .collect();
+                                if !causes.is_empty() {
+                                    msg.push_str(&format!(" [cause: {}]", causes.join(" | ")));
+                                }
+                                Err(FetchError::new(None, msg))
+                            }
+                        })
+                    })
                 })
             })
             .expect("spawn fetch thread");
@@ -361,7 +473,10 @@ pub(crate) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
 }
 #[cfg(target_os = "android")]
 pub use imp::install_panic_hook;
-pub use imp::{fetch_bytes, fetch_bytes_with_progress};
+pub use imp::{
+    fetch_bytes, fetch_bytes_with_progress, fetch_bytes_with_progress_for_owner,
+    fetch_bytes_with_progress_for_settings,
+};
 
 /// The transport is platform-specific; recipe processing and cache ownership are shared.
 pub fn fetch_image(
@@ -440,4 +555,193 @@ pub fn fetch_metadata_bytes(
 ) -> Result<Vec<u8>, nova_providers::ProviderHostError> {
     use nova_providers::AddonMetadataTransport;
     MetadataTransport.fetch(url, timeout, response_limit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nova_providers::ProviderHostError;
+    use nova_providers::plugin_settings::{self as settings, PluginSettingsBackend};
+    use std::io::{Cursor, Write};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    struct Backend {
+        owner: &'static str,
+        settings: Mutex<String>,
+    }
+    impl PluginSettingsBackend for Backend {
+        fn owner_id(&self) -> Option<String> {
+            Some(self.owner.into())
+        }
+        fn load_settings(&self) -> Result<Option<String>, ProviderHostError> {
+            Ok(Some(self.settings.lock().unwrap().clone()))
+        }
+        fn save_settings(&self, raw: &str) -> Result<(), ProviderHostError> {
+            *self.settings.lock().unwrap() = raw.into();
+            Ok(())
+        }
+        fn load_cache(&self) -> Result<Option<String>, ProviderHostError> {
+            Ok(None)
+        }
+        fn save_cache(&self, _: &str) -> Result<(), ProviderHostError> {
+            Ok(())
+        }
+    }
+    fn route() -> serde_json::Value {
+        let field = serde_json::from_value(serde_json::json!({
+            "key":"route","label":"Route","type":"string","default":""
+        }))
+        .unwrap();
+        settings::settings_snapshot("bytefixture", &[field])
+            .unwrap()
+            .values["route"]
+            .clone()
+    }
+
+    fn package(prefix: &str) -> Arc<nova_providers::AddonPackage> {
+        let manifest = serde_json::json!({
+            "formatVersion":1,"id":"bytefixture","name":prefix,"version":"1.0.0","entry":"index.js","permissions":{},
+            "capabilities":{"configurableCapabilities":true},
+            "configuration":[{"key":"route","label":"Route","type":"string","default":""}]
+        }).to_string();
+        let addon = serde_json::json!({"id":"nova.bytefixture","name":prefix,"version":"1.0.0"})
+            .to_string();
+        let source = "globalThis.novaProvider={handle(request){if(request.op==='manifest')return request.manifest;let rows=[{id:'one',title:'Fixture stream',url:'https://example.test/CODE-'+JSON.parse(nova.settings.get('route'))}];let error=nova.streams.publish(JSON.stringify(rows));if(error!=='')throw new Error(error);return rows;}};".replace("CODE", prefix);
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, contents) in [
+            ("manifest.json", manifest.as_str()),
+            ("stremio-manifest.json", addon.as_str()),
+            ("LICENSE", "Test fixture"),
+            ("NOTICE.md", "Test fixture"),
+            ("index.js", source.as_str()),
+        ] {
+            archive
+                .start_file(
+                    name,
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            archive.write_all(contents.as_bytes()).unwrap();
+        }
+        nova_providers::AddonPackage::parse(&archive.finish().unwrap().into_inner()).unwrap()
+    }
+
+    #[test]
+    fn explicit_byte_fetch_uses_origin_settings_after_switch_and_rejects_revocation() {
+        let backend = |owner, value| {
+            Arc::new(Backend {
+                owner,
+                settings: Mutex::new(format!(r#"{{"bytefixture":{{"route":"{value}"}}}}"#)),
+            })
+        };
+        settings::configure_plugin_settings(backend("byte-fetch-alice", "alice")).unwrap();
+        let alice = settings::capture_settings_capability();
+        let previous_packages = nova_providers::installed_packages();
+        let package_a = package("A");
+        let config = nova_providers::ProviderCapabilities::default();
+        let inventory = nova_providers::OwnedProviderSnapshot::new(
+            vec![package_a.clone()],
+            std::collections::HashMap::from([(package_a.url(), config)]),
+            vec![nova_providers::MetadataAddon {
+                url: package_a.url(),
+                manifest: package_a.addon_manifest().clone(),
+            }],
+        );
+        let metadata_revision = inventory.with(nova_providers::metadata_revision);
+        let package_b = package("B");
+        nova_providers::set_installed_packages(vec![package_b.clone()]);
+        nova_providers::configure_provider_capabilities(
+            &package_b.url(),
+            nova_providers::ProviderCapabilities {
+                streams: false,
+                metadata: false,
+            },
+        );
+        nova_providers::configure_metadata_addons(vec![nova_providers::MetadataAddon {
+            url: "nova-provider://bytefixture/b-only".into(),
+            manifest: package_b.addon_manifest().clone(),
+        }]);
+        settings::configure_plugin_settings(backend("byte-fetch-bob", "bob")).unwrap();
+        assert_ne!(nova_providers::metadata_revision(), metadata_revision);
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
+        fetch_bytes_with_progress_for_owner(
+            "nova-provider://bytefixture/stream/movie/title.json".into(),
+            Arc::new(move |_| {
+                // The same transport used by nested metadata requests must
+                // select A's manifest even while B owns the process registry.
+                let manifest = fetch_metadata_bytes(
+                    "nova-provider://bytefixture/manifest.json",
+                    Duration::from_secs(1),
+                    65536,
+                )
+                .unwrap();
+                let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+                progress_tx
+                    .send((
+                        route(),
+                        nova_providers::metadata_revision(),
+                        manifest["name"].clone(),
+                    ))
+                    .unwrap();
+            }),
+            alice.clone(),
+            inventory.clone(),
+            move |result| {
+                tx.send((result, route(), nova_providers::metadata_revision()))
+                    .unwrap()
+            },
+        );
+        let (result, callback_route, callback_revision) =
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&result.unwrap()).unwrap();
+        assert_eq!(body["streams"][0]["url"], "https://example.test/A-alice");
+        assert_eq!(callback_route, "alice");
+        assert_eq!(callback_revision, metadata_revision);
+        let (progress_route, progress_revision, nested_manifest) =
+            progress_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(progress_route, "alice");
+        assert_eq!(progress_revision, metadata_revision);
+        assert_eq!(nested_manifest, "A");
+        assert_eq!(route(), "bob");
+
+        let (tx, rx) = mpsc::channel();
+        fetch_bytes_with_progress_for_owner(
+            "nova-provider://bytefixture/manifest.json".into(),
+            Arc::new(|_| {}),
+            alice.clone(),
+            inventory.clone(),
+            move |result| tx.send(result).unwrap(),
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap())
+                .unwrap();
+        assert_eq!(manifest["name"], "A");
+        let (tx, rx) = mpsc::channel();
+        fetch_bytes_with_progress_for_owner(
+            "nova-provider://bytefixture/manifest.json".into(),
+            Arc::new(|_| {}),
+            alice.clone(),
+            nova_providers::OwnedProviderSnapshot::new(vec![], Default::default(), vec![]),
+            move |result| tx.send(result).unwrap(),
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap().is_err(),
+            "missing owner package cannot fall back to B"
+        );
+
+        alice.with(|| settings::set_setting("bytefixture", "route", "changed".into()).unwrap());
+        let (tx, rx) = mpsc::channel();
+        fetch_bytes_with_progress_for_owner(
+            "nova-provider://bytefixture/stream/movie/title.json".into(),
+            Arc::new(|_| panic!("revoked owner must not publish progress")),
+            alice,
+            inventory,
+            move |result| tx.send(result).unwrap(),
+        );
+        assert!(rx.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
+        nova_providers::set_installed_packages(previous_packages);
+    }
 }

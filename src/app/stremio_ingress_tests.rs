@@ -73,7 +73,7 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
 
 #[test]
 fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() {
-    isolated(
+    isolated_profiles(
         concat!(
             module_path!(),
             "::stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library"
@@ -112,8 +112,6 @@ fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() 
                     })
                 }
             }
-            sync::migrate_legacy_profiles().unwrap();
-            profiles::initialize().unwrap();
             let outgoing = profiles::capture();
             let title = incoming(true);
             let prepared =
@@ -139,7 +137,8 @@ fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() 
             });
             waiting.recv_timeout(Duration::from_secs(10)).unwrap();
             let replacement = profiles::create("Bob").unwrap();
-            profiles::commit_activation(profiles::prepare_activation(&replacement).unwrap());
+            fixture.bridge.switch_profile(&replacement);
+            assert_eq!(profiles::active_context().id, replacement);
             let mut private_entry = ordered_ingress_entry("bob-private");
             private_entry.type_ = "movie".into();
             fixture.bridge.shared.lock().unwrap().entries = vec![private_entry];
@@ -174,6 +173,133 @@ fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() 
                 fixture.bridge.shared.lock().unwrap().entries[0].id,
                 "bob-private"
             );
+        },
+    );
+}
+
+#[test]
+fn accepted_upload_after_bridge_switch_is_checkpointed_only_for_issuing_profile() {
+    isolated_profiles(
+        concat!(
+            module_path!(),
+            "::accepted_upload_after_bridge_switch_is_checkpointed_only_for_issuing_profile"
+        ),
+        |fixture| {
+            struct DeferredUpload {
+                entered: mpsc::SyncSender<()>,
+                resume: Mutex<mpsc::Receiver<()>>,
+            }
+            impl nova_stremio::Transport for DeferredUpload {
+                fn send(
+                    &self,
+                    request: nova_stremio::Request,
+                ) -> Result<nova_stremio::Response, ApiError> {
+                    assert!(
+                        request.url.ends_with("/datastorePut"),
+                        "canceled actor issued fresh HTTP: {}",
+                        request.url
+                    );
+                    self.entered.send(()).unwrap();
+                    self.resume
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                    Ok(nova_stremio::Response {
+                        status: 200,
+                        retry_after: None,
+                        body: br#"{"result":{"success":true}}"#.to_vec().into(),
+                    })
+                }
+            }
+            let issuing = profiles::ProfileStore::capture();
+            let connection = fixture.connection.clone();
+            let mut title = incoming(true);
+            title.pending = true;
+            let key = title_storage_key(&connection.account_id, &title);
+            let (entered, waiting) = mpsc::sync_channel(1);
+            let (release, resume) = mpsc::sync_channel(1);
+            let bridge = fixture.bridge.clone();
+            let original_handle = fixture.bridge.stremio();
+            let receiver = original_handle.rx.lock().unwrap().take().unwrap();
+            original_handle.finished.store(false, Ordering::Release);
+            let done = profile_actions::WorkerDone(original_handle.finished.clone());
+            let worker = profiles::thread::spawn(move || {
+                let _done = done;
+                let _receiver = receiver;
+                let worker = Worker::new(
+                    bridge,
+                    Client::new(DeferredUpload {
+                        entered,
+                        resume: Mutex::new(resume),
+                    }),
+                );
+                worker.upload_title(&connection, &mut title, 0)
+            });
+            waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+            let replacement = profiles::create("Bob").unwrap();
+            fixture.bridge.switch_profile(&replacement);
+            assert_eq!(profiles::active_context().id, replacement);
+            let selected = profiles::ProfileStore::capture();
+            assert!(selected.read(&key).unwrap().is_none());
+            fixture.bridge.switch_profile(issuing.id());
+            assert_eq!(profiles::active_context().id, issuing.id());
+            let returning_handle = fixture.bridge.stremio();
+            assert!(!Arc::ptr_eq(&original_handle, &returning_handle));
+            assert!(
+                !original_handle.is_finished(),
+                "the actual upload is still blocked"
+            );
+            assert!(returning_handle.is_finished());
+            assert!(returning_handle.rx.lock().unwrap().is_some());
+            fixture.bridge.retry_profile_services();
+            assert!(
+                returning_handle.rx.lock().unwrap().is_some(),
+                "returning A started a second actor before the first drained"
+            );
+            release.send(()).unwrap();
+            assert!(matches!(worker.join().unwrap(), Err(ApiError::Rejected)));
+            let saved: Title = serde_json::from_str(&issuing.read(&key).unwrap().unwrap()).unwrap();
+            assert!(
+                saved.accepted_upload.is_some(),
+                "the accepted external mutation lost its original-profile receipt"
+            );
+            assert!(
+                saved.pending,
+                "acceptance still requires later server verification"
+            );
+            assert!(selected.read(&key).unwrap().is_none());
+            assert!(
+                original_handle.is_finished(),
+                "WorkerDone must release the real actor drain barrier"
+            );
+            assert!(
+                returning_handle.rx.lock().unwrap().is_some(),
+                "finishing the old actor alone must not consume the new receiver"
+            );
+            // This fixture's credential is intentionally fake. Disconnect it
+            // before starting the replacement actor so no real HTTP is issued.
+            {
+                let owner = nova_sync::local_store().unwrap();
+                let mut store = owner.lock().unwrap();
+                store.set(
+                    &issuing.domain(DOMAIN),
+                    CONNECTION,
+                    None,
+                    0,
+                    nova_sync::local_device().unwrap(),
+                );
+                store.save().unwrap();
+            }
+            fixture.bridge.retry_profile_services();
+            assert!(
+                returning_handle.rx.lock().unwrap().is_none(),
+                "the retained start request must run once the old actor finishes"
+            );
+            assert!(!returning_handle.is_finished());
+            assert_eq!(profiles::active_context().id, issuing.id());
+            fixture.bridge.shutdown_tracking();
+            fixture.bridge.shutdown_stremio();
         },
     );
 }
@@ -264,7 +390,20 @@ fn isolated(name: &str, body: impl FnOnce(Fixture)) {
     isolated_with_clock(name, false, body);
 }
 
+fn isolated_profiles(name: &str, body: impl FnOnce(Fixture)) {
+    isolated_with_options(name, false, true, body);
+}
+
 fn isolated_with_clock(name: &str, system_time: bool, body: impl FnOnce(Fixture)) {
+    isolated_with_options(name, system_time, false, body);
+}
+
+fn isolated_with_options(
+    name: &str,
+    system_time: bool,
+    profiles_enabled: bool,
+    body: impl FnOnce(Fixture),
+) {
     const ROOT: &str = "NOVA_STREMIO_INGRESS_TEST_ROOT";
     let Some(root) = std::env::var_os(ROOT) else {
         let root = std::env::temp_dir().join(format!(
@@ -303,13 +442,6 @@ fn isolated_with_clock(name: &str, system_time: bool, body: impl FnOnce(Fixture)
     let player = crate::player::Player::setup(&app);
     let (hi, _) = mpsc::channel();
     let (lo, _) = mpsc::channel();
-    let bridge = Bridge::new(
-        app.as_weak(),
-        PosterTx { hi, lo },
-        Arc::new(AtomicU64::new(0)),
-        player,
-        DownloadCoordinator::new(root.join("downloads")),
-    );
     persist_sync_snapshot("library", "[]", true).unwrap();
     persist_sync_snapshot(EPISODE_PROGRESS_KEY, "{}", true).unwrap();
     let connection = Connection {
@@ -333,6 +465,20 @@ fn isolated_with_clock(name: &str, system_time: bool, body: impl FnOnce(Fixture)
     );
     store.save().unwrap();
     drop(store);
+    if profiles_enabled {
+        sync::migrate_legacy_profiles().unwrap();
+        profiles::initialize().unwrap();
+    }
+    // Like production, establish durable profile ownership before any session
+    // allocation captures its store. A legacy adapter must never be upgraded
+    // by attaching it to a profile-enabled Context afterward.
+    let bridge = Bridge::new(
+        app.as_weak(),
+        PosterTx { hi, lo },
+        Arc::new(AtomicU64::new(0)),
+        player,
+        DownloadCoordinator::new(root.join("downloads")),
+    );
     body(Fixture {
         _app: app,
         bridge,

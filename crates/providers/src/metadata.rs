@@ -34,9 +34,43 @@ struct Snapshot {
     fingerprint: String,
     addons: Vec<MetadataAddon>,
 }
-fn snapshot() -> &'static Mutex<Snapshot> {
-    static SNAPSHOT: OnceLock<Mutex<Snapshot>> = OnceLock::new();
+fn global_snapshot() -> &'static Arc<Mutex<Snapshot>> {
+    static SNAPSHOT: OnceLock<Arc<Mutex<Snapshot>>> = OnceLock::new();
     SNAPSHOT.get_or_init(Default::default)
+}
+thread_local! {
+    static OWNED_INVENTORY: std::cell::RefCell<Option<Arc<Mutex<Snapshot>>>> = const { std::cell::RefCell::new(None) };
+}
+fn snapshot() -> Arc<Mutex<Snapshot>> {
+    OWNED_INVENTORY
+        .with(|inventory| inventory.borrow().clone())
+        .unwrap_or_else(|| global_snapshot().clone())
+}
+#[derive(Clone)]
+pub(crate) struct MetadataInventory(Arc<Mutex<Snapshot>>);
+pub(crate) fn owned_inventory(addons: Vec<MetadataAddon>) -> MetadataInventory {
+    let fingerprint = inventory_fingerprint(&addons);
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, fingerprint.as_bytes());
+    let revision = u64::from_le_bytes(digest.as_ref()[..8].try_into().unwrap());
+    MetadataInventory(Arc::new(Mutex::new(Snapshot {
+        revision,
+        fingerprint,
+        addons,
+    })))
+}
+pub(crate) fn capture_inventory() -> MetadataInventory {
+    MetadataInventory(Arc::new(Mutex::new(snapshot().lock().unwrap().clone())))
+}
+pub(crate) fn with_inventory<R>(inventory: &MetadataInventory, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<Mutex<Snapshot>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OWNED_INVENTORY.with(|inventory| *inventory.borrow_mut() = self.0.take());
+        }
+    }
+    let old = OWNED_INVENTORY.with(|current| current.replace(Some(inventory.0.clone())));
+    let _restore = Restore(old);
+    f()
 }
 
 fn inventory_fingerprint(addons: &[MetadataAddon]) -> String {
@@ -50,7 +84,7 @@ fn inventory_fingerprint(addons: &[MetadataAddon]) -> String {
 /// Called with already-cloned enabled/available addons, never while networking.
 pub fn configure_metadata_addons(addons: Vec<MetadataAddon>) {
     let fingerprint = inventory_fingerprint(&addons);
-    let mut current = snapshot().lock().unwrap();
+    let mut current = global_snapshot().lock().unwrap();
     if current.fingerprint != fingerprint {
         // A content-derived revision also invalidates persisted episode aliases
         // after restart when the configured addon inventory has changed.

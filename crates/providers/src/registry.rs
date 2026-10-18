@@ -33,9 +33,69 @@ fn known_ids() -> &'static Mutex<HashSet<String>> {
     static IDS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     IDS.get_or_init(|| Mutex::new(HashSet::from(["anikoto".into(), "supernova".into()])))
 }
+/// The provider inventory accepted by one profile session. Scoped lookups keep
+/// ordinary requests and nested metadata enrichment on the same code and URLs.
+#[derive(Clone)]
+pub struct OwnedProviderSnapshot {
+    packages: Arc<Vec<Arc<crate::AddonPackage>>>,
+    configs: Arc<HashMap<String, ProviderCapabilities>>,
+    metadata: crate::metadata::MetadataInventory,
+}
+thread_local! {
+    static OWNED_INVENTORY: std::cell::RefCell<Option<OwnedProviderSnapshot>> = const { std::cell::RefCell::new(None) };
+}
+impl OwnedProviderSnapshot {
+    pub fn new(
+        packages: Vec<Arc<crate::AddonPackage>>,
+        configs: HashMap<String, ProviderCapabilities>,
+        metadata: Vec<crate::MetadataAddon>,
+    ) -> Self {
+        Self {
+            packages: Arc::new(packages),
+            configs: Arc::new(configs),
+            metadata: crate::metadata::owned_inventory(metadata),
+        }
+    }
+    pub fn capture() -> Self {
+        Self {
+            packages: Arc::new(installed_packages()),
+            configs: Arc::new(selected_configs()),
+            metadata: crate::metadata::capture_inventory(),
+        }
+    }
+    pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Restore(Option<OwnedProviderSnapshot>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                OWNED_INVENTORY.with(|inventory| *inventory.borrow_mut() = self.0.take());
+            }
+        }
+        let old = OWNED_INVENTORY.with(|inventory| inventory.replace(Some(self.clone())));
+        let _restore = Restore(old);
+        crate::metadata::with_inventory(&self.metadata, f)
+    }
+}
+fn selected_configs() -> HashMap<String, ProviderCapabilities> {
+    OWNED_INVENTORY
+        .with(|inventory| {
+            inventory
+                .borrow()
+                .as_ref()
+                .map(|inventory| (*inventory.configs).clone())
+        })
+        .unwrap_or_else(|| capability_configs().lock().unwrap().clone())
+}
+
 /// Atomically replace the installed snapshot. Workers retain their package Arc.
 pub fn installed_packages() -> Vec<Arc<crate::AddonPackage>> {
-    packages().lock().unwrap().clone()
+    OWNED_INVENTORY
+        .with(|inventory| {
+            inventory
+                .borrow()
+                .as_ref()
+                .map(|inventory| (*inventory.packages).clone())
+        })
+        .unwrap_or_else(|| packages().lock().unwrap().clone())
 }
 pub fn set_installed_packages(installed: Vec<Arc<crate::AddonPackage>>) {
     mark_known_provider_ids(installed.iter().map(|p| p.id().to_owned()).collect());
@@ -46,9 +106,7 @@ pub fn mark_known_provider_ids(ids: Vec<String>) {
 }
 fn installed_provider(url: &str) -> Option<Arc<crate::AddonPackage>> {
     let base = url.trim_end_matches('/');
-    packages()
-        .lock()
-        .unwrap()
+    installed_packages()
         .iter()
         .find(|p| p.url() == base)
         .cloned()
@@ -92,9 +150,7 @@ pub fn supports_capability_config(url: &str) -> bool {
 }
 pub fn provider_capabilities(url: &str) -> Option<ProviderCapabilities> {
     supports_capability_config(url).then(|| {
-        capability_configs()
-            .lock()
-            .unwrap()
+        selected_configs()
             .get(url.trim_end_matches('/'))
             .copied()
             .unwrap_or_default()
@@ -1041,6 +1097,69 @@ pub fn stable_stream_identity(
 
 /// Resolves a deferred token only inside its registered owner's sandbox. The
 /// caller supplies cancellation tied to the current UI request generation.
+/// A resolver keeps the exact package, settings owner and host state that
+/// produced its opaque token. Device-wide downloads can outlive UI activation.
+#[derive(Clone)]
+pub struct ResolverCapability {
+    inventory: OwnedProviderSnapshot,
+    definition: Arc<crate::AddonPackage>,
+    config: ProviderCapabilities,
+    settings: crate::plugin_settings::SettingsCapability,
+}
+impl ResolverCapability {
+    pub fn is_current(&self) -> bool {
+        self.settings.is_current()
+    }
+    pub fn resolve(
+        &self,
+        token: &str,
+        timeout: Duration,
+        cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<addons::Stream, ProviderResolveError> {
+        let authority = self.clone();
+        let cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(move || cancelled() || !authority.is_current());
+        if cancelled() {
+            return Err(ProviderResolveError::cancelled());
+        }
+        self.inventory.with(|| {
+            self.settings.with(|| {
+                resolve_owned_provider_stream(
+                    &self.definition,
+                    self.config,
+                    token,
+                    timeout,
+                    cancelled,
+                )
+            })
+        })
+    }
+}
+pub fn capture_resolver_capability(
+    provider_url: &str,
+    expected_generation: u64,
+) -> Result<ResolverCapability, ProviderHostError> {
+    let definition = installed_provider(provider_url)
+        .ok_or_else(|| ProviderHostError("provider unavailable".into()))?;
+    let config = provider_capabilities(&definition.url()).unwrap_or_default();
+    if !config.streams {
+        return Err(ProviderHostError("provider streams disabled".into()));
+    }
+    let settings =
+        crate::plugin_settings::capture_provider_settings(provider_url, expected_generation)?;
+    let capability = ResolverCapability {
+        inventory: OwnedProviderSnapshot::capture(),
+        definition,
+        config,
+        settings,
+    };
+    if !capability.is_current() {
+        return Err(ProviderHostError(
+            "provider settings changed during operation".into(),
+        ));
+    }
+    Ok(capability)
+}
 pub fn resolve_provider_stream(
     provider_url: &str,
     token: &str,
@@ -1051,10 +1170,19 @@ pub fn resolve_provider_stream(
         return Err(ProviderResolveError::cancelled());
     }
     let definition = installed_provider(provider_url).ok_or_else(ProviderResolveError::generic)?;
+    let config = provider_capabilities(&definition.url()).unwrap_or_default();
+    resolve_owned_provider_stream(&definition, config, token, timeout, cancelled)
+}
+fn resolve_owned_provider_stream(
+    definition: &crate::AddonPackage,
+    config: ProviderCapabilities,
+    token: &str,
+    timeout: Duration,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<addons::Stream, ProviderResolveError> {
     if token.is_empty() || token.len() > 8192 {
         return Err(ProviderResolveError::generic());
     }
-    let config = provider_capabilities(&definition.url()).unwrap_or_default();
     if !config.streams {
         return Err(ProviderResolveError::generic());
     }

@@ -274,7 +274,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let app_weak = app.as_weak();
             let catalog_gen = catalog_gen.clone();
 
-            thread::spawn(move || {
+            std::thread::spawn(move || {
                 while let Ok(job) = next_job(&hi_rx, &lo_rx) {
                     // Drop stale jobs before fetching: fast scrolling queues
                     // downloads for generations the user already left; each
@@ -368,7 +368,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let downloads = DownloadCoordinator::new(app_data_dir().join("downloads"));
 
     #[cfg(feature = "desktop")]
-    let mut bridge = Bridge::new(
+    let bridge = Bridge::new(
         app.as_weak(),
         tx,
         catalog_gen.clone(),
@@ -376,7 +376,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
     #[cfg(not(feature = "desktop"))]
-    let mut bridge = Bridge::new(
+    let bridge = Bridge::new(
         app.as_weak(),
         catalog_gen.clone(),
         player.clone(),
@@ -387,14 +387,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.wire_party();
     bridge.wire_completion_prompts();
 
-    bridge.last_stream = Arc::new(last_stream::Cache::open_synced(
-        nova_config::app_cache_dir().join("last-stream-v1.json"),
-    ));
+    bridge
+        .last_stream
+        .configure_synced(nova_config::app_cache_dir().join("last-stream-v1.json"));
     bridge.shared.lock().unwrap().restoring_models = true;
-
-    if !app.get_profiles_require_selection() {
-        bridge.initialize_tracking();
-    }
 
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
@@ -1058,7 +1054,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let image_gc_worker = cache_gc::start(&bridge);
     let persistence_worker = persistence::start();
     if !app.get_profiles_require_selection() {
-        bridge.start_stremio();
+        bridge
+            .sessions
+            .active()
+            .services_requested
+            .store(true, Ordering::Release);
+        bridge.retry_profile_services();
     }
     bridge.shared.lock().unwrap().restoring_models = false;
     bridge
@@ -1367,6 +1368,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
+            tick_bridge.retry_profile_services();
             if let Some(app) = tick_bridge.app() {
                 #[cfg(feature = "desktop")]
                 tick_window.tick(&app, &tick_player);

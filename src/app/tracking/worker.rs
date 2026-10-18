@@ -12,13 +12,34 @@ mod peer;
 mod setup;
 use crate::app::profiles::TrackingStorage as KvStorage;
 use nova_tracking::{
-    api::{Client, HttpsTransport},
+    api::{Client as TrackerClient, HttpsTransport},
     auth::{AuthReturn, Authorization, ClientRegistration, Tokens},
     credentials::{CredentialError, SavedConnection},
     *,
 };
 use std::num::{NonZeroU32, NonZeroU64};
 type Store<S = KvStorage> = nova_tracking::Store<S>;
+type Client = TrackerClient<ActorTransport>;
+
+/// Check cancellation before each HTTP request, including multi-request leaf
+/// operations such as token refresh followed by viewer verification. An already
+/// issued request still returns its result to the original durable adapter.
+#[derive(Clone)]
+struct ActorTransport<T = HttpsTransport> {
+    inner: T,
+    context: profiles::Context,
+    handle: StateHandle,
+}
+impl<T: api::Transport> api::Transport for ActorTransport<T> {
+    fn send(&self, request: api::Request) -> Result<api::Response, ApiError> {
+        if !profiles::is_current(&self.context) || !self.handle.alive.load(Ordering::Acquire) {
+            // Cancellation must retain queued intent for the next activation,
+            // rather than turn an unissued request into a permanent rejection.
+            return Err(ApiError::Offline);
+        }
+        api::Transport::send(&self.inner, request)
+    }
+}
 
 /// All account integrations share ownership of the Android authorization
 /// service, so finishing one sign-in cannot interrupt another one.
@@ -235,7 +256,8 @@ struct SetupDraft {
 struct Coordinator {
     bridge: Bridge,
     store: Store,
-    transport: HttpsTransport,
+    storage: KvStorage,
+    transport: ActorTransport,
     registrations: Registrations,
     sessions: Vec<Session>,
     logins: Vec<Login>,
@@ -264,7 +286,8 @@ enum Completion {
     Edit(EditAttempt, Result<RemoteEntry, DeliveryFailure>),
 }
 pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
-    let mut loaded = Store::load(KvStorage);
+    let durable_storage = KvStorage::capture();
+    let mut loaded = Store::load(durable_storage.clone());
     while loaded.is_err() {
         let weak = bridge.app.clone();
         let _ = crate::app::profiles::invoke_from_event_loop(move || {
@@ -276,7 +299,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         });
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Command::Reset) => {
-                loaded = reset_store();
+                loaded = reset_store(&durable_storage);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             _ => {
@@ -288,7 +311,11 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     }
     let store = loaded.unwrap();
     let transport = match HttpsTransport::new() {
-        Ok(t) => t,
+        Ok(inner) => ActorTransport {
+            inner,
+            context: profiles::capture(),
+            handle: bridge.tracking(),
+        },
         Err(_) => return,
     };
     let registrations = match read_json_result::<Registrations>(CLIENTS_KEY) {
@@ -307,6 +334,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     let mut coordinator = Coordinator {
         bridge,
         store,
+        storage: durable_storage,
         transport,
         registrations,
         sessions: vec![],
@@ -431,6 +459,9 @@ impl Coordinator {
     fn restore_connections(&mut self) {
         let now = now_secs();
         for service in [Service::MyAnimeList, Service::AniList] {
+            if !self.live() {
+                return;
+            }
             let index = service_index(service);
             if now < self.restore_after[index] {
                 continue;
@@ -465,7 +496,7 @@ impl Coordinator {
                 .map(|index| self.pending_restore.remove(index));
             let loaded = match retained {
                 Some(connection) => Ok(Some(connection)),
-                None => SavedConnection::load(&KvStorage, service),
+                None => SavedConnection::load(&self.storage, service),
             };
             let mut connection = match loaded {
                 Ok(Some(c)) if c.account == account => c,
@@ -478,7 +509,7 @@ impl Coordinator {
             };
             let epoch = self.bridge.tracking().login_generation[service_index(service)]
                 .load(Ordering::Acquire);
-            let client = match connection.restore(&KvStorage, self.transport.clone(), now) {
+            let client = match connection.restore(&self.storage, self.transport.clone(), now) {
                 Ok(client) => client,
                 Err(CredentialError::Storage) => {
                     // Keep rotated secrets in memory until they can be saved.
@@ -637,7 +668,7 @@ impl Coordinator {
             Command::Reset => {
                 self.cancel(Service::MyAnimeList);
                 self.cancel(Service::AniList);
-                let replacement = reset_store().map_err(|_| storage_message())?;
+                let replacement = reset_store(&self.storage).map_err(|_| storage_message())?;
                 self.sessions.clear();
                 self.pending_restore.clear();
                 self.store = replacement;
@@ -2011,6 +2042,9 @@ impl Coordinator {
         // Only one request is active in this owner; a service outage does not
         // affect the other service's queued state or credentials.
         for index in 0..self.sessions.len() {
+            if !self.live() {
+                return;
+            }
             if self.sessions[index].paused
                 || now < self.sessions[index].refresh_after
                 || self
@@ -2050,7 +2084,7 @@ impl Coordinator {
                                 registration: self.sessions[index].registration.clone(),
                                 tokens,
                             };
-                            let saved = connection.save(&KvStorage);
+                            let saved = connection.save(&self.storage);
                             if saved.is_err() {
                                 self.pending_restore
                                     .retain(|c| c.account.service != service);
@@ -2060,6 +2094,9 @@ impl Coordinator {
                                 continue;
                             }
                             self.sessions[index].tokens = connection.tokens;
+                            if !self.live() {
+                                return;
+                            }
                             let tokens = &self.sessions[index].tokens;
                             let mut client = Client::new(
                                 service,
@@ -2124,12 +2161,18 @@ impl Coordinator {
                 .map(|t| t.key.clone())
                 .collect();
             for target in targets {
+                if !self.live() {
+                    return;
+                }
                 if let Ok(Some(attempt)) = self.store.mutate(|state| state.begin_edit(&target, now))
                 {
                     let result = self.sessions[index]
                         .client
                         .read(target.remote_media_id, now)
                         .and_then(|remote| {
+                            if !self.live() {
+                                return Err(ApiError::Offline);
+                            }
                             if self.bridge.tracking().login_generation[service_index(service)]
                                 .load(Ordering::Acquire)
                                 != self.sessions[index].epoch
@@ -2160,6 +2203,9 @@ impl Coordinator {
                         return;
                     }
                 }
+                if !self.live() {
+                    return;
+                }
                 let attempt = match self.store.begin_delivery(&target, now) {
                     Ok(Some(a)) => a,
                     Ok(None) => continue,
@@ -2173,6 +2219,9 @@ impl Coordinator {
                     .client
                     .read(target.remote_media_id, now)
                     .and_then(|remote| {
+                        if !self.live() {
+                            return Err(ApiError::Offline);
+                        }
                         if self.bridge.tracking().login_generation[service_index(service)]
                             .load(Ordering::Acquire)
                             != self.sessions[index].epoch
@@ -2229,6 +2278,9 @@ impl Coordinator {
                             }
                             patch
                         };
+                        if !self.live() {
+                            return Err(ApiError::Offline);
+                        }
                         if self.bridge.tracking().login_generation[service_index(service)]
                             .load(Ordering::Acquire)
                             != self.sessions[index].epoch
@@ -2266,6 +2318,8 @@ impl Coordinator {
         }
     }
     fn commit_completion(&mut self) -> bool {
+        // HTTP has already completed. The retained leaf store owns the issuing
+        // profile, so cancellation may stop new requests but cannot drop its ack.
         let Some(completion) = self.completion.as_ref() else {
             return true;
         };
@@ -3166,15 +3220,15 @@ fn update_rows<T: Clone + PartialEq + 'static>(
     }
 }
 
-fn reset_store() -> Result<Store<KvStorage>, nova_tracking::LoadError> {
+fn reset_store(durable: &KvStorage) -> Result<Store<KvStorage>, nova_tracking::LoadError> {
     let owner = nova_sync::local_store()
         .map_err(|error| nova_tracking::LoadError::InvalidState(error.to_string()))?;
     let mut history = owner.lock().unwrap();
     history
         .save()
         .map_err(|error| nova_tracking::LoadError::InvalidState(error.to_string()))?;
-    let rows = storage::try_scan_prefix(EVENT_PREFIX)?;
-    Store::reset_with_journal_backup(KvStorage, &rows)
+    let rows = durable.profile_store().scan(EVENT_PREFIX)?;
+    Store::reset_with_journal_backup(durable.clone(), &rows)
 }
 
 fn candidate_reason(context: &SourceContext, service: Service, media: &Media) -> String {
@@ -3211,6 +3265,71 @@ fn candidate_reason(context: &SourceContext, service: Service, media: &Media) ->
         }
     };
     text::tr(label).into()
+}
+
+#[cfg(test)]
+mod transport_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_preserves_inflight_result_and_forbids_a_fresh_request() {
+        struct Deferred {
+            entered: mpsc::SyncSender<()>,
+            resume: Mutex<mpsc::Receiver<()>>,
+            calls: Arc<AtomicU64>,
+        }
+        impl api::Transport for Deferred {
+            fn send(&self, _: api::Request) -> Result<api::Response, ApiError> {
+                self.calls.fetch_add(1, Ordering::AcqRel);
+                self.entered.send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+                Ok(api::Response {
+                    status: 200,
+                    retry_after: None,
+                    reset_at: None,
+                    body: serde_json::json!({"accepted":true}),
+                })
+            }
+        }
+        let (entered, waiting) = mpsc::sync_channel(1);
+        let (release, resume) = mpsc::sync_channel(1);
+        let handle = Arc::new(TrackingHandle::new());
+        let calls = Arc::new(AtomicU64::new(0));
+        let transport = ActorTransport {
+            inner: Deferred {
+                entered,
+                resume: Mutex::new(resume),
+                calls: calls.clone(),
+            },
+            context: profiles::capture(),
+            handle: handle.clone(),
+        };
+        let worker = std::thread::spawn(move || {
+            let request = || api::Request {
+                method: "POST",
+                url: "https://example.invalid/update".into(),
+                bearer: None,
+                body: api::Body::Empty,
+            };
+            assert_eq!(
+                api::Transport::send(&transport, request()).unwrap().body["accepted"],
+                true
+            );
+            assert!(matches!(
+                api::Transport::send(&transport, request()),
+                Err(ApiError::Offline)
+            ));
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        handle.alive.store(false, Ordering::Release);
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+    }
 }
 
 #[cfg(test)]

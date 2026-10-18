@@ -147,6 +147,10 @@ struct Title {
     remote: Canonical,
     desired: Canonical,
     pending: bool,
+    /// Accepted upload of this exact serialized item; verification can resume
+    /// later without discarding a success returned after a profile switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_upload: Option<String>,
     #[serde(default)]
     progress_merged: bool,
     #[serde(default)]
@@ -166,6 +170,7 @@ impl Title {
             remote: Canonical::default(),
             desired: Canonical::default(),
             pending: false,
+            accepted_upload: None,
             progress_merged: false,
             binding: None,
         }
@@ -251,6 +256,9 @@ impl Handle {
 
 impl Bridge {
     pub(super) fn start_stremio(&self) {
+        if !self.profile_services_can_start() {
+            return;
+        }
         let handle = self.stremio();
         let Some(rx) = handle.rx.lock().unwrap().take() else {
             return;
@@ -319,6 +327,7 @@ struct Login {
 }
 struct Worker<T: nova_stremio::Transport> {
     bridge: Bridge,
+    owner: profiles::ProfileStore,
     client: Client<T>,
     connection: Option<Connection>,
     connection_raw: Option<Secret>,
@@ -346,6 +355,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
     fn new(bridge: Bridge, client: Client<T>) -> Self {
         let now = Instant::now();
         Self {
+            owner: profiles::ProfileStore::capture(),
             bridge,
             client,
             connection: None,
@@ -607,6 +617,11 @@ impl<T: nova_stremio::Transport> Worker<T> {
         let Some(auth_key) = self.client.read_link(&login.code, now_secs())? else {
             return Ok(());
         };
+        if !profiles::is_current(&profiles::capture())
+            || generation != self.bridge.stremio().generation.load(Ordering::Acquire)
+        {
+            return Err(ApiError::Rejected);
+        }
         let user = self.client.get_user(&auth_key, now_secs())?;
         if generation != self.bridge.stremio().generation.load(Ordering::Acquire) {
             self.login = None;
@@ -812,11 +827,14 @@ impl<T: nova_stremio::Transport> Worker<T> {
         });
     }
     fn prepare_preview(&mut self, connection: &Connection) -> Result<(), ApiError> {
+        let generation = self.bridge.stremio().generation.load(Ordering::Acquire);
+        self.check_current(connection, generation)?;
         ui(&self.bridge, |app| app.set_stremio_busy(true));
         self.set_phase("Reading Stremio addons…");
         self.descriptors = self
             .client
             .addon_collection(&connection.auth_key, now_secs())?;
+        self.check_current(connection, generation)?;
         self.set_phase("Reading Stremio library…");
         let items = self
             .client
@@ -915,6 +933,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
         self.descriptors = self
             .client
             .addon_collection(&connection.auth_key, now_secs())?;
+        self.check_current(connection, generation)?;
         let descriptor_revision = nova_config::fnv1a(
             &serde_json::to_vec(&self.descriptors).map_err(|_| ApiError::InvalidResponse)?,
         );
@@ -933,6 +952,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             .map(|(id, _)| id.clone())
             .collect();
         for ids in fetch_ids.chunks(100) {
+            self.check_current(connection, generation)?;
             for item in self
                 .client
                 .library_get(&connection.auth_key, ids, false, now_secs())?
@@ -976,7 +996,14 @@ impl<T: nova_stremio::Transport> Worker<T> {
         if locals.len() > MAX_TITLES {
             return Err(ApiError::InvalidResponse);
         }
+        let request_context = profiles::capture();
+        let request_handle = self.bridge.stremio();
         let fetch = |url: &str, timeout, limit| {
+            if !profiles::is_current(&request_context)
+                || request_handle.generation.load(Ordering::Acquire) != generation
+            {
+                return Err(());
+            }
             net::fetch_metadata_bytes(url, timeout, limit).map_err(|_| ())
         };
         self.pending.clear();
@@ -1392,12 +1419,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 self.titles.insert(slot.clone(), title.clone());
                 self.check_current(connection, generation)?;
                 self.set_phase("Uploading changes to Stremio…");
-                self.client.library_put(
-                    &connection.auth_key,
-                    std::slice::from_ref(&title.item),
-                    now_secs(),
-                )?;
-                self.check_current(connection, generation)?;
+                self.upload_title(connection, &mut title, generation)?;
                 self.set_phase("Confirming changes with Stremio…");
                 let verified = self
                     .client
@@ -1434,6 +1456,9 @@ impl<T: nova_stremio::Transport> Worker<T> {
                     title.remote.saved = title.desired.saved.clone();
                 }
                 title.pending = false;
+                // The verification request was already issued. Preserve its
+                // result for this durable owner before checking UI lifetime.
+                self.owner.run(|| save_title(connection, &mut title))?;
             }
             if progress_available {
                 title.local = title.desired.clone();
@@ -1515,6 +1540,37 @@ impl<T: nova_stremio::Transport> Worker<T> {
             app.set_stremio_status(text::tr(phase).into());
         });
     }
+    fn upload_title(
+        &self,
+        connection: &Connection,
+        title: &mut Title,
+        generation: u64,
+    ) -> Result<(), ApiError> {
+        self.check_current(connection, generation)?;
+        title.accepted_upload = None;
+        self.owner.run(|| save_title(connection, title))?;
+        self.check_current(connection, generation)?;
+        let fingerprint = format!(
+            "{:016x}",
+            fnv1a(
+                serde_json::to_string(&title.item)
+                    .map_err(|_| ApiError::InvalidResponse)?
+                    .as_bytes()
+            )
+        );
+        self.client.library_put(
+            &connection.auth_key,
+            std::slice::from_ref(&title.item),
+            now_secs(),
+        )?;
+        // A successful external mutation belongs to the issuing profile even
+        // if cancellation arrived while HTTP was blocked. Keep pending until
+        // verified; this receipt records acceptance rather than guessing it.
+        title.accepted_upload = Some(fingerprint);
+        self.owner.run(|| save_title(connection, title))?;
+        self.check_current(connection, generation)
+    }
+
     fn check_current(&self, connection: &Connection, generation: u64) -> Result<(), ApiError> {
         if !profiles::is_current(&profiles::capture()) {
             return Err(ApiError::Rejected);

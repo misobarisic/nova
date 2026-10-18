@@ -122,7 +122,11 @@ on another device.
 
 Device-local `stremio:state:v1:<JSON account>:<JSON remote ID>` records retain
 the raw title, mapping snapshot, reconciliation baselines, desired result and
-pending delivery marker. A defaulted per-title `progress_merged` marker defers
+pending delivery marker. Optional `accepted_upload` records a fingerprint of an
+accepted PUT even if the issuing profile was switched while HTTP was blocked;
+delivery remains pending until verification. Already-issued verification also
+checkpoints its original durable owner, while cancellation prevents fresh API
+requests. A defaulted per-title `progress_merged` marker defers
 initial watched-history union until compatible metadata becomes available,
 independently of the account's membership bootstrap. These local rows are not
 a second shared credential store.

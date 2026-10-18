@@ -178,7 +178,7 @@ pub(super) fn wake_gc_worker() {
 pub(super) fn start_gc_worker() {
     static START: Once = Once::new();
     START.call_once(|| {
-        if let Err(error) = crate::app::profiles::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("nova-plugin-cache-gc".into())
             .spawn(|| {
                 let _ = GC_THREAD.set(std::thread::current());

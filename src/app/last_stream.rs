@@ -61,14 +61,11 @@ impl Record {
 #[derive(Default)]
 pub(super) struct Cache {
     profiles: Mutex<std::collections::HashMap<String, Arc<ProfileCache>>>,
-    legacy_path: Option<PathBuf>,
+    legacy_path: Mutex<Option<PathBuf>>,
 }
 impl Cache {
-    pub(super) fn open_synced(path: PathBuf) -> Self {
-        Self {
-            profiles: Mutex::default(),
-            legacy_path: Some(path),
-        }
+    pub(super) fn configure_synced(&self, path: PathBuf) {
+        *self.legacy_path.lock().unwrap() = Some(path);
     }
     fn current(&self) -> Arc<ProfileCache> {
         let id = super::profiles::current_id();
@@ -83,7 +80,8 @@ impl Cache {
                 if !super::profiles::writable(&id) {
                     return Arc::default();
                 }
-                let Some(legacy) = &self.legacy_path else {
+                let legacy_path = self.legacy_path.lock().unwrap();
+                let Some(legacy) = &*legacy_path else {
                     return Arc::default();
                 };
                 let path = if super::profiles::enabled() {
@@ -180,10 +178,12 @@ impl ProfileCache {
         let series = Arc::new(Mutex::new(series_choices));
         let series_state = series.clone();
         let (wake, receiver) = mpsc::channel();
-        match super::profiles::thread::Builder::new()
+        let owner = super::profiles::ProfileStore::capture();
+        match std::thread::Builder::new()
             .name("nova-last-stream".into())
-            .spawn(move || persist_loop(path, state, series_path, series_state, receiver, synced))
-        {
+            .spawn(move || {
+                owner.run(|| persist_loop(path, state, series_path, series_state, receiver, synced))
+            }) {
             Ok(worker) => Self {
                 record,
                 series,

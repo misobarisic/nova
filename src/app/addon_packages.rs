@@ -131,6 +131,21 @@ fn parse(raw: &str) -> Result<BTreeMap<String, PackageDescriptor>, String> {
     }
     Ok(descriptors)
 }
+/// Validate retained records too: an absent materialized snapshot must not
+/// defer a corrupt incoming package configuration until after player teardown.
+pub(super) fn validate_owned(owner: &profiles::ProfileStore) -> Result<(), String> {
+    if let Some(raw) = owner.read(KEY).map_err(|error| error.to_string())? {
+        parse(&raw)?;
+    } else {
+        let store = nova_sync::local_store().map_err(|error| error.to_string())?;
+        for (id, raw) in store.lock().unwrap().records(&owner.domain(DOMAIN)) {
+            let descriptor: PackageDescriptor =
+                serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+            descriptor.validate(&id)?;
+        }
+    }
+    Ok(())
+}
 pub(super) fn records(raw: &str) -> Result<Vec<(String, String, u64)>, String> {
     parse(raw)?
         .into_iter()
@@ -268,8 +283,9 @@ fn publish(bridge: &Bridge) {
 }
 fn current_bridge(bridge: &Bridge) -> bool {
     bridge.app().is_some()
-        && super::bridge::with_global_bridge(|current| Arc::ptr_eq(&bridge.shared, &current.shared))
-            == Some(true)
+        && super::bridge::with_global_bridge(|current| {
+            Arc::ptr_eq(&bridge.runtime, &current.runtime)
+        }) == Some(true)
 }
 fn accepted_update(old: Option<&PackageDescriptor>, new: &PackageDescriptor) -> Result<(), String> {
     if let Some(old) = old {

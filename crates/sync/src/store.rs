@@ -597,6 +597,22 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// Versions for one record family, including tombstones. Durable
+    /// capabilities use clocks so removing and restoring identical values
+    /// cannot revive previously revoked authority.
+    pub fn versions_with_prefix(&self, domain: &str, prefix: &str) -> Vec<(String, Version)> {
+        self.domains
+            .get(domain)
+            .map(|records| {
+                records
+                    .range(prefix.to_owned()..)
+                    .take_while(|(key, _)| key.starts_with(prefix))
+                    .map(|(key, record)| (key.clone(), record.version))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Domains that currently hold at least one record (live or tombstone).
     pub fn domains(&self) -> Vec<String> {
         self.domains.keys().cloned().collect()

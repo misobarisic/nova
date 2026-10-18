@@ -10,48 +10,24 @@ struct Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // Activation retains stopped service generations until their workers
-        // exit. Shut down every captured owner, not merely the current one.
-        let owners: Vec<_> = self
-            .bridge
-            .tracking_services
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .chain(self.bridge.stremio_services.lock().unwrap().keys().cloned())
-            .collect();
-        for context in owners {
-            profiles::with_context(context, || {
+        // Retained callbacks may still own draining sessions. Stop every actor
+        // through its original allocation before the isolated database closes.
+        let sessions = self.bridge.sessions.all();
+        for session in &sessions {
+            profiles::with_context(session.context(), || {
                 self.bridge.shutdown_tracking();
                 self.bridge.shutdown_stremio();
             });
         }
         let until = std::time::Instant::now() + Duration::from_secs(3);
-        loop {
-            let tracking = self
-                .bridge
-                .tracking_services
-                .lock()
-                .unwrap()
-                .values()
-                .all(|handle| handle.is_finished());
-            let stremio = self
-                .bridge
-                .stremio_services
-                .lock()
-                .unwrap()
-                .values()
-                .all(|handle| handle.is_finished());
-            if tracking && stremio {
-                break;
-            }
+        while sessions.iter().any(|session| !session.is_finished()) {
             assert!(
                 std::time::Instant::now() < until,
                 "profile actors must stop"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        self.bridge.sessions.reap();
         persistence::flush().unwrap();
     }
 }
@@ -116,6 +92,7 @@ fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
             DownloadCoordinator::new(root.join("downloads")),
         )
     };
+    bridge::install_global_bridge(&bridge);
     persistence::register_collections();
     let writer = persistence::start();
     bridge.switch_profile(profiles::DEFAULT_ID);
@@ -477,6 +454,482 @@ fn deleted_profiles_reject_late_writes_and_the_last_profile_is_preserved() {
             assert_eq!(profiles::list().unwrap()[0].id, bob);
             assert_eq!(profiles::active_context().id, bob);
             storage::try_set_str("plugin_settings", "{}").unwrap();
+        },
+    );
+}
+
+#[test]
+fn captured_session_keeps_its_allocation_across_switch_and_same_id_return() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::captured_session_keeps_its_allocation_across_switch_and_same_id_return"
+        ),
+        |fixture| {
+            let old = profiles::capture();
+            let weak = Arc::downgrade(old.session.as_ref().unwrap());
+            fixture.bridge.shared.lock().unwrap().search = "old Alice allocation".into();
+            let bob = profiles::create("Bob").unwrap();
+            select(fixture, &bob);
+            assert!(
+                old.session
+                    .as_ref()
+                    .unwrap()
+                    .cancelled
+                    .load(Ordering::Acquire)
+            );
+            assert!(!Arc::ptr_eq(
+                old.session.as_ref().unwrap(),
+                &fixture.bridge.sessions.active()
+            ));
+            profiles::with_context(old.clone(), || {
+                assert_eq!(
+                    fixture.bridge.shared.lock().unwrap().search,
+                    "old Alice allocation"
+                );
+                fixture.bridge.shared.lock().unwrap().search = "old Alice callback".into();
+            });
+            assert!(fixture.bridge.shared.lock().unwrap().search.is_empty());
+            select(fixture, &old.id);
+            let current = fixture.bridge.sessions.active();
+            assert!(!Arc::ptr_eq(old.session.as_ref().unwrap(), &current));
+            assert_ne!(current.epoch, old.epoch);
+            assert!(fixture.bridge.shared.lock().unwrap().search.is_empty());
+            let callback: Box<dyn Fn()> = {
+                let owner = old.clone();
+                let bridge = fixture.bridge.clone();
+                Box::new(move || {
+                    profiles::with_context(owner.clone(), || {
+                        assert_eq!(bridge.shared.lock().unwrap().search, "old Alice callback");
+                        bridge.shared.lock().unwrap().search = "retained callback finished".into();
+                    });
+                })
+            };
+            drop(old);
+            callback();
+            assert!(fixture.bridge.shared.lock().unwrap().search.is_empty());
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while !weak.upgrade().unwrap().is_finished() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "outgoing session actors must drain"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            fixture.bridge.sessions.reap();
+            drain_account_queue();
+            assert!(
+                weak.upgrade().is_some(),
+                "the retained callback owns the old allocation"
+            );
+            drop(callback);
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while weak.upgrade().is_some() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "dropping the last callback must release the old session"
+                );
+                drain_account_queue();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        },
+    );
+}
+
+#[test]
+fn durable_only_context_can_write_its_store_but_cannot_access_live_shared_state() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::durable_only_context_can_write_its_store_but_cannot_access_live_shared_state"
+        ),
+        |fixture| {
+            let active = fixture.bridge.sessions.active();
+            let owner = profiles::ProfileStore::for_profile(&active.id);
+            owner.run(|| {
+                assert!(profiles::capture().session.is_none());
+                assert!(fixture.bridge.shared.lock().is_err());
+                storage::try_set_str("tracking:test:durable-owner", "retained").unwrap();
+            });
+            assert_eq!(
+                owner
+                    .read("tracking:test:durable-owner")
+                    .unwrap()
+                    .as_deref(),
+                Some("retained")
+            );
+            assert!(Arc::ptr_eq(&active, &fixture.bridge.sessions.active()));
+            assert!(fixture.bridge.shared.lock().is_ok());
+        },
+    );
+}
+
+#[test]
+fn activation_preflight_keeps_the_active_session_when_incoming_data_is_corrupt() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::activation_preflight_keeps_the_active_session_when_incoming_data_is_corrupt"
+        ),
+        |fixture| {
+            save_personal_state(fixture, "Alice", nova_config::Language::English, 1.25);
+            fixture.bridge.apply_library_to_ui();
+            fixture.app.set_profiles_open(true);
+            fixture.app.set_more_open(true);
+            let active = fixture.bridge.sessions.active();
+            let device = nova_storage::try_get_str("profiles:device:v1").unwrap();
+            let library = fixture.app.get_library().row_data(0).unwrap();
+            let generation = nova_providers::plugin_settings::settings_generation();
+            for key in ["library", "plugin_settings"] {
+                let incoming = profiles::create(&format!("Broken {key}")).unwrap();
+                let owner = profiles::ProfileStore::for_profile(&incoming);
+                owner.write(key, "{broken JSON").unwrap();
+                fixture.bridge.switch_profile(&incoming);
+                assert!(
+                    !fixture.app.get_profiles_error().is_empty(),
+                    "{key} must fail preflight"
+                );
+                assert!(Arc::ptr_eq(&active, &fixture.bridge.sessions.active()));
+                assert_eq!(profiles::active_context(), active.context());
+                assert!(!active.cancelled.load(Ordering::Acquire));
+                assert_eq!(
+                    nova_storage::try_get_str("profiles:device:v1").unwrap(),
+                    device
+                );
+                assert!(fixture.app.get_profiles_open() && fixture.app.get_more_open());
+                assert!(!fixture.app.get_profiles_require_selection());
+                let current = fixture.app.get_library().row_data(0).unwrap();
+                // Slint image handles have identity-based equality, including
+                // placeholder handles. Compare the visible row's semantic data.
+                assert_eq!(fixture.app.get_library().row_count(), 1);
+                assert_eq!(current.id, library.id);
+                assert_eq!(current.title, library.title);
+                assert_eq!(current.status, library.status);
+                assert_eq!(current.badge, library.badge);
+                assert_eq!(current.poster_path, library.poster_path);
+                assert_eq!(
+                    fixture.bridge.shared.lock().unwrap().entries[0].name,
+                    "Alice"
+                );
+                assert_eq!(
+                    fixture
+                        .bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .cache_settings
+                        .playback_speed,
+                    1.25
+                );
+                assert_eq!(
+                    nova_providers::plugin_settings::settings_generation(),
+                    generation
+                );
+                assert_eq!(
+                    owner.read(key).unwrap().as_deref(),
+                    Some("{broken JSON"),
+                    "unreadable incoming data is retained"
+                );
+            }
+        },
+    );
+}
+
+fn packaged_addon_fixture() -> Vec<u8> {
+    use std::io::Write;
+    use zip::{ZipWriter, write::SimpleFileOptions};
+    let plugin = serde_json::json!({
+        "formatVersion":1,"id":"profilefixture","name":"Profile fixture","version":"1.0.0",
+        "entry":"index.js","permissions":{},
+    });
+    let addon =
+        serde_json::json!({"id":"nova.profilefixture","name":"Profile fixture","version":"1.0.0"});
+    let mut archive = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [
+        ("manifest.json", serde_json::to_vec(&plugin).unwrap()),
+        ("stremio-manifest.json", serde_json::to_vec(&addon).unwrap()),
+        ("LICENSE", b"fixture license".to_vec()),
+        ("NOTICE.md", b"fixture notice".to_vec()),
+        (
+            "index.js",
+            b"globalThis.novaProvider = {handle(request) { return request.manifest || []; }};"
+                .to_vec(),
+        ),
+    ] {
+        archive
+            .start_file(
+                name,
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        archive.write_all(&bytes).unwrap();
+    }
+    archive.finish().unwrap().into_inner()
+}
+
+#[test]
+fn packaged_addon_registry_is_restored_before_reinstalling_its_profile_rows() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::packaged_addon_registry_is_restored_before_reinstalling_its_profile_rows"
+        ),
+        |fixture| {
+            let url = "nova-provider://profilefixture";
+            fixture.bridge.import_addon_zip(packaged_addon_fixture());
+            let until = std::time::Instant::now() + Duration::from_secs(10);
+            while fixture.app.get_addon_zip_import_busy() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "package import must finish"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+                drain_account_queue();
+            }
+            assert!(nova_providers::has_installed_provider(url));
+            assert!(
+                fixture
+                    .bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .installed
+                    .iter()
+                    .any(|addon| addon.url == url && addon.available)
+            );
+            let bob = profiles::create("Bob").unwrap();
+            select(fixture, &bob);
+            assert!(!nova_providers::has_installed_provider(url));
+            assert!(fixture.bridge.shared.lock().unwrap().installed.is_empty());
+            select(fixture, profiles::DEFAULT_ID);
+            assert!(
+                nova_providers::has_installed_provider(url),
+                "profile activation restores the immutable package registry"
+            );
+            let state = fixture.bridge.shared.lock().unwrap();
+            assert_eq!(state.installed.len(), 1);
+            assert_eq!(state.installed[0].url, url);
+            assert!(
+                state.installed[0].available,
+                "restored package rows must not start as unavailable"
+            );
+            assert!(state.loaded_packages.contains_key("profilefixture"));
+        },
+    );
+}
+
+#[test]
+fn incoming_unsupported_setting_protection_stays_with_its_durable_profile() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::incoming_unsupported_setting_protection_stays_with_its_durable_profile"
+        ),
+        |fixture| {
+            fixture.bridge.persist_settings();
+            let alice = profiles::ProfileStore::for_profile(profiles::DEFAULT_ID);
+            let bob = profiles::create("Bob").unwrap();
+            let incoming = profiles::ProfileStore::for_profile(&bob);
+            let mut raw = serde_json::to_value(CacheSettings::default()).unwrap();
+            raw["language"] = "future-language".into();
+            raw["date_relative"] = false.into();
+            incoming.write("settings", &raw.to_string()).unwrap();
+            // Recovery records protected fields before the later library
+            // validation fails. The active profile must never inherit them.
+            incoming.write("library", "{broken JSON").unwrap();
+            fixture.bridge.switch_profile(&bob);
+            assert!(!fixture.app.get_profiles_error().is_empty());
+            assert_eq!(profiles::active_context().id, profiles::DEFAULT_ID);
+            fixture
+                .bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .date_relative = true;
+            fixture.bridge.persist_settings();
+            let saved: serde_json::Value =
+                serde_json::from_str(&alice.read("settings").unwrap().unwrap()).unwrap();
+            assert_eq!(
+                saved["language"],
+                serde_json::to_value(nova_config::Language::English).unwrap()
+            );
+            assert_eq!(saved["date_relative"], true);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    &incoming.read("settings").unwrap().unwrap()
+                )
+                .unwrap()["language"],
+                "future-language"
+            );
+
+            incoming.write("library", "[]").unwrap();
+            select(fixture, &bob);
+            assert_eq!(
+                fixture
+                    .bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .cache_settings
+                    .language,
+                nova_config::Language::English
+            );
+            assert!(
+                !fixture
+                    .bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .cache_settings
+                    .date_relative
+            );
+            fixture
+                .bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .date_relative = true;
+            fixture.bridge.persist_settings();
+            let saved: serde_json::Value =
+                serde_json::from_str(&incoming.read("settings").unwrap().unwrap()).unwrap();
+            assert_eq!(
+                saved["language"], "future-language",
+                "unrelated edits preserve incoming unsupported intent"
+            );
+            assert_eq!(saved["date_relative"], true);
+            select(fixture, profiles::DEFAULT_ID);
+            let saved: serde_json::Value =
+                serde_json::from_str(&alice.read("settings").unwrap().unwrap()).unwrap();
+            assert_eq!(
+                saved["language"],
+                serde_json::to_value(nova_config::Language::English).unwrap()
+            );
+        },
+    );
+}
+
+#[test]
+fn stale_network_work_completes_synchronously_without_transport_and_releases_permits() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::stale_network_work_completes_synchronously_without_transport_and_releases_permits"
+        ),
+        |fixture| {
+            struct Permit(Arc<AtomicUsize>);
+            impl Drop for Permit {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::AcqRel);
+                }
+            }
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!(
+                "http://{}/must-not-be-requested",
+                listener.local_addr().unwrap()
+            );
+            let old = profiles::capture();
+            fixture.bridge.shared.lock().unwrap().search = "outgoing network owner".into();
+            let bob = profiles::create("Bob").unwrap();
+            select(fixture, &bob);
+            let pending = Arc::new(AtomicUsize::new(3));
+            let completions = Arc::new(AtomicUsize::new(0));
+            let progress = Arc::new(AtomicUsize::new(0));
+            let publications = Arc::new(AtomicUsize::new(0));
+            profiles::with_context(old.clone(), || {
+                let permit = Permit(pending.clone());
+                let count = completions.clone();
+                let publish = publications.clone();
+                let expected = old.clone();
+                let bridge = fixture.bridge.clone();
+                profile_net::fetch_bytes(url.clone(), move |result| {
+                    let _permit = permit;
+                    let error = result.unwrap_err();
+                    assert_eq!(error.status, None);
+                    assert_eq!(error.message, "Profile session ended");
+                    assert_eq!(profiles::capture(), expected);
+                    assert_eq!(
+                        bridge.shared.lock().unwrap().search,
+                        "outgoing network owner"
+                    );
+                    count.fetch_add(1, Ordering::AcqRel);
+                    profiles::invoke_from_event_loop(move || {
+                        publish.fetch_add(1, Ordering::AcqRel);
+                    })
+                    .unwrap();
+                });
+                assert_eq!(
+                    pending.load(Ordering::Acquire),
+                    2,
+                    "byte completion releases its permit before fetch returns"
+                );
+
+                let permit = Permit(pending.clone());
+                let count = completions.clone();
+                let publish = publications.clone();
+                let expected = old.clone();
+                let received = progress.clone();
+                profile_net::fetch_bytes_with_progress(
+                    url.clone(),
+                    Arc::new(move |_| {
+                        received.fetch_add(1, Ordering::AcqRel);
+                    }),
+                    move |result| {
+                        let _permit = permit;
+                        assert!(result.is_err());
+                        assert_eq!(profiles::capture(), expected);
+                        count.fetch_add(1, Ordering::AcqRel);
+                        profiles::invoke_from_event_loop(move || {
+                            publish.fetch_add(1, Ordering::AcqRel);
+                        })
+                        .unwrap();
+                    },
+                );
+                assert_eq!(
+                    pending.load(Ordering::Acquire),
+                    1,
+                    "progress-fetch completion releases its permit synchronously"
+                );
+
+                let permit = Permit(pending.clone());
+                let count = completions.clone();
+                let publish = publications.clone();
+                let expected = old.clone();
+                profile_net::fetch_image(
+                    url,
+                    nova_media::cache::ImageUse::DetailPoster,
+                    move |result| {
+                        let _permit = permit;
+                        assert!(result.is_none());
+                        assert_eq!(profiles::capture(), expected);
+                        count.fetch_add(1, Ordering::AcqRel);
+                        profiles::invoke_from_event_loop(move || {
+                            publish.fetch_add(1, Ordering::AcqRel);
+                        })
+                        .unwrap();
+                    },
+                );
+                assert_eq!(
+                    pending.load(Ordering::Acquire),
+                    0,
+                    "image completion releases its permit before fetch returns"
+                );
+            });
+            assert_eq!(completions.load(Ordering::Acquire), 3);
+            assert_eq!(progress.load(Ordering::Acquire), 0);
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+            );
+            drain_account_queue();
+            assert_eq!(
+                publications.load(Ordering::Acquire),
+                0,
+                "stale completion bookkeeping must not publish into the selected UI"
+            );
+            assert_eq!(profiles::active_context().id, bob);
+            assert!(fixture.bridge.shared.lock().unwrap().search.is_empty());
         },
     );
 }

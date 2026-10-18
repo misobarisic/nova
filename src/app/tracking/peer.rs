@@ -89,7 +89,7 @@ impl Coordinator {
         let mut records = peer_records(self.store.state()).map_err(|_| storage_message())?;
         for service in [Service::MyAnimeList, Service::AniList] {
             if let Some(connection) =
-                SavedConnection::load(&KvStorage, service).map_err(|_| storage_message())?
+                SavedConnection::load(&self.storage, service).map_err(|_| storage_message())?
                 && self
                     .store
                     .state()
@@ -104,7 +104,8 @@ impl Coordinator {
     }
     pub(super) fn publish_shared(&self, seed: bool) -> Result<(), String> {
         if seed
-            && KvStorage
+            && self
+                .storage
                 .read(&format!(
                     "sync:baseline:{}",
                     crate::app::sync::profile_domain(TRACKING_DOMAIN)
@@ -186,7 +187,8 @@ impl Coordinator {
         });
         let mut changed = vec![];
         for (service, connection) in &values {
-            let old = KvStorage
+            let old = self
+                .storage
                 .read(nova_tracking::credentials::credential_key(*service))
                 .map_err(|_| storage_message())?;
             let new = connection

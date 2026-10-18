@@ -36,3 +36,6 @@ webpki-roots = "1"
 # Heap trimming on Linux (malloc_trim).
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+zip = { version = "2", default-features = false }

@@ -837,7 +837,9 @@ fn install_receiver_downloads(bridge: &mut Bridge) {
             .to_json()
             .unwrap(),
     );
-    bridge.downloads = DownloadCoordinator::new(root);
+    Arc::get_mut(&mut bridge.runtime)
+        .expect("fixture runtime is not shared yet")
+        .downloads = DownloadCoordinator::new(root);
     assert!(bridge.shared.lock().unwrap().installed.is_empty());
 }
 

@@ -3,25 +3,94 @@ use super::*;
 use nova_providers::plugin_settings::{self as service, PluginSettingsBackend, SettingsMap};
 pub(super) const KEY: &str = "plugin_settings";
 pub(super) struct Backend {
-    context: profiles::Context,
+    owner: profiles::ProfileStore,
 }
 impl Backend {
     pub(super) fn new() -> Self {
-        Self {
-            context: profiles::capture(),
-        }
+        Self::for_store(profiles::ProfileStore::capture())
+    }
+    pub(super) fn for_store(owner: profiles::ProfileStore) -> Self {
+        Self { owner }
     }
 }
 impl PluginSettingsBackend for Backend {
+    fn owner_id(&self) -> Option<String> {
+        Some(self.owner.domain("plugin_settings"))
+    }
+    fn provider_revision(
+        &self,
+        url: &str,
+    ) -> Result<Option<String>, nova_providers::ProviderHostError> {
+        if self.owner.retired().map_err(provider_error)? {
+            return Ok(None);
+        }
+        let addons: Vec<AddonStore> = self
+            .owner
+            .read("addons")
+            .map_err(provider_error)?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(provider_error)?
+            .unwrap_or_default();
+        let Some(addon) = addons
+            .iter()
+            .find(|addon| addon.url == url && addon.enabled)
+        else {
+            return Ok(None);
+        };
+        let Some(plugin) = plugin_id(url) else {
+            return Ok(None);
+        };
+        let packages: serde_json::Value = self
+            .owner
+            .read(addon_packages::KEY)
+            .map_err(provider_error)?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(provider_error)?
+            .unwrap_or_default();
+        let settings = self
+            .owner
+            .read(KEY)
+            .map_err(provider_error)?
+            .map(|raw| service::parse_settings(&raw))
+            .transpose()?
+            .unwrap_or_default();
+        // Values alone would revive an old resolver after an inactive remote
+        // remove/re-add or credential clear/restore. Include durable clocks,
+        // including deleted fields, without cloning unrelated profile history.
+        let revisions = {
+            let store = nova_sync::local_store().map_err(provider_error)?;
+            let store = store.lock().unwrap();
+            (
+                store
+                    .record(&self.owner.domain(sync::DOMAIN_ADDONS), url)
+                    .map(|record| record.version),
+                store
+                    .record(&self.owner.domain(sync::DOMAIN_PACKAGES), plugin)
+                    .map(|record| record.version),
+                store.versions_with_prefix(
+                    &self.owner.domain(sync::DOMAIN_PLUGIN_SETTINGS),
+                    &format!("{plugin}/"),
+                ),
+            )
+        };
+        serde_json::to_string(&(
+            addon.capabilities,
+            &packages[plugin],
+            settings.get(plugin),
+            revisions,
+        ))
+        .map(Some)
+        .map_err(provider_error)
+    }
     fn load_settings(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
-        profiles::with_context(self.context.clone(), || storage::try_get_str(KEY))
-            .map_err(provider_error)
+        self.owner.read(KEY).map_err(provider_error)
     }
     fn save_settings(&self, raw: &str) -> Result<(), nova_providers::ProviderHostError> {
-        profiles::with_context(self.context.clone(), || {
-            persist_sync_snapshot(KEY, raw, false)
-        })
-        .map_err(provider_error)
+        self.owner
+            .persist_snapshot(KEY, raw, false)
+            .map_err(provider_error)
     }
     fn load_cache(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
         plugin_cache::load()
@@ -30,6 +99,39 @@ impl PluginSettingsBackend for Backend {
         plugin_cache::save(raw)
     }
 }
+/// Recover the incoming owner's retained projection before publishing any
+/// provider globals; unreadable credentials leave the outgoing owner intact.
+pub(super) fn prepare_backend(
+    owner: profiles::ProfileStore,
+) -> Result<service::PreparedPluginSettings, String> {
+    if owner
+        .read(KEY)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        let records = {
+            let store = nova_sync::local_store().map_err(|error| error.to_string())?;
+            let store = store.lock().unwrap();
+            let domain = owner.domain(sync::DOMAIN_PLUGIN_SETTINGS);
+            store
+                .domains()
+                .iter()
+                .any(|candidate| candidate == &domain)
+                .then(|| store.records(&domain))
+        };
+        if let Some(records) = records {
+            let values = project(records).map_err(|error| error.to_string())?;
+            let raw = serde_json::to_string(&values).map_err(|error| error.to_string())?;
+            let _applying = sync::ApplyingGuard::new();
+            owner
+                .persist_snapshot(KEY, &raw, false)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    service::prepare_plugin_settings(Arc::new(Backend::for_store(owner)))
+        .map_err(|error| error.to_string())
+}
+
 fn provider_error(error: impl std::fmt::Display) -> nova_providers::ProviderHostError {
     nova_providers::ProviderHostError(error.to_string())
 }
@@ -623,5 +725,122 @@ mod startup_tests {
         let generation = service::settings_generation();
         restore_retained_settings().unwrap();
         assert_eq!(service::settings_generation(), generation);
+
+        let incoming = profiles::ProfileStore::for_profile("incoming");
+        let incoming_domain = incoming.domain(sync::DOMAIN_PLUGIN_SETTINGS);
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                &incoming_domain,
+                "futureplugin/token",
+                Some(r#""incoming-token""#.into()),
+                0,
+                3,
+            );
+            store.save().unwrap();
+        }
+        let _prepared = prepare_backend(incoming.clone()).unwrap();
+        assert_eq!(
+            service::settings_generation(),
+            generation,
+            "preflight never replaces the active provider owner"
+        );
+        let recovered = service::parse_settings(&incoming.read(KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(recovered["futureplugin"]["token"], "incoming-token");
+        assert!(!service::parse_settings(&storage::try_get_str(KEY).unwrap().unwrap()).unwrap()["futureplugin"].contains_key("token"));
+
+        incoming
+            .write(
+                "addons",
+                r#"[{"url":"nova-provider://futureplugin","enabled":true,"label":"First"}]"#,
+            )
+            .unwrap();
+        let backend = Backend::for_store(incoming.clone());
+        let original = backend
+            .provider_revision("nova-provider://futureplugin")
+            .unwrap()
+            .unwrap();
+        incoming
+            .write(
+                "addons",
+                r#"[{"url":"nova-provider://futureplugin","enabled":true,"label":"Renamed"}]"#,
+            )
+            .unwrap();
+        assert_eq!(
+            backend
+                .provider_revision("nova-provider://futureplugin")
+                .unwrap()
+                .as_deref(),
+            Some(original.as_str())
+        );
+        // A remote cycle can restore identical projected bytes between two
+        // authority checks. Its record clocks must still invalidate the old
+        // capability for addon membership, package and credentials separately.
+        let mut original = original;
+        for (domain, key, value) in [
+            (
+                sync::DOMAIN_ADDONS,
+                "nova-provider://futureplugin",
+                r#"{"enabled":true}"#,
+            ),
+            (sync::DOMAIN_PACKAGES, "futureplugin", "{}"),
+            (
+                sync::DOMAIN_PLUGIN_SETTINGS,
+                "futureplugin/token",
+                r#""incoming-token""#,
+            ),
+        ] {
+            {
+                let mut store = owner.lock().unwrap();
+                let domain = incoming.domain(domain);
+                store.set(&domain, key, Some(value.into()), 0, 3);
+                store.set(&domain, key, None, 0, 3);
+                store.set(&domain, key, Some(value.into()), 0, 3);
+                store.save().unwrap();
+            }
+            let revised = backend
+                .provider_revision("nova-provider://futureplugin")
+                .unwrap()
+                .unwrap();
+            assert_ne!(
+                revised, original,
+                "{domain} removal must revoke identical re-adds"
+            );
+            original = revised;
+        }
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                &incoming.domain(sync::DOMAIN_PLUGIN_SETTINGS),
+                "otherplugin/token",
+                Some("true".into()),
+                0,
+                3,
+            );
+        }
+        assert_eq!(
+            backend
+                .provider_revision("nova-provider://futureplugin")
+                .unwrap()
+                .as_deref(),
+            Some(original.as_str())
+        );
+        incoming
+            .write(KEY, r#"{"futureplugin":{"token":"revoked-token"}}"#)
+            .unwrap();
+        assert_ne!(
+            backend
+                .provider_revision("nova-provider://futureplugin")
+                .unwrap()
+                .as_deref(),
+            Some(original.as_str())
+        );
+        incoming.write("addons", "[]").unwrap();
+        assert!(
+            backend
+                .provider_revision("nova-provider://futureplugin")
+                .unwrap()
+                .is_none()
+        );
     }
 }

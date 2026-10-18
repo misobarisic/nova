@@ -157,7 +157,7 @@ impl Controller {
         // UI access, and dropping the window drops its receiver safely.
         let (tx, rx) = std::sync::mpsc::channel();
         *self.pending.borrow_mut() = Some((rx, manual));
-        thread::spawn(move || {
+        std::thread::spawn(move || {
             let result = transport::fetch_latest(etag.as_deref(), crate::version::BASE).and_then(
                 |response| match response {
                     Response::Unchanged => Ok(None),

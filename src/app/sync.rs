@@ -58,8 +58,8 @@ pub(super) const SCOPED_DOMAINS: &[&str] = &[
 ];
 
 pub(super) fn profile_domain(domain: &str) -> String {
-    if profiles::is_initialized() && SCOPED_DOMAINS.contains(&domain) {
-        nova_sync::profile_domain(&profiles::current_id(), domain)
+    if SCOPED_DOMAINS.contains(&domain) {
+        profiles::ProfileStore::capture().domain(domain)
     } else {
         domain.to_owned()
     }
@@ -2096,17 +2096,17 @@ impl Bridge {
             }
             let generation = self.sync_start_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let b = self.clone();
-            thread::spawn(move || {
+            std::thread::spawn(move || {
                 let result = nova_sync::SyncEngine::setup();
                 let _ = profiles::invoke_account(move || {
                     if b.sync_start_generation.load(Ordering::Acquire) != generation {
                         // Runtime teardown can wait for worker shutdown too.
-                        thread::spawn(move || drop(result));
+                        std::thread::spawn(move || drop(result));
                         return;
                     }
                     b.sync_starting.store(false, Ordering::Release);
                     if !nova_sync::read_settings().enabled || b.app().is_none() {
-                        thread::spawn(move || drop(result));
+                        std::thread::spawn(move || drop(result));
                         return;
                     }
                     match result {
@@ -2114,7 +2114,7 @@ impl Bridge {
                             if nova_sync::engine().is_none() {
                                 nova_sync::install(engine);
                             } else {
-                                thread::spawn(move || drop(engine));
+                                std::thread::spawn(move || drop(engine));
                             }
                             if let Some(engine) = nova_sync::engine() {
                                 b.attach_sync(engine);
@@ -2271,7 +2271,7 @@ impl Bridge {
 
     fn set_sync_notice(&self, notice: SyncNotice) {
         let rendered = notice.render();
-        self.shared.lock().unwrap().sync_link_notice = Some(notice);
+        *self.account.sync_link_notice.lock().unwrap() = Some(notice);
         if let Some(app) = self.app() {
             app.set_sync_link_notice(SharedString::from(rendered));
         }
@@ -2279,7 +2279,7 @@ impl Bridge {
 
     /// Re-render the latest one-off sync notice using the selected language.
     pub(super) fn refresh_sync_link_notice(&self) {
-        let notice = self.shared.lock().unwrap().sync_link_notice.clone();
+        let notice = self.account.sync_link_notice.lock().unwrap().clone();
         if let (Some(notice), Some(app)) = (notice, self.app()) {
             app.set_sync_link_notice(SharedString::from(notice.render()));
         }

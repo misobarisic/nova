@@ -426,9 +426,6 @@ struct Shared {
     /// of an entry and reopening it restores tab, season, focused
     /// episode/stream and keyboard focus instead of starting fresh.
     detail_snapshots: HashMap<String, DetailSnapshot>,
-    /// Most recent sync notice, retained in semantic form so a language switch
-    /// can rerender it instead of leaving the old translation on screen.
-    sync_link_notice: Option<SyncNotice>,
 }
 
 #[derive(Clone, Debug)]
@@ -744,33 +741,15 @@ static EPISODE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone)]
 struct Bridge {
     app: slint::Weak<AppWindow>,
-    shared: Arc<Mutex<Shared>>,
-    catalog_gen: Arc<AtomicU64>,
-    /// Stale-response guard for the independent Home showcase fetches.
-    home_showcase_gen: Arc<AtomicU64>,
-    /// Stale-response guard for Home's additional catalog poster rails.
-    home_catalog_rows_gen: Arc<AtomicU64>,
-    // Native-only poster worker pipeline (dual-priority channels, see
-    // `PosterTx`). Android fetches each grid poster via net::fetch_image instead.
-    #[cfg(feature = "desktop")]
-    poster_tx: PosterTx,
-    /// In-app player overlay (same window; mpv on desktop, HTML5 video on web).
-    player: crate::player::Player,
-    downloads: DownloadCoordinator,
-    last_stream: Arc<last_stream::Cache>,
-    /// Bounded tracker actor; unavailable stores retain their originals and
-    /// require explicit recovery without blocking playback.
-    tracking_services: Arc<Mutex<HashMap<profiles::Context, tracking::StateHandle>>>,
-    stremio_services: Arc<Mutex<HashMap<profiles::Context, Arc<stremio::Handle>>>>,
-    profile_recovery_pending: Arc<AtomicBool>,
-    profile_loaded_epoch: Arc<AtomicU64>,
-    downloads_seen: Arc<AtomicU64>,
-    image_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
-    torrent_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
-    #[cfg(feature = "desktop")]
-    sync_start_generation: Arc<AtomicU64>,
-    #[cfg(feature = "desktop")]
-    sync_starting: Arc<AtomicBool>,
+    shared: profile_session::SessionState,
+    runtime: Arc<profile_session::DeviceRuntime>,
+}
+
+impl std::ops::Deref for Bridge {
+    type Target = profile_session::DeviceRuntime;
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 mod about;
@@ -806,6 +785,7 @@ mod profile_actions;
 #[cfg(test)]
 mod profile_actions_tests;
 mod profile_net;
+mod profile_session;
 mod profiles;
 pub(crate) mod remote_playback;
 mod run;

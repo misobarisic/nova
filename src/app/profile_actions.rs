@@ -8,6 +8,61 @@ impl Drop for WorkerDone {
     }
 }
 
+fn read_owned<T: serde::de::DeserializeOwned + Default>(
+    store: &profiles::ProfileStore,
+    key: &str,
+) -> Result<T, String> {
+    store
+        .read(key)
+        .map_err(|error| error.to_string())?
+        .map(|raw| serde_json::from_str(&raw).map_err(|error| format!("Unreadable {key}: {error}")))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+struct PreparedProfile {
+    session: Arc<profile_session::ProfileSession>,
+    addons: Vec<AddonStore>,
+    plugins: nova_providers::plugin_settings::PreparedPluginSettings,
+}
+
+impl PreparedProfile {
+    fn load(bridge: &Bridge, id: &str) -> Result<Self, String> {
+        let store = profiles::ProfileStore::for_profile(id);
+        // Settings recovery retains unknown fields by durable owner. Even
+        // detached preparation must attribute that bookkeeping to the incoming
+        // profile, without granting it access to an activation's mutable state.
+        store.run(|| {
+            let settings = match store.read("settings").map_err(|error| error.to_string())? {
+                Some(raw) => recover_settings(
+                    serde_json::from_str(&raw)
+                        .map_err(|error| format!("Unreadable settings: {error}"))?,
+                )
+                .ok_or("Unreadable settings object retained")?,
+                None => CacheSettings::default(),
+            };
+            let state = Shared {
+                chosen_addon: usize::MAX,
+                restoring_models: true,
+                cache_settings: settings,
+                download_settings: read_download_settings(),
+                entries: read_owned(&store, "library")?,
+                progress: read_owned(&store, EPISODE_PROGRESS_KEY)?,
+                continue_hidden: read_owned(&store, CONTINUE_HIDDEN_KEY)?,
+                ..Shared::default()
+            };
+            let addons = read_owned(&store, "addons")?;
+            addon_packages::validate_owned(&store)?;
+            let plugins = plugin_settings::prepare_backend(store.clone())?;
+            Ok(Self {
+                session: bridge.sessions.prepare(id, state),
+                addons,
+                plugins,
+            })
+        })
+    }
+}
+
 impl Bridge {
     fn profile_error(&self, error: String) {
         tracing::warn!(%error, "profile operation failed");
@@ -155,6 +210,9 @@ impl Bridge {
                 self.persist_settings();
             }
             persistence::flush()?;
+            // Validate storage and provider configuration before stopping the
+            // outgoing player or actors. Failure leaves the selected session live.
+            let prepared = PreparedProfile::load(self, id)?;
             let incoming = profiles::prepare_activation(id)?;
             self.party_leave();
             self.remote_disconnect();
@@ -168,7 +226,13 @@ impl Bridge {
             self.catalog_gen.fetch_add(1, Ordering::AcqRel);
             self.home_showcase_gen.fetch_add(1, Ordering::AcqRel);
             self.home_catalog_rows_gen.fetch_add(1, Ordering::AcqRel);
-            profiles::commit_activation(incoming);
+            nova_providers::plugin_settings::activate_plugin_settings(prepared.plugins);
+            let _ = prepared
+                .session
+                .providers
+                .set(nova_providers::plugin_settings::capture_settings_capability());
+            self.sessions.publish(prepared.session.clone());
+            profiles::commit_session(incoming, &prepared.session);
             if let Some(app) = self.app() {
                 app.set_profiles_require_selection(true);
                 app.set_profiles_open(true);
@@ -176,7 +240,7 @@ impl Bridge {
             }
             // The caller may itself be an outgoing-profile UI continuation.
             return profiles::with_context(profiles::active_context(), || {
-                self.load_profile()?;
+                self.load_profile(prepared.addons);
                 self.finish_profile_selection(require_selection);
                 Ok(())
             });
@@ -185,23 +249,9 @@ impl Bridge {
         Ok(())
     }
 
-    fn load_profile(&self) -> Result<(), String> {
-        *self.shared.lock().unwrap() = Shared {
-            chosen_addon: usize::MAX,
-            restoring_models: true,
-            cache_settings: read_settings(),
-            download_settings: read_download_settings(),
-            entries: read_persisted_library(),
-            progress: read_progress_map(),
-            continue_hidden: read_continue_hidden(),
-            ..Shared::default()
-        };
+    fn load_profile(&self, addons: Vec<AddonStore>) {
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         set_active_cache_settings(settings.clone());
-        nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
-            plugin_settings::Backend::new(),
-        ))
-        .map_err(|error| error.to_string())?;
         persistence::register_collections();
         self.settings_to_ui();
         self.load_search_history();
@@ -249,7 +299,8 @@ impl Bridge {
             app.set_remote_devices_open(false);
         }
         self.shared.lock().unwrap().loading_addons = true;
-        for addon in read_persisted_addons() {
+        addon_packages::initialize(self);
+        for addon in addons {
             nova_providers::configure_provider_capabilities(
                 &addon.url,
                 addon.capabilities.unwrap_or_default(),
@@ -267,7 +318,6 @@ impl Bridge {
         self.migrate_viewing_activity();
         self.restore_playback_preferences_schema();
         self.restore_last_stream_choice();
-        plugin_settings::restore_retained_settings().map_err(|error| error.to_string())?;
         self.seed_playback_default_settings();
         self.sync_seed();
         self.restore_sync_projection();
@@ -278,13 +328,15 @@ impl Bridge {
         self.profile_loaded_epoch
             .store(profiles::active_context().epoch, Ordering::Release);
         self.refresh_profiles();
-        Ok(())
     }
 
     fn finish_profile_selection(&self, require_selection: bool) {
         if !require_selection {
-            self.initialize_tracking();
-            self.start_stremio();
+            self.sessions
+                .active()
+                .services_requested
+                .store(true, Ordering::Release);
+            self.retry_profile_services();
         }
         if let Some(app) = self.app() {
             app.set_profiles_require_selection(require_selection);

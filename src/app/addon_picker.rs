@@ -21,7 +21,7 @@ pub(super) fn pick_zip() {
 fn deliver(bridge: Bridge, result: Result<Option<Vec<u8>>, &'static str>) {
     let _ = crate::app::profiles::invoke_from_event_loop(move || {
         let current = super::bridge::with_global_bridge(|current| {
-            Arc::ptr_eq(&current.shared, &bridge.shared)
+            Arc::ptr_eq(&current.runtime, &bridge.runtime)
         }) == Some(true);
         if !current || bridge.app().is_none() {
             return;

@@ -4,9 +4,13 @@ use crate::ProviderHostError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 pub const SETTINGS_LIMIT: usize = 1024 * 1024;
@@ -276,6 +280,14 @@ pub struct SettingsSnapshot {
 }
 
 pub trait PluginSettingsBackend: Send + Sync {
+    /// Stable durable owner; None keeps standalone/test configuration isolated.
+    fn owner_id(&self) -> Option<String> {
+        None
+    }
+    /// None means this owner no longer permits the installed provider.
+    fn provider_revision(&self, _url: &str) -> Result<Option<String>, ProviderHostError> {
+        Ok(Some(String::new()))
+    }
     fn load_settings(&self) -> Result<Option<String>, ProviderHostError>;
     fn save_settings(&self, raw: &str) -> Result<(), ProviderHostError>;
     fn load_cache(&self) -> Result<Option<String>, ProviderHostError>;
@@ -296,6 +308,10 @@ struct Service {
     backend: Option<Arc<dyn PluginSettingsBackend>>,
     settings: SettingsMap,
     generation: u64,
+    revision: u64,
+    revoked: bool,
+    provider_revisions: BTreeMap<String, u64>,
+    host: Arc<crate::MemoryProviderHost>,
     cache: BTreeMap<String, CacheEntry>,
     // Process-only entries are never serialized or sent to the backend.
     memory_cache: BTreeMap<String, CacheEntry>,
@@ -303,10 +319,148 @@ struct Service {
     // A digest tracks durable contents without retaining a second full cache.
     persisted_cache: Mutex<Option<[u8; 32]>>,
 }
-fn service() -> &'static Mutex<Service> {
-    static STORE: OnceLock<Mutex<Service>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(Service::default()))
+type ServiceOwner = Arc<Mutex<Service>>;
+fn active_service() -> &'static Mutex<ServiceOwner> {
+    static ACTIVE: OnceLock<Mutex<ServiceOwner>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(Arc::new(Mutex::new(Service::default()))))
 }
+fn owners() -> &'static Mutex<BTreeMap<String, Weak<Mutex<Service>>>> {
+    static OWNERS: OnceLock<Mutex<BTreeMap<String, Weak<Mutex<Service>>>>> = OnceLock::new();
+    OWNERS.get_or_init(Mutex::default)
+}
+thread_local! { static SCOPED_SERVICE: RefCell<Option<ServiceOwner>> = const { RefCell::new(None) }; }
+fn service() -> ServiceOwner {
+    SCOPED_SERVICE
+        .with(|owner| owner.borrow().clone())
+        .unwrap_or_else(|| active_service().lock().unwrap().clone())
+}
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+fn selected_generation(state: &Service) -> u64 {
+    if SCOPED_SERVICE.with(|owner| owner.borrow().is_some()) {
+        state.revision
+    } else {
+        state.generation
+    }
+}
+fn changed(state: &mut Service) {
+    let revision = next_generation();
+    state.generation = revision;
+    state.revision = revision;
+}
+
+/// Settings/host authority owned by the originating durable profile. UI
+/// activation generations intentionally do not revoke device-wide transfers.
+#[derive(Clone)]
+pub struct SettingsCapability {
+    owner: ServiceOwner,
+    revision: u64,
+    provider: Option<(String, u64, String)>,
+}
+impl SettingsCapability {
+    pub fn is_current(&self) -> bool {
+        let state = self.owner.lock().unwrap();
+        if state.revoked || state.revision != self.revision {
+            return false;
+        }
+        let Some((url, revision, durable_revision)) = &self.provider else {
+            return true;
+        };
+        if state.provider_revisions.get(url).copied().unwrap_or(0) != *revision {
+            return false;
+        }
+        let backend = state.backend.clone();
+        drop(state);
+        backend.is_some_and(|backend| {
+            backend
+                .provider_revision(url)
+                .is_ok_and(|current| current.as_deref() == Some(durable_revision))
+        })
+    }
+    pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Restore(Option<ServiceOwner>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                SCOPED_SERVICE.with(|owner| *owner.borrow_mut() = self.0.take());
+            }
+        }
+        let previous = SCOPED_SERVICE.with(|owner| owner.replace(Some(self.owner.clone())));
+        let _restore = Restore(previous);
+        f()
+    }
+}
+pub fn capture_settings_capability() -> SettingsCapability {
+    let owner = service();
+    let state = owner.lock().unwrap();
+    let revision = state.revision;
+    drop(state);
+    SettingsCapability {
+        owner,
+        revision,
+        provider: None,
+    }
+}
+pub(crate) fn capture_provider_settings(
+    url: &str,
+    expected_generation: u64,
+) -> Result<SettingsCapability, ProviderHostError> {
+    let mut capability = capture_settings_capability();
+    let state = capability.owner.lock().unwrap();
+    if state.revoked || selected_generation(&state) != expected_generation {
+        return Err(error("provider settings changed during operation"));
+    }
+    let revision = state.provider_revisions.get(url).copied().unwrap_or(0);
+    let backend = state
+        .backend
+        .clone()
+        .ok_or_else(|| error("plugin settings unavailable"))?;
+    drop(state);
+    let durable_revision = backend
+        .provider_revision(url)?
+        .ok_or_else(|| error("provider unavailable for owner"))?;
+    capability.provider = Some((url.into(), revision, durable_revision));
+    Ok(capability)
+}
+pub fn revoke_owner(owner_id: &str) {
+    let owner = owners()
+        .lock()
+        .unwrap()
+        .get(owner_id)
+        .and_then(Weak::upgrade);
+    if let Some(owner) = owner {
+        let mut state = owner.lock().unwrap();
+        state.revoked = true;
+        changed(&mut state);
+    }
+}
+pub fn invalidate_owner(owner_id: &str) {
+    let owner = owners()
+        .lock()
+        .unwrap()
+        .get(owner_id)
+        .and_then(Weak::upgrade);
+    if let Some(owner) = owner {
+        changed(&mut owner.lock().unwrap());
+    }
+}
+pub fn revoke_provider(owner_id: &str, url: &str) {
+    let owner = owners()
+        .lock()
+        .unwrap()
+        .get(owner_id)
+        .and_then(Weak::upgrade);
+    if let Some(owner) = owner {
+        let mut state = owner.lock().unwrap();
+        let revision = state.provider_revisions.entry(url.into()).or_default();
+        *revision = revision.wrapping_add(1);
+    }
+}
+pub(crate) fn session_host() -> Arc<crate::MemoryProviderHost> {
+    service().lock().unwrap().host.clone()
+}
+
 fn error(message: &str) -> ProviderHostError {
     ProviderHostError(message.into())
 }
@@ -361,9 +515,26 @@ pub fn parse_settings(raw: &str) -> Result<SettingsMap, ProviderHostError> {
     }
     Ok(values)
 }
-pub fn configure_plugin_settings(
+pub struct PreparedPluginSettings {
+    owner_id: Option<String>,
+    observed_owner: Option<(ServiceOwner, u64)>,
+    state: Service,
+}
+
+/// Read and validate a replacement without changing the active provider owner.
+pub fn prepare_plugin_settings(
     backend: Arc<dyn PluginSettingsBackend>,
-) -> Result<(), ProviderHostError> {
+) -> Result<PreparedPluginSettings, ProviderHostError> {
+    let owner_id = backend.owner_id();
+    // Observe before loading: a retained resolver may save newer credentials
+    // while preparation reads the backend or waits for activation.
+    let observed_owner = owner_id
+        .as_ref()
+        .and_then(|id| owners().lock().unwrap().get(id).and_then(Weak::upgrade))
+        .map(|owner| {
+            let revision = owner.lock().unwrap().revision;
+            (owner, revision)
+        });
     let settings = backend
         .load_settings()?
         .map(|raw| parse_settings(&raw))
@@ -375,24 +546,73 @@ pub fn configure_plugin_settings(
         .filter(|raw| raw.len() <= CACHE_LIMIT * 6 + 1024 * 1024)
         .and_then(|raw| serde_json::from_str::<BTreeMap<String, CacheEntry>>(&raw).ok())
         .unwrap_or_default();
-    let mut state = service().lock().unwrap();
-    let generation = state.generation.wrapping_add(1);
     let tick = cache
         .values()
         .map(|entry| entry.used)
         .max()
         .unwrap_or_default();
-    *state = Service {
+    let mut state = Service {
         backend: Some(backend),
         settings,
-        generation,
         cache,
-        memory_cache: BTreeMap::new(),
         tick,
         persisted_cache: Mutex::new(persisted_cache),
+        ..Service::default()
     };
     prune_cache(&mut state, 0);
-    crate::host::reset_session_state();
+    Ok(PreparedPluginSettings {
+        owner_id,
+        observed_owner,
+        state,
+    })
+}
+
+/// Publish only after the app has prepared its incoming profile successfully.
+pub fn activate_plugin_settings(prepared: PreparedPluginSettings) {
+    let PreparedPluginSettings {
+        owner_id,
+        observed_owner,
+        mut state,
+    } = prepared;
+    let mut registry = owners().lock().unwrap();
+    registry.retain(|_, owner| owner.strong_count() != 0);
+    let existing = owner_id
+        .as_ref()
+        .and_then(|id| registry.get(id))
+        .and_then(Weak::upgrade);
+    let owner = if let Some(existing) = existing {
+        let mut current = existing.lock().unwrap();
+        let unchanged_since_preparation =
+            observed_owner.as_ref().is_some_and(|(owner, revision)| {
+                Arc::ptr_eq(owner, &existing) && *revision == current.revision
+            });
+        if unchanged_since_preparation && current.settings != state.settings {
+            let revoked = current.revoked;
+            let provider_revisions = std::mem::take(&mut current.provider_revisions);
+            changed(&mut state);
+            state.revoked = revoked;
+            state.provider_revisions = provider_revisions;
+            *current = state;
+        } else {
+            current.backend = state.backend;
+        }
+        current.generation = next_generation();
+        drop(current);
+        existing
+    } else {
+        changed(&mut state);
+        Arc::new(Mutex::new(state))
+    };
+    if let Some(id) = owner_id {
+        registry.insert(id, Arc::downgrade(&owner));
+    }
+    drop(registry);
+    *active_service().lock().unwrap() = owner;
+}
+pub fn configure_plugin_settings(
+    backend: Arc<dyn PluginSettingsBackend>,
+) -> Result<(), ProviderHostError> {
+    activate_plugin_settings(prepare_plugin_settings(backend)?);
     Ok(())
 }
 pub fn settings_snapshot(
@@ -401,7 +621,8 @@ pub fn settings_snapshot(
 ) -> Result<SettingsSnapshot, ProviderHostError> {
     validate_plugin(plugin)?;
     validate_collection_schema(schema)?;
-    let state = service().lock().unwrap();
+    let owner = service();
+    let state = owner.lock().unwrap();
     let stored = state.settings.get(plugin);
     // Retain future fields durably, but only declared fields belong to this
     // version's operation. Unknown values must not consume its runtime budget.
@@ -416,7 +637,7 @@ pub fn settings_snapshot(
     }
     Ok(SettingsSnapshot {
         values,
-        generation: state.generation,
+        generation: selected_generation(&state),
     })
 }
 
@@ -503,8 +724,9 @@ fn update_settings(
     if let Some(value) = &value {
         validate_value(value)?;
     }
-    let mut state = service().lock().unwrap();
-    if expected_generation.is_some_and(|generation| generation != state.generation) {
+    let owner = service();
+    let mut state = owner.lock().unwrap();
+    if expected_generation.is_some_and(|generation| generation != selected_generation(&state)) {
         return Err(error("plugin settings changed during operation"));
     }
     let mut next = state.settings.clone();
@@ -527,7 +749,7 @@ fn update_settings(
     let raw = serde_json::to_string(&next).map_err(|_| error("invalid plugin settings"))?;
     parse_settings(&raw)?;
     if next == state.settings {
-        return Ok(state.generation);
+        return Ok(selected_generation(&state));
     }
     let backend = state
         .backend
@@ -535,11 +757,11 @@ fn update_settings(
         .ok_or_else(|| error("plugin settings unavailable"))?;
     backend.save_settings(&raw)?;
     state.settings = next;
-    state.generation = state.generation.wrapping_add(1);
+    changed(&mut state);
     // Cached results may contain credential-dependent URLs; invalidate at edit.
     state.cache.retain(|_, entry| entry.plugin != plugin);
     state.memory_cache.retain(|_, entry| entry.plugin != plugin);
-    Ok(state.generation)
+    Ok(selected_generation(&state))
 }
 pub fn set_setting(plugin: &str, key: &str, value: Value) -> Result<(), ProviderHostError> {
     update_settings(plugin, Some(key), Some(value), None).map(|_| ())
@@ -573,7 +795,8 @@ pub(crate) fn remove_setting_for_generation(
 pub fn apply_settings_projection(
     load: impl FnOnce() -> Result<String, ProviderHostError>,
 ) -> Result<(), ProviderHostError> {
-    let mut state = service().lock().unwrap();
+    let owner = service();
+    let mut state = owner.lock().unwrap();
     let raw = load()?;
     let next = parse_settings(&raw)?;
     state
@@ -583,7 +806,7 @@ pub fn apply_settings_projection(
         .save_settings(&raw)?;
     if next != state.settings {
         state.settings = next;
-        state.generation = state.generation.wrapping_add(1);
+        changed(&mut state);
         state.cache.clear();
         state.memory_cache.clear();
     }
@@ -652,8 +875,9 @@ fn cache_get_inner(
     memory_only: bool,
 ) -> Result<Option<String>, ProviderHostError> {
     let key = cache_key(plugin, key)?;
-    let mut state = service().lock().unwrap();
-    if expected_generation.is_some_and(|generation| generation != state.generation) {
+    let owner = service();
+    let mut state = owner.lock().unwrap();
+    if expected_generation.is_some_and(|generation| generation != selected_generation(&state)) {
         return Err(error("plugin settings changed during operation"));
     }
     if memory_only {
@@ -722,8 +946,9 @@ fn cache_set_inner(
     if value.len() > CACHE_ENTRY_LIMIT || ttl > 30 * 86400 {
         return Err(error("cache entry exceeds limits"));
     }
-    let mut state = service().lock().unwrap();
-    if expected_generation.is_some_and(|generation| generation != state.generation) {
+    let owner = service();
+    let mut state = owner.lock().unwrap();
+    if expected_generation.is_some_and(|generation| generation != selected_generation(&state)) {
         return Err(error("plugin settings changed during operation"));
     }
     let previous = (!memory_only).then(|| state.cache.clone());
@@ -780,7 +1005,8 @@ fn save_cache(state: &Service) -> Result<(), ProviderHostError> {
 /// removed expired entries in memory: their durable rows still need collection.
 /// This leaves preference generations and valid active cache entries untouched.
 pub fn cache_gc(now: u64) -> Result<usize, ProviderHostError> {
-    let mut state = service().lock().unwrap();
+    let owner = service();
+    let mut state = owner.lock().unwrap();
     let previous = state.cache.clone();
     prune_cache(&mut state, now);
     let plugins = state
@@ -809,7 +1035,8 @@ pub fn cache_gc(now: u64) -> Result<usize, ProviderHostError> {
 
 pub fn cache_clear(plugin: &str) -> Result<(), ProviderHostError> {
     validate_plugin(plugin)?;
-    let mut state = service().lock().unwrap();
+    let owner = service();
+    let mut state = owner.lock().unwrap();
     let previous = state.cache.clone();
     state.cache.retain(|_, entry| entry.plugin != plugin);
     if let Err(err) = save_cache(&state) {
@@ -819,7 +1046,7 @@ pub fn cache_clear(plugin: &str) -> Result<(), ProviderHostError> {
     state.memory_cache.retain(|_, entry| entry.plugin != plugin);
     // Even an empty clear must cancel requests that could repopulate it after
     // the user cleared it. Publish the epoch only after durable success.
-    state.generation = state.generation.wrapping_add(1);
+    changed(&mut state);
     Ok(())
 }
 pub fn cache_remove(plugin: &str, key: &str) -> Result<(), ProviderHostError> {
@@ -840,8 +1067,9 @@ fn cache_remove_inner(
     memory_only: bool,
 ) -> Result<(), ProviderHostError> {
     let key = cache_key(plugin, key)?;
-    let mut state = service().lock().unwrap();
-    if expected_generation.is_some_and(|generation| generation != state.generation) {
+    let owner = service();
+    let mut state = owner.lock().unwrap();
+    if expected_generation.is_some_and(|generation| generation != selected_generation(&state)) {
         return Err(error("plugin settings changed during operation"));
     }
     if memory_only {
@@ -894,7 +1122,7 @@ pub fn cache_remove_memory_for_generation(
 
 /// Monotonic process generation for rejecting settings-dependent worker results.
 pub fn settings_generation() -> u64 {
-    service().lock().unwrap().generation
+    selected_generation(&service().lock().unwrap())
 }
 
 #[cfg(test)]
@@ -917,14 +1145,19 @@ mod tests {
     }
 
     use super::*;
+    use crate::ProviderHost;
     #[derive(Default)]
     struct Memory {
+        owner: Option<String>,
         settings: Mutex<Option<String>>,
         cache: Mutex<Option<String>>,
         cache_writes: std::sync::atomic::AtomicUsize,
         fail: std::sync::atomic::AtomicBool,
     }
     impl PluginSettingsBackend for Memory {
+        fn owner_id(&self) -> Option<String> {
+            self.owner.clone()
+        }
         fn load_settings(&self) -> Result<Option<String>, ProviderHostError> {
             Ok(self.settings.lock().unwrap().clone())
         }
@@ -1166,7 +1399,8 @@ mod tests {
         cache_set("test", "valid", "retained", 100, 100).unwrap();
         // A stale fingerprint is collected alongside time-based expiration.
         {
-            let mut state = service().lock().unwrap();
+            let owner = service();
+            let mut state = owner.lock().unwrap();
             let mut stale = state.cache["test/valid"].clone();
             stale.key = "stale".into();
             stale.settings_hash = stale.settings_hash.wrapping_add(1);
@@ -1358,6 +1592,124 @@ mod tests {
                 ["enabled"],
             true
         );
+        // Preparation must not publish failed incoming data. Resolver authority
+        // then survives another owner's configuration and package registry,
+        // but an actual credential/config edit by its own owner still revokes.
+        let alice = Arc::new(Memory {
+            owner: Some("capability-alice".into()),
+            ..Memory::default()
+        });
+        *alice.settings.lock().unwrap() = Some(r#"{"resolverfixture":{"route":"alice"}}"#.into());
+        configure_plugin_settings(alice.clone()).unwrap();
+        let package = Arc::new(crate::AddonPackage {
+            plugin: serde_json::from_value(serde_json::json!({
+                "formatVersion":1,"id":"resolverfixture","name":"Resolver fixture","version":"1.0.0","entry":"index.js","permissions":{},
+                "configuration":[{"key":"route","label":"Route","type":"string","default":""}]
+            })).unwrap(),
+            addon: serde_json::from_value(serde_json::json!({"id":"nova.resolverfixture","name":"Resolver fixture","version":"1.0.0"})).unwrap(),
+            source: "globalThis.novaProvider={handle(request){return {id:'fixture',title:'Fixture stream',url:'https://example.test/'+JSON.parse(nova.settings.get('route'))};}};".into(),
+            assets: BTreeMap::new(), digest: String::new(),
+        });
+        let previous_packages = crate::installed_packages();
+        let mut packages = previous_packages.clone();
+        packages.push(package);
+        crate::set_installed_packages(packages.clone());
+        let capability = crate::capture_resolver_capability(
+            "nova-provider://resolverfixture",
+            settings_generation(),
+        )
+        .unwrap();
+        let owner_settings = capture_settings_capability();
+        crate::host::session_state()
+            .storage_set("owner", "alice")
+            .unwrap();
+        let bob = Arc::new(Memory {
+            owner: Some("capability-bob".into()),
+            ..Memory::default()
+        });
+        *bob.settings.lock().unwrap() = Some(r#"{"resolverfixture":{"route":"bob"}}"#.into());
+        configure_plugin_settings(bob.clone()).unwrap();
+        assert!(crate::host::session_state().storage_get("owner").is_none());
+        assert_eq!(
+            owner_settings
+                .with(|| crate::host::session_state().storage_get("owner"))
+                .as_deref(),
+            Some("alice")
+        );
+        crate::set_installed_packages(Vec::new());
+        assert!(capability.is_current());
+        assert_eq!(
+            capability
+                .resolve(
+                    "opaque",
+                    std::time::Duration::from_secs(1),
+                    Arc::new(|| false)
+                )
+                .unwrap()
+                .url
+                .as_deref(),
+            Some("https://example.test/alice")
+        );
+        let before_failed_preparation = settings_generation();
+        let corrupt = Arc::new(Memory::default());
+        *corrupt.settings.lock().unwrap() = Some("broken settings".into());
+        assert!(prepare_plugin_settings(corrupt).is_err());
+        assert_eq!(settings_generation(), before_failed_preparation);
+        assert_eq!(
+            settings_snapshot("resolverfixture", &[])
+                .unwrap()
+                .values
+                .len(),
+            0
+        );
+        configure_plugin_settings(alice.clone()).unwrap();
+        assert!(
+            capability.is_current(),
+            "returning to the same owner with identical settings preserves transfers"
+        );
+        let stale_prepared = prepare_plugin_settings(alice.clone()).unwrap();
+        configure_plugin_settings(bob).unwrap();
+        // A retained owner can complete a credential write while its prepared
+        // activation waits. Publishing the old snapshot must keep that write.
+        owner_settings.with(|| {
+            set_setting(
+                "resolverfixture",
+                "route",
+                Value::String("alice-edited".into()),
+            )
+            .unwrap();
+        });
+        activate_plugin_settings(stale_prepared);
+        let route: SettingField = serde_json::from_value(serde_json::json!({
+            "key":"route","label":"Route","type":"string","default":""
+        }))
+        .unwrap();
+        assert_eq!(
+            settings_snapshot("resolverfixture", &[route])
+                .unwrap()
+                .values["route"],
+            Value::String("alice-edited".into()),
+            "activation must not overwrite a retained owner's newer credentials"
+        );
+        assert!(!capability.is_current());
+        assert!(
+            capability
+                .resolve(
+                    "opaque",
+                    std::time::Duration::from_secs(1),
+                    Arc::new(|| false)
+                )
+                .is_err()
+        );
+        crate::set_installed_packages(packages);
+        let revoked = crate::capture_resolver_capability(
+            "nova-provider://resolverfixture",
+            settings_generation(),
+        )
+        .unwrap();
+        revoke_provider("capability-alice", "nova-provider://resolverfixture");
+        assert!(!revoked.is_current());
+        crate::set_installed_packages(previous_packages);
         *service().lock().unwrap() = Service::default();
     }
     #[test]

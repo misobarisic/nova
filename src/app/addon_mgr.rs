@@ -1,5 +1,12 @@
 //! Addon install / remove / refresh and the addon picker rows.
 use super::*;
+
+pub(super) fn revoke_provider_authority(url: &str) {
+    nova_providers::plugin_settings::revoke_provider(
+        &profiles::ProfileStore::capture().domain("plugin_settings"),
+        url,
+    );
+}
 static ADDON_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 impl Bridge {
@@ -78,6 +85,7 @@ impl Bridge {
     }
 
     pub(super) fn invalidate_package_generation(&self, url: &str) {
+        revoke_provider_authority(url);
         let mut state = self.shared.lock().unwrap();
         if let Some(addon) = state.installed.iter_mut().find(|addon| addon.url == url) {
             addon.generation = ADDON_GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -402,6 +410,7 @@ impl Bridge {
             nova_providers::configure_provider_capabilities(url, previous);
             return;
         };
+        revoke_provider_authority(url);
         {
             let mut state = self.shared.lock().unwrap();
             if let Some(entry) = state.installed.iter_mut().find(|a| a.url == url) {
@@ -501,6 +510,9 @@ impl Bridge {
             };
             entry.enabled = !entry.enabled;
             let now_enabled = entry.enabled;
+            if !now_enabled {
+                revoke_provider_authority(&entry.url);
+            }
             !now_enabled && chosen == idx
         };
         if reset_chosen {
@@ -625,6 +637,7 @@ impl Bridge {
             }
             removed.url
         };
+        revoke_provider_authority(&removed_url);
         addon_packages::remove(self, &removed_url);
         nova_providers::configure_provider_capabilities(&removed_url, Default::default());
         if let Some(app) = self.app()

@@ -10,37 +10,23 @@ static ACTIVE: Mutex<Option<Arc<Queue>>> = Mutex::new(None);
 thread_local! { static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 pub(super) fn register_collections() {
-    {
-        storage::register_collection(
-            "library",
-            storage::CollectionKind::Array {
-                id_field: "id".into(),
-            },
-        );
-        storage::register_collection(EPISODE_PROGRESS_KEY, storage::CollectionKind::Object);
-        for domain in [sync::DOMAIN_LIBRARY, sync::DOMAIN_PROGRESS] {
-            storage::register_collection(
-                &format!("sync:baseline:{}", sync::profile_domain(domain)),
-                storage::CollectionKind::Object,
-            );
-        }
-    }
+    register_for(&profiles::ProfileStore::capture());
 }
 
-/// The durable retirement marker can precede its UI callback. Do not retain a
-/// deleted profile's queued job as a global persistence failure in that gap.
-fn profile_retired(id: &str) -> Result<bool, String> {
-    if !profiles::writable(id) {
-        return Ok(true);
+fn register_for(owner: &profiles::ProfileStore) {
+    owner.register_collection(
+        "library",
+        storage::CollectionKind::Array {
+            id_field: "id".into(),
+        },
+    );
+    owner.register_collection(EPISODE_PROGRESS_KEY, storage::CollectionKind::Object);
+    for domain in [sync::DOMAIN_LIBRARY, sync::DOMAIN_PROGRESS] {
+        owner.register_collection(
+            &format!("sync:baseline:{}", owner.domain(domain)),
+            storage::CollectionKind::Object,
+        );
     }
-    if !profiles::is_initialized() {
-        return Ok(false);
-    }
-    let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
-    let store = owner.lock().unwrap();
-    Ok(store
-        .record(profiles::DELETIONS_DOMAIN, id)
-        .is_some_and(|row| !row.is_deleted()))
 }
 
 #[derive(Clone)]
@@ -71,21 +57,36 @@ impl ExternalPatch {
         self.library.is_none() && self.progress.is_empty()
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&self, owner: &profiles::ProfileStore) -> Result<(), String> {
         // Origin is thread-local: recreate both guards on the actual writer.
         let _applying = sync::ApplyingGuard::new();
         let _external = stremio_events::ExternalGuard::new();
         if let Some(edit) = &self.library {
-            let mut entries = read_persisted_library();
+            let mut entries: Vec<LibraryEntry> = owner
+                .read("library")
+                .map_err(|error| error.to_string())?
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default();
             edit.apply(&mut entries);
             let raw = serde_json::to_string(&entries).map_err(|error| error.to_string())?;
-            persist_sync_snapshot("library", &raw, false).map_err(|error| format!("{error:#}"))?;
+            owner
+                .persist_snapshot("library", &raw, false)
+                .map_err(|error| format!("{error:#}"))?;
         }
         if !self.progress.is_empty() {
-            let mut progress = read_progress_map();
+            let mut progress: HashMap<String, EpisodeProgress> = owner
+                .read(EPISODE_PROGRESS_KEY)
+                .map_err(|error| error.to_string())?
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default();
             progress.extend(self.progress.clone());
             let raw = serde_json::to_string(&progress).map_err(|error| error.to_string())?;
-            persist_sync_snapshot(EPISODE_PROGRESS_KEY, &raw, false)
+            owner
+                .persist_snapshot(EPISODE_PROGRESS_KEY, &raw, false)
                 .map_err(|error| format!("{error:#}"))?;
         }
         Ok(())
@@ -105,14 +106,18 @@ impl Snapshot {
     fn periodic(&self) -> bool {
         matches!(self, Self::Progress(_, true))
     }
-    fn save(&self) -> Result<(), String> {
+    fn save(&self, owner: &profiles::ProfileStore) -> Result<(), String> {
         let (key, raw) = match self {
             Self::Library(entries) => ("library", serde_json::to_string(entries)),
             Self::Progress(map, _) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map)),
-            Self::External(patch, _) => return patch.save(),
+            Self::External(patch, _) => return patch.save(owner),
         };
         let raw = raw.map_err(|error| error.to_string())?;
-        let save = || persist_sync_snapshot(key, &raw, false).map_err(|error| format!("{error:#}"));
+        let save = || {
+            owner
+                .persist_snapshot(key, &raw, false)
+                .map_err(|error| format!("{error:#}"))
+        };
         if self.periodic() {
             nova_sync::playback_checkpoint(save)
         } else {
@@ -122,7 +127,7 @@ impl Snapshot {
 }
 #[derive(Default)]
 struct State {
-    pending: VecDeque<(u64, profiles::Context, Snapshot)>,
+    pending: VecDeque<(u64, profiles::ProfileStore, Snapshot)>,
     next: u64,
     completed: u64,
     head_started: bool,
@@ -137,7 +142,7 @@ struct Queue {
 }
 impl Queue {
     fn enqueue(&self, snapshot: Snapshot) -> Result<bool, String> {
-        let context = profiles::capture();
+        let owner = profiles::ProfileStore::capture();
         let mut state = self.state.lock().unwrap();
         while state.pending.len() >= MAX_PENDING
             && state.error.is_none()
@@ -160,14 +165,15 @@ impl Queue {
         // Only adjacent periodic checkpoints may collapse. Manual watched /
         // unwatched edits and Library changes retain their transaction order.
         let replace = snapshot.periodic()
-            && state.pending.back().is_some_and(|(_, old_context, old)| {
-                old_context.id == context.id && old.periodic()
-            })
+            && state
+                .pending
+                .back()
+                .is_some_and(|(_, old_owner, old)| old_owner == &owner && old.periodic())
             && !(state.pending.len() == 1 && state.head_started);
         if replace {
             state.pending.pop_back();
         }
-        state.pending.push_back((sequence, context, snapshot));
+        state.pending.push_back((sequence, owner, snapshot));
         self.changed.notify_all();
         Ok(true)
     }
@@ -206,19 +212,19 @@ pub(super) struct Worker {
 }
 impl Worker {
     fn spawn(
-        save: impl Fn(&Snapshot) -> Result<(), String> + Send + 'static,
+        save: impl Fn(&profiles::ProfileStore, &Snapshot) -> Result<(), String> + Send + 'static,
     ) -> std::io::Result<Self> {
         let queue = Arc::new(Queue {
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
         });
         let worker = queue.clone();
-        let thread = thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("nova-persistence".into())
             .spawn(move || {
                 IN_WORKER.set(true);
                 loop {
-                    let (sequence, context, snapshot) = {
+                    let (sequence, owner, snapshot) = {
                         let mut state = worker.state.lock().unwrap();
                         while !state.stop
                             && (state.pending.is_empty() || (state.error.is_some() && !state.retry))
@@ -244,20 +250,16 @@ impl Worker {
                         state.pending.front().unwrap().clone()
                     };
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        profiles::with_context(context, || {
-                            let id = profiles::current_id();
-                            if profile_retired(&id)? {
-                                return Ok(());
-                            }
-                            let result = save(&snapshot);
-                            // Retirement may race the preflight check and be
-                            // rejected by the snapshot's transaction guard.
-                            if result.is_err() && profile_retired(&id)? {
-                                Ok(())
-                            } else {
-                                result
-                            }
-                        })
+                        if owner.retired().map_err(|error| error.to_string())? {
+                            return Ok(());
+                        }
+                        let result = save(&owner, &snapshot);
+                        // A durable retirement can race the transaction guard.
+                        if result.is_err() && owner.retired().map_err(|error| error.to_string())? {
+                            Ok(())
+                        } else {
+                            result
+                        }
                     }))
                     .unwrap_or_else(|_| {
                         Err("persistence worker panicked; pending saves retained".into())
@@ -310,8 +312,8 @@ impl Drop for Worker {
 }
 pub(super) fn start() -> Option<Worker> {
     register_collections();
-    match Worker::spawn(|snapshot| {
-        snapshot.save().inspect_err(|error| {
+    match Worker::spawn(|owner, snapshot| {
+        snapshot.save(owner).inspect_err(|error| {
             io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
         })
     }) {
@@ -364,7 +366,7 @@ pub(super) fn try_external(patch: ExternalPatch) -> Option<mpsc::Receiver<Result
     let sequence = state.next;
     state.pending.push_back((
         sequence,
-        profiles::capture(),
+        profiles::ProfileStore::capture(),
         Snapshot::External(Box::new(patch), done),
     ));
     queue.changed.notify_all();
@@ -413,8 +415,8 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
-        for (_, context, snapshot) in state.pending.iter().rev() {
-            if context.id != profiles::current_id() {
+        for (_, owner, snapshot) in state.pending.iter().rev() {
+            if owner != &profiles::ProfileStore::capture() {
                 continue;
             }
             match snapshot {
@@ -446,8 +448,8 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
-        for (_, context, snapshot) in state.pending.iter().rev() {
-            if context.id != profiles::current_id() {
+        for (_, owner, snapshot) in state.pending.iter().rev() {
+            if owner != &profiles::ProfileStore::capture() {
                 continue;
             }
             match snapshot {
@@ -530,8 +532,8 @@ mod tests {
         });
         let state = queue.state.lock().unwrap();
         assert_eq!(state.pending.len(), 2);
-        assert_eq!(state.pending[0].1.id, "alice");
-        assert_eq!(state.pending[1].1.id, "bob");
+        assert_eq!(state.pending[0].1.id(), "alice");
+        assert_eq!(state.pending[1].1.id(), "bob");
     }
     #[test]
     fn remote_retirement_drops_failed_head_before_ui_reconciliation() {
@@ -565,8 +567,8 @@ mod tests {
             let gate = gate.clone();
             let saved = saved.clone();
             let retired = retired.clone();
-            move |snapshot| {
-                if profiles::current_id() == retired.id {
+            move |owner, snapshot| {
+                if owner.id() == retired.id {
                     let _ = started.send(());
                     let mut ready = gate.0.lock().unwrap();
                     while !*ready {
@@ -577,7 +579,7 @@ mod tests {
                 saved
                     .lock()
                     .unwrap()
-                    .push((profiles::current_id(), position(snapshot)));
+                    .push((owner.id().to_string(), position(snapshot)));
                 Ok(())
             }
         })
@@ -630,7 +632,7 @@ mod tests {
             let gate = gate.clone();
             let started = started.clone();
             let saved = saved.clone();
-            move |snapshot| {
+            move |_, snapshot| {
                 *started.0.lock().unwrap() = true;
                 started.1.notify_all();
                 let mut ready = gate.0.lock().unwrap();
@@ -673,7 +675,7 @@ mod tests {
         let worker = Worker::spawn({
             let failing = failing.clone();
             let saved = saved.clone();
-            move |snapshot| {
+            move |_, snapshot| {
                 if failing.load(Ordering::Relaxed) {
                     return Err("injected write failure".into());
                 }
@@ -696,7 +698,7 @@ mod tests {
         let saved = Arc::new(Mutex::new(Vec::new()));
         let worker = Worker::spawn({
             let saved = saved.clone();
-            move |snapshot| {
+            move |_, snapshot| {
                 saved.lock().unwrap().push(position(snapshot));
                 Ok(())
             }

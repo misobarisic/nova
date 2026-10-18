@@ -184,6 +184,9 @@ impl Bridge {
         }
     }
     pub(super) fn initialize_tracking(&self) {
+        if !self.profile_services_can_start() {
+            return;
+        }
         let handle = self.tracking();
         let Some(rx) = handle.rx.lock().unwrap().take() else {
             return;

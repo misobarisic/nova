@@ -5289,6 +5289,7 @@ dependencies = [
  "nova-tracking",
  "nova-ui",
  "nova-ui-shared",
+ "parking_lot",
  "qrcode",
  "rfd",
  "rqrr",
@@ -5345,6 +5346,7 @@ dependencies = [
  "slint",
  "webp",
  "webpki-roots",
+ "zip",
 ]
 
 [[package]]

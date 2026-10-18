@@ -29,31 +29,26 @@ impl Bridge {
         player: crate::player::Player,
         downloads: DownloadCoordinator,
     ) -> Self {
+        let sessions = profile_session::SessionDirectory::new();
         Bridge {
             app,
-            shared: Arc::new(Mutex::new(Shared {
-                chosen_addon: usize::MAX, // default to "All addons"
-                ..Shared::default()
-            })),
-            catalog_gen,
-            home_showcase_gen: Arc::new(AtomicU64::new(0)),
-            home_catalog_rows_gen: Arc::new(AtomicU64::new(0)),
-            #[cfg(feature = "desktop")]
-            poster_tx,
-            player,
-            downloads,
-            last_stream: Arc::default(),
-            tracking_services: Arc::default(),
-            stremio_services: Arc::default(),
-            profile_recovery_pending: Arc::default(),
-            profile_loaded_epoch: Arc::default(),
-            downloads_seen: Arc::new(AtomicU64::new(0)),
-            image_usage_scan: Arc::default(),
-            torrent_usage_scan: Arc::default(),
-            #[cfg(feature = "desktop")]
-            sync_start_generation: Arc::new(AtomicU64::new(0)),
-            #[cfg(feature = "desktop")]
-            sync_starting: Arc::new(AtomicBool::new(false)),
+            shared: profile_session::SessionState(sessions.clone()),
+            runtime: Arc::new(profile_session::DeviceRuntime {
+                sessions,
+                account: Default::default(),
+                catalog_gen,
+                home_showcase_gen: Arc::new(AtomicU64::new(0)),
+                home_catalog_rows_gen: Arc::new(AtomicU64::new(0)),
+                #[cfg(feature = "desktop")]
+                poster_tx,
+                player,
+                downloads,
+                last_stream: Arc::default(),
+                profile_loaded_epoch: Arc::default(),
+                downloads_seen: Arc::new(AtomicU64::new(0)),
+                image_usage_scan: Arc::default(),
+                torrent_usage_scan: Arc::default(),
+            }),
         }
     }
 
@@ -61,31 +56,26 @@ impl Bridge {
         self.app.upgrade()
     }
 
-    /// A worker may inspect live personal state only while it still belongs
-    /// to this activation. Validate after taking the lock: profile activation
-    /// changes the epoch before replacing Shared under this same lock.
-    pub(super) fn personal_state(&self) -> Option<std::sync::MutexGuard<'_, Shared>> {
+    /// Live actor work is canceled on switching; its retained allocation is
+    /// still available for completion and cleanup through the captured owner.
+    pub(super) fn personal_state(&self) -> Option<profile_session::StateGuard> {
         let state = self.shared.lock().unwrap();
         profiles::is_current(&profiles::capture()).then_some(state)
     }
 
     pub(super) fn tracking(&self) -> tracking::StateHandle {
-        let context = profiles::capture();
-        let mut services = self.tracking_services.lock().unwrap();
-        services.retain(|key, handle| *key == context || !handle.is_finished());
-        services
-            .entry(context)
-            .or_insert_with(|| Arc::new(tracking::TrackingHandle::new()))
+        self.sessions
+            .resolve()
+            .expect("tracking requires a profile session")
+            .tracking
             .clone()
     }
 
     pub(super) fn stremio(&self) -> Arc<stremio::Handle> {
-        let context = profiles::capture();
-        let mut services = self.stremio_services.lock().unwrap();
-        services.retain(|key, handle| *key == context || !handle.is_finished());
-        services
-            .entry(context)
-            .or_insert_with(|| Arc::new(stremio::Handle::new()))
+        self.sessions
+            .resolve()
+            .expect("Stremio requires a profile session")
+            .stremio
             .clone()
     }
 }

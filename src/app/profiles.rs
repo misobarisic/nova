@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 pub(super) const DEFAULT_ID: &str = "default";
 pub(super) const DOMAIN: &str = "profiles";
@@ -34,10 +34,31 @@ pub(super) struct Profile {
     pub id: String,
     pub name: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub(super) struct Context {
     pub id: String,
     pub epoch: u64,
+    pub session: Option<Arc<super::profile_session::ProfileSession>>,
+}
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("id", &self.id)
+            .field("epoch", &self.epoch)
+            .finish()
+    }
+}
+impl PartialEq for Context {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.epoch == other.epoch
+    }
+}
+impl Eq for Context {}
+impl std::hash::Hash for Context {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.epoch.hash(state);
+    }
 }
 struct Runtime {
     enabled: bool,
@@ -52,6 +73,7 @@ static RUNTIME: LazyLock<RwLock<Runtime>> = LazyLock::new(|| {
         context: Context {
             id: default_id(),
             epoch: 1,
+            session: None,
         },
         device: DevicePreferences::default(),
         retired: HashSet::new(),
@@ -72,6 +94,29 @@ pub(super) fn capture() -> Context {
 pub(super) fn active_context() -> Context {
     RUNTIME.read().unwrap().context.clone()
 }
+static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
+pub(super) fn activation_context(id: &str) -> Context {
+    Context {
+        id: id.into(),
+        epoch: NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        session: None,
+    }
+}
+pub(super) fn attach_session(session: &Arc<super::profile_session::ProfileSession>) {
+    let mut runtime = RUNTIME.write().unwrap();
+    if runtime.enabled && runtime.context == session.context() {
+        runtime.context.session = Some(session.clone());
+    }
+}
+pub(super) fn commit_session(
+    prepared: PreparedActivation,
+    session: &Arc<super::profile_session::ProfileSession>,
+) {
+    assert_eq!(prepared.device.active_profile, session.id);
+    let mut runtime = RUNTIME.write().unwrap();
+    runtime.context = session.context();
+    runtime.device = prepared.device;
+}
 
 pub(super) fn current_id() -> String {
     capture().id
@@ -80,6 +125,7 @@ pub(super) fn context_for(id: &str) -> Context {
     Context {
         id: id.into(),
         epoch: 0,
+        session: None,
     }
 }
 pub(super) fn with_context<R>(context: Context, f: impl FnOnce() -> R) -> R {
@@ -114,11 +160,7 @@ pub(super) fn storage_key_for(id: &str, key: &str) -> String {
     format!("profile:{id}:{key}")
 }
 pub(super) fn storage_key(key: &str) -> String {
-    if enabled() && scoped_key(key) {
-        storage_key_for(&current_id(), key)
-    } else {
-        key.into()
-    }
+    ProfileStore::capture().key(key)
 }
 pub(super) fn domain_for(id: &str, base: &str) -> String {
     format!("profile:{id}:{base}")
@@ -191,13 +233,18 @@ pub(super) fn list() -> Result<Vec<Profile>, String> {
 }
 fn cleanup_deleted_data(ids: HashSet<String>) -> Result<(), String> {
     for id in ids {
-        let _serial = WRITE_SERIAL.lock().unwrap();
+        nova_providers::plugin_settings::revoke_owner(
+            &ProfileStore::for_profile(&id).domain("plugin_settings"),
+        );
         // A stale peer may deliver live children after the deletion marker.
         // Retombstone these under the record owner's lock before considering
         // local cleanup complete; the membership marker alone hides values.
         let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
         let device = nova_sync::local_device().map_err(|error| error.to_string())?;
         let mut store = owner.lock().unwrap();
+        // Tracking recovery may write durable storage while holding this
+        // owner. Keep the same lock order for deletion and cleanup.
+        let _serial = WRITE_SERIAL.lock().unwrap();
         let prefix = format!("profile:{id}:");
         let mut changed = false;
         for domain in store.domains() {
@@ -335,6 +382,7 @@ pub(super) fn initialize() -> Result<DevicePreferences, String> {
     let mut state = RUNTIME.write().unwrap();
     state.enabled = true;
     state.context.id = selected;
+    state.context.session = None;
     state.device = device.clone();
     Ok(device)
 }
@@ -361,14 +409,6 @@ pub(super) fn prepare_activation(id: &str) -> Result<PreparedActivation, String>
     Ok(PreparedActivation { device })
 }
 
-pub(super) fn commit_activation(prepared: PreparedActivation) {
-    let mut state = RUNTIME.write().unwrap();
-    state.context = Context {
-        id: prepared.device.active_profile.clone(),
-        epoch: state.context.epoch.wrapping_add(1),
-    };
-    state.device = prepared.device;
-}
 pub(super) fn set_open_last_profile_on_startup(enabled: bool) -> Result<(), String> {
     let mut state = RUNTIME.write().unwrap();
     let mut device = state.device.clone();
@@ -404,11 +444,11 @@ pub(super) fn delete(id: &str) -> Result<(), String> {
     if !profiles.iter().any(|p| p.id == id) {
         return Err("This profile is unavailable.".into());
     }
-    let _serial = WRITE_SERIAL.lock().unwrap();
-    RUNTIME.write().unwrap().retired.insert(id.into());
     let owner = nova_sync::local_store().map_err(|e| e.to_string())?;
     let device = nova_sync::local_device().map_err(|e| e.to_string())?;
     let mut store = owner.lock().unwrap();
+    let _serial = WRITE_SERIAL.lock().unwrap();
+    RUNTIME.write().unwrap().retired.insert(id.into());
     let prefix = format!("profile:{id}:");
     for domain in store.domains() {
         if domain.starts_with(&prefix) {
@@ -426,6 +466,10 @@ pub(super) fn delete(id: &str) -> Result<(), String> {
     }
     store.save().map_err(|e| e.to_string())?;
     drop(store);
+    drop(_serial);
+    nova_providers::plugin_settings::revoke_owner(
+        &ProfileStore::for_profile(id).domain("plugin_settings"),
+    );
     let _ = std::fs::remove_dir_all(cache_dir(id));
     nova_sync::request_local_sync();
     Ok(())
@@ -496,18 +540,33 @@ pub(super) mod thread {
 
 /// Tracking's leaf store uses the same captured namespace as app-side events.
 /// The default leaf KvStorage intentionally remains raw for independent users.
-#[derive(Clone, Copy)]
-pub(super) struct TrackingStorage;
+#[derive(Clone)]
+pub(super) struct TrackingStorage {
+    owner: ProfileStore,
+}
+impl TrackingStorage {
+    pub(super) fn capture() -> Self {
+        Self::for_store(ProfileStore::capture())
+    }
+    pub(super) fn for_store(owner: ProfileStore) -> Self {
+        Self { owner }
+    }
+    pub(super) fn profile_store(&self) -> &ProfileStore {
+        &self.owner
+    }
+}
 impl nova_tracking::StateStorage for TrackingStorage {
     fn read(&self, key: &str) -> Result<Option<String>, nova_storage::Error> {
-        storage::try_get_str(key)
+        self.owner.read(key)
     }
     fn write(&self, entries: &[(String, Option<String>)]) -> Result<(), nova_storage::Error> {
-        storage::try_write_batch(entries)
+        self.owner.write_batch(entries)
     }
 }
 
 pub(super) mod storage;
+pub(super) mod store;
+pub(super) use store::ProfileStore;
 
 #[cfg(test)]
 mod tests {
