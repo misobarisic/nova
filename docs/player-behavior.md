@@ -27,7 +27,9 @@ All addon replies must finish within the ordinary five-second EOF delay; empty,
 failed or slow discovery falls back to the existing end menu. Nova prefers the
 same release family through its normal recommendation policy, then the first
 playable stream in installed-addon/provider ranking (completed downloads remain
-pinned). Unsupported streams and disabled torrents cannot be selected.
+pinned). Completed download candidates must match the media type, parent title
+and episode ID; an episode ID reused by another title is insufficient.
+Unsupported streams and disabled torrents cannot be selected.
 A known candidate opens a fullscreen artwork preview showing its episode, source
 and a small eight-second countdown. Play now starts at the beginning through the
 ordinary playback path; Cancel, Escape or system Back opens the existing end menu

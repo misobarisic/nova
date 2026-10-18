@@ -295,6 +295,32 @@ impl DownloadCoordinator {
         jobs
     }
 
+    /// Automatic playback requires the exact title as well as its episode ID;
+    /// provider episode identifiers are not globally unique across titles.
+    pub(crate) fn jobs_for_media(
+        &self,
+        media_type: &str,
+        title_id: &str,
+        request_id: &str,
+    ) -> Vec<DownloadJob> {
+        let mut jobs: Vec<_> = self
+            .inner
+            .state()
+            .manifest
+            .jobs
+            .iter()
+            .filter(|job| {
+                job.phase == DownloadPhase::Completed
+                    && job.media_type == media_type
+                    && job.media_id == title_id
+                    && job.request_id == request_id
+            })
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|job| std::cmp::Reverse(job.created_at));
+        jobs
+    }
+
     pub(crate) fn job(&self, id: &str) -> Option<DownloadJob> {
         self.inner
             .state()
@@ -2733,6 +2759,38 @@ mod tests {
             assert!(!directory.exists());
             let _ = std::fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn automatic_download_matching_requires_completed_exact_typed_title() {
+        let root = temp_root("typed-media");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        let mut wanted = DownloadJob::new("wanted", JobSource::http("https://example.test/wanted"));
+        wanted.phase = DownloadPhase::Completed;
+        wanted.media_type = "series".into();
+        wanted.media_id = "title-a".into();
+        wanted.request_id = "episode-1".into();
+        let mut other_title = wanted.clone();
+        other_title.id = "other-title".into();
+        other_title.media_id = "title-b".into();
+        let mut other_type = wanted.clone();
+        other_type.id = "other-type".into();
+        other_type.media_type = "anime".into();
+        let mut pending = wanted.clone();
+        pending.id = "pending".into();
+        pending.phase = DownloadPhase::Downloading;
+        coordinator.inner.state().manifest.jobs = vec![other_title, other_type, pending, wanted];
+        let jobs = coordinator.jobs_for_media("series", "title-a", "episode-1");
+        assert_eq!(
+            jobs.iter().map(|job| job.id.as_str()).collect::<Vec<_>>(),
+            vec!["wanted"]
+        );
+        assert!(
+            coordinator
+                .jobs_for_media("series", "title-a", "episode-2")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -355,7 +355,11 @@ impl Bridge {
         if automatic_value.candidate.is_none() && automatic_value.pending == 0 {
             let mut rows: Vec<_> = self
                 .downloads
-                .jobs_for_request(&automatic_value.next.id)
+                .jobs_for_media(
+                    &context.session.type_,
+                    &context.session.title,
+                    &automatic_value.next.id,
+                )
                 .into_iter()
                 .filter(|job| job.phase == crate::download::DownloadPhase::Completed)
                 .filter_map(|job| {
