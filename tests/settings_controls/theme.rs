@@ -197,6 +197,12 @@ fn theme_search_toggle_resize_and_android_back() {
         key(&app, slint::platform::Key::DownArrow.into());
     }
     key(&app, slint::platform::Key::Return.into());
+    assert!(app.get_transparent_navbar());
+    assert!(app.global::<nova::Theme>().get_transparent_navbar());
+    key(&app, slint::platform::Key::DownArrow.into());
+    key(&app, slint::platform::Key::Return.into());
+    assert!(!app.get_transparent_navbar());
+    assert!(!app.global::<nova::Theme>().get_transparent_navbar());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
     assert_eq!(app.get_accent_color(), 0);
@@ -210,13 +216,14 @@ fn theme_search_toggle_resize_and_android_back() {
     assert_eq!(app.global::<nova::Theme>().get_hero_title_alignment(), 1);
     assert!(!app.get_animations());
     assert_eq!(
-        &edits.borrow()[edits.borrow().len() - 9..],
+        &edits.borrow()[edits.borrow().len() - 10..],
         [
             "background_style",
             "card_corner_radius",
             "button_corner_radius",
             "card_spacing",
             "status_bar_gradient",
+            "transparent_navbar",
             "home_backdrop_size",
             "detail_backdrop_size",
             "hero_title_alignment",

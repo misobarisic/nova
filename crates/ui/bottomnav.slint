@@ -27,26 +27,30 @@ export component BottomNav inherits Rectangle {
     callback more_picked();
 
     width: 100%;
-    height: 68px + root.safe-bottom;
+    private property <length> bar-height: 68px + root.safe-bottom;
+    // Overlay mode releases the layout slot while the actual controls stay
+    // anchored above it. The page's scroll content reserves its own end space.
+    height: Theme.transparent_navbar ? 0px : root.bar-height;
     vertical-stretch: 0;
 
     motion := NavFeedback { active: root.selected; }
 
     pill := Rectangle {
         x: -root.page-inset-left;
-        y: 0px;
+        y: Theme.transparent_navbar ? -self.height : 0px;
         width: root.width + root.page-inset-left + root.page-inset-right;
-        height: root.height;
-        background: Theme.current.nav_bottom;
+        height: root.bar-height + (Theme.transparent_navbar ? 32px : 0px);
+        background: Theme.transparent_navbar ? @linear-gradient(180deg, #00000000 0%, #000000b3 40%, #000000ed 100%) : Theme.current.nav_bottom;
         // Square corners keep the full-width bar flush against screen edges.
         border-radius: 0px;
         border-width: 0px;
-        // The panel meets the page without shading the content gutter above it.
+        // The optional fade extends above the controls without consuming taps.
 
         // Gaps and the system-bar safe zone also absorb taps, preventing
         // touches beside a tab from opening content behind the bar.
         eater := TouchArea {
-            width: 100%; height: 100%;
+            y: Theme.transparent_navbar ? 32px : 0px;
+            width: 100%; height: root.bar-height;
             clicked => { }
         }
 
@@ -54,7 +58,7 @@ export component BottomNav inherits Rectangle {
         // a selected background or a shadow above the page canvas.
         tabs := HorizontalLayout {
             x: 12px + root.safe-left;
-            y: 0px;
+            y: Theme.transparent_navbar ? 32px : 0px;
             width: pill.width - 24px - root.safe-left - root.safe-right;
             height: 60px;
 

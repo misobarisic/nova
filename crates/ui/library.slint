@@ -362,7 +362,7 @@ export component LibraryPage {
         let top = root.grid-top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
         let bot = top + root.row_stride;
         let vy = lib_scroll.content-y;
-        let vh = lib_scroll.visible-height;
+        let vh = lib_scroll.visible-height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
         let min_y = Math.min(0px, vh - lib_scroll.content-height);
         if (top < root.header_cover - vy) {
             lib_scroll.content-y = root.header_cover - top;
@@ -554,6 +554,7 @@ export component LibraryPage {
                         // Keep the first row's pointer hover lift inside the
                         // ScrollView's clip, just like Home's landing rails.
                         padding-top: root.grid-top;
+                        padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
                         alignment: start;
 
                     library_grid := GridLayout {

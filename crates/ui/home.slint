@@ -1994,7 +1994,7 @@ export component HomePage {
 
     function kb_scroll_to(top: length, bot: length) {
         let vy = land_scroll.content-y;
-        let vh = land_scroll.height;
+        let vh = land_scroll.height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
         let min_y = Math.min(0px, vh - land_scroll.content-height);
         if (top < -vy) {
             land_scroll.content-y = -top;
@@ -2284,6 +2284,7 @@ export component HomePage {
                                 width: 100%; spacing: 24px;
                                 padding-left: 18px + (root.narrow ? root.safe-left : 0px);
                                 padding-right: 18px + root.safe-right;
+                                padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
                                 padding-top: root.featured_count == 0 ? 18px + root.safe-top : 0px;
                                 if root.continue_rows.length == 0
                                     && root.new_episode_rows.length == 0

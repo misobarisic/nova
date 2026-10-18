@@ -3302,5 +3302,11 @@ msgstr "Ovaj profil nije dostupan."
 msgid "Enter a profile name of up to 64 characters."
 msgstr "Unesite naziv profila s najviše 64 znaka."
 
+msgid "Transparent navigation bar"
+msgstr "Prozirna navigacijska traka"
+
+msgid "Show content behind the bottom bar with a dark gradient."
+msgstr "Prikažite sadržaj iza donje trake s tamnim gradijentom."
+
 msgid "Pair devices and sync all profiles"
 msgstr "Uparite uređaje i sinkronizirajte sve profile"

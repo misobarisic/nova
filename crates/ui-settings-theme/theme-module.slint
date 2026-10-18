@@ -1,6 +1,6 @@
 import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
 
-import { PillButton, Segmented, AddonIconButton, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
+import { PillButton, Segmented, ToggleSwitch, AddonIconButton, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
 
 import { IcCheck } from "../ui/icons.slint";
 
@@ -255,15 +255,31 @@ export component SettingsThemeModule inherits Window {
                     }
                 }
             } }
+            SettingsCard { SettingsRow {
+                setting-key: "transparent_navbar";
+                row-title: @tr("Transparent navigation bar");
+                row-desc: @tr("Show content behind the bottom bar with a dark gradient.");
+                ToggleSwitch {
+                    name: @tr("Transparent navigation bar");
+                    checked: SettingsBridge.transparent_navbar;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 9 && SettingsBridge.kb_active;
+                    toggled => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17; SettingsContent.kb_theme = 9;
+                        SettingsBridge.transparent_navbar = self.checked;
+                        SettingsContent.schedule_setting("transparent_navbar");
+                    }
+                }
+            } }
             HorizontalLayout {
                 alignment: start;
                 PillButton {
                     label: @tr("Restore theme defaults");
-                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 9 && SettingsBridge.kb_active;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 10 && SettingsBridge.kb_active;
                     clicked => {
                         SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                         SettingsBridge.kb_zone = 17;
-                        SettingsContent.kb_theme = 9;
+                        SettingsContent.kb_theme = 10;
                         SettingsContent.restore_theme_defaults();
                     }
                 }

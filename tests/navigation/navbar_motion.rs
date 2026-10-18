@@ -410,3 +410,54 @@ fn nav_icons_pop_while_highlights_snap() {
         }
     }
 }
+
+#[test]
+fn transparent_bar_overlays_content_and_keeps_navigation_reachable() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "transparent_bar_overlays_content_and_keeps_navigation_reachable"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.global::<nova::Anim>().set_enabled(false);
+    app.show().unwrap();
+    switch(&app, 0);
+    idle(&app, false, 20);
+    let before = center(&icon(&app, false, 0));
+    let content_height = || {
+        ElementHandle::find_by_element_id(&app, "HomePage::content_host")
+            .next()
+            .unwrap()
+            .size()
+            .height
+    };
+    let opaque_height = content_height();
+    app.set_transparent_navbar(true);
+    nova_ui::apply_theme(&app, false);
+    idle(&app, false, 20);
+    assert!((content_height() - opaque_height - 68.0).abs() < 0.5);
+    assert!((center(&icon(&app, false, 0)).y - before.y).abs() < 0.5);
+    // Exercise real hit testing through the zero-height layout slot.
+    click(&app, false, 3);
+    idle(&app, false, 20);
+    assert!(app.get_more_open());
+    app.set_kb_active(true);
+    app.set_more_choice(6);
+    app.set_more_choice(7);
+    idle(&app, false, 20);
+    let about = ElementHandle::find_by_accessible_label(&app, "About")
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+        .unwrap();
+    assert!(about.absolute_position().y + about.size().height <= 844.0 - 68.0 + 0.5);
+    click(&app, false, 0);
+    idle(&app, false, 20);
+    assert!(app.get_show_home() && !app.get_more_open());
+    app.set_transparent_navbar(false);
+    nova_ui::apply_theme(&app, false);
+    idle(&app, false, 20);
+    assert!((content_height() - opaque_height).abs() < 0.5);
+}

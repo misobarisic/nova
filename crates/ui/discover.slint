@@ -1169,7 +1169,7 @@ export component DiscoverPage {
         let top = root.sv_grid_top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
         let bot = top + root.row_stride;
         let vy = root.display_scroll_y;
-        let vh = root.sv_vh;
+        let vh = root.sv_vh - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
         let min_y = Math.min(0px, vh - root.sv_vph);
         if (top < root.header_cover - vy) {
             root.set_display_scroll_y(root.header_cover - top);
@@ -1405,6 +1405,7 @@ export component DiscoverPage {
                     // a layout directly inside their ScrollViews.)
                     width: 100%;
                     spacing: 12px;
+                    padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
 
                 Rectangle { height: fix_header.height; }
 
@@ -1644,6 +1645,7 @@ export component DiscoverPage {
         VerticalLayout {
             width: 100%;
             spacing: 12px;
+            padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
 
             Rectangle { height: and_header.height; }
 

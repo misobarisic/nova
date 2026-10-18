@@ -82,7 +82,7 @@ export component MorePage inherits Rectangle {
         if root.choice < 2 { more_scroll.content-y = 0px; return; }
         let top = root.choice == 2 ? profiles_card.y : root.choice == 3 ? sync_card.y : root.choice == 4 ? devices_card.y : root.choice == 5 ? party_card.y : root.choice == 6 ? settings_card.y : about_card.y;
         let h = root.choice == 2 ? profiles_card.height : root.choice == 3 ? sync_card.height : root.choice == 4 ? devices_card.height : root.choice == 5 ? party_card.height : root.choice == 6 ? settings_card.height : about_card.height;
-        let vh = more_scroll.visible-height;
+        let vh = more_scroll.visible-height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
         if top < -more_scroll.content-y { more_scroll.content-y = -top; }
         else if top + h > vh - more_scroll.content-y { more_scroll.content-y = Math.max(Math.min(0px, more_scroll.visible-height - more_scroll.content-height), vh - top - h); }
     }
@@ -145,7 +145,7 @@ export component MorePage inherits Rectangle {
         padding-left: 18px + root.safe-left + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width));
         padding-right: 18px + root.safe-right;
         padding-top: 18px + root.safe-top;
-        padding-bottom: root.external_navigation && root.narrow ? 68px + root.safe-bottom : 0px;
+        padding-bottom: root.external_navigation && root.narrow && !Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
         spacing: 0px;
         more_scroll := ScrollView {
             init => { restore_scroll.start(); }
@@ -155,6 +155,7 @@ export component MorePage inherits Rectangle {
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
+                padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
                 PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.landing-active) { root.home_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
