@@ -91,58 +91,6 @@ export component SettingsSyncModule inherits Window {
                 }
             }
 
-            // Confirm a peer removal: it tombstones the peer across
-            // the whole mesh, so a stray tap must not do it.
-            if SettingsContent.sync_remove_prompt_visible: Rectangle {
-                background: Theme.current.removal_prompt;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: Theme.current.removal_border;
-                clip: true;
-
-                VerticalLayout {
-                    spacing: 10px;
-                    padding-top: 16px;
-                    padding-bottom: 16px;
-                    padding-left: 16px;
-                    padding-right: 16px;
-
-                    Text {
-                        text: @tr("Remove device?");
-                        font-size: 14px;
-                        font-weight: 700;
-                        color: Theme.current.text_bright;
-                    }
-
-                    Text {
-                        text: @tr("{} will be removed from sync on every paired device.", SettingsContent.sync_remove_prompt_name);
-                        font-size: 14px;
-                        color: Theme.current.text_settings;
-                        wrap: word-wrap;
-                        min-width: 0px;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 12px;
-
-                        PillButton {
-                            label: @tr("Cancel");
-                            clicked => { SettingsContent.sync_remove_prompt_visible = false; }
-                        }
-
-                        PillButton {
-                            label: @tr("Remove");
-                            destructive: true;
-                            primary: true;
-                            clicked => {
-                                SettingsBridge.sync_remove_peer(SettingsContent.sync_remove_prompt_id);
-                                SettingsContent.sync_remove_prompt_visible = false;
-                            }
-                        }
-                    }
-                }
-            }
-
             SectionHeader { label: @tr("Enablement"); }
 
             // ---- Sync --------------------------------------
@@ -575,6 +523,7 @@ export component SettingsSyncModule inherits Window {
                             row-desc: (peer.name == "" ? "" : peer.id + "\n") + peer.last_seen;
 
                             PillButton {
+                                accessible-id: "sync-remove:" + peer.id;
                                 label: @tr("Remove");
                                 destructive: true;
                                 clicked => {

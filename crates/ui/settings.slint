@@ -218,6 +218,17 @@ export component SettingsPage {
     property <bool> sync_remove_prompt_visible <=> SettingsContent.sync_remove_prompt_visible;
     property <string> sync_remove_prompt_id <=> SettingsContent.sync_remove_prompt_id;
     property <string> sync_remove_prompt_name <=> SettingsContent.sync_remove_prompt_name;
+    function cancel_sync_remove() {
+        nav_scope.focus();
+        root.sync_remove_prompt_visible = false;
+        root.sync_remove_prompt_id = "";
+        root.sync_remove_prompt_name = "";
+    }
+    function confirm_sync_remove() {
+        let peer_id = root.sync_remove_prompt_id;
+        root.cancel_sync_remove();
+        if peer_id != "" { root.sync_remove_peer(peer_id); }
+    }
     // Formatted readouts for the torrent sliders (Slint has no int→string).
     property <string> torrent_size_label: Math.round(root.torrent_max_mb) + " MB";
     property <string> torrent_rate_label: root.torrent_down_limit <= 0 ? @tr("Unlimited") : Math.round(root.torrent_down_limit) + " KB/s";
@@ -738,7 +749,7 @@ export component SettingsPage {
         if (root.home_catalog_add_open) {
             root.home_catalog_add_open = false;
         } else if (root.sync_remove_prompt_visible) {
-            root.sync_remove_prompt_visible = false;
+            root.cancel_sync_remove();
         } else if (root.sel == 12 && root.tracking_reset_confirm) {
             root.tracking_reset_confirm = false;
         } else if (root.sync_pair_prompt_visible) {
@@ -2783,6 +2794,85 @@ export component SettingsPage {
         safe-top: root.safe-top; safe-bottom: root.safe-bottom;
         safe-left: root.safe-left; safe-right: root.safe-right;
         closed => { nav_scope.focus(); }
+    }
+
+    // Removal affects every paired device; keep confirmation in the viewport
+    // instead of changing the height or position of the scrolled peer list.
+    if root.sync_remove_prompt_visible && root.sel == 7 && root.active: remove_modal := Rectangle {
+        width: 100%; height: 100%;
+        background: Theme.current.scrim_settings;
+        property <int> action: 0;
+        modal_focus := FocusScope {
+            width: 100%; height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                    if !e.repeat { root.cancel_sync_remove(); }
+                    accept
+                } else if e.text == Key.Return || e.text == " " {
+                    if !e.repeat {
+                        if remove_modal.action == 0 { root.cancel_sync_remove(); }
+                        else { root.confirm_sync_remove(); }
+                    }
+                    accept
+                } else if e.text == Key.LeftArrow || e.text == Key.UpArrow {
+                    remove_modal.action = 0; accept
+                } else if e.text == Key.RightArrow || e.text == Key.DownArrow {
+                    remove_modal.action = 1; accept
+                } else if e.text == Key.Tab {
+                    remove_modal.action = 1 - remove_modal.action; accept
+                } else { accept }
+            }
+        }
+        TouchArea {
+            width: 100%; height: 100%;
+            clicked => { root.cancel_sync_remove(); }
+            scroll-event(event) => { accept }
+        }
+        sync_remove_panel := Rectangle {
+            width: Math.max(1px, Math.min(480px, root.width - root.rail_w - root.safe-left - root.safe-right - 32px));
+            height: Math.max(1px, Math.min(remove_content.preferred-height, root.height - root.safe-top - root.safe-bottom - 32px));
+            x: root.rail_w + root.safe-left + (root.width - root.rail_w - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.safe-top + (root.height - root.safe-top - root.safe-bottom - self.height) / 2;
+            background: Theme.current.removal_prompt;
+            border-radius: 16px; border-width: 1px;
+            border-color: Theme.current.removal_border;
+            clip: true;
+            TouchArea { width: 100%; height: 100%; }
+            remove_content := VerticalLayout {
+                width: 100%; height: 100%; padding: 16px; spacing: 12px;
+                Text {
+                    text: @tr("Remove device?"); font-size: 16px; font-weight: 700;
+                    color: Theme.current.text_bright; wrap: word-wrap;
+                    min-width: 0px; vertical-stretch: 0;
+                }
+                remove_message_scroll := ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    preferred-height: remove_message.preferred-height;
+                    content-width: self.visible-width;
+                    content-height: remove_message.preferred-height;
+                    remove_message := Text {
+                        width: remove_message_scroll.visible-width; height: self.preferred-height;
+                        text: @tr("{} will be removed from sync on every paired device.", root.sync_remove_prompt_name);
+                        color: Theme.current.text_settings; font-size: 14px;
+                        wrap: char-wrap; min-width: 0px;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px; vertical-stretch: 0;
+                    sync_remove_cancel := PillButton {
+                        label: @tr("Cancel"); roomy: true;
+                        focused: SettingsStyle.keyboard-mode && remove_modal.action == 0;
+                        clicked => { root.cancel_sync_remove(); }
+                    }
+                    sync_remove_confirm := PillButton {
+                        label: @tr("Remove"); roomy: true; destructive: true; primary: true;
+                        focused: SettingsStyle.keyboard-mode && remove_modal.action == 1;
+                        clicked => { root.confirm_sync_remove(); }
+                    }
+                }
+            }
+        }
     }
 
     if !root.active: TouchArea {

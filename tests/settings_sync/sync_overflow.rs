@@ -12,6 +12,168 @@ use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::rc::Rc;
 
+#[test]
+fn peer_removal_confirmation_stays_in_view_after_scrolling() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::peer_removal_confirmation_stays_in_view_after_scrolling"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_sync_enabled(true);
+    app.invoke_more_bridge_sync_picked();
+    app.set_settings_detail_open(true);
+    let peers = (0..20)
+        .map(|i| nova::SyncPeer {
+            id: format!("peer-{i}").into(),
+            name: ("Long living room device name ".repeat(4) + &i.to_string()).into(),
+            last_seen: "Last connected 2m ago".into(),
+        })
+        .collect::<Vec<_>>();
+    app.set_sync_peers(Rc::new(VecModel::from(peers)).into());
+    let removed = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = removed.clone();
+    app.on_sync_remove_peer(move |id| recorded.borrow_mut().push(id.to_string()));
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..12 {
+            let _ = max_right_edge(&app);
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(25));
+        }
+    };
+    let element = |id: &str| {
+        ElementHandle::find_by_element_id(&app, id)
+            .next()
+            .expect(id)
+    };
+    let remove_button = || {
+        ElementQuery::from_root(&app)
+            .match_predicate(|e| e.accessible_id().as_deref() == Some("sync-remove:peer-19"))
+            .find_all()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                panic!(
+                    "last peer removal button; visible IDs: {:?}",
+                    ElementQuery::from_root(&app)
+                        .match_predicate(|e| e.accessible_id().is_some())
+                        .find_all()
+                        .into_iter()
+                        .map(|e| e.accessible_id().unwrap().to_string())
+                        .collect::<Vec<_>>()
+                )
+            })
+    };
+    let key = |key: slint::platform::Key| {
+        let text: SharedString = key.into();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        settle();
+    };
+    for locale in ["en", "hr"] {
+        slint::select_bundled_translation(locale).unwrap();
+        for (width, height) in [(320, 800), (720, 320), (1280, 800)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            settle();
+            assert!(app.get_sync_enabled(), "sync fixture must be enabled");
+            assert_eq!(
+                app.get_settings_selected_id(),
+                7,
+                "Sync page must be mounted"
+            );
+            app.set_settings_scroll_y(0.0);
+            for attempt in 0..100 {
+                settle();
+                let visible = ElementQuery::from_root(&app)
+                    .match_predicate(|e| {
+                        e.accessible_id().as_deref() == Some("sync-remove:peer-19")
+                    })
+                    .find_all()
+                    .into_iter()
+                    .any(|e| {
+                        let y = e.absolute_position().y;
+                        y >= 24.0 && y + e.size().height <= height as f32 - 24.0
+                    });
+                if visible {
+                    break;
+                }
+                app.set_settings_scroll_y(-120.0 * (attempt + 1) as f32);
+            }
+            let _ = remove_button();
+            let offset = app.get_settings_scroll_y();
+            assert!(
+                offset < -100.0,
+                "fixture must exercise a scrolled peer list"
+            );
+            let before = removed.borrow().len();
+            remove_button().mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            let panel = element("SettingsPage::sync_remove_panel");
+            let p = panel.absolute_position();
+            let size = panel.size();
+            assert!(p.x >= 0.0 && p.y >= 0.0);
+            assert!(p.x + size.width <= width as f32 + 1.0);
+            assert!(p.y + size.height <= height as f32 + 1.0);
+            for id in [
+                "SettingsPage::sync_remove_cancel",
+                "SettingsPage::sync_remove_confirm",
+            ] {
+                let action = element(id);
+                let p = action.absolute_position();
+                let size = action.size();
+                assert!(
+                    size.height >= 44.0 && p.y >= 0.0 && p.y + size.height <= height as f32 + 1.0
+                );
+            }
+            assert!((app.get_settings_scroll_y() - offset).abs() < 1.0);
+            element("SettingsPage::sync_remove_cancel")
+                .mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            assert_eq!(removed.borrow().len(), before);
+            assert!(
+                ElementHandle::find_by_element_id(&app, "SettingsPage::sync_remove_panel")
+                    .next()
+                    .is_none()
+            );
+            remove_button().mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            key(slint::platform::Key::Back);
+            assert!(
+                ElementHandle::find_by_element_id(&app, "SettingsPage::sync_remove_panel")
+                    .next()
+                    .is_none()
+            );
+            assert!(app.get_show_settings());
+            assert!((app.get_settings_scroll_y() - offset).abs() < 1.0);
+            remove_button().mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            key(slint::platform::Key::Return); // Cancel is the safe initial action.
+            assert_eq!(removed.borrow().len(), before);
+            remove_button().mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            if locale == "en" {
+                element("SettingsPage::sync_remove_confirm")
+                    .mock_single_click(slint::platform::PointerEventButton::Left);
+                settle();
+            } else {
+                key(slint::platform::Key::RightArrow);
+                key(slint::platform::Key::Return);
+            }
+            assert_eq!(removed.borrow().len(), before + 1);
+            assert_eq!(removed.borrow().last().unwrap(), "peer-19");
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}
+
 fn s(v: &str) -> SharedString {
     SharedString::from(v)
 }
