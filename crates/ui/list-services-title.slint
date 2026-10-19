@@ -2,13 +2,13 @@ import { DetailBridge, Theme } from "@NovaUiShared";
 import { PillButton } from "settings-controls.slint";
 import { CheckBox } from "std-widgets.slint";
 
-// Service indices belong only to this subsystem: 0 Simkl, 1 MDBList.
+// Service indices belong only to this subsystem: 0 Simkl, 1 MDBList, 2 Trakt.
 export component ListServicesTitle inherits VerticalLayout {
     in property <int> service;
     property <bool> include_history: false;
     alignment: start;
     spacing: 16px;
-    Text { text: root.service == 0 ? "Simkl" : "MDBList"; color: Theme.current.text_tracking_primary; font-size: 22px; font-weight: 700; }
+    Text { text: root.service == 0 ? "Simkl" : root.service == 1 ? "MDBList" : "Trakt"; color: Theme.current.text_tracking_primary; font-size: 22px; font-weight: 700; }
     Text { text: @tr("Sync this title's library membership and watched history. Only confirmed catalog and episode identities are shared."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
     Text { text: DetailBridge.list_services_title_identity; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
     Text { text: DetailBridge.list_services_title_status; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }

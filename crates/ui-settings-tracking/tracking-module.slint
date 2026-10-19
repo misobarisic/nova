@@ -11,7 +11,8 @@ export component SettingsTrackingModule inherits Window {
     private property <bool> tracker_focused;
     private property <bool> simkl_focused;
     private property <bool> mdblist_focused;
-    private property <bool> any_input_focused: root.tracker_focused || root.simkl_focused || root.mdblist_focused;
+    private property <bool> trakt_focused;
+    private property <bool> any_input_focused: root.tracker_focused || root.simkl_focused || root.mdblist_focused || root.trakt_focused;
     changed any_input_focused => { SettingsContent.tracking_input_focused = root.any_input_focused; }
     background: transparent;
     width: SettingsContent.slot_width; height: SettingsContent.slot_height;
@@ -48,6 +49,7 @@ export component SettingsTrackingModule inherits Window {
             StremioSettings {}
             ListServiceSettings { service: 0; blur: SettingsContent.tracking_blur; changed input_focused => { root.simkl_focused = self.input_focused; } }
             ListServiceSettings { service: 1; blur: SettingsContent.tracking_blur; changed input_focused => { root.mdblist_focused = self.input_focused; } }
+            ListServiceSettings { service: 2; blur: SettingsContent.tracking_blur; changed input_focused => { root.trakt_focused = self.input_focused; } }
         }
     }
 }

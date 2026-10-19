@@ -119,6 +119,7 @@ fn service_rail_reveals_every_destination_and_routes_its_own_callback() {
                 (2, "Stremio", "stremio:"),
                 (3, "Simkl", "list:0"),
                 (4, "MDBList", "list:1"),
+                (5, "Trakt", "list:2"),
             ] {
                 let before = events.borrow().len();
                 let target = service_button(&app, label);
@@ -294,7 +295,7 @@ fn title_sync_requires_the_enable_button_for_each_service() {
         settle(&app);
         assert_eq!(&stremio.borrow()[before..], &[false]);
 
-        for service in [0, 1] {
+        for service in [0, 1, 2] {
             app.set_tracking_service(service + 3);
             app.set_list_services_title_connected(true);
             app.set_list_services_title_selected(false);

@@ -29,11 +29,11 @@ export component ListServiceSettings inherits TrackingAccountCard {
     changed whole_library => { root.full_library_draft = false; }
     changed account => { root.full_library_draft = false; }
     toggled => { if !root.expanded { root.full_library_draft = false; } }
-    title: root.service == 0 ? "Simkl" : "MDBList";
-    logo: root.service == 0 ? @image-url("../../assets/icons/services/simkl.svg") : @image-url("../../assets/icons/services/mdblist.svg");
+    title: root.service == 0 ? "Simkl" : root.service == 1 ? "MDBList" : "Trakt";
+    logo: root.service == 0 ? @image-url("../../assets/icons/services/simkl.svg") : root.service == 1 ? @image-url("../../assets/icons/services/mdblist.svg") : @image-url("../../assets/icons/services/trakt.svg");
     status: SettingsBridge.list_services_account[root.service] != "" ? SettingsBridge.list_services_account[root.service] : @tr("Not connected");
-    brand_color: root.service == 0 ? #176c99 : #315f3d;
-    brand_dark: root.service == 0 ? #12344e : #183522;
+    brand_color: root.service == 0 ? #176c99 : root.service == 1 ? #315f3d : #9e252b;
+    brand_dark: root.service == 0 ? #12344e : root.service == 1 ? #183522 : #48191e;
     VerticalLayout {
         alignment: start; spacing: 12px;
         Text { text: SettingsBridge.list_services_status[root.service]; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
@@ -71,10 +71,10 @@ export component ListServiceSettings inherits TrackingAccountCard {
             color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px;
         }
         if root.connected: Text { text: @tr("Your selected titles and exclusions are kept when you change modes."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
-        if !SettingsBridge.list_services_connected[root.service]: Text { text: root.service == 0 ? @tr("Enter your Simkl application client ID and access token. Tokens are verified before use.") : @tr("Create an API key in MDBList preferences and paste it below."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
-        if root.service == 0 && !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: @tr("Simkl client ID"); accessible-label: @tr("Simkl client ID"); text <=> root.client_value; changed full-text => { root.client_full = self.full-text; } changed has-focus => { root.client_focused = self.has-focus; } }
-        if !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: root.service == 0 ? @tr("Simkl access token") : @tr("MDBList API key"); accessible-label: self.placeholder-text; input-type: password; text <=> root.token_value; changed full-text => { root.token_full = self.full-text; } changed has-focus => { root.token_focused = self.has-focus; } }
-        if !SettingsBridge.list_services_connected[root.service]: PillButton { label: @tr("Connect"); primary: true; enabled: !SettingsBridge.list_services_busy[root.service]; clicked => { root.full_library_draft = false; SettingsBridge.list_services_connect(root.service, root.service == 0 ? root.client_full : "", root.token_full); root.release_focus(); root.token_value = ""; root.token_full = ""; } }
+        if !SettingsBridge.list_services_connected[root.service]: Text { text: root.service == 0 ? @tr("Enter your Simkl application client ID and access token. Tokens are verified before use.") : root.service == 1 ? @tr("Create an API key in MDBList preferences and paste it below.") : @tr("Enter your registered Trakt application client ID. Sign in opens Trakt in your browser; no client secret is needed. Register urn:ietf:wg:oauth:2.0:oob as the redirect URI."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+        if root.service != 1 && !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: root.service == 0 ? @tr("Simkl client ID") : @tr("Trakt client ID"); accessible-label: self.placeholder-text; text <=> root.client_value; changed full-text => { root.client_full = self.full-text; } changed has-focus => { root.client_focused = self.has-focus; } }
+        if root.service != 2 && !SettingsBridge.list_services_connected[root.service]: SettingsInput { placeholder-text: root.service == 0 ? @tr("Simkl access token") : @tr("MDBList API key"); accessible-label: self.placeholder-text; input-type: password; text <=> root.token_value; changed full-text => { root.token_full = self.full-text; } changed has-focus => { root.token_focused = self.has-focus; } }
+        if !SettingsBridge.list_services_connected[root.service]: PillButton { label: root.service == 2 ? @tr("Sign in") : @tr("Connect"); primary: true; enabled: !SettingsBridge.list_services_busy[root.service]; clicked => { root.full_library_draft = false; SettingsBridge.list_services_connect(root.service, root.service != 1 ? root.client_full : "", root.service == 2 ? "" : root.token_full); root.release_focus(); root.token_value = ""; root.token_full = ""; } }
         if !SettingsBridge.list_services_connected[root.service]: PillButton { label: @tr("Open account settings"); clicked => { SettingsBridge.list_services_open_account(root.service); } }
         if SettingsBridge.list_services_connected[root.service]: SettingsRow { row-title: SettingsBridge.list_services_whole_library[root.service] ? @tr("Automatic sync") : @tr("Automatic sync for selected titles"); ToggleSwitch { name: SettingsBridge.list_services_whole_library[root.service] ? @tr("Automatic sync") : @tr("Automatic sync for selected titles"); checked: SettingsBridge.list_services_automatic[root.service]; toggled => { SettingsBridge.list_services_automatic_changed(root.service, self.checked); } } }
         if root.connected && root.full_library_draft: Text { text: @tr("Full-library sync imports and exports all supported saved titles and watched episodes. Custom lists and ratings are preserved."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }

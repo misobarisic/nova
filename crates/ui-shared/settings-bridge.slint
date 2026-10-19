@@ -3,12 +3,12 @@
 import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
-    in-out property <[string]> list_services_account: ["", ""];
-    in-out property <[string]> list_services_status: ["", ""];
-    in-out property <[bool]> list_services_connected: [false, false];
-    in-out property <[bool]> list_services_busy: [false, false];
-    in-out property <[bool]> list_services_automatic: [true, true];
-    in-out property <[bool]> list_services_whole_library: [false, false];
+    in-out property <[string]> list_services_account: ["", "", ""];
+    in-out property <[string]> list_services_status: ["", "", ""];
+    in-out property <[bool]> list_services_connected: [false, false, false];
+    in-out property <[bool]> list_services_busy: [false, false, false];
+    in-out property <[bool]> list_services_automatic: [true, true, true];
+    in-out property <[bool]> list_services_whole_library: [false, false, false];
     callback list_services_connect(int, string, string);
     callback list_services_disconnect(int);
     callback list_services_cancel(int);

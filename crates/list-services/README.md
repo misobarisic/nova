@@ -1,9 +1,9 @@
 # nova-list-services
 
-Official Simkl and MDBList account, list, watched-history and playback APIs,
+Official Simkl, MDBList and Trakt account, list, watched-history and playback APIs,
 independent of Slint, storage and the app's sync engine. `Client` accepts an
 `Arc<dyn Transport>`; production uses `HttpsTransport`, tests inject responses.
-Requests use HTTPS to only the two official API hosts, disable redirects, time
+Requests use HTTPS to only the official Simkl/MDBList/Trakt API and Trakt auth hosts, disable redirects, time
 out after 30 seconds, and bound each JSON body to 16 MiB. Library requests stop
 at 100 pages / 50,000 titles. Failures never contain URLs, credentials or bodies.
 `Secret` zeroizes strings on drop and redacts Debug output. Credentials remain
@@ -12,7 +12,8 @@ sensitive when serialized; the caller owns persistence and account isolation.
 ## App contract
 
 - `Credentials { service, client_id, token }`: Simkl requires a real registered
-  public app client ID and user access token. MDBList accepts a personal API key
+  public app client ID and user access token. Trakt also uses a registered public
+  client ID; its device authorization does not accept a client secret. MDBList accepts a personal API key
   as `token` and an empty `client_id`. No borrowed app IDs or client secrets.
 - `verify` validates credentials and returns a stable account ID/name.
 - `begin_device`, `poll_device`, `refresh` implement Simkl AUTH V2's public
@@ -57,8 +58,29 @@ Dynamic/foreign lists are read-only, and API quotas apply to all account apps.
 The current official API supports progress and history; old API summaries that
 claim MDBList is only a ratings/list reader are outdated.
 
+Trakt supports additive watchlist and exact watched-history sync, paused playback
+and real start/pause/stop scrobbles. The 2026 auth migration uses
+`auth.trakt.tv/oauth/device/{code,token}` and `/oauth/token`, with a public client
+ID only. Register `urn:ietf:wg:oauth:2.0:oob` as the application redirect URI for
+refreshes. Tokens rotate on refresh and must be saved before subsequent calls.
+The API client verifies immutable account UUIDs rather than mutable usernames.
+Watched shows request `extended=progress`; episodes with zero plays and no
+positive watched evidence remain unwatched. All reads explicitly paginate and
+respect applied page/count headers, falling back to an empty page with repeated
+page detection. Scrobbles resolve exact episode IDs from confirmed parent IDs;
+show IDs never substitute for episode IDs. Recently recorded duplicate stop
+responses (409) count as acknowledged delivery. Movie scrobbles hydrate and
+validate the canonical summary before sending required title/year/IDs; a
+64-entry, one-day public metadata cache serves repeated player events.
+Ratings, custom lists and
+collection membership are preserved rather than edited.
+
 ## Sources inspected
 
+- [Trakt current official OpenAPI](https://developer.trakt.tv/openapi.json),
+  [authentication](https://developer.trakt.tv/docs/authentication-oauth),
+  [required headers](https://developer.trakt.tv/docs/required-headers), and
+  [2026 watched pagination change](https://github.com/trakt/trakt-api/discussions/775).
 - [Simkl current reference](https://api.simkl.org/) and
   [required incremental sync workflow](https://api.simkl.org/guides/sync).
 - [Simkl AUTH V2 device flow](https://api.simkl.org/api-reference/oauth2-device).

@@ -1,4 +1,4 @@
-//! Profile-owned Simkl/MDBList actors. Scope is explicit; merge operations are
+//! Profile-owned Simkl/MDBList/Trakt actors. Scope is explicit; merge operations are
 //! additive and never infer a removal from an absent remote record.
 use super::*;
 use nova_list_services::{
@@ -10,9 +10,12 @@ use std::time::Instant;
 
 pub(super) const DOMAIN: &str = "list_services";
 const MAX_TITLES: usize = 20_000;
+const SERVICE_COUNT: usize = 3;
 #[cfg(test)]
 #[path = "list_services_tests.rs"]
 mod tests;
+#[path = "list_services_trakt.rs"]
+mod trakt;
 // library() can perform several bounded pages. Check cancellation at each
 // physical request, so cancelling a pass does not start another page afterward.
 struct SessionTransport {
@@ -26,8 +29,10 @@ impl nova_list_services::Transport for SessionTransport {
     ) -> Result<nova_list_services::Response, ApiError> {
         let i = if request.url.starts_with("https://api.simkl.com/") {
             0
-        } else {
+        } else if request.url.starts_with("https://api.mdblist.com/") {
             1
+        } else {
+            2
         };
         if !profiles::is_current(&profiles::capture())
             || self.handle.stop.load(Ordering::Acquire)
@@ -50,6 +55,8 @@ struct Connection {
     credentials: Credentials,
     account: Account,
     epoch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<trakt::Refresh>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Selection {
@@ -96,6 +103,7 @@ struct Permit {
     selection: Selection,
 }
 enum Command {
+    Device(String, u64),
     Connect(usize, String, Secret, u64),
     Disconnect(usize, u64),
     Cancel(usize, u64),
@@ -109,6 +117,7 @@ enum Command {
 impl Command {
     fn owner(&self) -> (usize, u64) {
         match self {
+            Self::Device(_, generation) => (2, *generation),
             Self::Connect(i, _, _, generation)
             | Self::Disconnect(i, generation)
             | Self::Cancel(i, generation)
@@ -124,11 +133,14 @@ impl Command {
 pub(super) struct Handle {
     finished: Arc<AtomicBool>,
     stop: AtomicBool,
-    generation: [AtomicU64; 2],
+    generation: [AtomicU64; SERVICE_COUNT],
     tx: SyncSender<Command>,
     rx: Mutex<Option<Receiver<Command>>>,
     urgent: Mutex<Vec<Command>>,
     wake: AtomicBool,
+    playback: Mutex<Option<trakt::Observation>>,
+    playback_end: Mutex<trakt::PlaybackEnd>,
+    scrobbles: Mutex<std::collections::VecDeque<(trakt::Observation, u64)>>,
 }
 impl Handle {
     pub(super) fn new() -> Self {
@@ -141,6 +153,9 @@ impl Handle {
             rx: Mutex::new(Some(rx)),
             urgent: Mutex::new(Vec::new()),
             wake: AtomicBool::new(false),
+            playback: Mutex::new(None),
+            playback_end: Mutex::new(trakt::PlaybackEnd::default()),
+            scrobbles: Mutex::new(std::collections::VecDeque::new()),
         }
     }
     pub(super) fn is_finished(&self) -> bool {
@@ -160,14 +175,10 @@ impl Handle {
     }
 }
 fn index(service: i32) -> Option<usize> {
-    usize::try_from(service).ok().filter(|i| *i < 2)
+    usize::try_from(service).ok().filter(|i| *i < SERVICE_COUNT)
 }
 fn service(index: usize) -> Service {
-    if index == 0 {
-        Service::Simkl
-    } else {
-        Service::MdbList
-    }
+    [Service::Simkl, Service::MdbList, Service::Trakt][index]
 }
 impl Bridge {
     pub(super) fn start_list_services(&self) {
@@ -203,7 +214,7 @@ impl Bridge {
     pub(super) fn shutdown_list_services(&self) {
         let h = self.list_services();
         h.stop.store(true, Ordering::Release);
-        for i in 0..2 {
+        for i in 0..SERVICE_COUNT {
             h.bump(i);
         }
     }
@@ -214,6 +225,12 @@ impl Bridge {
         let Some(i) = index(value) else {
             return;
         };
+        if i == 2 && token.trim().is_empty() {
+            let h = self.list_services();
+            let generation = h.bump(i);
+            h.control(i, Command::Device(client.trim().to_owned(), generation));
+            return;
+        }
         let Ok(token) = Secret::new(token.trim().to_owned()) else {
             if let Some(app) = self.app() {
                 let current = app.get_list_services_status();
@@ -272,8 +289,10 @@ impl Bridge {
         if let Some(i) = index(value) {
             let _ = crate::player::open_browser(if i == 0 {
                 "https://simkl.com/settings/developer/"
-            } else {
+            } else if i == 1 {
                 "https://mdblist.com/preferences/"
+            } else {
+                "https://developer.trakt.tv/apps"
             });
         }
     }
@@ -346,34 +365,40 @@ impl Bridge {
 struct Worker {
     bridge: Bridge,
     client: Client,
-    connections: [Option<Connection>; 2],
-    verified: [bool; 2],
-    automatic: [bool; 2],
-    full: [bool; 2],
-    busy: [bool; 2],
-    status: [String; 2],
-    next: [Instant; 2],
-    retry: [u64; 2],
+    connections: [Option<Connection>; SERVICE_COUNT],
+    verified: [bool; SERVICE_COUNT],
+    automatic: [bool; SERVICE_COUNT],
+    full: [bool; SERVICE_COUNT],
+    busy: [bool; SERVICE_COUNT],
+    status: [String; SERVICE_COUNT],
+    next: [Instant; SERVICE_COUNT],
+    retry: [u64; SERVICE_COUNT],
     review: Option<Review>,
-    paused: [bool; 2],
-    force: [bool; 2],
+    paused: [bool; SERVICE_COUNT],
+    force: [bool; SERVICE_COUNT],
+    device: Option<trakt::DeviceSession>,
+    last_scrobble: Option<(trakt::Observation, u64)>,
+    rejected_scrobbles: std::collections::VecDeque<(trakt::Observation, u64)>,
 }
 impl Worker {
     fn new(bridge: Bridge, client: Client) -> Self {
         Self {
             bridge,
             client,
-            connections: [None, None],
-            verified: [false; 2],
-            automatic: [true; 2],
-            full: [false; 2],
-            busy: [false; 2],
-            status: [String::new(), String::new()],
-            next: [Instant::now(); 2],
-            retry: [5; 2],
+            connections: std::array::from_fn(|_| None),
+            verified: [false; SERVICE_COUNT],
+            automatic: [true; SERVICE_COUNT],
+            full: [false; SERVICE_COUNT],
+            busy: [false; SERVICE_COUNT],
+            status: std::array::from_fn(|_| String::new()),
+            next: [Instant::now(); SERVICE_COUNT],
+            retry: [5; SERVICE_COUNT],
             review: None,
-            paused: [false; 2],
-            force: [false; 2],
+            paused: [false; SERVICE_COUNT],
+            force: [false; SERVICE_COUNT],
+            device: None,
+            last_scrobble: None,
+            rejected_scrobbles: std::collections::VecDeque::new(),
         }
     }
     fn run(mut self, rx: Receiver<Command>) {
@@ -396,16 +421,20 @@ impl Worker {
             if !profiles::is_current(&profiles::capture()) {
                 return;
             }
+            self.poll_trakt_device();
             let wake = self
                 .bridge
                 .list_services()
                 .wake
                 .swap(false, Ordering::AcqRel);
             let mut projected = true;
-            for i in 0..2 {
+            for i in 0..SERVICE_COUNT {
                 if let Err(error) = self.restore(i) {
                     projected = false;
                     self.failed(i, error);
+                }
+                if i == 2 {
+                    self.flush_trakt_observations();
                 }
                 if self.verified[i] && self.force[i] {
                     self.force[i] = false;
@@ -435,6 +464,9 @@ impl Worker {
             return;
         }
         let result = match command {
+            Command::Device(client_id, generation) => {
+                Some((2, self.begin_trakt_device(client_id, generation)))
+            }
             Command::Connect(i, client_id, token, generation) => {
                 self.busy[i] = true;
                 self.status[i] = text::tr("Verifying account…").into();
@@ -448,6 +480,7 @@ impl Worker {
                     self.live(i, generation)?;
                     let connection = Connection {
                         version: 1,
+                        refresh: None,
                         credentials,
                         account,
                         epoch: format!(
@@ -470,6 +503,9 @@ impl Worker {
                 Some((i, result))
             }
             Command::Disconnect(i, generation) => {
+                if i == 2 {
+                    self.device = None;
+                }
                 let result = self.live(i, generation).and_then(|_| {
                     if let Some(current) = self.record::<Connection>(&format!("connection:{i}"))? {
                         self.account_preferences(i, &current)?;
@@ -485,6 +521,9 @@ impl Worker {
                 Some((i, result))
             }
             Command::Cancel(i, _) => {
+                if i == 2 {
+                    self.device = None;
+                }
                 self.busy[i] = false;
                 self.paused[i] = true;
                 self.status[i] = text::tr("Sync paused. Select Sync now to resume.").into();
@@ -499,6 +538,15 @@ impl Worker {
                 let result = self.flag(i, "automatic", enabled);
                 if result.is_ok() {
                     self.automatic[i] = enabled;
+                    if i == 2 && !enabled {
+                        self.bridge
+                            .list_services()
+                            .scrobbles
+                            .lock()
+                            .unwrap()
+                            .clear();
+                        self.last_scrobble = None;
+                    }
                 }
                 Some((i, result))
             }
@@ -720,15 +768,24 @@ impl Worker {
                     && a.credentials.token == b.credentials.token
                     && a.credentials.client_id == b.credentials.client_id
                     && a.credentials.service == b.credentials.service
+                    && a.refresh == b.refresh
             }
             _ => false,
         };
         if !same {
-            self.bridge.list_services().bump(i);
+            if i != 2
+                || self.connections[i].is_some()
+                || self.bridge.list_services().generation[i].load(Ordering::Acquire) != 0
+            {
+                self.bridge.list_services().bump(i);
+            }
             self.verified[i] = false;
             self.connections[i] = loaded;
             self.next[i] = Instant::now();
             self.paused[i] = false;
+        }
+        if i == 2 {
+            self.refresh_trakt()?;
         }
         if let Some(connection) = self.connections[i].clone() {
             if connection.version != 1
@@ -758,6 +815,10 @@ impl Worker {
                         .restore_simkl_checkpoint(&connection.credentials, checkpoint)?;
                 }
                 self.verified[i] = true;
+                if i == 2 {
+                    self.retry[i] = 5;
+                    self.status[i] = text::tr("Connected").into();
+                }
             }
         }
         if !same || prior != (self.full[i], self.automatic[i], self.verified[i]) {
@@ -1068,7 +1129,12 @@ impl Worker {
                 });
                 let event = local_watched_sequence(&source.entry.id, native)?;
                 let export = existing.is_some_and(|p| history_allowed(&selection, p, event));
-                if export && !remote_watched {
+                let live_scrobble = i == 2
+                    && self
+                        .bridge
+                        .list_services()
+                        .has_trakt_observation(&source.entry.id, Some(native));
+                if export && !remote_watched && !live_scrobble {
                     self.scope_current(i, generation, &connection, &source, &selection)?;
                     self.client.set_watched(
                         &connection.credentials,
@@ -1100,7 +1166,12 @@ impl Worker {
             }
             // Never manufacture seconds from an unknown duration or let an
             // unrelated episode's position overwrite the remote checkpoint.
-            if let Some((_, episode, p)) = latest_resume {
+            let live_scrobble = i == 2
+                && self
+                    .bridge
+                    .list_services()
+                    .has_trakt_observation(&source.entry.id, None);
+            if let Some((_, episode, p)) = latest_resume.filter(|_| !live_scrobble) {
                 let percent = resume_percent(&p).unwrap();
                 let compatible =
                     remote.is_none_or(|r| r.progress.is_none() || r.playback_episode == episode);
@@ -1309,6 +1380,7 @@ impl Worker {
         self.busy[i] = false;
         let seconds = match error {
             ApiError::RateLimited { retry_after } => retry_after.clamp(1, 86_400),
+            ApiError::Pending if i == 2 => self.retry[i].max(30),
             _ => self.retry[i],
         };
         self.next[i] = Instant::now() + Duration::from_secs(seconds);
@@ -1320,6 +1392,9 @@ impl Worker {
                 "Reconnect this account to continue"
             }
             ApiError::RateLimited { .. } => "Service rate limit reached. Sync will retry.",
+            ApiError::Pending if i == 2 => {
+                "Waiting for refreshed sign-in from paired devices. Reconnect if this continues."
+            }
             ApiError::Rejected => "Sync interrupted or local save failed. Try Sync now.",
             ApiError::InvalidInput | ApiError::InvalidResponse => {
                 "Unsupported or invalid service data. Some titles remain pending."
@@ -1576,6 +1651,7 @@ fn same_control(a: &Command, b: &Command) -> bool {
         (Command::Select(a, _, _), Command::Select(b, _, _)) => {
             a.id == b.id && a.media_type == b.media_type
         }
+        (Command::Device(..), Command::Device(..)) => true,
         (Command::Scope(..), Command::Scope(..))
         | (Command::Automatic(..), Command::Automatic(..))
         | (Command::Cancel(..), Command::Cancel(..)) => true,
@@ -1804,7 +1880,7 @@ fn imported_entry(remote: &RemoteTitle) -> Option<LibraryEntry> {
         added_at_secs: now_secs(),
     })
 }
-fn strings(values: [String; 2]) -> slint::ModelRc<slint::SharedString> {
+fn strings(values: [String; SERVICE_COUNT]) -> slint::ModelRc<slint::SharedString> {
     slint::ModelRc::new(slint::VecModel::from(
         values.into_iter().map(Into::into).collect::<Vec<_>>(),
     ))
@@ -1812,10 +1888,10 @@ fn strings(values: [String; 2]) -> slint::ModelRc<slint::SharedString> {
 pub(super) fn clear_ui(app: &AppWindow) {
     app.set_list_services_account(strings(std::array::from_fn(|_| String::new())));
     app.set_list_services_status(strings(std::array::from_fn(|_| String::new())));
-    app.set_list_services_connected(bools([false; 2]));
-    app.set_list_services_busy(bools([false; 2]));
-    app.set_list_services_automatic(bools([true; 2]));
-    app.set_list_services_whole_library(bools([false; 2]));
+    app.set_list_services_connected(bools([false; SERVICE_COUNT]));
+    app.set_list_services_busy(bools([false; SERVICE_COUNT]));
+    app.set_list_services_automatic(bools([true; SERVICE_COUNT]));
+    app.set_list_services_whole_library(bools([false; SERVICE_COUNT]));
     app.set_list_services_title_selected(false);
     app.set_list_services_title_connected(false);
     app.set_list_services_title_busy(false);
@@ -1823,7 +1899,7 @@ pub(super) fn clear_ui(app: &AppWindow) {
     app.set_list_services_title_status("".into());
     app.set_list_services_title_identity("".into());
 }
-fn bools(values: [bool; 2]) -> slint::ModelRc<bool> {
+fn bools(values: [bool; SERVICE_COUNT]) -> slint::ModelRc<bool> {
     slint::ModelRc::new(slint::VecModel::from(values.to_vec()))
 }
 
@@ -1834,6 +1910,7 @@ mod policy_regressions {
     fn connection(i: usize, account: &str, epoch: &str) -> Connection {
         Connection {
             version: 1,
+            refresh: None,
             credentials: Credentials {
                 service: service(i),
                 client_id: "nova-test".into(),
@@ -1868,7 +1945,7 @@ mod policy_regressions {
 
     #[test]
     fn native_exclusion_blocks_canonical_reimport_after_native_metadata_is_gone() {
-        for i in 0..2 {
+        for i in 0..SERVICE_COUNT {
             let connection = connection(i, "account-a", "first-sign-in");
             let review = Review {
                 service: i,
@@ -1990,7 +2067,7 @@ mod policy_regressions {
 
     #[test]
     fn reconnecting_a_then_b_then_a_restores_account_preferences_with_fresh_session_guards() {
-        for i in 0..2 {
+        for i in 0..SERVICE_COUNT {
             let mut store = nova_sync::Store::default();
             let a = connection(i, "account-a", "a-first");
             store_connection(&mut store, i, &a, 1).unwrap();

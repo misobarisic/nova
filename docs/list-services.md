@@ -1,6 +1,6 @@
-# Simkl and MDBList sync
+# Simkl, MDBList and Trakt sync
 
-Settings → Tracking includes separate Simkl and MDBList account cards. Each
+Settings → Tracking includes separate Simkl, MDBList and Trakt account cards. Each
 account belongs to the selected Nova profile. Connecting verifies the remote
 account and saves its sign-in; it does not enable a whole-library upload.
 
@@ -17,9 +17,22 @@ token refresh is not yet wired into the account cards. An expired
 or rejected credential requires reconnecting. Tokens are never included in
 statuses or diagnostics.
 
+Trakt uses browser device-code sign-in with your registered public application
+client ID from [Trakt developer apps](https://developer.trakt.tv/apps). Register
+`urn:ietf:wg:oauth:2.0:oob` as its redirect URI; Nova uses that URI when renewing
+the device grant. No client secret is needed or embedded. The code and official
+activation URL appear in the account status, and the browser opens automatically.
+Polling honors the service interval, slowdown responses, expiry and cancellation.
+Android keeps the shared authorization service alive while sign-in is pending.
+Refresh tokens rotate atomically before subsequent network reads. A rejected
+shared refresh waits with bounded backoff for newer paired-device credentials;
+it never disconnects the account or overwrites a newer connection/tombstone.
+See the [current official Trakt authentication guide](https://developer.trakt.tv/docs/authentication-oauth)
+and [OpenAPI schema](https://developer.trakt.tv/openapi.json).
+
 ## Choosing scope
 
-Open a saved title's Tracking page and choose Simkl or MDBList. **Start syncing
+Open a saved title's Tracking page and choose Simkl, MDBList or Trakt. **Start syncing
 this title** enables that exact native title for that verified account. The
 **Include watched episodes** checkbox is unchecked by default. Without it, Nova
 checkpoints the local semantic watch journal; subsequent local watched actions
@@ -72,13 +85,34 @@ local resume candidate is considered for each title. Matching episode positions
 merge toward the greater percentage. Different remote/local episode checkpoints
 remain pending instead of overwriting one another. Import converts a remote
 percentage to seconds only when the matching local episode already has a real
-duration; missing durations remain pending. This is checkpoint sync, without
-continuous start/pause event streaming or guessed runtimes.
+duration; missing durations remain pending. Simkl/MDBList use checkpoint sync without continuous player event streaming.
+Trakt additionally receives real player start, unpause, pause and stop events,
+subject to the same selected/full scope, exclusions, automatic toggle and
+verified account. Loading never emits a scrobble. Live playback skips competing
+bulk watched/checkpoint writes, and repeated stop acknowledgments do not add
+duplicate plays. Trakt records a watch above its documented 80% stop threshold;
+shorter stops retain resume progress. Episode scrobbles resolve the exact
+episode ID against the confirmed parent, never the show ID or display numbering.
+These observations and pending device codes are process-local and profile-owned.
+A bounded 16-event queue retains transiently failed player transitions, including
+terminal stops, until retry. Real frames update the live snapshot even without
+a state change, so finishing verification or enabling consent mid-play can
+deliver Start once. Successfully sent session/action pairs suppress repeat
+notifications; profile/account generations invalidate stale queued events.
+Player observations use their own queue and never cancel library HTTP requests.
+Native EOF sends Stop while the final frame/end menu remains open; later pause
+ticks and close cannot send it again. Seeking back or replaying rearms a new
+viewing cycle on the same native load. Invalid or unsupported remote items are
+quarantined for that viewing cycle so another title can proceed; transport and
+rate-limit failures keep their bounded retry behavior. Movie scrobbles use a
+canonical Trakt summary whose IDs match the confirmed source and include the
+required title/year/IDs. A 64-entry, one-day public metadata cache avoids
+refetching that summary for every start/pause/stop.
 
 ## Persistence and paired devices
 
 The profile-qualified `list_services` generic peer domain contains version-1
-JSON `connection:0` (Simkl) and `connection:1` (MDBList) records. Each includes the
+JSON `connection:0` (Simkl), `connection:1` (MDBList) and `connection:2` (Trakt) records. Trakt records optionally include its refresh token and access expiry; older records without these fields remain readable. Each includes the
 verified account, credentials, public client registration and a fresh sign-in
 epoch. Disconnect publishes a tombstone. Separate
 `account:<JSON(service,account)>:automatic` and `:full` booleans carry preferences
@@ -126,9 +160,11 @@ server rate limits cannot be bypassed by the manual sync button.
 
 ## Where to look
 
-- `crates/list-services/src/{api,models}.rs`: bounded official HTTPS clients,
+- `crates/list-services/src/{api,models,trakt}.rs`: bounded official HTTPS clients,
   normalized catalog identities, library/history/checkpoint operations and
-  Simkl device authorization.
+  Simkl device authorization and current Trakt auth/pagination/scrobble protocol.
+- `src/app/list_services_trakt.rs`: Trakt browser device flow, shared refresh
+  rotation, stale peer guards and scoped real player observations.
 - `src/app/list_services.rs`: profile actor, credentials, explicit scope,
   conservative identity projection, additive merge and durable apply checks.
 - `src/app/list_services_tests.rs`: scope, history authorization, queue
@@ -140,4 +176,4 @@ server rate limits cannot be bypassed by the manual sync button.
 - `crates/ui/list-services-title.slint`: selected-title opt-in and exclusion.
 
 Fixture and headless tests do not establish live-account compatibility. No live
-Simkl or MDBList account mutation has been performed during this implementation.
+Simkl, MDBList or Trakt account mutation has been performed during this implementation.

@@ -15,7 +15,10 @@ pub(super) fn imported_watch(progress: &EpisodeProgress) -> bool {
 }
 
 pub(super) fn sign_in_background() -> Result<Box<dyn Send>, String> {
-    worker::sign_in_background()
+    sign_in_background_for("Stremio")
+}
+pub(super) fn sign_in_background_for(service: &'static str) -> Result<Box<dyn Send>, String> {
+    worker::sign_in_background(service)
 }
 use nova_tracking::{Service, SourceRef};
 use std::sync::mpsc::{self, Receiver, SyncSender};

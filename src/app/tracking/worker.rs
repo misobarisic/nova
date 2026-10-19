@@ -174,16 +174,16 @@ impl<T: api::Transport> api::Transport for ActorTransport<T> {
 
 /// All account integrations share ownership of the Android authorization
 /// service, so finishing one sign-in cannot interrupt another one.
-pub(super) fn sign_in_background() -> Result<Box<dyn Send>, String> {
+pub(super) fn sign_in_background(_service: &'static str) -> Result<Box<dyn Send>, String> {
     #[cfg(target_os = "android")]
     {
         let lease = LOGIN_BACKGROUND.acquire(
             || {
                 crate::app::android_bg::start_auth_service(
-                    "Stremio",
+                    _service,
                     text::tr("Finish sign-in in your browser"),
                 )
-                .ok_or_else(|| text::tr("Stremio is unavailable. Changes will retry.").to_string())
+                .ok_or_else(|| text::tr("Service unavailable. Try again.").to_string())
             },
             crate::app::android_bg::stop_auth_service,
         )?;

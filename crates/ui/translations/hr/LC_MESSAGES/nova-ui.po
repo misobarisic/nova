@@ -3506,6 +3506,15 @@ msgstr "Prikaži sve"
 msgid "External playback is currently unavailable on desktop."
 msgstr "Vanjska reprodukcija trenutačno nije dostupna na računalu."
 
+msgid "Sign in"
+msgstr "Prijavite se"
+
+msgid "Trakt client ID"
+msgstr "Trakt ID klijenta"
+
+msgid "Enter your registered Trakt application client ID. Sign in opens Trakt in your browser; no client secret is needed. Register urn:ietf:wg:oauth:2.0:oob as the redirect URI."
+msgstr "Unesite ID klijenta svoje registrirane Trakt aplikacije. Prijava otvara Trakt u pregledniku; tajni ključ klijenta nije potreban. Registrirajte urn:ietf:wg:oauth:2.0:oob kao URI za preusmjeravanje."
+
 msgid "Picture in picture"
 msgstr "Slika u slici"
 

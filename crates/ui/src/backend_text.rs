@@ -143,6 +143,10 @@ pub fn tr(english: &str) -> &str {
         "Choose what to sync for this title." => "Odaberite što sinkronizirati za ovaj naslov.",
         "Verifying account…" => "Provjera računa…",
         "Enter an API key or access token first." => "Prvo unesite API ključ ili pristupni token.",
+        "Sign-in expired. Start again." => "Prijava je istekla. Počnite ponovno.",
+        "Waiting for refreshed sign-in from paired devices. Reconnect if this continues." => {
+            "Čeka se obnovljena prijava s uparenih uređaja. Ponovno se povežite ako se čekanje nastavi."
+        }
         "Service unavailable. Try again." => "Usluga nije dostupna. Pokušajte ponovno.",
         "Sync paused. Select Sync now to resume." => {
             "Sinkronizacija je zaustavljena. Odaberite Sinkroniziraj sada za nastavak."
@@ -2227,4 +2231,13 @@ pub fn stremio_pending_title(name: &str, media_type: &str, id: &str, reason: &st
         tr("Source identifier omitted").into()
     };
     format!("{name}\n{}\n{identity}", tr(reason))
+}
+
+/// The code is public and short lived; access/refresh tokens never reach UI text.
+pub fn trakt_device_code(uri: &str, code: &str) -> String {
+    if croatian() {
+        format!("Otvorite {uri} i unesite kôd {code}")
+    } else {
+        format!("Visit {uri} and enter code {code}")
+    }
 }

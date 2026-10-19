@@ -1,3 +1,5 @@
+#[path = "trakt.rs"]
+mod trakt;
 use crate::*;
 use serde_json::{Value, json};
 use std::{
@@ -15,6 +17,8 @@ pub struct Request {
     pub method: &'static str,
     pub url: String,
     pub bearer: Option<Secret>,
+    /// Public registered Trakt application ID, sent only to official Trakt hosts.
+    pub trakt_client_id: Option<String>,
     pub body: Option<Value>,
 }
 impl Drop for Request {
@@ -39,6 +43,8 @@ pub struct Response {
     pub status: u16,
     pub retry_after: Option<u64>,
     pub has_more: bool,
+    /// Applied page and page count, when the server sends pagination headers.
+    pub pagination: Option<(u64, u64)>,
     pub body: Value,
 }
 pub trait Transport: Send + Sync {
@@ -84,7 +90,10 @@ impl Transport for HttpsTransport {
     fn send(&self, request: Request) -> Result<Response, ApiError> {
         let url = url::Url::parse(&request.url).map_err(|_| ApiError::InvalidInput)?;
         if url.scheme() != "https"
-            || !matches!(url.host_str(), Some("api.simkl.com" | "api.mdblist.com"))
+            || !matches!(
+                url.host_str(),
+                Some("api.simkl.com" | "api.mdblist.com" | "api.trakt.tv" | "auth.trakt.tv")
+            )
             || !url.username().is_empty()
             || url.password().is_some()
             || url.port().is_some()
@@ -94,7 +103,18 @@ impl Transport for HttpsTransport {
         }
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| ApiError::InvalidInput)?;
+        let trakt_host = matches!(url.host_str(), Some("api.trakt.tv" | "auth.trakt.tv"));
+        if trakt_host != request.trakt_client_id.is_some() {
+            return Err(ApiError::InvalidInput);
+        }
         let mut builder = self.client.request(method, url);
+        if let Some(client_id) = &request.trakt_client_id {
+            validate_client_id(client_id)?;
+            builder = builder
+                .header("trakt-api-key", client_id)
+                .header("trakt-api-version", "2")
+                .header("content-type", "application/json");
+        }
         if let Some(token) = &request.bearer {
             builder = builder.bearer_auth(token.expose());
         }
@@ -112,6 +132,15 @@ impl Transport for HttpsTransport {
             .headers()
             .get("x-has-more")
             .is_some_and(|h| h == "true");
+        let pagination_header = |name| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+        };
+        let pagination = pagination_header("x-pagination-page")
+            .zip(pagination_header("x-pagination-page-count"));
         let mut bytes = zeroize::Zeroizing::new(Vec::new());
         response
             .by_ref()
@@ -134,6 +163,7 @@ impl Transport for HttpsTransport {
             status,
             retry_after,
             has_more,
+            pagination,
             body,
         })
     }
@@ -166,12 +196,14 @@ struct SimklCache {
 pub struct Client {
     transport: Arc<dyn Transport>,
     simkl: Mutex<Option<SimklCache>>,
+    trakt_movies: Mutex<Vec<trakt::MovieSummary>>,
 }
 impl Client {
     pub fn new(transport: Arc<dyn Transport>) -> Self {
         Self {
             transport,
             simkl: Mutex::new(None),
+            trakt_movies: Mutex::new(Vec::new()),
         }
     }
     fn request(
@@ -186,10 +218,12 @@ impl Client {
         let base = match credentials.service {
             Service::Simkl => "https://api.simkl.com",
             Service::MdbList => "https://api.mdblist.com",
+            Service::Trakt => "https://api.trakt.tv",
         };
         let mut url =
             url::Url::parse(&format!("{base}{path}")).map_err(|_| ApiError::InvalidInput)?;
         let bearer = match credentials.service {
+            Service::Trakt => Some(credentials.token.clone()),
             Service::Simkl => {
                 url.query_pairs_mut()
                     .append_pair("client_id", &credentials.client_id)
@@ -206,12 +240,26 @@ impl Client {
         for (k, v) in query {
             url.query_pairs_mut().append_pair(k, v);
         }
-        checked(self.transport.send(Request {
+        let response = self.transport.send(Request {
             method,
             url: url.into(),
             bearer,
+            trakt_client_id: (credentials.service == Service::Trakt)
+                .then(|| credentials.client_id.clone()),
             body,
-        })?)
+        })?;
+        // Trakt explicitly rejects a just-recorded duplicate scrobble with
+        // 409. It is already delivered, so retries must not create more plays.
+        if credentials.service == Service::Trakt
+            && path == "/scrobble/stop"
+            && response.status == 409
+            && response.body["watched_at"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        {
+            return Ok(response);
+        }
+        checked(response)
     }
     pub fn verify(&self, credentials: &Credentials) -> Result<Account, ApiError> {
         let value = self
@@ -219,7 +267,7 @@ impl Client {
                 credentials,
                 "GET",
                 match credentials.service {
-                    Service::Simkl => "/users/settings",
+                    Service::Simkl | Service::Trakt => "/users/settings",
                     Service::MdbList => "/user",
                 },
                 &[],
@@ -228,6 +276,13 @@ impl Client {
             .body;
         let (id, name) = match credentials.service {
             Service::Simkl => (&value["account"]["id"], &value["user"]["name"]),
+            Service::Trakt => (
+                &value["user"]["ids"]["uuid"],
+                value["user"]
+                    .get("name")
+                    .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+                    .unwrap_or(&value["user"]["username"]),
+            ),
             Service::MdbList => (
                 &value["user_id"],
                 value
@@ -294,6 +349,7 @@ impl Client {
     pub fn library(&self, credentials: &Credentials) -> Result<Vec<RemoteTitle>, ApiError> {
         match credentials.service {
             Service::Simkl => self.simkl_library(credentials),
+            Service::Trakt => self.trakt_library(credentials),
             Service::MdbList => {
                 let mut titles = Vec::new();
                 for (path, status) in [
@@ -478,6 +534,11 @@ impl Client {
                 });
                 "/sync/add-to-list"
             }
+            Service::Trakt => match status {
+                ListStatus::Planning => "/sync/watchlist",
+                ListStatus::Removed => "/sync/watchlist/remove",
+                _ => return Err(ApiError::Unsupported),
+            },
             Service::MdbList => match status {
                 ListStatus::Planning => "/watchlist/items/add",
                 ListStatus::Removed => "/watchlist/items/remove",
@@ -499,13 +560,16 @@ impl Client {
         watched: bool,
     ) -> Result<(), ApiError> {
         validate_episode(kind, episode)?;
+        if credentials.service == Service::Trakt && kind != MediaType::Movie && episode.is_none() {
+            return Err(ApiError::InvalidInput);
+        }
         let mut item = json!({"ids":request_ids(ids,credentials.service)?});
         if let Some(ep) = episode {
             item["seasons"] = json!([{"number":ep.season,"episodes":[{"number":ep.number}]}]);
         }
         let path = match (credentials.service, watched) {
-            (Service::Simkl, true) => "/sync/history",
-            (Service::Simkl, false) => "/sync/history/remove",
+            (Service::Simkl | Service::Trakt, true) => "/sync/history",
+            (Service::Simkl | Service::Trakt, false) => "/sync/history/remove",
             (Service::MdbList, true) => "/sync/watched",
             (Service::MdbList, false) => "/sync/watched/remove",
         };
@@ -523,6 +587,9 @@ impl Client {
         progress: f64,
         action: ScrobbleAction,
     ) -> Result<(), ApiError> {
+        if credentials.service == Service::Trakt {
+            return self.trakt_scrobble(credentials, ids, kind, episode, progress, action);
+        }
         validate_episode(kind, episode)?;
         if !progress.is_finite()
             || !(0.0..=100.0).contains(&progress)
@@ -677,6 +744,7 @@ impl Client {
             method: "POST",
             url: format!("https://api.simkl.com{path}"),
             bearer: None,
+            trakt_client_id: None,
             body: Some(body),
         })?)?
         .body)
@@ -696,7 +764,7 @@ fn validate_verification_uri(value: &str) -> Result<(), ApiError> {
 }
 fn validate_credentials(c: &Credentials) -> Result<(), ApiError> {
     Secret::new(c.token.expose().to_owned())?;
-    if c.service == Service::Simkl {
+    if matches!(c.service, Service::Simkl | Service::Trakt) {
         validate_client_id(&c.client_id)?;
     }
     Ok(())
@@ -1074,6 +1142,7 @@ mod tests {
                 status: 200,
                 retry_after: None,
                 has_more: false,
+                pagination: None,
                 body: value,
             });
         }
@@ -1100,6 +1169,327 @@ mod tests {
             imdb: Some("tt0903747".into()),
             ..Default::default()
         }
+    }
+    #[test]
+    fn trakt_verifies_immutable_uuid_and_sends_registered_client_headers() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"user":{"name":null,"username":"viewer","ids":{"uuid":"stable-owner","slug":"changeable-name"}}}));
+        let client = Client::new(fake.clone());
+        let account = client.verify(&credentials(Service::Trakt)).unwrap();
+        assert_eq!(account.id, "stable-owner");
+        assert_eq!(account.name, "viewer");
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests[0].url, "https://api.trakt.tv/users/settings");
+        assert_eq!(requests[0].trakt_client_id.as_deref(), Some("nova-client"));
+        assert_eq!(
+            requests[0].bearer.as_ref().unwrap().expose(),
+            "private-token"
+        );
+        assert!(!requests[0].url.contains("private-token"));
+    }
+    #[test]
+    fn trakt_device_flow_uses_current_auth_host_public_client_and_code_field() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"device_code":"private-device","user_code":"ABCD1234","verification_url":"https://auth.trakt.tv/activate","expires_in":600,"interval":5}));
+        fake.push(json!({"access_token":"private-access","refresh_token":"private-refresh","token_type":"Bearer","scope":"public","expires_in":604800}));
+        fake.push(json!({"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":604800}));
+        let client = Client::new(fake.clone());
+        let code = client.begin_trakt_device("nova-client").unwrap();
+        let tokens = client
+            .poll_trakt_device("nova-client", &code.device_code)
+            .unwrap();
+        client
+            .refresh_trakt("nova-client", &tokens.refresh_token)
+            .unwrap();
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests[0].url, "https://auth.trakt.tv/oauth/device/code");
+        assert_eq!(requests[1].body.as_ref().unwrap()["code"], "private-device");
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.body.as_ref().unwrap().get("client_secret").is_none())
+        );
+        assert_eq!(
+            requests[2].body.as_ref().unwrap()["refresh_token"],
+            "private-refresh"
+        );
+        assert_eq!(
+            requests[2].body.as_ref().unwrap()["redirect_uri"],
+            "urn:ietf:wg:oauth:2.0:oob"
+        );
+        drop(requests);
+        for (status, error) in [
+            (400, ApiError::Pending),
+            (429, ApiError::SlowDown),
+            (418, ApiError::Expired),
+            (410, ApiError::Expired),
+        ] {
+            fake.responses.lock().unwrap().push_back(Response {
+                status,
+                retry_after: None,
+                has_more: false,
+                pagination: None,
+                body: Value::Null,
+            });
+            assert!(
+                matches!(client.poll_trakt_device("nova-client",&code.device_code),Err(e) if e == error)
+            );
+        }
+    }
+    #[test]
+    fn trakt_library_paginates_actual_limits_and_never_expands_unwatched_episodes() {
+        let fake = Arc::new(Fake::default());
+        fake.responses.lock().unwrap().push_back(Response {
+            status: 200,
+            retry_after: None,
+            has_more: false,
+            pagination: Some((1, 2)),
+            body: json!([{"movie":{"title":"First","ids":{"imdb":"tt1111111"}}}]),
+        });
+        fake.responses.lock().unwrap().push_back(Response {
+            status: 200,
+            retry_after: None,
+            has_more: false,
+            pagination: Some((2, 2)),
+            body: json!([{"movie":{"title":"Second","ids":{"imdb":"tt2222222"}}}]),
+        });
+        fake.push(json!([])); // watched movies
+        fake.push(json!([])); // watchlist shows
+        fake.push(json!([{"show":{"title":"Show","ids":{"imdb":"tt0903747"}},"seasons":[{"number":0,"episodes":[{"number":1,"plays":1}]},{"number":1,"episodes":[{"number":1,"plays":1},{"number":2,"plays":0}]}]}]));
+        fake.push(json!([])); // next watched-show page
+        fake.push(json!([{"progress":40.0,"show":{"ids":{"imdb":"tt0903747"}},"episode":{"season":1,"number":2}},{"progress":20.0,"show":{"ids":{"imdb":"tt0903747"}},"episode":{"season":1,"number":1}}]));
+        fake.push(json!([])); // next playback page
+        let titles = Client::new(fake.clone())
+            .library(&credentials(Service::Trakt))
+            .unwrap();
+        assert_eq!(titles.len(), 3);
+        let show = titles
+            .iter()
+            .find(|t| t.media_type == MediaType::Show)
+            .unwrap();
+        assert_eq!(
+            show.episodes,
+            vec![
+                Episode {
+                    season: 0,
+                    number: 1
+                },
+                Episode {
+                    season: 1,
+                    number: 1
+                }
+            ]
+        );
+        assert_eq!(show.progress, Some(40.0));
+        assert_eq!(
+            show.playback_episode,
+            Some(Episode {
+                season: 1,
+                number: 2
+            })
+        );
+        let requests = fake.requests.lock().unwrap();
+        assert!(requests[1].url.contains("page=2"));
+        assert!(requests[4].url.contains("extended=progress"));
+    }
+    #[test]
+    fn trakt_scrobble_resolves_exact_episode_and_rejects_wrong_numbering() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"season":2,"number":3,"ids":{"trakt":1234}}));
+        fake.push(json!({"action":"start"}));
+        let client = Client::new(fake.clone());
+        let c = credentials(Service::Trakt);
+        client
+            .scrobble(
+                &c,
+                &ids(),
+                MediaType::Show,
+                Some(Episode {
+                    season: 2,
+                    number: 3,
+                }),
+                23.0,
+                ScrobbleAction::Start,
+            )
+            .unwrap();
+        {
+            let r = fake.requests.lock().unwrap();
+            assert_eq!(
+                r[0].url,
+                "https://api.trakt.tv/shows/tt0903747/seasons/2/episodes/3"
+            );
+            assert_eq!(r[1].body.as_ref().unwrap()["episode"]["ids"]["trakt"], 1234);
+            assert!(r[1].body.as_ref().unwrap().get("show").is_none());
+        }
+        fake.push(json!({"season":1,"number":3,"ids":{"trakt":1234}}));
+        assert_eq!(
+            client.scrobble(
+                &c,
+                &ids(),
+                MediaType::Show,
+                Some(Episode {
+                    season: 2,
+                    number: 3
+                }),
+                23.0,
+                ScrobbleAction::Pause
+            ),
+            Err(ApiError::InvalidResponse)
+        );
+        assert_eq!(fake.requests.lock().unwrap().len(), 3);
+        assert_eq!(
+            client.set_watched(&c, &ids(), MediaType::Show, None, true),
+            Err(ApiError::InvalidInput)
+        );
+    }
+    #[test]
+    fn trakt_duplicate_stop_is_acknowledged_and_history_writes_are_targeted() {
+        let fake = Arc::new(Fake::default());
+        fake.push(
+            json!({"title":"Verified movie","year":2024,"ids":{"trakt":123,"imdb":"tt0903747"}}),
+        );
+        fake.responses.lock().unwrap().push_back(Response {
+            status: 409,
+            retry_after: None,
+            has_more: false,
+            pagination: None,
+            body: json!({"watched_at":"2026-10-20T10:00:00Z","expires_at":"2026-10-20T11:00:00Z"}),
+        });
+        fake.push(json!({"added":{"episodes":1},"not_found":{"episodes":[]}}));
+        let client = Client::new(fake.clone());
+        let c = credentials(Service::Trakt);
+        client
+            .scrobble(
+                &c,
+                &ids(),
+                MediaType::Movie,
+                None,
+                99.0,
+                ScrobbleAction::Stop,
+            )
+            .unwrap();
+        client
+            .set_watched(
+                &c,
+                &ids(),
+                MediaType::Show,
+                Some(Episode {
+                    season: 2,
+                    number: 3,
+                }),
+                true,
+            )
+            .unwrap();
+        let r = fake.requests.lock().unwrap();
+        assert!(r[2].url.ends_with("/sync/history"));
+        assert_eq!(
+            r[2].body.as_ref().unwrap()["shows"][0]["seasons"][0]["episodes"],
+            json!([{"number":3}])
+        );
+    }
+    #[test]
+    fn trakt_movie_scrobbles_validate_and_cache_required_canonical_metadata() {
+        let fake = Arc::new(Fake::default());
+        fake.push(json!({"title":"Canonical title","year":2024,"ids":{"trakt":321,"imdb":"tt0903747","tmdb":555}}));
+        for _ in 0..3 {
+            fake.push(json!({"action":"accepted"}));
+        }
+        let client = Client::new(fake.clone());
+        for action in [
+            ScrobbleAction::Start,
+            ScrobbleAction::Pause,
+            ScrobbleAction::Stop,
+        ] {
+            client
+                .scrobble(
+                    &credentials(Service::Trakt),
+                    &ids(),
+                    MediaType::Movie,
+                    None,
+                    50.0,
+                    action,
+                )
+                .unwrap();
+        }
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            4,
+            "only the first event hydrates canonical metadata"
+        );
+        assert_eq!(requests[0].url, "https://api.trakt.tv/movies/tt0903747");
+        for request in &requests[1..] {
+            let movie = &request.body.as_ref().unwrap()["movie"];
+            assert_eq!(movie["title"], "Canonical title");
+            assert_eq!(movie["year"], 2024);
+            assert_eq!(movie["ids"]["trakt"], 321);
+            assert_eq!(movie["ids"]["imdb"], "tt0903747");
+        }
+    }
+    #[test]
+    fn trakt_movie_scrobble_rejects_conflicting_ids_and_invalid_title_or_year() {
+        for summary in [
+            json!({"title":"Wrong movie","year":2024,"ids":{"trakt":1,"imdb":"tt9999999"}}),
+            json!({"title":"","year":2024,"ids":{"trakt":1,"imdb":"tt0903747"}}),
+            json!({"title":"Movie","year":null,"ids":{"trakt":1,"imdb":"tt0903747"}}),
+            json!({"title":"Movie","year":0,"ids":{"trakt":1,"imdb":"tt0903747"}}),
+        ] {
+            let fake = Arc::new(Fake::default());
+            fake.push(summary);
+            assert_eq!(
+                Client::new(fake.clone()).scrobble(
+                    &credentials(Service::Trakt),
+                    &ids(),
+                    MediaType::Movie,
+                    None,
+                    50.0,
+                    ScrobbleAction::Start
+                ),
+                Err(ApiError::InvalidResponse)
+            );
+            assert_eq!(
+                fake.requests.lock().unwrap().len(),
+                1,
+                "unverified metadata must never authorize a scrobble POST"
+            );
+        }
+        let fake = Arc::new(Fake::default());
+        fake.push(json!([{"type":"movie","movie":{"ids":{"trakt":42,"tmdb":99}}}]));
+        fake.push(json!({"title":"Typed TMDB movie","year":2025,"ids":{"trakt":42,"tmdb":99}}));
+        fake.push(json!({"action":"start"}));
+        let ids = MediaIds {
+            tmdb: Some(99),
+            ..Default::default()
+        };
+        Client::new(fake.clone())
+            .scrobble(
+                &credentials(Service::Trakt),
+                &ids,
+                MediaType::Movie,
+                None,
+                50.0,
+                ScrobbleAction::Start,
+            )
+            .unwrap();
+        let requests = fake.requests.lock().unwrap();
+        assert!(requests[0].url.contains("/search/tmdb/99?type=movie"));
+        assert_eq!(requests[1].url, "https://api.trakt.tv/movies/42");
+    }
+    #[test]
+    fn trakt_repeated_pages_and_untrusted_device_urls_fail_closed() {
+        let fake = Arc::new(Fake::default());
+        for _ in 0..2 {
+            fake.push(json!([{"movie":{"ids":{"imdb":"tt1111111"}}}]));
+        }
+        assert_eq!(
+            Client::new(fake.clone()).library(&credentials(Service::Trakt)),
+            Err(ApiError::InvalidResponse)
+        );
+        fake.push(json!({"device_code":"private-device","user_code":"ABCD1234","verification_url":"https://example.org/activate","expires_in":600,"interval":5}));
+        assert!(matches!(
+            Client::new(fake).begin_trakt_device("nova-client"),
+            Err(ApiError::InvalidResponse)
+        ));
     }
     #[test]
     fn secrets_are_redacted_and_ids_reject_episode_strings() {
@@ -1242,6 +1632,7 @@ mod tests {
             status: 400,
             retry_after: None,
             has_more: false,
+            pagination: None,
             body: json!({"error":"authorization_pending"}),
         };
         assert!(matches!(checked(r), Err(ApiError::Pending)));
@@ -1249,6 +1640,7 @@ mod tests {
             status: 429,
             retry_after: Some(120),
             has_more: false,
+            pagination: None,
             body: json!({}),
         };
         assert!(matches!(

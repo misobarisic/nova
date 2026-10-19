@@ -157,7 +157,7 @@ export component TrackingPanel inherits Rectangle {
                 VerticalLayout {
                     spacing: 4px;
                     Text {
-                        text: root.selected_service == 2 ? @tr("Stremio tracking") : root.selected_service == 3 ? "Simkl" : root.selected_service == 4 ? "MDBList" : root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
+                        text: root.selected_service == 2 ? @tr("Stremio tracking") : root.selected_service == 3 ? "Simkl" : root.selected_service == 4 ? "MDBList" : root.selected_service == 5 ? "Trakt" : root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
                         color: Theme.current.text_tracking_primary;
                         font-size: root.wide ? 26px : 22px;
                         font-weight: 700;
@@ -212,6 +212,10 @@ export component TrackingPanel inherits Rectangle {
                     TrackingButton {
                         width: 104px; text: "MDBList"; selected: root.selected_service == 4;
                         clicked => { if root.selected_service != 4 { root.recover_entry_focus(); root.selected_service = 4; DetailBridge.list_services_title_open(1); } }
+                    }
+                    TrackingButton {
+                        width: 88px; text: "Trakt"; selected: root.selected_service == 5;
+                        clicked => { if root.selected_service != 5 { root.recover_entry_focus(); root.selected_service = 5; DetailBridge.list_services_title_open(2); } }
                     }
                 }
             }

@@ -3,7 +3,7 @@ name = "nova-list-services"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
-description = "Bounded Simkl and MDBList account, library and playback APIs"
+description = "Bounded Simkl, MDBList and Trakt account, library and playback APIs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

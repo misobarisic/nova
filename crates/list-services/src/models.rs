@@ -6,6 +6,7 @@ use zeroize::Zeroize;
 pub enum Service {
     Simkl,
     MdbList,
+    Trakt,
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize)]
@@ -40,7 +41,7 @@ impl fmt::Debug for Secret {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Credentials {
     pub service: Service,
-    /// A registered public Simkl app client ID; empty for MDBList API keys.
+    /// A registered public Simkl/Trakt app client ID; empty for MDBList API keys.
     pub client_id: String,
     pub token: Secret,
 }

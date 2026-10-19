@@ -77,7 +77,7 @@ pub(crate) fn note_android_pause_checkpoint() {
         bridge.refresh_playback_end_menu();
         bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
-        bridge.persist_outgoing_playback();
+        bridge.persist_playback_checkpoint(false);
     }
     persistence::flush_report();
 }
@@ -999,8 +999,18 @@ impl Bridge {
 
     /// Save the last observation before another episode replaces its target.
     pub(super) fn persist_outgoing_playback(&self) {
+        self.persist_playback_checkpoint(true);
+    }
+
+    // Android suspension also checkpoints the active player. PiP keeps that
+    // session playing, so persistence alone must never emit a terminal scrobble.
+    fn persist_playback_checkpoint(&self, stopped: bool) {
         persistence::flush_report();
         self.flush_playback_preferences(true);
+        let outgoing = self.shared.lock().unwrap().playback.clone();
+        if let Some(target) = outgoing.filter(|_| stopped) {
+            self.list_services_playback(&target, target.last_pos, target.last_dur, false, true);
+        }
         let map = {
             let mut state = self.shared.lock().unwrap();
             let Some(target) = state.playback.clone() else {
@@ -1472,6 +1482,13 @@ impl Bridge {
             if !app.get_playback_started() || (dur <= 0.0 && pos <= 0.0) {
                 return; // frames not flowing yet: nothing to persist
             }
+            self.list_services_playback(
+                &target,
+                pos,
+                dur,
+                app.get_is_paused(),
+                self.player.playback_readiness().ended,
+            );
             observe_history_playback(&mut target, pos, app.get_is_paused());
             target.last_pos = pos;
             target.last_dur = dur;
@@ -1568,6 +1585,7 @@ impl Bridge {
                 self.refresh_progress_ui();
             }
         } else {
+            self.list_services_playback(&target, target.last_pos, target.last_dur, false, true);
             // Player just closed: finalize with the last observed values
             // (the close itself resets the UI props to 0). A close near the
             // end counts as watched the same as a natural EOF.
