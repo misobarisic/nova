@@ -29,6 +29,7 @@ mod android_recovery;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod media_badges;
 mod media_probe;
 pub use media_probe::probe_local_duration;
 
@@ -49,7 +50,7 @@ use nova_config::playback_preferences::{
     SessionPreferences, TitlePreferences, TrackChoice, select_track,
 };
 use nova_ui::{AppWindow, TrackRow};
-use slint::{ComponentHandle, GraphicsAPI, RenderingState, VecModel};
+use slint::{ComponentHandle, GraphicsAPI, Model, RenderingState, VecModel};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
@@ -1919,10 +1920,13 @@ impl Player {
         }
 
         // Android: immersive playback — hide the status and navigation bars
-        // for as long as the overlay is up. `tick` re-asserts this; `close`
-        // requests them back.
+        // initially. The fullscreen action changes the retry policy; `close`
+        // requests the bars back.
         #[cfg(target_os = "android")]
-        let _ = set_system_bars_hidden(true);
+        {
+            let _ = set_system_bars_hidden(true);
+            app.set_is_fullscreen(true);
+        }
         // Loading counts as engaged: keep the screen awake from open.
         #[cfg(target_os = "linux")]
         converge_idle_inhibit(true);
@@ -1938,6 +1942,7 @@ impl Player {
         app.set_position(0.0);
         app.set_duration(0.0);
         app.set_buffered_until(0.0);
+        app.set_player_badges(Default::default());
         app.set_is_paused(true);
         app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
         app.set_player_status(slint::SharedString::from("Loading stream…"));
@@ -2249,6 +2254,9 @@ impl Player {
     /// Toggle window fullscreen.
     pub fn toggle_fullscreen(&self) {
         if let Some(app) = self.state.app.upgrade() {
+            #[cfg(target_os = "android")]
+            self.set_fullscreen(!app.get_is_fullscreen());
+            #[cfg(not(target_os = "android"))]
             self.set_fullscreen(!app.window().is_fullscreen());
         }
     }
@@ -2257,6 +2265,10 @@ impl Player {
         if let Some(app) = self.state.app.upgrade() {
             app.window().set_fullscreen(fullscreen);
             app.set_is_fullscreen(fullscreen);
+            // The Android immersion retry loop must follow this explicit
+            // choice instead of hiding the bars again on the next tick.
+            #[cfg(target_os = "android")]
+            let _ = set_system_bars_hidden(fullscreen);
             #[cfg(not(target_os = "android"))]
             self.state
                 .playback_fullscreen
@@ -2821,6 +2833,7 @@ impl Player {
         #[cfg(target_os = "android")]
         {
             let _ = set_system_bars_hidden(true);
+            app.set_is_fullscreen(true);
             converge_screen_on(ANDROID_FOREGROUND.load(Ordering::SeqCst));
         }
         #[cfg(target_os = "linux")]
@@ -2929,8 +2942,11 @@ impl Player {
             app.set_player_open(false);
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
+            app.set_player_title(slint::SharedString::default());
             app.set_player_show_title(slint::SharedString::default());
             app.set_player_episode_title(slint::SharedString::default());
+            app.set_player_media_summary(Default::default());
+            app.set_player_badges(Default::default());
             app.set_playback_started(false);
             app.set_position(0.0);
             app.set_duration(0.0);
@@ -3019,6 +3035,7 @@ impl Player {
             live_paused: Option<bool>,
             dur: f64,
             buffered_until: f32,
+            media_badges: Option<Vec<slint::SharedString>>,
             paused: bool,
             vol: f64,
             muted: bool,
@@ -3103,6 +3120,13 @@ impl Player {
                 live_paused,
                 dur,
                 buffered_until,
+                // Hidden controls need no repeated metadata reads. A pending
+                // replacement must never display the previous file's badges.
+                media_badges: (!pending_load
+                    && app.get_osd_visible()
+                    && mpv.get_property::<String>("path").ok().as_deref()
+                        == Some(buffer_source.as_str()))
+                .then(|| media_badges::read(mpv)),
                 paused,
                 // Mirror volume/mute (cheap reads; keeps UI in sync if changed
                 // via keyboard shortcuts or external controls).
@@ -3208,6 +3232,17 @@ impl Player {
         #[cfg(target_os = "android")]
         self.sync_frame_rate(&app, snapshot.container_fps);
 
+        if let Some(badges) = snapshot.media_badges {
+            let current = app.get_player_badges();
+            if current.row_count() != badges.len()
+                || badges
+                    .iter()
+                    .enumerate()
+                    .any(|(i, badge)| current.row_data(i).as_ref() != Some(badge))
+            {
+                app.set_player_badges(Rc::new(VecModel::from(badges)).into());
+            }
+        }
         let was_paused = app.get_is_paused();
         if snapshot.dur > 0.0 || snapshot.pos > 0.0 {
             // The startup wake chooses a playing/paused timeout. Publish the

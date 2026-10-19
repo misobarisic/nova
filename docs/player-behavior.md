@@ -118,24 +118,33 @@ wrapped-row and addon-gesture tests.
 
 ## Player header, screenshots and keyboard controls
 
+The OSD places the show's title, optional episode caption, live source badges and
+available year/genres at the bottom left. Android landscape keeps circular
+play/pause and ten-second seek controls over the center of the video, with compact
+subtitle, audio, speed, screenshot, settings and fullscreen buttons beside the
+metadata. Desktop keeps playback and volume at the bottom left and utilities on
+the right, beneath the timeline. Portrait stacks utilities below the timeline;
+track selection remains available through Settings at narrow widths. Time elapsed
+and total duration sit at opposite ends of the safe-area-aligned seek bar.
 Dragging the timeline previews the target position and timestamp locally, then
 seeks once on release. Native playback continues during the preview; cancellation
 discards it. A hidden timeline only wakes the controls on its first press, and
 loading/live streams or party guests cannot scrub. Held previews keep controls awake.
+Android’s fullscreen action updates the existing system-bar retry policy as well
+as the window state, so leaving immersion is retained until the next explicit change.
+Badges use mpv's actual resolution, video codec, HDR transfer and selected audio
+language/channel layout, omit unavailable facts, and reset on source replacement.
+Metadata belongs to the captured playback request, so browsing another title does
+not replace it. The party badge remains in a separate safe top lane. Subtitle,
+intro-skip and next-episode clearance measures the entire footer.
 
-The OSD header shows `S1E1: Episode title` beside Exit, with the show's
-name rendered as text below it. Movies show their title without an
-episode line. The party badge sits below the measured caption block with a gap.
-The header fades with the controls; the bottom strip retains
-playback controls and timing without repeating the title. The displayed title belongs to
-the playback request, so browsing cannot replace it with another show's title.
-Playback no longer fetches or carries title logos. Visible controls dim the entire playing video uniformly;
-loading artwork uses the same dim layer, with loading/error text drawn above it. Brightness/seek/speed feedback stays at the
-safe top center rather than shifting with header or screenshot-notice height.
-Title captions fade out while feedback is visible and fade back in afterwards,
-without moving or being unmounted. The existing player animation setting controls these fades.
+The full viewport dims lightly while controls are visible, with a stronger bottom
+gradient behind the footer. Loading artwork retains the stronger uniform dimmer;
+loading/error text paints above it. Captions fade during gesture feedback without
+changing geometry. Feedback and screenshot notices retain stable safe top lanes.
+All controls share the existing player motion setting and hidden-control wake guard.
 
-The top-right screenshot button saves the video frame with subtitles and
+The screenshot utility button saves the video frame with subtitles and
 without Slint controls. It is disabled while loading or capturing. Capture
 and file writes use a worker, with a session guard and a 20-second capture
 deadline. Android HW+ renders video and subtitles into a temporary GPU target

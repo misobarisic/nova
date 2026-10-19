@@ -63,6 +63,7 @@ component TrackMenu inherits Rectangle {
     in property <int> row_icon: 0;   // icon for every track row
     in property <bool> with_off_row: false;
     in property <length> max_w: 340px;
+    in property <length> max_h: InterfaceStyle.tv ? 440px : 320px;
     // 6-button nav: focused row index (off-row is 0 when present).
     in property <int> focused_idx: -1;
     callback pick(int);
@@ -86,7 +87,7 @@ component TrackMenu inherits Rectangle {
 
     menu_scroll := ScrollView {
         width: 100%;
-        height: Math.min(menu_col.preferred-height, InterfaceStyle.tv ? 440px : 320px);
+        height: Math.min(menu_col.preferred-height, root.max_h);
         // Touch devices scroll by dragging (there is no wheel): the
         // fluent-style ScrollView disables drag-pan by default, so opt
         // in explicitly.
@@ -144,7 +145,8 @@ component SettingsMenu inherits Rectangle {
     in property <length> safe_left;
     in property <length> safe_right;
     // Very short landscape windows use the centered layout to retain room.
-    property <bool> anchored: !root.narrow && root.height >= 320px;
+    property <bool> anchored: !root.narrow && root.height >= 320px
+        && root.anchor_y - root.top_inset >= 280px;
     property <length> top_inset: root.safe_top + 16px;
     property <length> card_limit: Math.max(0px, root.anchored
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
@@ -684,6 +686,8 @@ export component PlayerOverlay {
     in-out property <string> player_title: "";
     in property <string> player_episode_title;
     in property <string> player_show_title;
+    in property <[string]> player_badges;
+    in property <string> player_media_summary;
     in property <bool> screenshot_busy;
     in property <string> screenshot_notice;
     callback take_screenshot();
@@ -995,35 +999,36 @@ export component PlayerOverlay {
         }
     }
 
-    // Screenshot keeps index 9 on both platforms; fullscreen (8) is desktop-only.
+    // Preserve existing action indices; the compact speed shortcut uses 13.
     function kb_control_max() -> int {
-        if (root.next_episode_shown) { return 11; }
-        if (root.skip_segment_shown) { return 11; }
-        return 9;
+        return 13;
     }
 
     // Neighbour control in the strip, skipping buttons absent on this
     // layout: the volume control (2) is gone on Android (volume pinned to
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
+        if root.kb_idx == 13 { return 9; }
+        if root.kb_idx == 10 { return root.party_owns_playback ? 9 : 13; }
         let raw = Math.max(0, root.kb_idx - 1);
-        if (root.is_android && raw == 8) { return 7; }
         if (root.is_android && raw == 2) {
             return 1;
         }
         if (root.narrow && (raw == 5 || raw == 6)) {
-            return 4;
+            return root.is_android ? 4 : 2;
         }
         return raw;
     }
 
     function kb_next() -> int {
+        if root.kb_idx == 11 { return 11; }
+        if root.kb_idx == 9 { return !root.party_owns_playback ? 13 : root.next_episode_shown || root.skip_segment_shown ? 10 : 9; }
+        if root.kb_idx == 13 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 13; }
         let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
-        if (root.is_android && raw == 8) { return 9; }
         if (root.is_android && raw == 2) {
             return 3;
         }
-        if (root.narrow && (raw == 5 || raw == 6)) {
+        if (root.narrow && (raw == 5 || raw == 6 || (!root.is_android && raw == 3))) {
             return 7;
         }
         return raw;
@@ -1044,6 +1049,7 @@ export component PlayerOverlay {
                 root.playback_speed_preview_end();
             }
             if root.settings_page == 4 { root.settings_page = 0; root.kb_menu = 0; }
+            if root.kb_idx == 13 { root.kb_idx = 7; }
         }
     }
     function shortcut_seek(d: int) {
@@ -1099,7 +1105,9 @@ export component PlayerOverlay {
             root.settings_opened();
             root.tracks_popup_opened(0);
             root.osd_mouse_moved();
-        } else if (root.kb_idx == 8 && !root.is_android) {
+        } else if root.kb_idx == 13 && !root.party_owns_playback {
+            root.settings_page = 4; root.open_popup = 4; root.osd_mouse_moved();
+        } else if (root.kb_idx == 8) {
             root.toggle_fullscreen();
         }
     }
@@ -1192,11 +1200,11 @@ export component PlayerOverlay {
     // left or right edge, so the close button and control row must clear it.
     in property <length> safe-left: 0px;
     in property <length> safe-right: 0px;
+    in property <length> safe-bottom: 0px;
 
     // Keep the keyboard focus on a present control when the layout flips:
     // the subs/audio buttons (5/6) only exist on wide layouts and the
-    // fullscreen button (8) is hidden on Android (the system affordance is
-    // used there).
+    // compact desktop seek buttons also move out of the row.
     function kb_clamp_focus() {
         if InterfaceStyle.tv {
             if root.kb_idx == 12 && root.tv_can_seek() { return; }
@@ -1204,10 +1212,8 @@ export component PlayerOverlay {
             return;
         }
         if (root.kb_idx > root.kb_control_max()) { root.kb_idx = 1; }
-        if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
-            root.kb_idx = 7;
-        }
-        if (root.is_android && root.kb_idx == 8) {
+        if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6
+            || (!root.is_android && (root.kb_idx == 3 || root.kb_idx == 4)))) {
             root.kb_idx = 7;
         }
         if (root.is_android && root.kb_idx == 2) {
@@ -1224,7 +1230,6 @@ export component PlayerOverlay {
     }
     changed duration => { if root.duration <= 0 { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.kb_clamp_focus(); } }
     changed screenshot_busy => { if InterfaceStyle.tv { root.kb_clamp_focus(); } }
-
     changed osd_visible => { if !root.osd_visible { root.pointer_scrubbing = false; } }
 
     // Hover movement over the bar itself re-arms the auto-hide countdown.
@@ -1246,7 +1251,7 @@ export component PlayerOverlay {
             || root.osd_mouse_pos_y != root.osd_last_wake_y) {
             root.osd_last_wake_x = root.osd_mouse_pos_x;
             root.osd_last_wake_y = root.osd_mouse_pos_y;
-            if (!root.hold_active) { root.osd_mouse_moved(); }
+            if (!root.hold_active && !root.hold_releasing) { root.osd_mouse_moved(); }
         }
     }
     changed osd_mouse_pos_x => { root.osd_note_pos(); }
@@ -1270,13 +1275,13 @@ export component PlayerOverlay {
         root.publish_subtitle_clearance();
     }
     // Both controls and the independent episode offer occupy subtitle space.
-    // Measure their top edge with a small gap; keep the existing OSD fade when
-    // no offer is mounted. Ratios cancel display density and stay below halfway
-    // up the viewport even on short landscape screens.
+    // Measure the complete footer and offers with a small gap. Ratios cancel
+    // display density; short windows may need to lift subtitles past halfway
+    // while the controls are visible, then restore their authored baseline.
     private property <float> subtitle_clearance_fraction: root.height > 0px
-        ? Math.clamp(Math.max(osd.height + 8px,
+        ? Math.clamp(Math.max(root.height - player_header.y + 8px,
             Math.max(root.next_episode_shown ? root.next_episode_clearance : 0px,
-                root.skip_segment_shown ? root.skip_segment_clearance : 0px)) / root.height, 0, 0.5) : 0;
+                root.skip_segment_shown ? root.skip_segment_clearance : 0px)) / root.height, 0, 1) : 0;
     // A conditional banner's id is scoped to its own subtree. It publishes
     // its measured top edge here rather than escaping that Slint scope.
     private property <length> next_episode_clearance;
@@ -1289,7 +1294,15 @@ export component PlayerOverlay {
         root.publish_subtitle_clearance();
     }
     changed subtitle_clearance_opacity => { root.publish_subtitle_clearance(); }
-    private property <length> header_bottom: player_header.y + player_header.height;
+    // Watch-party controls retain the safe top lane after captions move down.
+    private property <length> header_bottom: root.safe-top + 56px;
+    private property <length> content_left: root.safe-left + (root.narrow ? 16px : 24px);
+    private property <length> content_right: root.safe-right + (root.narrow ? 16px : 24px);
+    private property <bool> mobile_landscape: root.is_android && !root.narrow && !InterfaceStyle.tv;
+    private property <length> rail_height: InterfaceStyle.tv ? 104px : root.mobile_landscape ? 54px : 102px;
+    private property <length> utility_width: 6 * 40px + 5 * 8px;
+    private property <length> caption_height: show_heading.height + episode_heading.height
+        + badge_lane.height + summary_heading.height + 12px;
     changed header_bottom => { root.header_geometry_changed(root.header_bottom); }
 
     // Re-arm the OSD wake whenever a popup opens or closes: while browsing
@@ -1320,6 +1333,13 @@ export component PlayerOverlay {
     property <int> tap_side: -2;
     property <bool> tap_osd_visible: false;
     property <bool> hold_active: false;
+    // Releasing over the footer retargets hover after the backdrop drops its
+    // pointer grab. That synthetic move still belongs to the speed hold.
+    property <bool> hold_releasing: false;
+    hold_release_timer := Timer {
+        interval: 1ms;
+        triggered => { self.stop(); root.hold_releasing = false; }
+    }
     // Swipe kind: 0 none, 1 brightness (left half), 2 volume (right half).
     property <int> swipe_kind: 0;
     property <length> swipe_py: 0px;
@@ -1395,6 +1415,8 @@ export component PlayerOverlay {
     // because functions cannot see the TouchArea's `self`).
     function backdrop_release(up_x: length, w: length) {
         if (root.hold_active) {
+            root.hold_releasing = true;
+            hold_release_timer.start();
             root.hold_active = false;
             root.flash_show = false;
             root.playback_speed_preview_end();
@@ -1784,13 +1806,21 @@ export component PlayerOverlay {
             x: 0px; y: 0px;
             width: 100%; height: 100%;
             background: Theme.current.scrim_player;
-            opacity: root.controls_active ? 0.35 : 0;
+            opacity: root.controls_active ? (root.playback_started ? 0.12 : 0.35) : 0;
+            animate opacity { duration: Anim.player_fade; }
+        }
+        bottom_scrim := Rectangle {
+            width: 100%; height: Math.min(root.height, root.caption_height + root.rail_height + root.safe-bottom + 100px);
+            y: root.height - self.height;
+            background: @linear-gradient(180deg, transparent 0%, #00000088 40%, #000000df 100%);
+            opacity: root.controls_active ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
         }
         // Loading/error text paints above the shared dim layer so it stays
         // as readable as the controls over paused video.
         if !root.playback_started && root.player_status != "": loading_status := VerticalLayout {
-            width: 100%; height: 100%; alignment: center;
+            y: root.safe-top + 56px;
+            width: 100%; height: Math.max(0px, player_header.y - root.safe-top - 56px); alignment: center;
             HorizontalLayout {
                 width: 100%; alignment: center;
                 Text {
@@ -1824,61 +1854,57 @@ export component PlayerOverlay {
         }
 
         player_header := VerticalLayout {
-            // Gestures briefly own the caption lane; keep the feedback at
-            // its stable top position. Keep the header mounted so titles can
-            // fade out and back in without changing their measured geometry.
-            x: root.safe-left + (InterfaceStyle.tv ? 32px : 68px); y: root.safe-top + (InterfaceStyle.tv ? 24px : 16px);
-            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 140px);
-            height: episode_heading.height + show_heading.height + 6px;
-            spacing: 6px;
+            x: root.content_left;
+            y: root.height - root.safe-bottom - root.rail_height - self.height - 8px;
+            width: Math.max(0px, root.width - root.content_left - root.content_right
+                - (root.mobile_landscape ? root.utility_width + 24px : 0px));
+            height: root.caption_height;
+            spacing: 4px;
             opacity: root.controls_active && !root.flash_show ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
-            episode_heading := Text {
-                text: root.player_episode_title;
-                height: root.player_episode_title == "" ? 0px : (InterfaceStyle.tv ? 28px : 22px);
-                font-size: InterfaceStyle.tv ? 20px : (root.narrow ? 14px : 16px);
-                font-weight: 600; color: Theme.current.text_bright;
-                overflow: elide; max-lines: 1;
-            }
             show_heading := Text {
-                text: root.player_show_title;
-                width: 100%; height: self.preferred-height;
-                font-size: InterfaceStyle.tv ? 32px : (root.narrow ? 20px : 26px);
+                text: root.player_show_title != "" ? root.player_show_title : root.player_title;
+                height: self.text == "" ? 0px : (InterfaceStyle.tv ? 38px : root.narrow ? 28px : root.height < 420px ? 30px : 38px);
+                font-size: InterfaceStyle.tv ? 32px : root.narrow ? 22px : root.height < 420px ? 24px : 30px;
                 font-weight: 800; color: Theme.current.text_bright;
                 overflow: elide; max-lines: 1;
             }
-        }
-        screenshot_button := Rectangle {
-            visible: !InterfaceStyle.tv;
-            x: root.width - root.safe-right - self.width - 16px;
-            y: root.safe-top + 16px;
-            width: 40px; height: 40px; border-radius: 20px;
-            property <bool> can_capture: root.playback_started && !root.screenshot_busy;
-            accessible-role: button; accessible-label: @tr("Take screenshot");
-            accessible-enabled: self.can_capture;
-            border-width: root.kb_active && root.kb_idx == 9 && root.open_popup == 0 ? 2px : 0px;
-            border-color: Theme.current.focus_ring;
-            background: screenshot_touch.has-hover ? Theme.current.player_control_hover : Theme.current.player_control;
-            opacity: root.controls_active ? 1 : 0;
-            animate opacity { duration: Anim.player_fade; }
-            IcCamera {
-                x: 8px; y: 8px; width: 24px; height: 24px;
-                fill: Theme.current.text_bright;
-                opacity: screenshot_button.can_capture ? 1 : 0.4;
+            episode_heading := Text {
+                text: root.player_episode_title;
+                height: self.text == "" ? 0px : (InterfaceStyle.tv ? 28px : 20px);
+                font-size: InterfaceStyle.tv ? 20px : 14px;
+                font-weight: 500; color: Theme.current.text_player_caption;
+                overflow: elide; max-lines: 1;
             }
-            screenshot_touch := TouchArea {
-                width: 100%; height: 100%; mouse-cursor: pointer;
-                clicked => {
-                    if (!root.guard_osd_control()) { return; }
-                    root.kb_active = false; root.kb_idx = 9;
-                    if (screenshot_button.can_capture) { root.take_screenshot(); }
+            badge_lane := Rectangle {
+                height: root.player_badges.length == 0 ? 0px : 24px;
+                clip: true;
+                HorizontalLayout {
+                    height: parent.height; spacing: 6px; alignment: start;
+                    for badge in root.player_badges: Rectangle {
+                        width: badge_text.preferred-width + 16px; height: 24px;
+                        background: Theme.current.player_control;
+                        border-radius: 7px; border-width: 1px;
+                        border-color: Theme.current.text_player_muted;
+                        badge_text := Text {
+                            text: badge; color: Theme.current.text_player_caption;
+                            font-size: 11px; font-weight: 600;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
                 }
+            }
+            summary_heading := Text {
+                text: root.player_media_summary;
+                height: self.text == "" ? 0px : 18px;
+                font-size: 12px; color: Theme.current.text_player_secondary;
+                overflow: elide; max-lines: 1;
             }
         }
         screenshot_message := Text {
             visible: root.screenshot_notice != "";
             x: Math.max(root.safe-left + 16px, root.width - root.safe-right - self.width - 16px);
-            y: root.safe-top + 16px + Math.max(40px, player_header.height) + 8px;
+            y: root.safe-top + ((PartyBridge.active || PartyBridge.busy) ? 128px : 64px);
             width: Math.min(240px, Math.max(0px, root.width - root.safe-left - root.safe-right - 32px));
             text: root.screenshot_notice; font-size: InterfaceStyle.tv ? 18px : 12px;
             color: Theme.current.text_player_caption;
@@ -1899,7 +1925,7 @@ export component PlayerOverlay {
             border-radius: 20px;
             border-width: root.kb_active && root.kb_idx == 0 && root.open_popup == 0 ? 2px : 0px;
             border-color: Theme.current.focus_ring;
-            // A dark base keeps the white X readable over bright video;
+            // A dark base keeps the white back arrow readable over bright video;
             // hover lightens it.
             background: close_touch.has-hover ? Theme.current.player_close_hover : Theme.current.player_control;
             // Touch hover alone must not paint the bar: the backend wake owns
@@ -1908,7 +1934,7 @@ export component PlayerOverlay {
                 || root.open_popup != 0) ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fade; }
 
-            IcClose {
+            IcChevronLeft {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 24px;
@@ -1937,11 +1963,11 @@ export component PlayerOverlay {
         // readable over bright video. The three buttons keep their logical
         // keyboard indices (play 1, rewind 3, forward 4); on-screen they read
         // 3, 1, 4 left to right.
-        if root.is_android && !InterfaceStyle.tv: Rectangle {
-            width: 216px;
+        if root.is_android && !InterfaceStyle.tv: center_transport := Rectangle {
+            width: 252px;
             height: 72px;
             x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            y: Math.max(root.safe-top + 64px, Math.min((parent.height - self.height) / 2, player_header.y - self.height - 12px));
             opacity: (root.controls_active && root.playback_started) ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fade; }
 
@@ -1973,7 +1999,7 @@ export component PlayerOverlay {
 
             // Play/pause (larger, circular).
             IconBtn {
-                x: 72px;
+                x: 90px;
                 y: 0px;
                 width: 72px;
                 height: 72px;
@@ -2003,7 +2029,7 @@ export component PlayerOverlay {
 
             // Forward 10s.
             IconBtn {
-                x: 164px;
+                x: 200px;
                 y: 10px;
                 width: 52px;
                 height: 52px;
@@ -2044,7 +2070,7 @@ export component PlayerOverlay {
         // controls and their hover/touch area.
         osd := Rectangle {
             width: 100%;
-            height: InterfaceStyle.tv ? 132px : 96px;
+            height: root.rail_height + root.safe-bottom;
             y: parent.height - self.height;
             // Visible when the wake timer says so, and always while loading or a
             // popup is open — the auto-hide countdown applies whether playing
@@ -2061,7 +2087,7 @@ export component PlayerOverlay {
             // tapping the video — primarily a touch convenience.
             osd_hover := TouchArea {
                 width: 100%;
-                height: InterfaceStyle.tv ? 132px : 96px;
+                height: parent.height;
                 y: parent.height - self.height;
                 // Like the backdrop: a swipe that wakes the OSD must not hide
                 // it again on release, and a tap wakes it when it was down.
@@ -2097,31 +2123,28 @@ export component PlayerOverlay {
                 }
             }
 
-            VerticalLayout {
-                // A layout inside a plain element fills the parent, so pin
-                // the 68px of controls (seekbar + row) to the bottom edge.
-                height: InterfaceStyle.tv ? 104px : 68px;
-                y: parent.height - self.height;
+            controls_layout := Rectangle {
+                height: root.rail_height;
+                y: 0px;
                 width: 100%;
-                spacing: 0px;
 
                 // ---- Seekbar ---------------------------------------------
-                // The track spans the control row's content box exactly
-                // (same 10px/14px side insets as the row below), so the bar
-                // lines up with the buttons underneath it.
+                // Timeline, captions and controls share the safe content gutters.
                 seekbar := Rectangle {
-                    width: 100%;
-                    height: InterfaceStyle.tv ? 40px : 20px;
+                    y: 0px;
+                    x: root.content_left;
+                    width: Math.max(0px, root.width - root.content_left - root.content_right);
+                    height: InterfaceStyle.tv ? 40px : 24px;
 
                     track_zone := Rectangle {
-                        x: 10px;
-                        width: parent.width - 24px;
+                        x: 0px;
+                        width: parent.width;
                         height: 100%;
 
                         // Dim track.
                         unbuffered_track := Rectangle {
                             x: 0;
-                            y: InterfaceStyle.tv ? 17px : 8px;
+                            y: InterfaceStyle.tv ? 17px : 10px;
                             height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: 100%;
                             background: Theme.current.player_secondary;
@@ -2132,7 +2155,7 @@ export component PlayerOverlay {
                         // portion, including while the user moves the seek thumb.
                         buffered_track := Rectangle {
                             x: root.duration > 0 ? Math.clamp(root.displayed_position / root.duration, 0, 1) * parent.width : 0px;
-                            y: InterfaceStyle.tv ? 17px : 8px;
+                            y: InterfaceStyle.tv ? 17px : 10px;
                             height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: root.playback_started && root.duration > 0
                                 ? Math.max(0, Math.clamp(root.buffered_until / root.duration, 0, 1)
@@ -2145,15 +2168,14 @@ export component PlayerOverlay {
                         // Played portion (anchored to the left edge).
                         played_track := Rectangle {
                             x: 0;
-                            y: InterfaceStyle.tv ? 17px : 8px;
+                            y: InterfaceStyle.tv ? 17px : 10px;
                             height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: root.duration > 0 ? (root.displayed_position / root.duration) * parent.width : 0;
                             background: Theme.current.player_progress_fill;
                             border-radius: 1.5px;
                         }
 
-                        // Thumb dot — only appears while the bar is hovered
-                        // (stays visible while scrubbing).
+                        // Android keeps its scrub handle visible without hover.
                         Rectangle {
                             x: Math.clamp(
                                 root.duration > 0 ? (root.displayed_position / root.duration) * (parent.width - 11px) : 0,
@@ -2163,7 +2185,7 @@ export component PlayerOverlay {
                             height: 11px;
                             background: Theme.current.player_progress_fill;
                             border-radius: 5.5px;
-                            opacity: root.pointer_scrubbing || seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
+                            opacity: root.is_android || root.pointer_scrubbing || seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
                         }
 
@@ -2226,27 +2248,26 @@ export component PlayerOverlay {
                     }
                 }
 
+                if !InterfaceStyle.tv: timeline_times := Rectangle {
+                    x: root.content_left; y: 24px;
+                    width: Math.max(0px, root.width - root.content_left - root.content_right); height: 20px;
+                    Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.displayed_position); font-size: 12px; color: Theme.current.text_player_caption; }
+                    Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.duration); font-size: 12px; color: Theme.current.text_player_caption; horizontal-alignment: right; }
+                }
                 // ---- Control row ----------------------------------------
-                // Stretch distribution: left cluster (play/volume/time) hugs
-                // the left edge, the track controls hug the right edge, and
-                // the title stretches in between (centered within).
-                HorizontalLayout {
-                    width: 100%;
-                    height: InterfaceStyle.tv ? 64px : 48px;
-                    // The Android gear adds an eighth button; the portrait rail
-                    // is already close to the 360px floor, so tighten the gaps
-                    // there (the volume slider still expands over the row).
-                    // The side insets keep the outermost buttons clear of a
-                    // landscape cutout.
-                    padding-left: (root.narrow ? 6px : 10px) + safe-left;
-                    padding-right: (root.narrow ? 8px : 14px) + safe-right;
-                    spacing: root.narrow ? 2px : 6px;
-
+                // Android landscape aligns utilities beside metadata; desktop and
+                // portrait place them beneath the timeline.
+                control_row := HorizontalLayout {
+                    x: root.mobile_landscape ? root.width - root.content_right - root.utility_width : root.content_left;
+                    y: root.mobile_landscape ? -52px : (InterfaceStyle.tv ? 40px : 48px);
+                    width: root.mobile_landscape ? root.utility_width : Math.max(0px, root.width - root.content_left - root.content_right);
+                    height: InterfaceStyle.tv ? 64px : 44px;
+                    spacing: root.narrow ? 2px : 8px;
                     // -- Left cluster --
-                    // Android moves play/pause to the centered transport
-                    // cluster (see below); the bottom bar keeps the time and
-                    // title only.
-                    if !root.is_android || InterfaceStyle.tv: IconBtn {
+                    // Desktop transport stays at the left; Android uses the center cluster.
+                    if !root.is_android || InterfaceStyle.tv: desktop_pause := IconBtn {
+                        base: InterfaceStyle.tv ? transparent : Theme.current.text_bright;
+                        border-radius: self.height / 2;
                         enabled: root.timeline_control_allowed;
                         focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
                         // Re-arm the auto-hide wake so the bar lingers after
@@ -2260,9 +2281,47 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: Theme.current.text_bright;
+                            fill: InterfaceStyle.tv ? Theme.current.text_bright : #111827;
                         }
                         if !root.is_paused: IcPause {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: InterfaceStyle.tv ? Theme.current.text_bright : #111827;
+                        }
+                    }
+
+                    if (!root.is_android && !root.narrow) || InterfaceStyle.tv: rewind_button := IconBtn {
+                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
+                        focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false;
+                            root.kb_idx = 3;
+                            root.seek_relative(-10);
+                            root.osd_mouse_moved();
+                        }
+                        IcReplay10 {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: Theme.current.text_bright;
+                        }
+                    }
+
+                    if (!root.is_android && !root.narrow) || InterfaceStyle.tv: forward_button := IconBtn {
+                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
+                        focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false;
+                            root.kb_idx = 4;
+                            root.seek_relative(10);
+                            root.osd_mouse_moved();
+                        }
+                        IcForward10 {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 26px;
@@ -2281,7 +2340,7 @@ export component PlayerOverlay {
                         width: 40px + (self.vol_open ? 106px : 0px);
                             animate width { duration: Anim.player_slide; }
                         property <bool> vol_open:
-                            vol_btn.hovered || vol_catch.has-hover || vol_slider_touch.has-hover;
+                            !root.narrow && (vol_btn.hovered || vol_catch.has-hover || vol_slider_touch.has-hover);
 
                         vol_catch := TouchArea {
                             x: 40px;
@@ -2401,72 +2460,11 @@ export component PlayerOverlay {
                         }
                     }
 
-                    // Time text. Fixed 40px height so the layout places it
-                    // exactly like the 40px icon buttons (fixed-height
-                    // children top-align in the 48px row), keeping the
-                    // text on the same vertical center as the icons. Shown on
-                    // narrow too: the Android bottom-left is free once
-                    // play/volume moved off the row, so the timestamp sits
-                    // there (the title stays hidden).
-                    Rectangle {
-                        width: time_lbl.preferred-width + 16px;
-                        height: InterfaceStyle.tv ? 56px : 40px;
-
-                        time_lbl := Text {
-                            text: root.time_text;
-                            color: Theme.current.text_bright;
-                            font-size: InterfaceStyle.tv ? 20px : 13px;
-                            vertical-alignment: center;
-                            x: 8px;
-                        }
+                    if InterfaceStyle.tv: Text {
+                        text: root.time_text; font-size: 20px; color: Theme.current.text_bright;
+                        vertical-alignment: center;
                     }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 40px;
-                    }
-
-                    // -- Right cluster --
-                    // Android's ±10s buttons live in the centered transport
-                    // cluster, not here.
-                    if !root.is_android || InterfaceStyle.tv: rewind_button := IconBtn {
-                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
-                        focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
-                        clicked => {
-                            if (!root.guard_osd_control()) { return; }
-                            root.kb_active = false;
-                            root.kb_idx = 3;
-                            root.seek_relative(-10);
-                            root.osd_mouse_moved();
-                        }
-                        IcReplay10 {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 26px;
-                            height: 26px;
-                            fill: Theme.current.text_bright;
-                        }
-                    }
-
-                    if !root.is_android || InterfaceStyle.tv: forward_button := IconBtn {
-                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
-                        focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
-                        clicked => {
-                            if (!root.guard_osd_control()) { return; }
-                            root.kb_active = false;
-                            root.kb_idx = 4;
-                            root.seek_relative(10);
-                            root.osd_mouse_moved();
-                        }
-                        IcForward10 {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 26px;
-                            height: 26px;
-                            fill: Theme.current.text_bright;
-                        }
-                    }
-
+                    if !root.mobile_landscape: Rectangle { horizontal-stretch: 1; height: 40px; }
                     // Subtitle button + popup anchored above it (right edge
                     // flush with the button, 8px gap). Wide only: on narrow
                     // layouts track selection lives in the settings panel.
@@ -2477,6 +2475,9 @@ export component PlayerOverlay {
                         IconBtn {
                             x: 0;
                             y: 0;
+                            base: Theme.current.player_control;
+                            border-width: self.focused ? 2px : 1px;
+                            border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                             active: root.open_popup == 2;
                             focused: root.kb_active && root.kb_idx == 5 && root.open_popup == 0;
                             clicked => {
@@ -2501,9 +2502,12 @@ export component PlayerOverlay {
                         }
 
                         if root.open_popup == 2: TrackMenu {
-                            x: parent.width - self.width;
+                            x: Math.clamp(parent.width - self.width,
+                                root.safe-left + 16px - parent.absolute-position.x + root.absolute-position.x,
+                                root.width - root.safe-right - 16px - parent.absolute-position.x + root.absolute-position.x - self.width);
                             y: -self.height - 8px;
-                            max_w: root.width - 32px;
+                            max_w: root.width - root.safe-left - root.safe-right - 32px;
+                            max_h: Math.max(0px, parent.absolute-position.y - root.absolute-position.y - root.safe-top - 24px);
                             row_icon: 2;
                             with_off_row: true;
                             tracks: root.sub_tracks;
@@ -2524,6 +2528,9 @@ export component PlayerOverlay {
                         IconBtn {
                             x: 0;
                             y: 0;
+                            base: Theme.current.player_control;
+                            border-width: self.focused ? 2px : 1px;
+                            border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                             active: root.open_popup == 1;
                             focused: root.kb_active && root.kb_idx == 6 && root.open_popup == 0;
                             clicked => {
@@ -2548,9 +2555,12 @@ export component PlayerOverlay {
                         }
 
                         if root.open_popup == 1: TrackMenu {
-                            x: parent.width - self.width;
+                            x: Math.clamp(parent.width - self.width,
+                                root.safe-left + 16px - parent.absolute-position.x + root.absolute-position.x,
+                                root.width - root.safe-right - 16px - parent.absolute-position.x + root.absolute-position.x - self.width);
                             y: -self.height - 8px;
-                            max_w: root.width - 32px;
+                            max_w: root.width - root.safe-left - root.safe-right - 32px;
+                            max_h: Math.max(0px, parent.absolute-position.y - root.absolute-position.y - root.safe-top - 24px);
                             row_icon: 1;
                             tracks: root.audio_tracks;
                             focused_idx: root.kb_menu;
@@ -2559,11 +2569,52 @@ export component PlayerOverlay {
                         }
                     }
 
+                    if !InterfaceStyle.tv: speed_button := IconBtn {
+                        enabled: !root.party_owns_playback;
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
+                        focused: root.kb_active && root.kb_idx == 13 && root.open_popup == 0;
+                        accessible-role: button; accessible-label: @tr("Playback speed") + ": " + PlaybackSpeed.label(root.playback_speed);
+                        clicked => {
+                            if !root.guard_osd_control() || root.party_owns_playback { return; }
+                            root.kb_active = false; root.kb_idx = 13;
+                            root.settings_page = 4; root.open_popup = 4;
+                        }
+                        Text { text: Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    if !InterfaceStyle.tv: screenshot_button := Rectangle {
+                        width: 40px; height: 40px; border-radius: 10px;
+                        property <bool> can_capture: root.playback_started && !root.screenshot_busy;
+                        accessible-role: button; accessible-label: @tr("Take screenshot");
+                        accessible-enabled: self.can_capture;
+                        border-width: root.kb_active && root.kb_idx == 9 && root.open_popup == 0 ? 2px : 1px;
+                        border-color: root.kb_active && root.kb_idx == 9 && root.open_popup == 0 ? Theme.current.focus_ring : Theme.current.player_menu_border;
+                        background: screenshot_touch.has-hover ? Theme.current.player_control_hover : Theme.current.player_control;
+                        opacity: root.controls_active ? 1 : 0;
+                        animate opacity { duration: Anim.player_fade; }
+                        IcCamera {
+                            x: 8px; y: 8px; width: 24px; height: 24px;
+                            fill: Theme.current.text_bright;
+                            opacity: screenshot_button.can_capture ? 1 : 0.4;
+                        }
+                        screenshot_touch := TouchArea {
+                            width: 100%; height: 100%; mouse-cursor: pointer;
+                            clicked => {
+                                if (!root.guard_osd_control()) { return; }
+                                root.kb_active = false; root.kb_idx = 9;
+                                if (screenshot_button.can_capture) { root.take_screenshot(); }
+                            }
+                        }
+                    }
                     // Player settings (all platforms/widths): a gear that opens
                     // the settings panel (subtitles, audio, the Android
                     // decoder options, and the playback rate). Second to last,
                     // right before fullscreen.
                     settings_gear := IconBtn {
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                         active: root.open_popup == 4;
                         focused: root.kb_active && root.kb_idx == 7 && root.open_popup == 0;
                         clicked => {
@@ -2591,9 +2642,7 @@ export component PlayerOverlay {
                         }
                     }
 
-                    // Fullscreen button. Hidden on Android: the platform has
-                    // its own fullscreen affordance (and the bars are already
-                    // immersive during playback).
+                    // TV keeps screenshot capture in its remote-control strip.
                     if InterfaceStyle.tv: IconBtn {
                         enabled: root.playback_started && !root.screenshot_busy;
                         focused: root.kb_active && root.kb_idx == 9 && root.open_popup == 0;
@@ -2606,7 +2655,10 @@ export component PlayerOverlay {
                         IcCamera { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_bright; }
                     }
 
-                    if !root.is_android && !InterfaceStyle.tv: IconBtn {
+                    if !InterfaceStyle.tv: IconBtn {
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                         focused: root.kb_active && root.kb_idx == 8 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
@@ -2631,7 +2683,7 @@ export component PlayerOverlay {
             }
         }
 
-        // Stay visible with the OSD hidden, then clear its 68px control lane
+        // Stay visible with the OSD hidden, then clear the measured footer
         // when it wakes. Paint above the OSD so its transparent hover zone cannot
         // intercept offer taps, even while the controls are hidden.
         if root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
@@ -2642,7 +2694,7 @@ export component PlayerOverlay {
                 root.width - root.safe-left - root.safe-right - 32px));
             x: root.width - root.safe-right - self.width - 16px;
             y: Math.max(root.safe-top + 16px,
-                root.height - self.height - (root.controls_active ? (InterfaceStyle.tv ? osd.height + 12px : 80px) : 16px));
+                root.height - self.height - (root.controls_active ? (root.height - player_header.y + 12px) : 16px));
             title: root.next_episode_title;
             context: root.next_episode_context;
             focused_action: root.kb_active ? (root.kb_idx == 10 ? 1 : root.kb_idx == 11 ? 2 : 0) : 0;
@@ -2658,7 +2710,7 @@ export component PlayerOverlay {
             height: InterfaceStyle.tv ? 56px : 48px;
             x: root.width - root.safe-right - self.width - 16px;
             y: Math.max(root.safe-top + 16px,
-                root.height - self.height - (root.controls_active ? osd.height + 12px : 16px));
+                root.height - self.height - (root.controls_active ? root.height - player_header.y + 12px : 16px));
             background: Theme.current.player_control_hover;
             border-radius: 10px;
             border-width: root.kb_active && root.kb_idx == 10 ? 2px : 1px;

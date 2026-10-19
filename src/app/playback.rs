@@ -8,6 +8,7 @@ struct PlaybackContext {
     title: String,
     episode_label: String,
     osd_episode_title: String,
+    media_summary: String,
     episode_number: String,
     use_modal_poster: bool,
     media_type: String,
@@ -259,6 +260,11 @@ impl Bridge {
                         .as_ref()
                         .map(|modal| PlaybackContext {
                             title: modal.name.clone(),
+                            media_summary: std::iter::once(modal.year.as_str())
+                                .chain(modal.genres.iter().take(2).map(String::as_str))
+                                .filter(|value| !value.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" · "),
                             episode_label,
                             osd_episode_title,
                             episode_number,
@@ -1019,6 +1025,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_player_episode_title(context.osd_episode_title.clone().into());
             app.set_player_show_title(context.title.clone().into());
+            app.set_player_media_summary(context.media_summary.clone().into());
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(SharedString::default());
         }

@@ -227,7 +227,7 @@ fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
             }
             assert!(
                 app.global::<nova::SliderGesture>().get_active(),
-                "horizontal drag owns its gesture"
+                "horizontal drag owns its gesture at {width}x{height}: {pos:?}, {size:?}"
             );
             assert!(
                 (slider.absolute_position().y - pos.y).abs() < 1.0,

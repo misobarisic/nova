@@ -39,10 +39,10 @@ fn click(app: &nova::AppWindow, element: &ElementHandle) {
 }
 
 #[test]
-fn party_badge_uses_a_separate_measured_caption_lane_and_follows_osd_visibility() {
+fn party_badge_keeps_the_top_lane_clear_of_bottom_captions_and_follows_osd_visibility() {
     if !crate::isolation::run(concat!(
         module_path!(),
-        "::party_badge_uses_a_separate_measured_caption_lane_and_follows_osd_visibility"
+        "::party_badge_keeps_the_top_lane_clear_of_bottom_captions_and_follows_osd_visibility"
     )) {
         return;
     }
@@ -73,8 +73,8 @@ fn party_badge_uses_a_separate_measured_caption_lane_and_follows_osd_visibility(
                     .next()
                     .unwrap();
                 assert!(
-                    badge.absolute_position().y
-                        >= header.absolute_position().y + header.size().height + 11.5,
+                    badge.absolute_position().y + badge.size().height
+                        <= header.absolute_position().y - 8.0,
                     "party badge obscures the caption at {width}x{height}"
                 );
                 assert!(badge.absolute_position().y + badge.size().height < height as f32 / 2.0);
@@ -136,7 +136,7 @@ fn text_titles_fit_and_screenshot_is_guarded() {
             settle(&app);
             assert_eq!(
                 element(&app, "PlayerOverlay::osd_scrim").computed_opacity(),
-                loading_opacity
+                0.12
             );
             app.set_is_paused(false);
             app.set_osd_visible(false);
@@ -152,19 +152,16 @@ fn text_titles_fit_and_screenshot_is_guarded() {
             let heading = element(&app, "PlayerOverlay::episode_heading");
             let camera = element(&app, "PlayerOverlay::screenshot_button");
             let show_title = element(&app, "PlayerOverlay::show_heading");
-            assert!(heading.absolute_position().x >= 68.0);
+            let track = element(&app, "PlayerOverlay::unbuffered_track");
+            assert!(heading.absolute_position().x >= 16.0);
+            assert!(show_title.absolute_position().y < heading.absolute_position().y);
             assert!(
-                heading.absolute_position().x + heading.size().width
-                    <= camera.absolute_position().x - 7.5
+                heading.absolute_position().y + heading.size().height < track.absolute_position().y
             );
+            assert!(show_title.size().height > 0.0 && show_title.size().height < 42.0);
+            assert!(camera.absolute_position().y + camera.size().height <= height as f32);
             assert!(
-                show_title.absolute_position().y
-                    >= heading.absolute_position().y + heading.size().height
-            );
-            assert!(show_title.size().height > 0.0 && show_title.size().height < 40.0);
-            assert!(
-                show_title.absolute_position().x + show_title.size().width
-                    <= camera.absolute_position().x
+                show_title.absolute_position().x + show_title.size().width <= width as f32 - 15.5
             );
             assert!(
                 ElementHandle::find_by_accessible_label(&app, "Removed bottom title")
@@ -471,6 +468,187 @@ fn render_loading_dimmer_keeps_status_bright() {
             if phase.get() == 0 {
                 phase.set(1);
                 nova_ui::apply_theme(&app, true);
+            } else {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    slint::run_event_loop().unwrap();
+}
+
+#[test]
+fn responsive_footer_keeps_metadata_and_utilities_clear_of_transport_and_safe_areas() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::responsive_footer_keeps_metadata_and_utilities_clear_of_transport_and_safe_areas"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_osd_visible(true);
+    app.set_player_show_title("The Apothecary Diaries".into());
+    app.set_player_episode_title("S1E3: The Unsettling Matter of the Spirit".into());
+    app.set_player_media_summary("2023 · Animation · Mystery".into());
+    app.set_player_badges(
+        Rc::new(slint::VecModel::from(vec![
+            "4K".into(),
+            "HEVC".into(),
+            "HDR".into(),
+            "English 5.1".into(),
+        ]))
+        .into(),
+    );
+    app.window().show().unwrap();
+    for (width, height, android) in [
+        (320, 568, true),
+        (640, 360, true),
+        (800, 360, true),
+        (1280, 720, true),
+        (320, 568, false),
+        (1280, 720, false),
+    ] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_is_android(android);
+        let bridge = app.global::<nova::PlayerOsdBridge>();
+        bridge.set_safe_left(30.0);
+        bridge.set_safe_right(8.0);
+        bridge.set_safe_bottom(12.0);
+        settle(&app);
+        let header = element(&app, "PlayerOverlay::player_header");
+        let track = element(&app, "PlayerOverlay::unbuffered_track");
+        let camera = element(&app, "PlayerOverlay::screenshot_button");
+        let gear = element(&app, "PlayerOverlay::settings_gear");
+        assert!(header.absolute_position().y > height as f32 / 3.0);
+        assert!(header.absolute_position().y + header.size().height < track.absolute_position().y);
+        assert!((header.absolute_position().x - track.absolute_position().x).abs() < 0.5);
+        for control in [
+            &camera,
+            &gear,
+            &element(&app, "PlayerOverlay::speed_button"),
+        ] {
+            let p = control.absolute_position();
+            let size = control.size();
+            assert!(
+                p.x >= 30.0 && p.x + size.width <= width as f32 - 8.0,
+                "control outside safe area at {width}x{height}: {p:?}, {size:?}"
+            );
+            assert!(p.y + size.height <= height as f32 - 12.0);
+        }
+        if android {
+            let center = element(&app, "PlayerOverlay::center_transport");
+            assert!(
+                center.absolute_position().y + center.size().height <= header.absolute_position().y
+            );
+            if width >= 700 {
+                assert!(
+                    camera.absolute_position().y + camera.size().height
+                        < track.absolute_position().y
+                );
+            } else {
+                assert!(
+                    camera.absolute_position().y > track.absolute_position().y,
+                    "portrait utility placement at {width}x{height}: camera={:?}, track={:?}",
+                    camera.absolute_position(),
+                    track.absolute_position()
+                );
+            }
+        } else {
+            let play = element(&app, "PlayerOverlay::desktop_pause");
+            assert!(play.absolute_position().x < camera.absolute_position().x);
+            assert!(play.absolute_position().y > track.absolute_position().y);
+        }
+        click(&app, &element(&app, "PlayerOverlay::speed_button"));
+        assert!(element(&app, "SettingsMenu::settings_header").computed_opacity() > 0.9);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Escape.into(),
+            });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Escape.into(),
+            });
+        settle(&app);
+    }
+}
+
+#[test]
+#[ignore = "requires a display; SLINT_BACKEND=winit SLINT_RENDERER=femtovg"]
+fn render_responsive_footer_previews() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::render_responsive_footer_previews"
+    )) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_osd_visible(true);
+    app.set_player_show_title("Avatar: The Way of Water".into());
+    app.set_player_media_summary("2022 · Action".into());
+    app.set_player_badges(
+        Rc::new(slint::VecModel::from(vec![
+            "4K".into(),
+            "HEVC".into(),
+            "HDR".into(),
+            "English 5.1".into(),
+        ]))
+        .into(),
+    );
+    app.set_duration(11520.0);
+    app.set_position(5058.0);
+    app.set_buffered_until(6700.0);
+    app.on_format_time(|seconds| nova::player::format_time(seconds as f64).into());
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.set_is_android(true);
+    app.show().unwrap();
+    let weak = app.as_weak();
+    let stage = Rc::new(Cell::new(0));
+    let warmup = Rc::new(Cell::new(2));
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(600),
+        move || {
+            let app = weak.upgrade().unwrap();
+            let snapshot = app.window().take_snapshot().unwrap();
+            // The native backend publishes its scale factor after showing the
+            // window; let the embedded factory consume that geometry before capture.
+            if warmup.get() > 0 {
+                warmup.set(warmup.get() - 1);
+                app.window().request_redraw();
+                return;
+            }
+            if let Some(dir) = std::env::var_os("NOVA_PLAYER_PREVIEW_DIR") {
+                let dir = std::path::PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                image::save_buffer(
+                    dir.join(if stage.get() == 0 {
+                        "android.png"
+                    } else {
+                        "desktop.png"
+                    }),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            if stage.get() == 0 {
+                stage.set(1);
+                app.set_is_android(false);
+                warmup.set(2);
+                app.window().request_redraw();
             } else {
                 slint::quit_event_loop().unwrap();
             }

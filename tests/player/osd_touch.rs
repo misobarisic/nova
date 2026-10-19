@@ -181,7 +181,7 @@ fn hidden_osd_taps_wake_without_activating_controls() {
             let position = element.absolute_position();
             let size = element.size();
             size.width > 300.0
-                && (size.height - 96.0).abs() < 1.5
+                && (size.height - 102.0).abs() < 1.5
                 && position.x.abs() < 1.5
                 && position.y > height - 130.0
         });
@@ -266,7 +266,7 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         // it, like tapping the video, and must not run a control action.
         reset(&app, &wakes1, &toggles1, &closes1, &seeks1);
         app.set_osd_visible(true);
-        let bar_empty = LogicalPosition::new(180.0, height - 90.0);
+        let bar_empty = LogicalPosition::new(8.0, height - 57.0);
         let _ = press(&app, bar_empty);
         let _ = release(&app, bar_empty);
         fail(

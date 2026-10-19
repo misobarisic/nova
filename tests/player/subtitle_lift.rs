@@ -44,11 +44,16 @@ fn subtitle_clearance_tracks_controls_fade_rotation_and_reduced_motion() {
             .set_size(slint::PhysicalSize::new(width, height));
         app.set_is_android(android);
         advance(&app, 30);
-        let osd = ElementHandle::find_by_element_id(&app, "PlayerOverlay::osd")
+        let footer = ElementHandle::find_by_element_id(&app, "PlayerOverlay::player_header")
             .next()
             .unwrap();
         let (fraction, opacity) = published.get();
-        assert!((fraction - (osd.size().height + 8.0) / height as f32).abs() < 0.002);
+        assert!(
+            (fraction
+                - ((height as f32 - footer.absolute_position().y + 8.0) / height as f32).min(1.0))
+            .abs()
+                < 0.002
+        );
         assert_eq!(opacity, 1.0);
         app.set_osd_visible(false);
         advance(&app, 30);
@@ -119,7 +124,7 @@ fn next_episode_offer_keeps_subtitles_clear_with_hidden_and_fading_controls() {
                     opacity, 1.0,
                     "the offer remains visible independently of OSD"
                 );
-                assert!(fraction > 0.0 && fraction <= 0.5);
+                assert!(fraction > 0.0 && fraction <= 1.0);
                 let baseline = height as f32 * (1.0 - fraction);
                 assert!(
                     baseline <= banner.absolute_position().y - 7.5,
