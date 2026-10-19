@@ -4,7 +4,7 @@ import { MiniSlider, PillButton } from "settings-controls.slint";
 // Both hosts use the same units and bounds. The backend owns normalization and
 // persistence; this component only reports an edit to one field.
 export component SubtitleControls inherits VerticalLayout {
-    in property <[float]> values: [0, 55, 19, 100, 3, 0, 0];
+    in property <[float]> values: [0, 56, 19, 100, 3, 0, 0];
     in property <int> focused_idx: -1;
     callback edited(int, float);
     callback reveal(length, length);

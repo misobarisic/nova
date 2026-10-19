@@ -32,7 +32,7 @@ pub enum TrackChoice {
 #[serde(default)]
 pub struct SubtitleStyle {
     pub delay: f32,
-    /// None retains the native mpv version's default on this device.
+    /// None uses Nova's default without persisting an explicit size override.
     pub font_size: Option<f32>,
     pub margin: f32,
     pub position: f32,
@@ -43,7 +43,7 @@ pub struct SubtitleStyle {
 
 impl Default for SubtitleStyle {
     fn default() -> Self {
-        // Font and outline defaults differ across supported mpv versions.
+        // The outline retains the native mpv version's default.
         Self {
             delay: 0.0,
             font_size: None,
@@ -57,6 +57,8 @@ impl Default for SubtitleStyle {
 }
 
 impl SubtitleStyle {
+    pub const DEFAULT_FONT_SIZE: f32 = 56.0;
+
     pub fn normalized(self) -> Self {
         fn bounded(v: f32, min: f32, max: f32, fallback: f32) -> f32 {
             if v.is_finite() {
@@ -67,9 +69,9 @@ impl SubtitleStyle {
         }
         Self {
             delay: (bounded(self.delay, -60.0, 60.0, 0.0) * 10.0).round() / 10.0,
-            font_size: self
-                .font_size
-                .map(|v| (bounded(v, 16.0, 100.0, 55.0) * 100.0).round() / 100.0),
+            font_size: self.font_size.map(|v| {
+                (bounded(v, 16.0, 100.0, Self::DEFAULT_FONT_SIZE) * 100.0).round() / 100.0
+            }),
             margin: bounded(self.margin, 0.0, 200.0, 19.0).round(),
             position: bounded(self.position, 0.0, 100.0, 100.0).round(),
             outline: self
@@ -80,10 +82,10 @@ impl SubtitleStyle {
         }
     }
 
-    /// Resolve native-only values without persisting a device/version baseline.
+    /// Resolve application size and native outline defaults without persisting them.
     pub fn resolved(self, native: Self) -> Self {
         let mut style = self.normalized();
-        style.font_size = style.font_size.or(native.font_size);
+        style.font_size = Some(style.font_size.unwrap_or(Self::DEFAULT_FONT_SIZE));
         style.outline = style.outline.or(native.outline);
         style
     }
@@ -92,7 +94,7 @@ impl SubtitleStyle {
         let s = self.normalized();
         [
             s.delay,
-            s.font_size.unwrap_or(55.0),
+            s.font_size.unwrap_or(Self::DEFAULT_FONT_SIZE),
             s.margin,
             s.position,
             s.outline.unwrap_or(3.0),
@@ -489,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_native_defaults_remain_unpersisted_across_device_versions() {
+    fn subtitle_defaults_are_readable_and_remain_unpersisted_across_device_versions() {
         let saved = SubtitleStyle::default().with_value(0, 0.3);
         for (font, outline) in [(38.0, 1.65), (55.0, 3.0)] {
             let native = SubtitleStyle {
@@ -497,15 +499,21 @@ mod tests {
                 outline: Some(outline),
                 ..Default::default()
             };
-            assert_eq!(saved.resolved(native).values()[1], font);
+            assert_eq!(saved.resolved(native).values()[1], 56.0);
             assert_eq!(saved.resolved(native).values()[4], outline);
             let edited = saved.with_value(4, 1.75);
             assert_eq!(edited.resolved(native).outline, Some(1.75));
-            assert_eq!(edited.resolved(native).font_size, Some(font));
+            assert_eq!(edited.resolved(native).font_size, Some(56.0));
+            assert_eq!(
+                saved.with_value(1, 42.0).resolved(native).font_size,
+                Some(42.0)
+            );
         }
         let json = serde_json::to_value(saved).unwrap();
         assert!(json["font_size"].is_null());
         assert!(json["outline"].is_null());
+        let legacy: SubtitleStyle = serde_json::from_str(r#"{"font_size":null}"#).unwrap();
+        assert_eq!(legacy.values()[1], 56.0);
     }
 
     #[test]

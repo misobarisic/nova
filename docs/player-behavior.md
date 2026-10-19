@@ -92,13 +92,10 @@ while addon filters pin at the safe top. An opaque full-width theme canvas
 covers the pinned filters and the area above them, including safe-area insets.
 Artwork starts at the top and fades into the canvas. True-black cards use a thin
 gray outline for separation, with the stronger purple ring for keyboard focus.
-Ordinary bottom subtitles rise above the bottom OSD with an 8-pixel logical gap
-and follow its existing fade, including reduced-motion behavior. The next-episode
-banner also reserves subtitle clearance while the rest of the OSD is hidden.
-A higher user position remains unchanged; hiding both controls and the banner,
-or closing playback, restores the base position. Native ASS dialogue already clear of the controls in letterboxed video
-stays put, and mpv/libass retain authored positions and styling for signs/effects.
-Nova changes only the transient `sub-pos` value and never forces ASS style overrides.
+Subtitles retain their chosen position when controls or next-episode offers appear.
+The OSD clearance measurements, fade logic and native subtitle lift/restore code
+remain implemented, but `OSD_LIFT_ENABLED = false` disables lifting at runtime.
+mpv/libass retain authored positions and styling for signs/effects.
 Stream rows offer playback and an actions button; desktop keeps native menus and touch
 keeps hold-to-open sheets. Empty/loading states use the existing stream hints.
 
@@ -308,10 +305,11 @@ that title; **Use global defaults** clears its appearance/timing overrides while
 retaining language and speed choices. A positive offset shows subtitles later.
 Size, margins and outline scale from a 720p canvas. Embedded ASS styling remains
 preserved by default, with an explicit option to override it; image subtitles
-retain their source appearance. Untouched text size and outline use each device’s
-native mpv defaults, including differences between bundled and desktop versions;
-only explicit edits persist and sync. Position edits remain the baseline while the
-OSD temporarily lifts bottom subtitles above its controls.
+retain their source appearance. Untouched text size uses Nova’s 56-unit 720p-canvas
+default, including older settings with no explicit size; previously saved sizes
+are preserved. This is a relative mpv size, not Android sp. Untouched outline uses
+the native mpv default; only explicit edits persist and sync. Position edits remain
+the baseline independently of OSD visibility.
 
 Track preferences store language and track kind (normal/commentary audio or
 full/forced/signs subtitles), not stream-local track numbers. A missing saved

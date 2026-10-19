@@ -1,6 +1,10 @@
 //! Temporary OSD clearance, preserving the user's base position and ASS styles.
 use libmpv2::Mpv;
 
+// Keep the clearance measurement and render/restore paths ready, but leave
+// subtitles at their chosen position while the player controls are visible.
+pub(super) const OSD_LIFT_ENABLED: bool = false;
+
 #[derive(Default)]
 pub(super) struct SubtitlePosition {
     clearance: f64,

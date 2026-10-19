@@ -937,7 +937,13 @@ fn apply_subtitle_style(
 ) {
     let style = style.resolved(native);
     let _ = mpv.set_property("sub-delay", style.delay as f64);
-    let _ = mpv.set_property("sub-font-size", style.font_size.unwrap_or(55.0) as f64);
+    let _ = mpv.set_property(
+        "sub-font-size",
+        style
+            .font_size
+            .unwrap_or(nova_config::playback_preferences::SubtitleStyle::DEFAULT_FONT_SIZE)
+            as f64,
+    );
     let _ = mpv.set_property("sub-margin-x", style.margin as i64);
     let _ = mpv.set_property("sub-pos", style.position as f64);
     let _ = mpv.set_property("sub-border-size", style.outline.unwrap_or(3.0) as f64);
@@ -2851,6 +2857,11 @@ impl Player {
     /// UI thread: reserve the OSD's current logical height independently of
     /// pixel density. Actual subtitle updates stay beside mpv rendering.
     pub fn set_subtitle_clearance(&self, fraction: f32, opacity: f32) {
+        let (fraction, opacity) = if subtitle_position::OSD_LIFT_ENABLED {
+            (fraction, opacity)
+        } else {
+            (0.0, 0.0)
+        };
         self.state
             .subtitle_position
             .lock()
@@ -3825,7 +3836,7 @@ mod tests {
                 .unwrap()
                 .apply(mpv)
                 .unwrap();
-            assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 75.0);
+            assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 95.0);
         }
         player.close();
         assert_eq!(

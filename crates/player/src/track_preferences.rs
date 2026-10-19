@@ -111,7 +111,8 @@ mod tests {
             "sub-pos",
             "sub-border-size",
         ];
-        let before = properties.map(|key| mpv.get_property::<f64>(key).unwrap());
+        let mut before = properties.map(|key| mpv.get_property::<f64>(key).unwrap());
+        before[1] = SubtitleStyle::DEFAULT_FONT_SIZE as f64;
         let native = super::super::native_subtitle_defaults(&mpv);
         super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), native);
         assert_eq!(
@@ -157,7 +158,7 @@ mod tests {
         assert_eq!(
             properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
             before,
-            "clearing overrides restores this mpv core's original defaults"
+            "clearing overrides restores Nova's text size and the native outline"
         );
         assert_eq!(
             mpv.get_property::<String>("sub-ass-override").unwrap(),
