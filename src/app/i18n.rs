@@ -123,6 +123,7 @@ impl Bridge {
         self.apply_addon_rows();
         self.refresh_catalog_language_text();
         self.refresh_detail_language_text();
+        self.publish_detail_extras();
         self.refresh_remote_language_text();
         self.refresh_party_language_text();
         self.refresh_completion_language_text();

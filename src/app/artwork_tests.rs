@@ -167,6 +167,7 @@ fn home_completion_paints_without_lru_and_inactive_prefetch_does_not_reload() {
 
 fn modal(videos: Vec<Video>, seasons: Vec<u32>) -> ModalItem {
     ModalItem {
+        details: Default::default(),
         open_token: Arc::new(()),
         pending_watch_now: None,
         episodes_loading: false,

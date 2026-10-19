@@ -53,6 +53,7 @@ fn release_unmounted_payloads(app: &crate::generated::AppWindow, page: i32) {
         }
         3 => {
             let bridge = app.global::<DetailBridge>();
+            drop(bridge.get_selected_details());
             bridge.set_tracking_links(Default::default());
             bridge.set_tracking_candidates(Default::default());
             bridge.set_tracking_setup(Default::default());
@@ -319,6 +320,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_stream_selector_back => invoke_detail_bridge_stream_selector_back(),
             on_detail_tab_picked => invoke_detail_bridge_detail_tab_picked(arg0),
             on_episode_filter_changed => invoke_detail_bridge_episode_filter_changed(arg0),
+            on_detail_extra_picked => invoke_detail_bridge_detail_extra_picked(arg0, arg1),
             on_watch_now => invoke_detail_bridge_watch_now(),
         );
         let weak = app.as_weak();

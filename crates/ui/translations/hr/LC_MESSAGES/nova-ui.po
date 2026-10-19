@@ -3463,3 +3463,42 @@ msgstr "Odabrani i isključeni naslovi ostaju sačuvani pri promjeni načina rad
 
 msgid "Full-library sync starts only when you choose Start full-library sync."
 msgstr "Sinkronizacija cijele zbirke započinje tek kada odaberete Pokreni sinkronizaciju cijele zbirke."
+
+msgid "IMDb rating"
+msgstr "IMDb ocjena"
+
+msgid "Runtime"
+msgstr "Trajanje"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "Country"
+msgstr "Država"
+
+msgid "Watch trailer"
+msgstr "Pogledaj najavu"
+
+msgid "Opens in your browser"
+msgstr "Otvara se u pregledniku"
+
+msgid "Trailers"
+msgstr "Najave"
+
+msgid "Cast"
+msgstr "Glumačka postava"
+
+msgid "Directors"
+msgstr "Redatelji"
+
+msgid "Writers"
+msgstr "Scenaristi"
+
+msgid "More to explore"
+msgstr "Istražite više"
+
+msgid "More trailers"
+msgstr "Više najava"
+
+msgid "Show all"
+msgstr "Prikaži sve"

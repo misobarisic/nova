@@ -1,7 +1,8 @@
-import { InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
+import { DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
 
 import { DetailContent } from "@NovaUiShared";
 import { TitleArtwork } from "title-artwork.slint";
+import { DetailExtrasPanel } from "detail-extras.slint";
 
 
 
@@ -179,6 +180,8 @@ export component DetailPage {
     in property <bool> is_movie;
     in-out property <bool> stream_selector_open;
     in-out property <string> selected_year: "";
+    in property <DetailInfo> selected_details;
+    callback detail_extra_picked(int,string);
     in-out property <string> selected_description: "";
     property <bool> synopsis_expanded: false;
     property <bool> hero_description_expanded: false;
@@ -1326,6 +1329,12 @@ export component DetailPage {
 
                                 }
 
+                            }
+
+                            if root.detail_tab == 0: extras_content := DetailExtrasPanel {
+                                info: root.selected_details;
+                                narrow: root.narrow;
+                                picked(kind,target) => { root.detail_extra_picked(kind,target); }
                             }
 
                             // ---- Stub tabs (no addon data) ------------

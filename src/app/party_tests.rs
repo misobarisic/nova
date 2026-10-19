@@ -111,6 +111,7 @@ fn install_room(bridge: &Bridge, app: &AppWindow, role: PartyRole) -> Arc<PartyS
 fn select_local_media(bridge: &Bridge, media: &PartyMedia) {
     let identity = &media.identity;
     bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+        details: Default::default(),
         open_token: Arc::new(()),
         pending_watch_now: None,
         episodes_loading: false,
@@ -297,6 +298,7 @@ fn choosing_another_source_closes_the_player_without_leaving_the_room() {
         ),
         |Fixture { app, bridge }| {
             bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+                details: Default::default(),
                 open_token: Arc::new(()),
                 pending_watch_now: None,
                 episodes_loading: false,

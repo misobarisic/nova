@@ -85,6 +85,13 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "IMDb rating" => "IMDb ocjena",
+        "Runtime" => "Trajanje",
+        "Status" => "Status",
+        "Country" => "Država",
+        "Language" => "Jezik",
+        "Watch trailer" => "Pogledaj najavu",
+        "Opens in your browser" => "Otvara se u pregledniku",
         "Paused by tracking scope" => "Pauzirano odabirom opsega praćenja",
         "Sync mode" => "Način sinkronizacije",
         "Full library sync" => "Sinkronizacija cijele zbirke",
@@ -893,6 +900,14 @@ pub fn tr(english: &str) -> &str {
         "Dropped" => "Odbačeno",
         // ---- Air-date labels -------------------------------------------
         other => other,
+    }
+}
+
+pub fn detail_trailer_label(number: usize) -> String {
+    if croatian() {
+        format!("Najava {number}")
+    } else {
+        format!("Trailer {number}")
     }
 }
 

@@ -972,6 +972,7 @@ impl Bridge {
             return;
         }
         let context = ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,

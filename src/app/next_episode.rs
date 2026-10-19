@@ -334,6 +334,7 @@ mod tests {
             .map(|n| video(&format!("episode-{n}"), 1, n))
             .collect();
         bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,

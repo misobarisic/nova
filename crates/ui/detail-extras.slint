@@ -1,0 +1,117 @@
+import { DetailInfo, DetailActionRow, Theme, InterfaceStyle } from "@NovaUiShared";
+import { PillButton } from "settings-controls.slint";
+import { IcPlay, IcChevronRight } from "icons.slint";
+
+component DetailActionTile inherits Rectangle {
+    in property <DetailActionRow> entry;
+    in property <bool> trailer: false;
+    in property <bool> compact: false;
+    callback picked();
+    height: Math.max(root.compact ? 48px : 76px, copy.preferred-height + (root.compact ? 20px : 28px));
+    min-width: 0px;
+    border-radius: Theme.card_corner_radius;
+    border-width: 1px;
+    border-color: focus.has-focus || touch.has-hover ? Theme.current.accent_vivid : Theme.current.border_soft;
+    background: touch.has-hover ? Theme.current.control_hover : Theme.current.season_caption;
+    HorizontalLayout {
+        padding: root.compact ? 10px : 16px; spacing: 14px;
+        if root.trailer: Rectangle {
+            width: 40px; height: 40px; border-radius: 20px;
+            background: Theme.current.control;
+            IcPlay { width: 20px; height: 20px; x: 11px; y: 10px; fill: Theme.current.accent_vivid; }
+        }
+        copy := VerticalLayout {
+            alignment: center; spacing: 5px;
+            Text { text: root.entry.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 21px : 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+            if root.entry.subtitle != "": Text { text: root.entry.subtitle; color: Theme.current.text_episode_metadata; font-size: InterfaceStyle.tv ? 17px : 13px; wrap: word-wrap; min-width: 0px; }
+        }
+        if !root.compact: IcChevronRight { width: 18px; height: 18px; fill: Theme.current.text_episode_metadata; }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == "\n" || event.text == " " { root.picked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        accessible-role: button; accessible-label: root.entry.title;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.picked(); }
+    }
+}
+
+component DetailPeople inherits Rectangle {
+    in property <string> heading;
+    in property <[string]> names;
+    in property <bool> narrow;
+    callback picked(string);
+    property <bool> expanded: false;
+    property <int> visible_count: root.expanded ? root.names.length : Math.min(6, root.names.length);
+    changed names => { root.expanded = false; }
+    height: body.preferred-height;
+    vertical-stretch: 0;
+    body := VerticalLayout {
+        width: 100%; spacing: 12px; alignment: start;
+        Text { text: root.heading; color: Theme.current.text_bright; font-weight: 700; font-size: root.narrow ? 20px : 24px; }
+        GridLayout {
+            spacing: 10px;
+            for i in root.visible_count: DetailActionTile {
+                row: Math.floor(i / (root.narrow ? 2 : 3)); col: Math.mod(i, root.narrow ? 2 : 3);
+                horizontal-stretch: 1; min-width: 0px;
+                compact: true;
+                entry: { title: root.names[i], subtitle: "", target: root.names[i] };
+                picked => { root.picked(root.names[i]); }
+            }
+        }
+        if root.names.length > 6: HorizontalLayout {
+            alignment: start;
+            PillButton { label: root.expanded ? @tr("Show less") : @tr("Show all"); clicked => { root.expanded = !root.expanded; } }
+        }
+    }
+}
+
+export component DetailExtrasPanel inherits Rectangle {
+    in property <DetailInfo> info;
+    in property <bool> narrow;
+    callback picked(int,string);
+    property <bool> trailers_expanded: false;
+    changed info => { root.trailers_expanded = false; }
+    property <int> trailer_count: root.trailers_expanded ? root.info.trailers.length : Math.min(1, root.info.trailers.length);
+    height: body.preferred-height;
+    vertical-stretch: 0;
+    body := VerticalLayout {
+        width: 100%; alignment: start; spacing: 28px;
+        if root.info.facts.length > 0: Rectangle {
+            background: Theme.current.season_caption;
+            border-radius: Theme.card_corner_radius;
+            border-width: 1px; border-color: Theme.current.border_soft;
+            height: facts.preferred-height;
+            facts := GridLayout {
+                width: 100%; padding: root.narrow ? 16px : 24px; spacing: 20px;
+                for fact[i] in root.info.facts: VerticalLayout {
+                    row: Math.floor(i / (root.narrow ? 2 : 3)); col: Math.mod(i, root.narrow ? 2 : 3);
+                    spacing: 5px; min-width: 0px; alignment: start;
+                    Text { text: fact.title; color: Theme.current.text_episode_metadata; font-size: 13px; wrap: word-wrap; min-width: 0px; }
+                    Text { text: fact.subtitle; color: Theme.current.text_bright; font-size: root.narrow ? 16px : 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                }
+            }
+        }
+        if root.info.trailers.length > 0: VerticalLayout {
+            spacing: 12px; alignment: start;
+            Text { text: @tr("Trailers"); color: Theme.current.text_bright; font-size: root.narrow ? 20px : 24px; font-weight: 700; }
+            for i in root.trailer_count: DetailActionTile { entry: root.info.trailers[i]; trailer: true; picked => { root.picked(1, root.info.trailers[i].target); } }
+            if root.info.trailers.length > 1: HorizontalLayout {
+                alignment: start;
+                PillButton { label: root.trailers_expanded ? @tr("Show less") : @tr("More trailers"); clicked => { root.trailers_expanded = !root.trailers_expanded; } }
+            }
+        }
+        if root.info.cast.length > 0: DetailPeople { heading: @tr("Cast"); names: root.info.cast; narrow: root.narrow; picked(name) => { root.picked(0, name); } }
+        if root.info.directors.length > 0: DetailPeople { heading: @tr("Directors"); names: root.info.directors; narrow: root.narrow; picked(name) => { root.picked(0, name); } }
+        if root.info.writers.length > 0: DetailPeople { heading: @tr("Writers"); names: root.info.writers; narrow: root.narrow; picked(name) => { root.picked(0, name); } }
+        if root.info.related.length > 0: VerticalLayout {
+            spacing: 12px; alignment: start;
+            Text { text: @tr("More to explore"); color: Theme.current.text_bright; font-size: root.narrow ? 20px : 24px; font-weight: 700; }
+            for title in root.info.related: DetailActionTile { entry: title; picked => { root.picked(2, title.target); } }
+        }
+    }
+}

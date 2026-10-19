@@ -480,6 +480,7 @@ enum WatchNowOrigin {
 
 /// The item whose detail modal is currently open.
 struct ModalItem {
+    details: detail_extras::DetailExtras,
     /// Identity of this opening, including reopens of the same title.
     open_token: Arc<()>,
     /// One-shot selection intent; never persisted or carried to another modal.
@@ -763,6 +764,7 @@ mod catalog;
 #[cfg(feature = "desktop")]
 mod desktop_window;
 mod detail;
+mod detail_extras;
 mod downloads;
 mod downloads_page;
 mod home;
@@ -991,6 +993,8 @@ static CURRENT_TORRENT_SETTINGS: LazyLock<Mutex<TorrentSettings>> =
 /// Poster URLs are recorded only after successful image decoding and reused by Discover.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct MetaHeader {
+    #[serde(default)]
+    details: detail_extras::DetailExtras,
     #[serde(default)]
     poster_url: String,
     #[serde(default)]

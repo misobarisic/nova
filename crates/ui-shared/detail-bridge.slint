@@ -1,4 +1,4 @@
-import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
+import { DetailInfo, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
 
 // The host keeps backend-owned state; the page shares this exact object.
 export global DetailBridge {
@@ -49,6 +49,8 @@ export global DetailBridge {
     in-out property <bool> is_movie;
     in-out property <bool> stream_selector_open;
     in-out property <string> selected_year;
+    in-out property <DetailInfo> selected_details;
+    callback detail_extra_picked(int,string);
     in-out property <string> selected_description;
     in-out property <[string]> selected_genre_list;
     in-out property <int> detail_tab;

@@ -4,7 +4,7 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -419,6 +419,7 @@ export component AppWindow inherits Window {
         selected_title <=> root.selected_title;
         stream_selector_open <=> root.stream_selector_open;
         selected_year <=> root.selected_year;
+        selected_details <=> root.selected_details;
         selected_description <=> root.selected_description;
         selected_genre_list <=> root.selected_genre_list;
         detail_tab <=> root.detail_tab;
@@ -1456,6 +1457,9 @@ export component AppWindow inherits Window {
     in-out property <image> selected_logo;
     in-out property <string> selected_title: "";
     in-out property <string> selected_year: "";
+    in-out property <DetailInfo> selected_details;
+    callback detail_extra_picked(int,string);
+    public function detail_bridge_detail_extra_picked(kind:int, target:string) { root.detail_extra_picked(kind,target); }
     in-out property <string> selected_description: "";
     in-out property <[string]> selected_genre_list: [];
     in-out property <bool> modal_visible: false;

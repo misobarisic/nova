@@ -2122,6 +2122,7 @@ mod discover_artwork_tests {
     fn detail_only_poster_failure_respects_current_typed_identity_and_url() {
         let mut state = Shared {
             modal_item: Some(ModalItem {
+                details: Default::default(),
                 open_token: Arc::new(()),
                 pending_watch_now: None,
                 episodes_loading: false,

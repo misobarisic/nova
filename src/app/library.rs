@@ -710,6 +710,7 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = Some(ModalItem {
+                details: Default::default(),
                 open_token: Arc::new(()),
                 pending_watch_now: None,
                 episodes_loading: false,
@@ -738,6 +739,7 @@ impl Bridge {
         // Prefer resolved detail text to an older saved preview, with the
         // entry supplying fields the header cache has not resolved yet.
         self.restore_modal_header_from_cache(&e.id);
+        self.publish_detail_extras();
         let (paint_background, paint_description, paint_genres, paint_year) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
@@ -1815,6 +1817,7 @@ mod duplicate_tests {
     }
     fn modal(videos: Vec<Video>) -> ModalItem {
         ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,

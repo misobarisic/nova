@@ -209,7 +209,7 @@ pub struct MetaDetail {
 
 /// A catalog entry / light metadata card, as returned by
 /// `GET /catalog/{type}/{id}.json`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaPreview {
     pub id: String,

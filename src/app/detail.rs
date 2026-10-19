@@ -85,6 +85,10 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.history_selection = None;
             state.modal_item = Some(ModalItem {
+                details: detail_extras::DetailExtras::from_item(&MetaItem {
+                    preview: preview.clone(),
+                    ..Default::default()
+                }),
                 open_token: Arc::new(()),
                 pending_watch_now: (watch_now && preview.type_ != "movie")
                     .then_some(WatchNowOrigin::Featured),
@@ -120,6 +124,7 @@ impl Bridge {
         // catalog preview, so reentry does not replay the same corrections.
         // Missing cached fields still fall back to the preview.
         self.restore_modal_header_from_cache(&preview.id);
+        self.publish_detail_extras();
         let (paint_description, paint_genres, paint_year, is_movie) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
@@ -705,6 +710,7 @@ impl Bridge {
             _ => return false,
         };
         let mut touched = false;
+        touched |= m.details.merge(&cached.details);
         if m.poster_url.is_empty() && !cached.poster_url.is_empty() {
             m.poster_url = cached.poster_url.clone();
             touched = true;
@@ -764,6 +770,8 @@ impl Bridge {
             };
             let mut backdrop_to_load: Option<String> = None;
             let mut poster_to_load: Option<String> = None;
+            m.details
+                .merge(&detail_extras::DetailExtras::from_item(item));
             // Art upgrades also apply to finished shows and deeper episode
             // views: season cards must not stay on their cached fallback.
             m.season_backdrops.extend(item.season_backdrops());
@@ -820,6 +828,7 @@ impl Bridge {
             }
             let header = (m.genres.clone(), m.description.clone(), m.year.clone());
             let header_cache = MetaHeader {
+                details: m.details.clone(),
                 poster_url: read_meta_header_for(&m.type_, &m.id)
                     .map(|header| header.poster_url)
                     .unwrap_or_default(),
@@ -852,6 +861,7 @@ impl Bridge {
             merge_meta_header_for(&modal_type, id, &header_cache);
         }
         self.apply_season_cards();
+        self.publish_detail_extras();
         self.dispatch_season_thumbs();
         if let Some(app) = self.app() {
             let state = self.shared.lock().unwrap();
@@ -3455,6 +3465,7 @@ mod source_lookup_tests {
             ..Default::default()
         });
         ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,
@@ -3989,6 +4000,7 @@ pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
     preview.extra.extend(item.extra.clone());
     tracking::remember_source(&preview);
     MetaHeader {
+        details: detail_extras::DetailExtras::from_item(item),
         // Persist only decoded poster URLs (published by the image pipeline).
         // A metadata URL alone may still return 404 or fail to decode.
         poster_url: String::new(),
@@ -4025,11 +4037,13 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
         && fresh.genres.is_empty()
         && fresh.year.is_empty()
         && fresh.season_backdrops.is_empty()
+        && fresh.details == Default::default()
     {
         return false;
     }
     let mut cached = read_meta_header_for(type_, id).unwrap_or_default();
     let mut touched = false;
+    touched |= cached.details.merge(&fresh.details);
     for (&season, url) in &fresh.season_backdrops {
         // A newer season image replaces an older cached URL even when text
         // stays gap-filled for a finished show.
@@ -4353,6 +4367,7 @@ mod tests {
             DownloadCoordinator::new(root.join("downloads")),
         );
         bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,
@@ -5023,6 +5038,7 @@ mod tests {
         assert!(old.poster_url.is_empty());
         assert!(old.logo_url.is_empty());
         let fresh = MetaHeader {
+            details: Default::default(),
             poster_url: "https://images.example/poster.jpg".into(),
             logo_url: "https://images.example/title-logo.png".into(),
             ..old

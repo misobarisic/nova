@@ -44,6 +44,8 @@ export component DetailModule inherits Window {
         is_movie <=> DetailBridge.is_movie;
         stream_selector_open <=> DetailBridge.stream_selector_open;
         selected_year <=> DetailBridge.selected_year;
+        selected_details <=> DetailBridge.selected_details;
+        detail_extra_picked(kind,target) => { DetailBridge.detail_extra_picked(kind,target); }
         selected_description <=> DetailBridge.selected_description;
         selected_genre_list <=> DetailBridge.selected_genre_list;
         detail_tab <=> DetailBridge.detail_tab;

@@ -622,6 +622,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_watch_now(move || b.watch_now());
 
     let b = bridge.clone();
+    app.on_detail_extra_picked(move |kind, target| b.detail_extra_picked(kind, &target));
+
+    let b = bridge.clone();
     app.on_tracking_connect(move |a0, a1, a2| {
         b.tracking_connect(a0, a1.to_string(), a2.to_string())
     });

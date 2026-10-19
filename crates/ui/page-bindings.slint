@@ -1,4 +1,4 @@
-import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed } from "@NovaUiShared";
+import { DetailInfo, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed } from "@NovaUiShared";
 
 // These nonvisual components live for the entire AppWindow lifetime.
 // Linking a remounted host to an already-connected backend/global pool
@@ -91,6 +91,7 @@ export component DetailBindings {
     in-out property <string> selected_title <=> DetailBridge.selected_title;
     in-out property <bool> stream_selector_open <=> DetailBridge.stream_selector_open;
     in-out property <string> selected_year <=> DetailBridge.selected_year;
+    in-out property <DetailInfo> selected_details <=> DetailBridge.selected_details;
     in-out property <string> selected_description <=> DetailBridge.selected_description;
     in-out property <[string]> selected_genre_list <=> DetailBridge.selected_genre_list;
     in-out property <int> detail_tab <=> DetailBridge.detail_tab;

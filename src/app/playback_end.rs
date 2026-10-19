@@ -107,6 +107,7 @@ struct Context {
 impl Context {
     fn lookup(&self, videos: Vec<Video>) -> ModalItem {
         ModalItem {
+            details: Default::default(),
             open_token: Arc::new(()),
             pending_watch_now: None,
             episodes_loading: false,

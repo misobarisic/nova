@@ -9,6 +9,13 @@ export struct CompletionDestination {
 }
 
 // Stable IDs keep profile actions attached to their owner after sync reorders rows.
+export struct DetailActionRow { title: string, subtitle: string, target: string }
+export struct DetailInfo {
+    facts: [DetailActionRow],
+    cast: [string], directors: [string], writers: [string],
+    trailers: [DetailActionRow], related: [DetailActionRow],
+}
+
 export struct ProfileRow {
     id: string,
     name: string,

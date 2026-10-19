@@ -1167,6 +1167,7 @@ impl Bridge {
             app.set_detail_tab(0);
             app.set_episode_filter(SharedString::default());
             app.set_selected_backdrop(Image::default());
+            app.set_selected_details(Default::default());
             app.set_selected_description(SharedString::default());
             app.set_selected_genre_list(Rc::new(VecModel::from(vec![])).into());
         }

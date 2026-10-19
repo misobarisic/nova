@@ -138,6 +138,7 @@ nova-list-services = { path = "crates/list-services" }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"
+url = "2"
 # The license catalog uses the same zstd implementation as local storage.
 zstd = { version = "0.13", default-features = false }
 

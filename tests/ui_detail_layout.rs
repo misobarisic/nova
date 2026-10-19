@@ -17,3 +17,6 @@ mod scrim_render;
 
 #[path = "detail_layout/topbar.rs"]
 mod topbar;
+
+#[path = "detail_layout/extras.rs"]
+mod extras;

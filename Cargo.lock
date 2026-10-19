@@ -5303,6 +5303,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "url",
  "zip",
  "zstd",
 ]

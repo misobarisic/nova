@@ -343,6 +343,7 @@ impl Bridge {
             app.set_stremio_pending("".into());
             app.set_stremio_merge_ready(false);
             app.set_modal_visible(false);
+            app.set_selected_details(Default::default());
             app.set_stream_selector_open(false);
             app.set_categories_modal(false);
             app.set_discover_search_open(false);
