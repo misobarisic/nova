@@ -213,3 +213,104 @@ fn playback_shortcuts_and_popup_navigation_are_independent() {
         "windowed playback can also close with Escape"
     );
 }
+
+#[test]
+fn volume_wheel_keeps_the_control_open_and_tracks_are_complementary() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::volume_wheel_keeps_the_control_open_and_tracks_are_complementary"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_osd_visible(true);
+    app.set_volume(50.0);
+    let steps = Rc::new(RefCell::new(Vec::new()));
+    let recorded = steps.clone();
+    let weak = app.as_weak();
+    app.on_volume_step(move |delta| {
+        recorded.borrow_mut().push(delta);
+        let app = weak.upgrade().unwrap();
+        app.set_volume((app.get_volume() + delta).clamp(0.0, 100.0));
+    });
+    app.show().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    let element = |id: &str| {
+        ElementHandle::find_by_element_id(&app, &format!("PlayerOverlay::{id}"))
+            .next()
+            .unwrap()
+    };
+    let move_to = |id: &str| {
+        let item = element(id);
+        let p = item.absolute_position();
+        let size = item.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+        position
+    };
+    move_to("vol_btn");
+    for (id, delta) in [
+        ("vol_btn", 120.0),
+        ("vol_catch", -120.0),
+        ("vol_slider_touch", 120.0),
+    ] {
+        let position = move_to(id);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: delta,
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(500));
+        assert!(
+            element("vol_slider").size().width >= 99.0,
+            "wheel collapsed volume over {id}"
+        );
+    }
+    assert_eq!(&*steps.borrow(), &[5.0, -5.0, 5.0]);
+    for (volume, muted) in [
+        (0.0, false),
+        (25.0, false),
+        (50.0, false),
+        (100.0, false),
+        (75.0, true),
+    ] {
+        app.set_volume(volume);
+        app.set_muted(muted);
+        let fill = element("vol_fill");
+        let rest = element("vol_remaining");
+        let track = element("vol_slider");
+        let length = track.size().width - 16.0;
+        let selected = if muted { 0.0 } else { volume / 100.0 };
+        assert!((fill.size().width - length * selected).abs() < 0.5);
+        assert!(
+            (fill.absolute_position().x + fill.size().width - rest.absolute_position().x).abs()
+                < 0.5
+        );
+        assert!(
+            (rest.absolute_position().x + rest.size().width
+                - track.absolute_position().x
+                - track.size().width
+                + 8.0)
+                .abs()
+                < 0.5
+        );
+    }
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(640.0, 200.0),
+        });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+    assert_eq!(
+        element("vol_slider").size().width,
+        0.0,
+        "leaving the control still collapses it"
+    );
+}

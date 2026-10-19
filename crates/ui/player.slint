@@ -21,6 +21,7 @@ component IconBtn inherits Rectangle {
     in property <color> base: transparent;
     in-out property <bool> hovered: touch.has-hover;
     callback clicked();
+    callback wheel(float) -> bool;
     width: InterfaceStyle.tv ? 56px : 40px;
     height: InterfaceStyle.tv ? 56px : 40px;
     border-radius: 10px;
@@ -35,6 +36,7 @@ component IconBtn inherits Rectangle {
         height: 100%;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        scroll-event(event) => { if root.wheel(event.delta_y / 1px) { accept } else { reject } }
     }
     @children
 }
@@ -2403,15 +2405,24 @@ export component PlayerOverlay {
                         property <bool> vol_open:
                             !root.narrow && (vol_btn.hovered || vol_catch.has-hover || vol_slider_touch.has-hover);
 
+                        function wheel(delta: float) -> bool {
+                            if delta == 0 || !root.guard_osd_control() { return false; }
+                            root.volume_step(delta > 0 ? 5 : -5);
+                            root.osd_mouse_moved();
+                            return true;
+                        }
+
                         vol_catch := TouchArea {
                             x: 40px;
                             y: 0;
                             width: 6px;
                             height: 40px;
                             moved => { root.osd_mouse_moved(); }
+                            scroll-event(event) => { if vol_group.wheel(event.delta_y / 1px) { accept } else { reject } }
                         }
 
                         vol_btn := IconBtn {
+                            wheel(delta) => { vol_group.wheel(delta) }
                             x: 0;
                             y: 0;
                             focused: root.kb_active && root.kb_idx == 2 && root.open_popup == 0;
@@ -2445,18 +2456,18 @@ export component PlayerOverlay {
 
                             property <float> vol_pct: Math.clamp((root.muted ? 0 : root.volume) / 100, 0, 1);
 
-                            Rectangle {
+                            vol_fill := Rectangle {
                                 y: 18px;
                                 x: 8px;
-                                width: parent.vol_pct * (parent.width - 16px);
+                                width: parent.vol_pct * Math.max(0px, parent.width - 16px);
                                 height: 3px;
                                 background: Theme.current.player_progress_fill;
                                 border-radius: 1.5px;
                             }
-                            Rectangle {
+                            vol_remaining := Rectangle {
                                 y: 18px;
-                                x: 8px;
-                                width: (1 - parent.vol_pct) * (parent.width - 16px);
+                                x: 8px + parent.vol_pct * Math.max(0px, parent.width - 16px);
+                                width: (1 - parent.vol_pct) * Math.max(0px, parent.width - 16px);
                                 height: 3px;
                                 background: Theme.current.player_secondary;
                                 border-radius: 1.5px;
@@ -2474,6 +2485,7 @@ export component PlayerOverlay {
                                 animate opacity { duration: Anim.player_fast; }
                             }
                             vol_slider_touch := TouchArea {
+                                scroll-event(event) => { if vol_group.wheel(event.delta_y / 1px) { accept } else { reject } }
                                 x: 0;
                                 width: 100%;
                                 height: 100%;
