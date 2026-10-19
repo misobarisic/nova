@@ -1,4 +1,4 @@
-import { DetailInfo, DetailActionRow, Theme, InterfaceStyle } from "@NovaUiShared";
+import { DetailInfo, DetailActionRow, Theme, InterfaceStyle, Anim } from "@NovaUiShared";
 import { PillButton } from "settings-controls.slint";
 import { IcPlay, IcChevronRight } from "icons.slint";
 
@@ -6,6 +6,7 @@ component DetailActionTile inherits Rectangle {
     in property <DetailActionRow> entry;
     in property <bool> trailer: false;
     in property <bool> compact: false;
+    in property <bool> active: true;
     callback picked();
     height: Math.max(root.compact ? 48px : 76px, copy.preferred-height + (root.compact ? 20px : 28px));
     min-width: 0px;
@@ -28,12 +29,14 @@ component DetailActionTile inherits Rectangle {
         if !root.compact: IcChevronRight { width: 18px; height: 18px; fill: Theme.current.text_episode_metadata; }
     }
     focus := FocusScope {
+        enabled: root.active;
         key-pressed(event) => {
             if event.text == "\n" || event.text == " " { root.picked(); return accept; }
             return reject;
         }
     }
     touch := TouchArea {
+        enabled: root.active;
         accessible-role: button; accessible-label: root.entry.title;
         mouse-cursor: pointer;
         clicked => { focus.focus(); root.picked(); }
@@ -76,7 +79,10 @@ export component DetailExtrasPanel inherits Rectangle {
     callback picked(int,string);
     property <bool> trailers_expanded: false;
     changed info => { root.trailers_expanded = false; }
-    property <int> trailer_count: root.trailers_expanded ? root.info.trailers.length : Math.min(1, root.info.trailers.length);
+    property <float> trailer_reveal: root.trailers_expanded ? 1.0 : 0.0;
+    animate trailer_reveal { duration: Anim.transition_slide; easing: ease-in-out; }
+    // Resolve immediately if motion is disabled during a reveal.
+    property <float> trailer_progress: Anim.enabled && Anim.transitions ? root.trailer_reveal : (root.trailers_expanded ? 1.0 : 0.0);
     height: body.preferred-height;
     vertical-stretch: 0;
     body := VerticalLayout {
@@ -99,7 +105,24 @@ export component DetailExtrasPanel inherits Rectangle {
         if root.info.trailers.length > 0: VerticalLayout {
             spacing: 12px; alignment: start;
             Text { text: @tr("Trailers"); color: Theme.current.text_bright; font-size: root.narrow ? 20px : 24px; font-weight: 700; }
-            for i in root.trailer_count: DetailActionTile { entry: root.info.trailers[i]; trailer: true; picked => { root.picked(1, root.info.trailers[i].target); } }
+            trailer_viewport := Rectangle {
+                clip: true;
+                height: first_trailer.height + root.trailer_progress * (trailer_list.preferred-height - first_trailer.height);
+                trailer_list := VerticalLayout {
+                    x: 0px; y: 0px; width: 100%; height: self.preferred-height;
+                    spacing: 12px; alignment: start;
+                    first_trailer := DetailActionTile {
+                        entry: root.info.trailers[0]; trailer: true;
+                        picked => { root.picked(1, root.info.trailers[0].target); }
+                    }
+                    for i in root.info.trailers.length - 1: DetailActionTile {
+                        entry: root.info.trailers[i + 1]; trailer: true;
+                        active: root.trailers_expanded;
+                        opacity: root.trailer_progress;
+                        picked => { root.picked(1, root.info.trailers[i + 1].target); }
+                    }
+                }
+            }
             if root.info.trailers.length > 1: HorizontalLayout {
                 alignment: start;
                 PillButton { label: root.trailers_expanded ? @tr("Show less") : @tr("More trailers"); clicked => { root.trailers_expanded = !root.trailers_expanded; } }

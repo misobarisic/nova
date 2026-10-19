@@ -3,6 +3,27 @@ use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+fn tap(app: &nova::AppWindow, label: &str) {
+    let button = ElementHandle::find_by_accessible_label(app, label)
+        .last()
+        .unwrap();
+    let p = button.absolute_position();
+    let s = button.size();
+    let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
+}
+
 #[test]
 fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
     if !crate::isolation::run(concat!(
@@ -99,24 +120,7 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
                     .next()
                     .is_none()
             );
-            let button = ElementHandle::find_by_accessible_label(&app, "More trailers")
-                .last()
-                .unwrap();
-            let p = button.absolute_position();
-            let s = button.size();
-            let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
-            for event in [
-                slint::platform::WindowEvent::PointerPressed {
-                    position,
-                    button: slint::platform::PointerEventButton::Left,
-                },
-                slint::platform::WindowEvent::PointerReleased {
-                    position,
-                    button: slint::platform::PointerEventButton::Left,
-                },
-            ] {
-                app.window().dispatch_event(event);
-            }
+            tap(&app, "More trailers");
             for _ in 0..10 {
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
             }
@@ -143,6 +147,47 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
             .is_some()
         );
     }
+    app.window().set_size(slint::PhysicalSize::new(360, 5000));
+    (*app)
+        .global::<nova_ui_shared::DetailContent>()
+        .invoke_scroll_list_to_top(-100_000.0);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+    let viewport = || {
+        ElementHandle::find_by_element_id(&app, "DetailExtrasPanel::trailer_viewport")
+            .next()
+            .unwrap()
+    };
+    let expanded_height = viewport().size().height;
+    // Establish the collapsed measurement without motion, then exercise both
+    // directions with mock time rather than only checking the final rows.
+    tap(&app, "Show less");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+    let collapsed_height = viewport().size().height;
+    assert!(expanded_height > collapsed_height + 40.0);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    tap(&app, "More trailers");
+    let _ = viewport().size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    let midway = viewport().size().height;
+    assert!(midway > collapsed_height + 1.0 && midway < expanded_height - 1.0);
+    let teaser = ElementHandle::find_by_accessible_label(&app, "Teaser")
+        .next()
+        .unwrap();
+    assert!(teaser.computed_opacity() > 0.0 && teaser.computed_opacity() < 1.0);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert!((viewport().size().height - expanded_height).abs() < 1.0);
+    tap(&app, "Show less");
+    let _ = viewport().size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    let midway = viewport().size().height;
+    assert!(midway > collapsed_height + 1.0 && midway < expanded_height - 1.0);
+    app.global::<nova::Anim>().set_transitions(false);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+    assert!((viewport().size().height - collapsed_height).abs() < 1.0);
+    tap(&app, "More trailers");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+    assert!((viewport().size().height - expanded_height).abs() < 1.0);
     app.global::<nova::DetailBridge>()
         .invoke_detail_extra_picked(1, "https://example.org/trailer".into());
     assert_eq!(
