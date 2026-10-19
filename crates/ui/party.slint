@@ -2,8 +2,31 @@ import { PartyBridge, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
 import { SettingsCard, SettingsInput, PillButton, MiniSlider, ToggleSwitch, SectionHeader } from "settings-controls.slint";
-import { IcSync } from "icons.slint";
+import { IcSync, IcLink } from "icons.slint";
 import { SessionPanel, SessionTransportButton, SessionAvatar } from "session-controls.slint";
+
+component PartySectionHeader inherits HorizontalLayout {
+    in property <string> label;
+    in property <bool> people;
+    spacing: 10px; alignment: start;
+    Rectangle {
+        width: 26px; height: 26px;
+        if root.people: Image {
+            x: 3px; y: 3px; width: 20px; height: 20px;
+            source: @image-url("../../assets/icons/menus/watch-party.svg");
+            colorize: Theme.current.accent_soft;
+        }
+        if !root.people: IcLink {
+            x: 3px; y: 3px; width: 20px; height: 20px;
+            fill: Theme.current.accent_soft;
+        }
+    }
+    Text {
+        text: root.label; font-size: InterfaceStyle.tv ? 22px : 16px;
+        font-weight: 600; color: Theme.current.text_settings;
+        vertical-alignment: center; min-width: 0px; wrap: word-wrap;
+    }
+}
 
 // The room remains independent of sync setup and of the selected local source.
 export component PartyPage inherits Rectangle {
@@ -105,8 +128,15 @@ export component PartyPage inherits Rectangle {
                     Text { text: PartyBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
                 }
             }
-            party_body := GridLayout { spacing: 16px;
-                party_main := VerticalLayout { row: 0; col: 0; min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0; spacing: 12px;
+            // Explicit column bounds keep phone panels full-width; grid cell
+            // constraints can retain spare width from the desktop arrangement.
+            party_body := Rectangle {
+                width: 100%;
+                height: root.wide ? Math.max(party_main.preferred-height, party_side.preferred-height)
+                    : party_main.preferred-height + 16px + party_side.preferred-height;
+                party_main := VerticalLayout { x: 0px; y: 0px;
+                    width: root.wide ? parent.width - party_side.width - 16px : parent.width;
+                    height: self.preferred-height; spacing: 12px;
             if !PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("Host a party"); icon-kind: 5; }
@@ -176,10 +206,14 @@ export component PartyPage inherits Rectangle {
                 }
             }
                 }
-                party_side := VerticalLayout { row: root.wide ? 0 : 1; col: root.wide ? 1 : 0; min-width: root.wide ? 300px : 0px; max-width: root.wide ? 380px : 100000px; horizontal-stretch: root.wide ? 0 : 1; vertical-stretch: 0; spacing: 12px;
+                party_side := VerticalLayout {
+                    width: root.wide ? Math.min(380px, Math.max(300px, parent.width * 0.35)) : parent.width;
+                    x: root.wide ? parent.width - self.width : 0px;
+                    y: root.wide ? 0px : party_main.height + 16px;
+                    height: self.preferred-height; spacing: 12px;
             if !PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
-                    SectionHeader { label: @tr("Join a party"); icon-kind: 7; }
+                    PartySectionHeader { label: @tr("Join a party"); }
                     Text { text: @tr("Paste an invite from your host. Device pairing is not required."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
                     invite_input := SettingsInput {
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 1;
@@ -195,7 +229,7 @@ export component PartyPage inherits Rectangle {
             }
             if PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
-                    SectionHeader { label: @tr("People"); icon-kind: 7; }
+                    PartySectionHeader { label: @tr("People"); people: true; }
                     for member[index] in PartyBridge.participants: participant := Rectangle {
                         height: Math.max(64px, member_col.preferred-height + 20px);
                         background: transparent; border-radius: Theme.button_corner_radius;
@@ -219,7 +253,7 @@ export component PartyPage inherits Rectangle {
             }
             if PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "": SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
-                    SectionHeader { label: @tr("Invite friends"); icon-kind: 7; }
+                    PartySectionHeader { label: @tr("Invite friends"); }
                     // Invites are shown only in the explicitly opened room.
                     if PartyBridge.invite_qr.width > 0: HorizontalLayout {
                         alignment: center;

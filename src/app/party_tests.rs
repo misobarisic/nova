@@ -577,7 +577,7 @@ fn lobby_publication_and_reports_do_not_reuse_an_old_local_video() {
                 assert_eq!(
                     app.get_party_status(),
                     if role == PartyRole::Host {
-                        "Choose what to watch"
+                        ""
                     } else {
                         "Waiting for the host to choose"
                     }
@@ -588,6 +588,17 @@ fn lobby_publication_and_reports_do_not_reuse_an_old_local_video() {
                 assert!(!report.loaded);
                 assert!(!report.ready);
                 assert!(bridge.party_start_position().is_none());
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .connected = false;
+                bridge.party_publish();
+                assert_eq!(app.get_party_status(), "Reconnecting to the host…");
             }
         },
     );

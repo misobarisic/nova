@@ -174,7 +174,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
         slint::select_bundled_translation(language).unwrap();
         for has_media in [false, true] {
             app.set_party_has_media(has_media);
-            for (width, height) in [(320, 1800), (840, 380), (1280, 800)] {
+            for (width, height) in [(320, 1800), (393, 820), (840, 380), (1280, 800)] {
                 app.window()
                     .set_size(slint::PhysicalSize::new(width, height));
                 settle();
@@ -212,6 +212,13 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
                         assert!(qr.size().width > 0.0 && qr.size().width <= 232.5);
                         assert!(qr.absolute_position().x >= 0.0);
                         assert!(qr.absolute_position().x + qr.size().width <= width as f32 + 0.5);
+                        if width < 900 {
+                            assert!(qr.absolute_position().x >= 33.5);
+                            assert!(
+                                qr.absolute_position().x + qr.size().width <= width as f32 - 33.5,
+                                "QR must stay within its card padding"
+                            );
+                        }
                     }
                     for item in i_slint_backend_testing::ElementQuery::from_root(&app)
                         .find_all()
@@ -237,6 +244,14 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
                         ElementHandle::find_by_element_id(&app, "PartyPage::participant").next()
                     {
                         saw_participant = true;
+                        if width < 900 {
+                            assert!(
+                                (participant.size().width - (width as f32 - 68.0)).abs() < 1.0,
+                                "{language} {width}x{height}: phone panels must fill the scroll viewport, participant={:?}/{:?}",
+                                participant.absolute_position(),
+                                participant.size()
+                            );
+                        }
                         assert!(
                             participant.size().height < 220.0,
                             "participant stretched into spare height"

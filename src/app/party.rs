@@ -899,7 +899,8 @@ impl Bridge {
             "Reconnecting to the host…"
         } else if media.is_none() {
             if room.role == PartyRole::Host {
-                "Choose what to watch"
+                // The lobby already presents this action as its primary button.
+                ""
             } else {
                 "Waiting for the host to choose"
             }
