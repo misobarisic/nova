@@ -1011,6 +1011,7 @@ export component PlayerOverlay {
         if root.kb_idx == 13 { return 9; }
         if root.kb_idx == 10 { return root.party_owns_playback ? 9 : 13; }
         let raw = Math.max(0, root.kb_idx - 1);
+        if root.is_android && raw == 8 { return 7; }
         if (root.is_android && raw == 2) {
             return 1;
         }
@@ -1025,6 +1026,7 @@ export component PlayerOverlay {
         if root.kb_idx == 9 { return !root.party_owns_playback ? 13 : root.next_episode_shown || root.skip_segment_shown ? 10 : 9; }
         if root.kb_idx == 13 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 13; }
         let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
+        if root.is_android && raw == 8 { return 9; }
         if (root.is_android && raw == 2) {
             return 3;
         }
@@ -1107,7 +1109,7 @@ export component PlayerOverlay {
             root.osd_mouse_moved();
         } else if root.kb_idx == 13 && !root.party_owns_playback {
             root.settings_page = 4; root.open_popup = 4; root.osd_mouse_moved();
-        } else if (root.kb_idx == 8) {
+        } else if (root.kb_idx == 8 && !root.is_android) {
             root.toggle_fullscreen();
         }
     }
@@ -1212,6 +1214,7 @@ export component PlayerOverlay {
             return;
         }
         if (root.kb_idx > root.kb_control_max()) { root.kb_idx = 1; }
+        if root.is_android && root.kb_idx == 8 { root.kb_idx = 7; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6
             || (!root.is_android && (root.kb_idx == 3 || root.kb_idx == 4)))) {
             root.kb_idx = 7;
@@ -1300,7 +1303,7 @@ export component PlayerOverlay {
     private property <length> content_right: root.safe-right + (root.narrow ? 16px : 24px);
     private property <bool> mobile_landscape: root.is_android && !root.narrow && !InterfaceStyle.tv;
     private property <length> rail_height: InterfaceStyle.tv ? 104px : root.mobile_landscape ? 54px : 102px;
-    private property <length> utility_width: 6 * 40px + 5 * 8px;
+    private property <length> utility_width: root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px;
     private property <length> caption_height: show_heading.height + episode_heading.height
         + badge_lane.height + summary_heading.height + 12px;
     changed header_bottom => { root.header_geometry_changed(root.header_bottom); }
@@ -2655,7 +2658,7 @@ export component PlayerOverlay {
                         IcCamera { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_bright; }
                     }
 
-                    if !InterfaceStyle.tv: IconBtn {
+                    if !InterfaceStyle.tv && !root.is_android: fullscreen_button := IconBtn {
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;

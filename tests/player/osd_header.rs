@@ -523,6 +523,11 @@ fn responsive_footer_keeps_metadata_and_utilities_clear_of_transport_and_safe_ar
         let track = element(&app, "PlayerOverlay::unbuffered_track");
         let camera = element(&app, "PlayerOverlay::screenshot_button");
         let gear = element(&app, "PlayerOverlay::settings_gear");
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "PlayerOverlay::fullscreen_button").count(),
+            usize::from(!android),
+            "fullscreen is a desktop control"
+        );
         assert!(header.absolute_position().y > height as f32 / 3.0);
         assert!(header.absolute_position().y + header.size().height < track.absolute_position().y);
         assert!((header.absolute_position().x - track.absolute_position().x).abs() < 0.5);

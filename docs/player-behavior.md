@@ -121,7 +121,7 @@ wrapped-row and addon-gesture tests.
 The OSD places the show's title, optional episode caption, live source badges and
 available year/genres at the bottom left. Android landscape keeps circular
 play/pause and ten-second seek controls over the center of the video, with compact
-subtitle, audio, speed, screenshot, settings and fullscreen buttons beside the
+subtitle, audio, speed, screenshot and settings buttons beside the
 metadata. Desktop keeps playback and volume at the bottom left and utilities on
 the right, beneath the timeline. Portrait stacks utilities below the timeline;
 track selection remains available through Settings at narrow widths. Time elapsed
@@ -130,8 +130,8 @@ Dragging the timeline previews the target position and timestamp locally, then
 seeks once on release. Native playback continues during the preview; cancellation
 discards it. A hidden timeline only wakes the controls on its first press, and
 loading/live streams or party guests cannot scrub. Held previews keep controls awake.
-Android’s fullscreen action updates the existing system-bar retry policy as well
-as the window state, so leaving immersion is retained until the next explicit change.
+Android enters immersive playback automatically and has no fullscreen button;
+desktop retains its fullscreen control.
 Badges use mpv's actual resolution, video codec, HDR transfer and selected audio
 language/channel layout, omit unavailable facts, and reset on source replacement.
 Metadata belongs to the captured playback request, so browsing another title does
