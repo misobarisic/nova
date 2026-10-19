@@ -7,7 +7,7 @@ import { SubtitleControls } from "../ui/subtitle-controls.slint";
 
 import { SpeedControl } from "../ui/speedcontrol.slint";
 
-import { Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting } from "../ui/settings-controls.slint";
+import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting } from "../ui/settings-controls.slint";
 import { Dropdown } from "../ui/dropdown.slint";
 
 import { PlaybackLanguagePicker } from "../ui/playback-language-picker.slint";
@@ -101,12 +101,28 @@ export component SettingsPlayerModule inherits Window {
 
                 if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
                     row-title: @tr("When returning to playback");
-                    row-desc: @tr("Always pause in the background. Automatically continue only if the video was playing before you left.");
+                    row-desc: @tr("Outside picture in picture, pause in the background. Automatically continue only if the video was playing before you left.");
                     Segmented {
                         labels: [@tr("Stay paused"), @tr("Auto continue")];
                         current_index: SettingsBridge.android_auto_continue ? 1 : 0;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 3 && SettingsBridge.kb_active;
                         picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 3; SettingsBridge.android_auto_continue = i == 1; SettingsContent.schedule_save(); }
+                    }
+                }
+
+                if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    row-title: @tr("Picture in picture");
+                    row-desc: @tr("Play video in a floating window when leaving Nova. Disabled keeps playback paused in the background.");
+                    ToggleSwitch {
+                        name: @tr("Picture in picture");
+                        checked <=> SettingsBridge.android_pip_enabled;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 4 && SettingsBridge.kb_active;
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = 4;
+                            SettingsContent.schedule_setting("android_pip_enabled");
+                        }
                     }
                 }
 

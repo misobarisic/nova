@@ -1,0 +1,23 @@
+diff --git a/ndk-build2/src/manifest.rs b/ndk-build2/src/manifest.rs
+--- a/ndk-build2/src/manifest.rs
++++ b/ndk-build2/src/manifest.rs
+@@ -223,6 +223,11 @@ pub struct Activity {
+     )]
+     pub resizeable_activity: Option<bool>,
+     #[serde(
++        rename(serialize = "@android:supportsPictureInPicture"),
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub supports_picture_in_picture: Option<bool>,
++    #[serde(
+         rename(serialize = "@android:alwaysRetainTaskState"),
+         skip_serializing_if = "Option::is_none"
+     )]
+@@ -257,6 +262,7 @@ impl Default for Activity {
+             orientation: None,
+             exported: None,
+             resizeable_activity: None,
++            supports_picture_in_picture: None,
+             always_retain_task_state: None,
+             window_soft_input_mode: None,
+             meta_data: Default::default(),

@@ -312,6 +312,7 @@ impl Bridge {
             self.filter_playback_languages("", false);
             self.filter_playback_languages("", true);
             app.set_android_auto_continue(settings.android_auto_continue);
+            app.set_android_pip_enabled(settings.android_pip_enabled);
             app.set_intro_skip_mode_index(settings.intro_skip_mode.index());
             app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
@@ -556,6 +557,7 @@ impl Bridge {
                 default_audio_language: app.get_default_audio_language().to_string(),
                 default_subtitle_language: app.get_default_subtitle_language().to_string(),
                 android_auto_continue: app.get_android_auto_continue(),
+                android_pip_enabled: app.get_android_pip_enabled(),
                 intro_skip_mode: nova_config::IntroSkipMode::from_index(
                     app.get_intro_skip_mode_index(),
                 )
@@ -1465,6 +1467,21 @@ mod tests {
         bridge.torrent_settings_to_ui();
         bridge.persist_settings();
         app.set_desktop_hwdec_index(2);
+        app.set_android_pip_enabled(false);
+        app.invoke_settings_edited("android_pip_enabled".into());
+        bridge.persist_settings();
+        assert!(!read_settings().android_pip_enabled);
+        app.set_android_pip_enabled(true);
+        bridge.settings_to_ui();
+        assert!(!app.get_android_pip_enabled());
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "android_pip_enabled")
+                .is_none(),
+            "the Android PiP preference stays on this device"
+        );
         app.invoke_settings_edited("desktop_hwdec".into());
         bridge.persist_settings();
         assert_eq!(read_settings().desktop_hwdec, nova_config::DesktopHwdec::Sw);

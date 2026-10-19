@@ -71,6 +71,55 @@ static FOCUS_POLL_TICKS: AtomicU32 = AtomicU32::new(0);
 /// so startup does not fire a spurious re-assert.
 static FOCUS_LAST: AtomicI8 = AtomicI8::new(1);
 
+/// Resolve methods on the existing activity object, avoiding FindClass's
+/// bootstrap loader on native-created threads. Java marshals writes to main.
+pub(crate) fn update_picture_in_picture(active: bool, paused: bool, width: i32, height: i32) {
+    let _ = with_pip_activity(|env, activity| {
+        env.call_method(
+            activity,
+            jni::jni_str!("updatePictureInPicture"),
+            jni::jni_sig!("(ZZII)V"),
+            &[
+                jni::JValue::Bool(active),
+                jni::JValue::Bool(paused),
+                jni::JValue::Int(width),
+                jni::JValue::Int(height),
+            ],
+        )?;
+        Ok(false)
+    });
+}
+
+pub fn picture_in_picture_keeps_playing() -> bool {
+    with_pip_activity(|env, activity| {
+        env.call_method(
+            activity,
+            jni::jni_str!("pictureInPictureKeepsPlaying"),
+            jni::jni_sig!("()Z"),
+            &[],
+        )?
+        .z()
+    })
+    .unwrap_or(false)
+}
+
+fn with_pip_activity(
+    call: impl FnOnce(&mut jni::Env<'_>, &NovaActivity<'_>) -> jni::errors::Result<bool>,
+) -> Option<bool> {
+    let ptr = android_activity_ptr();
+    if ptr.is_null() {
+        return None;
+    }
+    let vm = JavaVM::singleton().ok()?;
+    vm.attach_current_thread(|env| {
+        // Borrow the android-activity-owned global ref for this attachment.
+        let raw = ptr.cast();
+        let activity = unsafe { env.as_cast_raw::<Global<NovaActivity>>(&raw)? };
+        call(env, &activity)
+    })
+    .ok()
+}
+
 /// Called once from `android_main` in `lib.rs`. This module only compiles
 /// on Android, so the call site needs no extra gating.
 pub fn set_android_runtime(vm: *mut c_void, activity: *mut c_void) {

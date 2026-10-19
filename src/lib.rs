@@ -61,17 +61,21 @@ fn android_main(app: slint::android::AndroidApp) {
     // Resume and renderer setup jointly release a session-scoped recovery
     // request. The patched backend suspends on TerminateWindow while the old
     // window is valid, so mpv teardown runs with its original GL context current.
-    // Activity pause also pauses playback; returning follows the device-local
-    // auto-continue preference.
+    // Activity pause outside visible PiP also pauses playback; returning from
+    // the background follows the device-local auto-continue preference.
     slint::android::init_with_event_listener(app, |event| {
         use slint::android::android_activity::{MainEvent, PollEvent};
         if let PollEvent::Main(main) = event {
             match main {
                 MainEvent::Pause => {
                     nova_sync::set_foreground(false);
-                    crate::app::remote_playback::playback_foreground(false);
-                    crate::player::note_android_pause();
-                    crate::app::note_android_pause_checkpoint();
+                    // PiP pauses the activity while its native video surface
+                    // remains visible. Only a real background/lock pauses mpv.
+                    if !crate::player::picture_in_picture_keeps_playing() {
+                        crate::app::remote_playback::playback_foreground(false);
+                        crate::player::note_android_pause();
+                        crate::app::note_android_pause_checkpoint();
+                    }
                 }
                 MainEvent::Resume { .. } => {
                     nova_sync::set_foreground(true);
@@ -87,4 +91,22 @@ fn android_main(app: slint::android::AndroidApp) {
     if let Err(e) = app::run() {
         eprintln!("nova: {e}");
     }
+}
+
+/// NativeActivity callbacks arrive on Java's main thread; Slint and the player
+/// are owned by android-activity's native event thread.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_misob_nova_NovaActivity_nativePipEvent(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    event: i32,
+) {
+    let _ = slint::invoke_from_event_loop(move || {
+        crate::player::note_android_pip_event(event);
+        if event == 4 {
+            crate::app::remote_playback::playback_foreground(false);
+            crate::app::note_android_pause_checkpoint();
+        }
+    });
 }

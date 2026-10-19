@@ -3505,3 +3505,12 @@ msgstr "Prikaži sve"
 
 msgid "External playback is currently unavailable on desktop."
 msgstr "Vanjska reprodukcija trenutačno nije dostupna na računalu."
+
+msgid "Picture in picture"
+msgstr "Slika u slici"
+
+msgid "Play video in a floating window when leaving Nova. Disabled keeps playback paused in the background."
+msgstr "Reproducirajte video u plutajućem prozoru pri izlasku iz Nove. Kada je isključeno, reprodukcija ostaje pauzirana u pozadini."
+
+msgid "Outside picture in picture, pause in the background. Automatically continue only if the video was playing before you left."
+msgstr "Izvan slike u slici pauzirajte reprodukciju u pozadini. Automatski nastavite samo ako se video reproducirao prije izlaska."

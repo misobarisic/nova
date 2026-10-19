@@ -205,6 +205,30 @@ mod tests {
     }
 
     #[test]
+    fn visible_pip_window_recreation_preserves_play_and_pause() {
+        for paused in [true, false] {
+            let mut recovery = playing(paused);
+            // PiP keeps playback foreground: the activity's Pause is not an
+            // engine pause. A resize can still rebuild the native GL window.
+            recovery.teardown();
+            recovery.observe(Some(44.0), Some(paused));
+            assert_eq!(recovery.take_reload(), None);
+            recovery.setup();
+            let reload = recovery.take_reload().unwrap();
+            assert_eq!(reload.position, 44.0);
+            assert_eq!(reload.paused, paused);
+            assert_eq!(recovery.take_reload(), None);
+            // Dismissal/lock uses the ordinary background policy again.
+            recovery.pause();
+            recovery.teardown();
+            recovery.setup();
+            assert_eq!(recovery.take_reload(), None);
+            recovery.resume(false);
+            assert!(recovery.take_reload().unwrap().paused);
+        }
+    }
+
+    #[test]
     fn paused_playback_and_missing_properties_retain_the_snapshot() {
         let mut recovery = playing(true);
         recovery.pause();

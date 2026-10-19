@@ -254,7 +254,22 @@ System Back dismisses the nearest open layer without enabling keyboard focus
 markers on the player or the page it returns to. Held repeats still pop only
 one layer; desktop keyboard navigation keeps its focus markers.
 
-Leaving the app with Home, switching apps, or turning the screen off pauses
+Home or switching apps while in-app video is playing enters Android picture in
+picture on supported devices (Android 12+ automatic entry, Android 8–11 Home
+callback). PiP contains the native video and system play/pause actions; Nova's
+controls, menus and modal layers stay hidden until returning. Its aspect ratio
+follows the selected video's display dimensions within Android's supported
+range. Paused, unloaded, failed, audio-only and external playback do not
+auto-enter PiP. Screen lock, PiP dismissal and activity Stop pause and checkpoint
+playback. Disabled/unavailable PiP follows ordinary background pausing.
+
+Settings → Player → Picture in picture enables this behavior by default on
+Android. The choice is saved only on this device, applies to every title, and
+is hidden on desktop. Turning it off immediately prevents further automatic
+entry. An existing PiP window is paused and remains video-only until expanded
+or dismissed; Nova does not force an activity launch to leave PiP.
+
+Leaving the app without visible PiP, or turning the screen off, pauses
 playback immediately, including a stream still loading. Returning restores the
 video and position and shows the OSD. Settings → Player → When returning to
 playback offers Stay paused (default) or Auto continue. Auto continue resumes

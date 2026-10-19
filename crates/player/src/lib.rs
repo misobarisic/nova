@@ -25,7 +25,11 @@
 //! returns to the catalog.
 
 #[cfg(any(target_os = "android", test))]
+mod android_pip;
+#[cfg(any(target_os = "android", test))]
 mod android_recovery;
+#[cfg(target_os = "android")]
+pub use android_pip::note_android_pip_event;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
@@ -192,6 +196,8 @@ pub use crate::external::network_changed;
 pub use crate::external::open_browser;
 #[cfg(target_os = "android")]
 pub use crate::external::open_external;
+#[cfg(target_os = "android")]
+pub use crate::external::picture_in_picture_keeps_playing;
 #[cfg(target_os = "android")]
 pub use crate::external::reassert_system_bars;
 #[cfg(target_os = "android")]
@@ -1782,6 +1788,8 @@ impl Player {
         preferences: SessionPreferences,
         allow_external: bool,
     ) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        external::update_picture_in_picture(false, true, 16, 9);
         {
             let mpv = self.state.mpv.lock().unwrap();
             self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());
@@ -1999,10 +2007,10 @@ impl Player {
         if self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
-        let Ok(mpv) = self.state.mpv.lock() else {
+        let Ok(mpv_guard) = self.state.mpv.lock() else {
             return;
         };
-        let Some(mpv) = mpv.as_ref() else {
+        let Some(mpv) = mpv_guard.as_ref() else {
             return;
         };
         let _ = mpv.set_property("pause", new_paused);
@@ -2020,6 +2028,13 @@ impl Player {
         converge_idle_inhibit(!new_paused);
         #[cfg(target_os = "android")]
         converge_screen_on(!new_paused);
+        #[cfg(target_os = "android")]
+        {
+            drop(mpv_guard);
+            if let Some(app) = self.state.app.upgrade() {
+                android_pip::publish(&self.state, &app, false);
+            }
+        }
     }
 
     /// Seek to `pos` seconds (OSD slider).
@@ -2523,6 +2538,21 @@ impl Player {
 
     /// Local global edits affect only fields still inheriting in this session.
     pub fn update_playback_defaults(&self, settings: &nova_config::CacheSettings) {
+        #[cfg(target_os = "android")]
+        if !settings.android_pip_enabled {
+            // Apply the device preference at capture time, before the next
+            // timer tick or Home gesture. Android has no public exit-PiP API;
+            // leave an existing window video-only and paused until expanded.
+            external::update_picture_in_picture(false, true, 16, 9);
+            if self
+                .state
+                .app
+                .upgrade()
+                .is_some_and(|app| app.get_android_pip_active())
+            {
+                self.set_paused(true);
+            }
+        }
         let inherited = {
             let session = self.state.preferences.lock().unwrap();
             [
@@ -2869,6 +2899,8 @@ impl Player {
 
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
+        #[cfg(target_os = "android")]
+        external::update_picture_in_picture(false, true, 16, 9);
         // Capture before leaving fullscreen. Closing an already-closed player
         // must not replace the saved choice with the catalog's window state.
         #[cfg(not(target_os = "android"))]
@@ -3314,6 +3346,8 @@ impl Player {
                 app.invoke_osd_mouse_moved();
             }
         }
+        #[cfg(target_os = "android")]
+        android_pip::publish(&self.state, &app, snapshot.eof);
     }
 
     /// Android: last resort for a stream the in-app player cannot start — hand

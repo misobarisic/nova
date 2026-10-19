@@ -62,6 +62,50 @@ fn setup() -> (nova::AppWindow, Rc<RefCell<Vec<&'static str>>>) {
 }
 
 #[test]
+fn android_pip_hides_entire_scene_and_restores_player_state() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::android_pip_hides_entire_scene_and_restores_player_state"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let (app, _) = setup();
+    app.set_is_android(true);
+    app.set_playback_end_menu_visible(true);
+    app.set_osd_visible(true);
+    advance(&app, 30);
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AppWindow::playback_ended")
+            .next()
+            .is_some()
+    );
+    app.set_android_pip_active(true);
+    advance(&app, 30);
+    // Ancestor visibility hides menus, party badges and modal layers together.
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AppWindow::system_back_scope")
+            .next()
+            .is_none()
+    );
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AppWindow::playback_ended")
+            .next()
+            .is_none()
+    );
+    assert!(app.get_player_open());
+    assert!(app.get_playback_started());
+    assert!(app.get_playback_end_menu_visible());
+    app.set_android_pip_active(false);
+    advance(&app, 30);
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AppWindow::playback_ended")
+            .next()
+            .is_some()
+    );
+}
+
+#[test]
 fn end_menu_fits_translations_and_routes_pointer_keyboard_and_system_back() {
     if !crate::isolation::run(concat!(
         module_path!(),

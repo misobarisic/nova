@@ -85,6 +85,10 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Picture in picture" => "Slika u slici",
+        "Play video in a floating window when leaving Nova. Disabled keeps playback paused in the background." => {
+            "Reproducirajte video u plutajućem prozoru pri izlasku iz Nove. Kada je isključeno, reprodukcija ostaje pauzirana u pozadini."
+        }
         "IMDb rating" => "IMDb ocjena",
         "Runtime" => "Trajanje",
         "Status" => "Status",

@@ -402,6 +402,74 @@ fn playback_defaults_reset_and_player_settings_fit() {
 use crate::settings_support;
 
 #[test]
+fn android_pip_setting_is_local_translated_and_keyboard_accessible() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::android_pip_setting_is_local_translated_and_keyboard_accessible"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(5);
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 1400));
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..30 {
+            for item in ElementQuery::from_root(&app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = item.size();
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+        }
+    };
+    settle();
+    assert!(!has_text(&app, "Picture in picture"));
+    app.set_is_android(true);
+    settle();
+    assert!(app.get_android_pip_enabled());
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let captured = edits.clone();
+    app.on_settings_edited(move |field| captured.borrow_mut().push(field.to_string()));
+    let toggle = || {
+        ElementHandle::find_by_accessible_label(&app, "Picture in picture")
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Checkbox)
+            })
+            .expect("Android PiP toggle")
+    };
+    assert_eq!(toggle().accessible_checked(), Some(true));
+    toggle().mock_single_click(slint::platform::PointerEventButton::Left);
+    assert!(!app.get_android_pip_enabled());
+    assert!(
+        edits
+            .borrow()
+            .iter()
+            .any(|field| field == "android_pip_enabled")
+    );
+    // Left/Right reaches this added row without shifting the decoder or
+    // return-behavior controls; Enter toggles it through the shell as well.
+    key(&app, slint::platform::Key::RightArrow);
+    assert!(app.get_android_pip_enabled());
+    key(&app, slint::platform::Key::LeftArrow);
+    assert!(!app.get_android_pip_enabled());
+    key(&app, slint::platform::Key::Return);
+    assert!(app.get_android_pip_enabled());
+    slint::select_bundled_translation("hr").unwrap();
+    settle();
+    assert!(has_text(&app, "Slika u slici"));
+    app.set_is_android(false);
+    settle();
+    assert!(!has_text(&app, "Slika u slici"));
+}
+
+#[test]
 fn external_player_choice_is_android_only() {
     if !crate::isolation::run(concat!(
         module_path!(),

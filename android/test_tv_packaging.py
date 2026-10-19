@@ -12,7 +12,9 @@ class TvPackaging(unittest.TestCase):
         metadata = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["metadata"]["android"]
         app = metadata["application"]
         self.assertEqual(app["banner"], "@drawable/tv_banner")
-        native = next(a for a in app["activity"] if a["name"] == "android.app.NativeActivity")
+        native = next(a for a in app["activity"] if a["name"] == ".NovaActivity")
+        self.assertTrue(native["supports_picture_in_picture"])
+        self.assertTrue(native["resizeable_activity"])
         categories = native["intent_filter"][0]["categories"]
         self.assertIn("android.intent.category.LAUNCHER", categories)
         self.assertIn("android.intent.category.LEANBACK_LAUNCHER", categories)

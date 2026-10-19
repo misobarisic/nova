@@ -224,7 +224,7 @@ icon = "@mipmap/ic_launcher"
 banner = "@drawable/tv_banner"
 
 # cargo-apk2 generates no implicit activity (unlike cargo-apk): declare the
-# android-activity NativeActivity, its `lib_name` meta-data (the value is
+# NovaActivity (a framework NativeActivity subclass for PiP), its `lib_name` meta-data (the value is
 # filled from `[lib]` automatically) and the launcher intent filter. cargo-apk2
 # sets `android:exported="true"` on targetSdk >= 31.
 #
@@ -232,8 +232,11 @@ banner = "@drawable/tv_banner"
 # runtime instead of letting the Activity be recreated (which would restart the
 # app and drop the in-app player). `screenLayout`/`smallestScreenSize` flip on
 # some devices and, being unhandled, would recreate the Activity.
+# The pinned packager's PiP attribute is supplied by android/cargo-apk2-pip.patch.
 [[package.metadata.android.application.activity]]
-name = "android.app.NativeActivity"
+name = ".NovaActivity"
+supports_picture_in_picture = true
+resizeable_activity = true
 config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode|layoutDirection"
 
 [[package.metadata.android.application.activity.meta_data]]

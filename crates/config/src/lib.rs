@@ -828,6 +828,9 @@ cache_settings_type! {
     /// Android: resume on returning only if playing before backgrounding. Local-only.
     #[serde(default)]
     pub android_auto_continue: bool,
+    /// Android: allow Home to enter system picture in picture. Device-local.
+    #[serde(default = "default_true")]
+    pub android_pip_enabled: bool,
     /// Warm the next episode source list in memory near the end of playback.
     #[serde(default = "default_true")]
     pub prefetch_next_episode_streams: bool,
@@ -1014,6 +1017,7 @@ impl Default for CacheSettings {
             default_subtitle_language: String::new(),
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
+            android_pip_enabled: true,
             intro_skip_mode: IntroSkipMode::Prompt,
             intro_skip_confidence: IntroSkipConfidence::default(),
             prefetch_next_episode_streams: true,
@@ -1591,6 +1595,15 @@ mod tests {
         assert_eq!(settings.language, Language::English);
         assert_eq!(settings.desktop_hwdec, DesktopHwdec::default());
         assert!(!settings.android_auto_continue);
+        assert!(settings.android_pip_enabled);
+        assert!(CacheSettings::default().android_pip_enabled);
+        let disabled = CacheSettings {
+            android_pip_enabled: false,
+            ..Default::default()
+        };
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
+        assert!(!restored.android_pip_enabled);
         assert_eq!(settings.intro_skip_mode, IntroSkipMode::Prompt);
         assert_eq!(settings.intro_skip_confidence.percent(), 50);
         assert!(settings.prefetch_next_episode_streams);

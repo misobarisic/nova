@@ -604,6 +604,7 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "remote_control_enabled",
     "desktop_external_app",
     "android_auto_continue",
+    "android_pip_enabled",
     "sync_overrides",
     "categories",
 ];
@@ -3523,6 +3524,9 @@ mod tests {
         assert!(fields.contains_key("default_audio_language"));
         assert!(fields.contains_key("default_subtitle_language"));
         assert!(!fields.contains_key("android_auto_continue"));
+        assert!(!fields.contains_key("android_pip_enabled"));
+        let remote_pip = [("android_pip_enabled".into(), "false".into())];
+        assert!(merge_settings_fields(&settings, &remote_pip).android_pip_enabled);
         assert_eq!(fields["background_style"], "\"default\"");
         let base = CacheSettings {
             background_style: nova_config::BackgroundStyle::TrueBlack,
