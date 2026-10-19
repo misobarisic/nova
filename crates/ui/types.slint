@@ -32,12 +32,12 @@ export struct MediaCard {
     poster_path: string,
     poster: image,
     is_loaded: bool,
-    /// Playback badge for library items (e.g. "▶ Resume S1 E3", "3 left",
-    /// "✓ Seen"). Empty when there is nothing to report.
+    /// Playback badge for library items (e.g. "▶ Resume S1 E3", "3 left").
+    /// Empty when there is nothing to report.
     badge: string,
-    /// True when the series is completed for currently available episodes
-    /// (drives the library watched/unwatched menu; always false for
-    /// Discover catalog cards).
+    /// True when a movie is watched or a series' currently available episodes
+    /// are completed (drives the library watched/unwatched menu; always false
+    /// for Discover catalog cards).
     watched: bool,
     /// Library-only display state; catalog cards leave these at their defaults.
     status: string,

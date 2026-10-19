@@ -218,7 +218,9 @@ impl Bridge {
         let (series_id, episode_ids) = {
             let e = entry;
             let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-            let ids = if target {
+            let ids = if e.type_ == "movie" {
+                vec![e.id.clone()]
+            } else if target {
                 episodes
                     .iter()
                     .filter(|v| episode_is_out(v, today))
@@ -331,7 +333,8 @@ impl Bridge {
         match action {
             0 => {
                 let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
-                let watched = available_completed(
+                let watched = library_title_completed(
+                    &entry.type_,
                     &entry.id,
                     &episodes,
                     &self.shared.lock().unwrap().progress,
@@ -375,8 +378,8 @@ impl Bridge {
             {
                 return;
             }
-            let watched = target.as_ref().is_some_and(|(id, _)| {
-                available_completed(id, &episodes, &state.progress, today_days())
+            let watched = target.as_ref().is_some_and(|(id, type_)| {
+                library_title_completed(type_, id, &episodes, &state.progress, today_days())
             });
             let action = target
                 .as_ref()
@@ -1353,7 +1356,7 @@ fn project_library_card(
         is_movie: candidate.type_ == "movie",
         watched_count,
         episode_count,
-        watched: available_completed(&candidate.id, videos, progress, today),
+        watched: library_title_completed(&candidate.type_, &candidate.id, videos, progress, today),
     })
 }
 
@@ -1393,6 +1396,80 @@ fn builtin_filter_label(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movie_completion_without_episode_metadata_matches_cards_and_filters() {
+        let mut movie: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id": "movie", "type_": "movie", "name": "Movie"
+        }))
+        .unwrap();
+        let activity = HashMap::new();
+        // A series sharing the raw title ID cannot complete a movie.
+        let mut progress = HashMap::from([(
+            progress_map_key("movie", "episode"),
+            EpisodeProgress {
+                series_id: "movie".into(),
+                episode_id: "episode".into(),
+                watched: true,
+                ..Default::default()
+            },
+        )]);
+        for (record, status) in [
+            (None, "Plan to Watch"),
+            (Some((600.0, false)), "Watching"),
+            (Some((3600.0, true)), "Completed"),
+            (Some((0.0, false)), "Watching"),
+        ] {
+            movie.imported_tracking_status = record.map(|_| nova_tracking::ListStatus::Planning);
+            if let Some((position, watched)) = record {
+                progress.insert(
+                    progress_map_key("movie", "movie"),
+                    EpisodeProgress {
+                        series_id: "movie".into(),
+                        episode_id: "movie".into(),
+                        position_secs: position,
+                        duration_secs: 3600.0,
+                        watched,
+                        updated_at_secs: 1,
+                        ..Default::default()
+                    },
+                );
+            }
+            let candidate = LibraryCandidate::from_entry(&movie, 0);
+            let card = project_library_card(&movie, &candidate, &[], &progress, &activity).unwrap();
+            assert_eq!(card.status, status);
+            assert_eq!(card.watched, status == "Completed");
+            if card.watched {
+                assert!(card.badge.is_empty());
+            }
+            for filter in ["Plan to Watch", "Watching", "Completed"] {
+                assert_eq!(
+                    project_library_candidate(
+                        &movie,
+                        0,
+                        None,
+                        &progress,
+                        &activity,
+                        &LibraryViewOptions {
+                            filter,
+                            needle: String::new(),
+                            sort: 0,
+                        }
+                    )
+                    .is_some(),
+                    filter == status
+                );
+            }
+        }
+        movie.watch_status = WatchStatus::OnHold;
+        let candidate = LibraryCandidate::from_entry(&movie, 0);
+        assert_eq!(
+            project_library_card(&movie, &candidate, &[], &progress, &activity)
+                .unwrap()
+                .status,
+            "On Hold"
+        );
+    }
 
     #[test]
     fn search_and_sort_keep_entries_and_action_indices_together() {

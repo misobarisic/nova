@@ -860,7 +860,6 @@ pub fn tr(english: &str) -> &str {
         "P2P engine could not start." => "P2P modul nije se mogao pokrenuti.",
         "Connecting to peers…" => "Povezivanje s drugim čvorovima…",
         // ---- Episode / season badges -----------------------------------
-        "✓ Seen" => "✓ Pogledano",
         "▶ Resume" => "▶ Nastavite",
         "Caught up" => "Sve pogledano",
         "New episodes" => "Nove epizode",

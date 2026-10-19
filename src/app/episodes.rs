@@ -134,20 +134,13 @@ pub(crate) fn library_badge_for(
             )
             .trim()
             .to_string(),
-            None => {
-                if map.values().any(|p| is_ours(p) && p.watched) {
-                    text::tr("✓ Seen").to_string()
-                } else {
-                    String::new()
-                }
-            }
+            None => String::new(),
         };
     }
     let mut watched_count = 0usize;
     let mut resume: Option<(&Video, &EpisodeProgress)> = None;
-    // Released and unaired episodes are tallied separately: a series with
-    // episodes still to come never reads "✓ Seen" — it stays in Watching
-    // and feeds Home → Upcoming.
+    // Released and unaired episodes are tallied separately so a series with
+    // episodes still to come can feed Home → Upcoming.
     let today = today_days();
     let mut unaired = 0usize;
     // Dated, released episodes only: dateless ones carry no schedule, so
@@ -209,8 +202,8 @@ pub(crate) fn library_badge_for(
         // Everything dated is seen — but a resume in progress still wins:
         // the user is mid-episode (possibly a dateless one), and "▶ Resume"
         // is more useful than silence. Otherwise a fully seen series carries
-        // the top-right checkmark on its library card, so the badge stays
-        // empty instead of repeating "✓ Seen". A dated-complete series that
+        // a Completed status pill and full progress rail, so the badge stays
+        // empty. A dated-complete series that
         // is not fully seen — episodes still to come (unaired), or an
         // unwatched dateless episode pending — still names the wait.
         if let Some((v, _)) = resume {

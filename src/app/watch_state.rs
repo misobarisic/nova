@@ -52,6 +52,24 @@ pub(crate) fn available_completed(
         }
 }
 
+/// Movies have one native playback ID, independent of episode metadata.
+/// Do not let another media type's episode records complete the movie.
+pub(crate) fn library_title_completed(
+    type_: &str,
+    id: &str,
+    episodes: &[Video],
+    progress: &HashMap<String, EpisodeProgress>,
+    today: i64,
+) -> bool {
+    if type_ == "movie" {
+        progress
+            .get(&progress_map_key(id, id))
+            .is_some_and(|record| record.watched)
+    } else {
+        available_completed(id, episodes, progress, today)
+    }
+}
+
 /// An account's status stays visible while cold metadata cannot establish
 /// native playback. Local watches, explicit unwatches, resume and activity
 /// always take priority over this non-authoritative display hint.
@@ -65,7 +83,9 @@ pub(crate) fn library_activity_bucket(
     let local = activity.is_some()
         || progress.values().any(|p| {
             p.series_id == entry.id
-                && (p.unwatched_at_secs > 0
+                && (entry.type_ != "movie" || p.episode_id == entry.id)
+                && ((entry.type_ == "movie" && p.watched)
+                    || p.unwatched_at_secs > 0
                     || p.updated_at_secs > 0
                     || p.play_count > 0
                     || p.position_secs >= RESUME_MIN_SECS
@@ -85,7 +105,17 @@ pub(crate) fn library_activity_bucket(
             nova_tracking::ListStatus::Dropped => "Dropped",
         };
     }
-    activity_bucket(&entry.id, episodes, progress, activity, today)
+    if entry.type_ == "movie" {
+        if library_title_completed(&entry.type_, &entry.id, episodes, progress, today) {
+            "Completed"
+        } else if progress.contains_key(&progress_map_key(&entry.id, &entry.id)) {
+            "Watching"
+        } else {
+            "Plan to Watch"
+        }
+    } else {
+        activity_bucket(&entry.id, episodes, progress, activity, today)
+    }
 }
 
 pub(crate) fn activity_bucket(

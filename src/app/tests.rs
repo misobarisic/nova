@@ -578,15 +578,14 @@ mod playback_tests {
 
     #[test]
     fn movie_and_listless_entries_badge_bucket_and_check() {
-        // Watched movie (no episode list): "✓ Seen" badge, Watching bucket,
-        // never a card checkmark (completion needs an episode list).
+        // A completed movie has no redundant badge. Typed movie completion
+        // is tested with the Library projection; this helper handles series.
         let mut map = HashMap::new();
         map.insert(
             progress_map_key("m", "m"),
             entry("m", "m", 3500.0, 3600.0, true, 1),
         );
-        assert_eq!(library_badge_for("m", &[], &map), "✓ Seen");
-        assert_eq!(auto_bucket("m", &[], &map), "Watching");
+        assert_eq!(library_badge_for("m", &[], &map), "");
         assert!(!series_fully_watched("m", &[], &map));
         // In-progress movie: resume badge, Watching, no checkmark.
         let mut map2 = HashMap::new();

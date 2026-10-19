@@ -68,16 +68,16 @@ retain their English identifiers.
 | Plan to Watch | No progress record at all (untouched movies, added-but-never-played series). |
 | Watching | A started, incomplete viewing run, including its next unstarted episode. Legacy backlogs without a checkpoint conservatively stay here. |
 | New episodes | Previously completed (or explicitly awaiting return), with dated released episodes outstanding, without resumed meaningful playback. |
-| Completed | **All known dated, released episodes watched**, without unfinished meaningful playback in the known list. Future episodes and untouched dateless extras do not block it. A dateless-only list completes only when every known episode is watched. Establishing completion needs a cached episode list; an existing checkpoint survives missing metadata. The show need not have ended. |
+| Completed | **All known dated, released episodes watched**, without unfinished meaningful playback in the known list. Future episodes and untouched dateless extras do not block it. A dateless-only list completes only when every known episode is watched. Establishing series completion needs a cached episode list; an existing checkpoint survives missing metadata. A movie completes from its own watched playback record, without episode metadata. The show need not have ended. |
 | On Hold / Dropped | Pinned manually per entry (card menu → status); overrides the derived bucket. Back-to-automatic clears the pin. |
 
 Pinned entries appear under their pin only — never under the automatic
 buckets. A pin replaces the card’s status pill, while resume text and the
 watched/total rail remain derived from progress.
 
-Quirk, documented as-is: movies have no episode list, so a fully watched
-movie buckets as Watching (not Completed) and has no episode rail — it reads
-`✓ Seen` instead (see below).
+Movies use their native `id\x01id` playback record for completion and the
+watched/unwatched action. A watched movie belongs to Completed and has no
+episode rail or redundant Seen badge. Manual On Hold / Dropped pins still apply.
 
 ## Returning shows and Home
 
@@ -141,9 +141,9 @@ Resume (latest-updated resumable position) beats that text count.
 | Only untouched dateless episodes | (none) | Plan to Watch |
 | Started dateless-only list | `▶ Resume <Title>` | Watching |
 | No episode list cached, resume exists | `▶ Resume` | Watching |
-| No episode list cached, something watched | `✓ Seen` | Watching |
+| No series episode list cached, something watched | (none) | Watching unless an existing completion checkpoint applies |
 | Movie in progress | `▶ Resume` | Watching |
-| Movie watched | `✓ Seen` | Watching (never Completed) |
+| Movie watched | (none — Completed status pill) | Completed |
 | Movie untouched | (none) | Plan to Watch |
 | Pinned On Hold / Dropped | playback text as derived | under the pin |
 
