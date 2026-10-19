@@ -497,3 +497,48 @@ fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
         }
     }
 }
+
+#[test]
+fn decoder_choices_fit_short_landscape_without_clipping_software() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::decoder_choices_fit_short_landscape_without_clipping_software"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (width, height) in [(853, 394), (900, 360), (1280, 591), (1280, 720)] {
+        let app = nova::AppWindow::new().unwrap();
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.global::<nova::Anim>().set_enabled(false);
+        app.set_is_android(true);
+        app.set_touch_menus(true);
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.show().unwrap();
+        advance_menu(&app, 300);
+        open_settings(&app);
+        button(&app, "Hardware decoding")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        advance_menu(&app, 300);
+        let sw = button(&app, "SW");
+        let scroll = ElementHandle::find_by_element_id(&app, "SettingsMenu::settings_scroll")
+            .next()
+            .unwrap();
+        let card = ElementHandle::find_by_element_id(&app, "SettingsMenu::card")
+            .next()
+            .unwrap();
+        assert!(
+            sw.absolute_position().y + sw.size().height
+                <= scroll.absolute_position().y + scroll.size().height + 0.5,
+            "SW clipped at {width}x{height}: row={:?}/{:?}, viewport={:?}/{:?}, card={:?}/{:?}",
+            sw.absolute_position(),
+            sw.size(),
+            scroll.absolute_position(),
+            scroll.size(),
+            card.absolute_position(),
+            card.size()
+        );
+    }
+}

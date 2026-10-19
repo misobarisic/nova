@@ -479,6 +479,9 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         Text {
+                            // Measure the wrapped hint at the real viewport width; otherwise
+                            // the popup reserves one line and clips the final decoder row.
+                            width: 100%; height: self.preferred-height; min-width: 0px;
                             text: @tr("Applies to this stream only. The next stream uses Settings → Player.");
                             color: Theme.current.text_secondary;
                             font-size: 13px;
