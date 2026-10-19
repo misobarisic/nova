@@ -27,7 +27,11 @@ All addon replies must finish within the ordinary five-second EOF delay; empty,
 failed or slow discovery falls back to the existing end menu. Nova prefers the
 same release family through its normal recommendation policy, then the first
 playable stream in installed-addon/provider ranking (completed downloads remain
-pinned). Completed download candidates must match the media type, parent title
+pinned). Completed downloads also participate in release recommendations, and
+playing a saved episode remembers its show’s release preference. Downloaded
+release text can match online sources without the original addon URL, while
+online-to-online comparisons retain addon ownership. Incomplete or missing local
+files never qualify. Completed download candidates must match the media type, parent title
 and episode ID; an episode ID reused by another title is insufficient.
 Unsupported streams and disabled torrents cannot be selected.
 A known candidate opens a fullscreen artwork preview showing its episode, source

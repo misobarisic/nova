@@ -87,8 +87,7 @@ fn automatic_choice(
     let rows: Vec<_> = rows
         .iter()
         .filter(|row| {
-            !matches!(row.source, StreamSource::Unsupported)
-                && !matches!(&row.source, StreamSource::Downloaded { path, .. } if !path.is_file())
+            stream_recommendation_usable(row)
                 && (torrents || !matches!(row.source, StreamSource::Torrent { .. }))
         })
         .cloned()

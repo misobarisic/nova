@@ -51,8 +51,16 @@ pub(super) fn preference_hash(kind: &str, value: &str) -> String {
 
 impl StreamPreference {
     pub(super) fn from_row(row: &StreamUi) -> Self {
-        let title = row.card.title.to_ascii_lowercase();
-        let normalized = format!("{} {}", row.card.metadata, title)
+        Self::from_card(&row.owner_url, &row.card)
+    }
+
+    pub(super) fn from_download(job: &DownloadJob) -> Self {
+        Self::from_card("", &downloaded_stream_card(job))
+    }
+
+    fn from_card(owner: &str, card: &StreamCardText) -> Self {
+        let title = card.title.to_ascii_lowercase();
+        let normalized = format!("{} {}", card.metadata, title)
             .to_ascii_lowercase()
             .replace("h.264", "h264")
             .replace("h.265", "h265")
@@ -95,8 +103,8 @@ impl StreamPreference {
             })
             .map(|g| preference_hash("group", g));
         Self {
-            owner: preference_hash("owner", row.owner_url.trim_end_matches('/')),
-            binge: row.card.binge_group.clone(),
+            owner: preference_hash("owner", owner.trim_end_matches('/')),
+            binge: card.binge_group.clone(),
             group,
             resolution: fact(&[
                 ("2160", &["2160p", "4k"]),
@@ -119,7 +127,14 @@ impl StreamPreference {
     }
 
     fn score(&self, candidate: &Self) -> Option<u32> {
-        if self.owner != candidate.owner {
+        // Downloads retain release text but not the original addon URL. Permit
+        // local/online matching using the same release evidence, without
+        // weakening owner isolation between two online addon responses.
+        let local_owner = preference_hash("owner", "");
+        if self.owner != candidate.owner
+            && self.owner != local_owner
+            && candidate.owner != local_owner
+        {
             return None;
         }
         let same = |a: &Option<String>, b: &Option<String>| a.is_some() && a == b;
@@ -140,20 +155,33 @@ impl StreamPreference {
     }
 }
 
+pub(super) fn stream_recommendation_usable(row: &StreamUi) -> bool {
+    match &row.source {
+        StreamSource::Unsupported => false,
+        StreamSource::Downloaded { path, .. } => row.download.as_ref().is_some_and(|job| {
+            job.phase == crate::download::DownloadPhase::Completed
+                && job.artifact_path.as_ref() == Some(path)
+                && path.is_file()
+        }),
+        _ => true,
+    }
+}
+
 pub(super) fn recommended_stream(
     rows: &[StreamUi],
     exact: Option<&str>,
     preference: &StreamPreference,
 ) -> Option<usize> {
-    if exact.is_some_and(|id| rows.iter().any(|row| row.choice_id.as_deref() == Some(id))) {
+    if exact.is_some_and(|id| {
+        rows.iter()
+            .any(|row| stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id))
+    }) {
         return None;
     }
     // Keep the addon's ranking on equal evidence, including cumulative batches.
     rows.iter()
         .enumerate()
-        .filter(|(_, row)| {
-            row.download.is_none() && !matches!(row.source, StreamSource::Unsupported)
-        })
+        .filter(|(_, row)| stream_recommendation_usable(row))
         .filter_map(|(index, row)| {
             preference
                 .score(&StreamPreference::from_row(row))
@@ -546,6 +574,88 @@ pub(crate) fn stream_display(s: &addons::Stream) -> String {
 mod choice_identity_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn download_recommendations_match_online_releases_and_require_completed_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nova-download-recommendation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("episode.mkv");
+        fs::write(&path, b"fixture").unwrap();
+        let job = DownloadJob {
+            id: "local".into(),
+            display: "Addon\n1080p\n[Family] Show 02 HEVC WEB-DL".into(),
+            phase: crate::download::DownloadPhase::Completed,
+            artifact_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let local = StreamUi {
+            id: "download:local".into(),
+            choice_id: Some("local".into()),
+            owner_url: String::new(),
+            display: job.display.clone(),
+            card: downloaded_stream_card(&job),
+            source: StreamSource::Downloaded {
+                job_id: job.id.clone(),
+                path: path.clone(),
+            },
+            addon: "Addon".into(),
+            download: Some(job.clone()),
+        };
+        let online = StreamUi {
+            id: "online".into(),
+            choice_id: Some("online".into()),
+            owner_url: "https://addon.example".into(),
+            source: StreamSource::Url("https://media.example/video".into()),
+            download: None,
+            ..local.clone()
+        };
+        let preference = StreamPreference::from_row(&online);
+        let from_download = StreamPreference::from_download(&job);
+        assert!(preference.score(&from_download).is_some());
+        assert!(from_download.score(&preference).is_some());
+        assert_eq!(
+            recommended_stream(&[local.clone(), online.clone()], None, &preference),
+            Some(0)
+        );
+        assert_eq!(
+            recommended_stream(&[online.clone()], None, &from_download),
+            Some(0)
+        );
+        assert_eq!(
+            recommended_stream(&[local.clone()], Some("local"), &preference),
+            None
+        );
+        let mut other_addon = online.clone();
+        other_addon.owner_url = "https://other.example".into();
+        assert_eq!(recommended_stream(&[other_addon], None, &preference), None);
+        let mut unrelated = local.clone();
+        unrelated.card = StreamCardText {
+            title: "[Other] Show 02".into(),
+            ..Default::default()
+        };
+        assert_eq!(recommended_stream(&[unrelated], None, &preference), None);
+        for phase in [
+            crate::download::DownloadPhase::Queued,
+            crate::download::DownloadPhase::Failed,
+        ] {
+            let mut unavailable = local.clone();
+            unavailable.download.as_mut().unwrap().phase = phase;
+            assert_eq!(recommended_stream(&[unavailable], None, &preference), None);
+        }
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            recommended_stream(&[local, online], Some("local"), &preference),
+            Some(1)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn recommendation_scopes_cover_native_episodic_types_without_aliasing() {

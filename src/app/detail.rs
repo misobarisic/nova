@@ -2553,6 +2553,7 @@ impl Bridge {
             addon_label,
             request_id,
             media_type,
+            media_id,
             series_id,
         ) = {
             let mut state = self.shared.lock().unwrap();
@@ -2592,6 +2593,11 @@ impl Bridge {
                     .modal_item
                     .as_ref()
                     .map(|m| m.type_.clone())
+                    .unwrap_or_default(),
+                state
+                    .modal_item
+                    .as_ref()
+                    .map(|m| m.id.clone())
                     .unwrap_or_default(),
                 state
                     .modal_item
@@ -2639,6 +2645,7 @@ impl Bridge {
             .downloads
             .jobs_for_request(&request_id)
             .into_iter()
+            .filter(|job| job.media_type == media_type && job.media_id == media_id)
             .map(|job| {
                 let path = job.artifact_path.clone().unwrap_or_default();
                 StreamUi {
@@ -2667,9 +2674,9 @@ impl Bridge {
         displayed.extend(filtered);
         let last_used = self.last_stream.identity(nova_config::now_secs());
         let has_exact = last_used.as_deref().is_some_and(|id| {
-            displayed
-                .iter()
-                .any(|row| row.choice_id.as_deref() == Some(id))
+            displayed.iter().any(|row| {
+                stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id)
+            })
         });
         let recommended_id = if has_exact {
             None

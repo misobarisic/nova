@@ -854,6 +854,13 @@ impl Bridge {
         }
         let episode = read_episodes_cache_for(&job.media_type, &job.media_id)
             .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id));
+        if let Some(scope) = stream_series_scope(&job.media_type, &job.media_id) {
+            self.last_stream.remember_series(
+                &scope,
+                StreamPreference::from_download(&job),
+                nova_config::now_secs(),
+            );
+        }
         let saved_coordinates = job
             .intro_request
             .as_ref()
