@@ -128,6 +128,26 @@ pub struct Handler {
     /// peer that removed us, awaiting a UI notice.
     removed_notice: Arc<Mutex<Option<String>>>,
     pub(crate) joining: Arc<tokio::sync::Mutex<()>>,
+    outbound: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// Keep the outbound slot until every peer task has actually stopped. Dropping
+/// a JoinSet requests cancellation, but those tasks may not drop immediately.
+pub(crate) struct OutboundPass {
+    handler: Handler,
+    _slot: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for OutboundPass {
+    fn drop(&mut self) {
+        if let Ok(mut status) = self.handler.status.lock() {
+            status.syncing = false;
+            status.syncing_since = 0;
+            for attempt in status.peer_attempts.values_mut() {
+                attempt.in_flight = false;
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for Handler {
@@ -139,6 +159,14 @@ impl std::fmt::Debug for Handler {
 }
 
 impl Handler {
+    pub(crate) async fn outbound_pass(&self) -> Arc<OutboundPass> {
+        let slot = self.outbound.clone().lock_owned().await;
+        Arc::new(OutboundPass {
+            handler: self.clone(),
+            _slot: slot,
+        })
+    }
+
     pub(crate) fn note_peer_attempt(&self, id: &str) {
         if let Ok(mut status) = self.status.lock() {
             let attempt = status.peer_attempts.entry(id.to_string()).or_default();
@@ -184,6 +212,7 @@ impl Handler {
             acks,
             removed_notice: Arc::new(Mutex::new(None)),
             joining: Arc::new(tokio::sync::Mutex::new(())),
+            outbound: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -1030,6 +1059,115 @@ mod tests {
 
     fn acks_of(handler: &Arc<Handler>) -> crate::PeerAcks {
         handler.acks.lock().map(|a| a.clone()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn cancelled_job_waiting_for_outbound_slot_preserves_live_pass() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let handler = handler(
+            Arc::new(Mutex::new(Store::default())),
+            1,
+            "self",
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let foreground_pass = handler.outbound_pass().await;
+        handler.set_syncing(true);
+        handler.note_peer_attempt("peer");
+        let cancel = AtomicBool::new(false);
+        let stop = AtomicBool::new(false);
+        let job = crate::bounded_one_shot(&cancel, &stop, Duration::from_secs(5), async {
+            let _pass = handler.outbound_pass().await;
+            panic!("job overlapped the foreground pass");
+        });
+        tokio::pin!(job);
+        tokio::select! {
+            biased;
+            _ = &mut job => panic!("job did not wait for the occupied slot"),
+            _ = tokio::task::yield_now() => {}
+        }
+        cancel.store(true, Ordering::Release);
+        assert_eq!(job.await, crate::OneShotOutcome::Cancelled);
+        {
+            let status = handler.status.lock().unwrap();
+            assert!(status.syncing);
+            assert!(status.peer_attempts["peer"].in_flight);
+        }
+        assert!(!stop.load(Ordering::Relaxed));
+        drop(foreground_pass);
+        let _next = handler.outbound_pass().await;
+        let status = handler.status.lock().unwrap();
+        assert!(!status.syncing);
+        assert!(!status.peer_attempts["peer"].in_flight);
+    }
+
+    #[tokio::test]
+    async fn outbound_slot_waits_for_cancelled_peer_tasks_before_clearing_status() {
+        let handler = handler(
+            Arc::new(Mutex::new(Store::default())),
+            1,
+            "self",
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let pass = handler.outbound_pass().await;
+        let mut peers = tokio::task::JoinSet::new();
+        let peer_pass = pass.clone();
+        let peer_handler = handler.clone();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        peers.spawn(async move {
+            let _pass = peer_pass;
+            peer_handler.note_peer_attempt("peer");
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        handler.set_syncing(true);
+        drop(pass);
+        // The peer task still owns the slot and its published in-flight state.
+        assert!(handler.outbound.try_lock().is_err());
+        assert!(handler.status.lock().unwrap().peer_attempts["peer"].in_flight);
+        drop(peers);
+        let _next = tokio::time::timeout(Duration::from_secs(1), handler.outbound_pass())
+            .await
+            .unwrap();
+        let status = handler.status.lock().unwrap();
+        assert!(!status.syncing);
+        assert_eq!(status.syncing_since, 0);
+        assert!(!status.peer_attempts["peer"].in_flight);
+    }
+
+    #[tokio::test]
+    async fn one_shot_budget_covers_slot_wait_and_network_refresh() {
+        use std::sync::atomic::AtomicBool;
+
+        let handler = handler(
+            Arc::new(Mutex::new(Store::default())),
+            1,
+            "self",
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let cancel = AtomicBool::new(false);
+        let stop = AtomicBool::new(false);
+        let owner = handler.outbound_pass().await;
+        assert_eq!(
+            crate::bounded_one_shot(&cancel, &stop, Duration::from_millis(10), async {
+                let _pass = handler.outbound_pass().await;
+                crate::OneShotOutcome::Completed
+            })
+            .await,
+            crate::OneShotOutcome::TimedOut
+        );
+        drop(owner);
+        // A stalled network refresh holds the same slot inside the deadline.
+        assert_eq!(
+            crate::bounded_one_shot(&cancel, &stop, Duration::from_millis(10), async {
+                let _pass = handler.outbound_pass().await;
+                std::future::pending::<crate::OneShotOutcome>().await
+            })
+            .await,
+            crate::OneShotOutcome::TimedOut
+        );
+        assert!(handler.outbound.try_lock().is_ok());
     }
 
     async fn endpoint() -> iroh::Endpoint {

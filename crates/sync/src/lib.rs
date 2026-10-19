@@ -466,18 +466,25 @@ impl SyncEngine {
             return OneShotOutcome::TimedOut;
         }
         let started = Instant::now();
-        let outcome = self.rt.block_on(async {
-            tokio::select! {
-                outcome = run_pass(self.endpoint.clone(), self.handler.clone(), self.peers.clone(),
-                    self.conns.clone(), Arc::new(Mutex::new(HashMap::new()))) => outcome,
-                _ = tokio::time::sleep(budget) => OneShotOutcome::TimedOut,
-                _ = async {
-                    while !cancel.load(Ordering::Acquire) && !self.stop.load(Ordering::Relaxed) {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                } => OneShotOutcome::Cancelled,
-            }
-        });
+        let outcome = self
+            .rt
+            .block_on(bounded_one_shot(cancel, &self.stop, budget, async {
+                let pass = self.handler.outbound_pass().await;
+                // A scheduled job can wake a retained, frozen Activity process.
+                // Its UI network poll has not run, so refresh stale paths here and
+                // await readiness without queuing an unprotected worker pass.
+                self.conns.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                self.endpoint.network_change().await;
+                run_pass_owned(
+                    self.endpoint.clone(),
+                    self.handler.clone(),
+                    self.peers.clone(),
+                    self.conns.clone(),
+                    Arc::new(Mutex::new(HashMap::new())),
+                    pass,
+                )
+                .await
+            }));
         let class = match &outcome {
             OneShotOutcome::Completed => "completed",
             OneShotOutcome::Cancelled => "cancelled",
@@ -1126,7 +1133,9 @@ async fn sync_worker(worker: SyncWorker) {
                     timeout_secs = MAX_PASS_SECS,
                     "sync pass timed out; aborting"
                 );
-                handler.finish_sync(Some(format!("sync pass timed out after {MAX_PASS_SECS}s")));
+                // The pass guard clears transient status after its canceled
+                // peer tasks drop. A timeout waiting for the slot must not
+                // clear another owner's in-flight pass.
             }
         }
         // Count worker wakes even with no eligible peer. Android uses the
@@ -1150,6 +1159,18 @@ async fn run_pass(
     peers: Arc<Mutex<Vec<String>>>,
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     health: Arc<Mutex<HashMap<String, PeerHealth>>>,
+) -> OneShotOutcome {
+    let pass = handler.outbound_pass().await;
+    run_pass_owned(endpoint, handler, peers, conns, health, pass).await
+}
+
+async fn run_pass_owned(
+    endpoint: Endpoint,
+    handler: Arc<Handler>,
+    peers: Arc<Mutex<Vec<String>>>,
+    conns: Arc<Mutex<HashMap<String, Connection>>>,
+    health: Arc<Mutex<HashMap<String, PeerHealth>>>,
+    pass: Arc<protocol::OutboundPass>,
 ) -> OneShotOutcome {
     let started_at = Instant::now();
     let mut last_err = None;
@@ -1180,8 +1201,10 @@ async fn run_pass(
             let conns = conns.clone();
             let health = health.clone();
             let semaphore = semaphore.clone();
+            let pass = pass.clone();
             tasks.spawn(
                 async move {
+                    let _pass = pass;
                     let _permit = semaphore.acquire_owned().await;
                     sync_one(&endpoint, &handler, &peer, &conns, &health).await
                 }
@@ -1233,6 +1256,32 @@ pub enum OneShotOutcome {
     TimedOut,
     Skipped,
     Failed(String),
+}
+
+/// Cancellation and the deadline cover slot acquisition, path refresh and the
+/// exchange itself. In particular, waiting for a foreground pass is bounded.
+async fn bounded_one_shot(
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    budget: Duration,
+    work: impl std::future::Future<Output = OneShotOutcome>,
+) -> OneShotOutcome {
+    if cancel.load(Ordering::Acquire) || stop.load(Ordering::Relaxed) {
+        return OneShotOutcome::Cancelled;
+    }
+    if budget.is_zero() {
+        return OneShotOutcome::TimedOut;
+    }
+    tokio::select! {
+        biased;
+        _ = async {
+            while !cancel.load(Ordering::Acquire) && !stop.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        } => OneShotOutcome::Cancelled,
+        _ = tokio::time::sleep(budget) => OneShotOutcome::TimedOut,
+        outcome = work => outcome,
+    }
 }
 
 /// Sync with one peer, recording success/failure for backoff. Returns the
@@ -1575,10 +1624,16 @@ impl Drop for BackgroundLease {
 }
 pub fn background_engine() -> Result<Option<BackgroundLease>> {
     let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
-    if engine().is_some() {
+    if engine().is_none() {
+        install_inner(SyncEngine::setup()?);
+    } else if !FOREGROUND_OWNER.load(Ordering::Acquire) {
+        // A headless engine has exactly one owning job. Do not let a second
+        // lease tear it down while its original job is still using it.
         return Ok(None);
     }
-    install_inner(SyncEngine::setup()?);
+    // An installed engine can belong to an Activity whose process Android
+    // froze. Borrow it for the job's protected pass; lease release still leaves
+    // any foreground owner (including one attached during the job) intact.
     Ok(engine().map(|engine| BackgroundLease { engine }))
 }
 

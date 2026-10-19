@@ -46,7 +46,34 @@ public class NovaSyncJobService extends JobService {
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setPersisted(true)
                 .build();
-        scheduler.schedule(job);
+        // Replacing even an identical job resets its schedule and stops a
+        // running pass. Startup and engine attachment both call this method.
+        if (sameSchedule(scheduler.getPendingJob(JOB_ID), job)) {
+            return;
+        }
+        if (scheduler.schedule(job) != JobScheduler.RESULT_SUCCESS) {
+            Log.e(TAG, "could not schedule background sync");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static boolean sameSchedule(JobInfo existing, JobInfo requested) {
+        // JobScheduler may annotate the NetworkRequest with our UID, making
+        // JobInfo.equals fail even though the requested constraints match.
+        // We intentionally use the basic network type that this job sets.
+        return existing != null
+                && existing.getService().equals(requested.getService())
+                && existing.isPeriodic() == requested.isPeriodic()
+                && existing.getIntervalMillis() == requested.getIntervalMillis()
+                && existing.getFlexMillis() == requested.getFlexMillis()
+                && existing.getInitialBackoffMillis() == requested.getInitialBackoffMillis()
+                && existing.getBackoffPolicy() == requested.getBackoffPolicy()
+                && existing.getNetworkType() == requested.getNetworkType()
+                && existing.isPersisted() == requested.isPersisted()
+                && existing.isRequireCharging() == requested.isRequireCharging()
+                && existing.isRequireDeviceIdle() == requested.isRequireDeviceIdle()
+                && existing.isRequireBatteryNotLow() == requested.isRequireBatteryNotLow()
+                && existing.isRequireStorageNotLow() == requested.isRequireStorageNotLow();
     }
 
     /** Cancel the periodic sync job (sync disabled). */

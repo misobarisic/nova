@@ -97,9 +97,15 @@ and retained-connection power measurements remain outstanding. See
   unknown authorization. Pairing is bounded, consumes invite+trust atomically,
   and the joiner installs host trust before its completion close permits fan-out.
 - **Android:** serialized lifecycle transitions coordinate foreground ownership
-  and a background lease. Job cancellation drops its one-shot future/JoinSet,
-  never uninstalls a foreground-owned engine. Headless periodic passes are
-  suppressed; the one-shot budget includes setup elapsed time. Setup itself is
+  and a background lease. Jobs borrow retained Activity engines because Android
+  can freeze their ordinary workers; an allocated engine is not an active pass.
+  A shared outbound gate covers the awaited network refresh and exchange, and
+  canceled peer tasks retain it until they drop and clear transient status.
+  Job cancellation never uninstalls a foreground-owned engine; a second headless
+  owner is excluded. Equivalent JobScheduler registrations are preserved across
+  startup/attachment instead of resetting the schedule or stopping active work.
+  Headless periodic passes are suppressed; the one-shot budget includes slot
+  acquisition, path refresh and setup elapsed time. Setup itself is
   synchronous and cannot currently be interrupted mid-setup, so device tests
   must verify its latency against the OS job window. Java finishes at most once.
 

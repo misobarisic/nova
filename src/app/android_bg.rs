@@ -256,11 +256,9 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeRunSync(
 
 fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String, String> {
     let started = Instant::now();
-    // The app is alive: its own interval loop owns sync, so the job is a no-op.
-    if nova_sync::is_running() {
-        return Ok("skipped: app sync already running".to_string());
-    }
-
+    // A retained Activity engine can be frozen along with its process. The
+    // job must borrow it for protected work instead of treating its presence
+    // as evidence that an ordinary interval pass is executing.
     // Initialize app paths + redb *before* reading settings. A job-only process
     // has no Activity (and thus no `ndk-context` Context), so nothing has opened
     // the store yet — and `read_settings` reads redb. The open is lazy and
@@ -298,7 +296,7 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
                 Duration::from_secs(120).saturating_sub(started.elapsed())
             )
         )),
-        Ok(None) => Ok("skipped: foreground sync owns engine".to_string()),
+        Ok(None) => Ok("skipped: another background job owns engine".to_string()),
         Err(error) => Err(format!("setup: {error:#}")),
     }
 }
