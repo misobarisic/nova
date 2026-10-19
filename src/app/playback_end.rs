@@ -300,7 +300,7 @@ impl Bridge {
         }
         let state = self.shared.lock().unwrap();
         state.cache_settings.auto_next_episode
-            && !state.cache_settings.player_external
+            && !state.cache_settings.uses_external_player()
             && nova_providers::plugin_settings::settings_generation() == automatic.settings
             && state
                 .installed
@@ -333,7 +333,9 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             let begin = !state.playback_end.automatic_attempted && !state.playback_end.suppressed;
             state.playback_end.automatic_attempted = true;
-            begin && state.cache_settings.auto_next_episode && !state.cache_settings.player_external
+            begin
+                && state.cache_settings.auto_next_episode
+                && !state.cache_settings.uses_external_player()
         };
         if begin {
             self.begin_automatic_next(context);

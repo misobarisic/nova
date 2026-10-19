@@ -290,7 +290,11 @@ impl Bridge {
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_desktop_hwdec_index(settings.desktop_hwdec.supported().index());
-            app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
+            app.set_player_backend_index(if settings.uses_external_player() {
+                1
+            } else {
+                0
+            });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
             app.set_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
@@ -529,7 +533,11 @@ impl Bridge {
                 android_hwdec: AndroidHwdec::from_index(app.get_android_hwdec_index()),
                 desktop_hwdec: nova_config::DesktopHwdec::from_index(app.get_desktop_hwdec_index())
                     .supported(),
-                player_external: app.get_player_backend_index() == 1,
+                player_external: if cfg!(target_os = "android") {
+                    app.get_player_backend_index() == 1
+                } else {
+                    state.cache_settings.player_external
+                },
                 desktop_external_app: DesktopExternalApp::from_index(
                     app.get_desktop_external_app_index(),
                 ),

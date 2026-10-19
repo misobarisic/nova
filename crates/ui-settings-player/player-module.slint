@@ -40,13 +40,14 @@ export component SettingsPlayerModule inherits Window {
                 SettingsRow {
                     setting-key: "player_external";
                     row-title: @tr("Player");
-                    row-desc: @tr("Built-in plays streams inside the app. External hands them to another video app.");
+                    row-desc: SettingsBridge.is_android ? @tr("Built-in plays streams inside the app. External hands them to another video app.") : @tr("External playback is currently unavailable on desktop.");
 
                     Segmented {
                         labels: [@tr("Built-in"), @tr("External")];
+                        disabled_index: SettingsBridge.is_android ? -1 : 1;
                         current_index: SettingsBridge.player_backend_index;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 0 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 0; SettingsBridge.player_backend_index = i; SettingsContent.schedule_save(); }
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 0; SettingsBridge.player_backend_index = SettingsBridge.is_android ? i : 0; SettingsContent.schedule_save(); }
                     }
                 }
             }

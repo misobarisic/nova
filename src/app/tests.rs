@@ -1305,6 +1305,8 @@ mod settings_tests {
         let json = serde_json::to_string(&ext).unwrap();
         let back: CacheSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ext);
+        assert_eq!(back.uses_external_player(), cfg!(target_os = "android"));
+        assert!(!defaults.uses_external_player());
     }
 
     #[test]

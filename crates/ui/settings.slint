@@ -1308,7 +1308,7 @@ export component SettingsPage {
 
     function kb_player_step(d: int) {
         if (root.kb_pr == 0) {
-            root.player_backend_index = Math.max(0, Math.min(1, root.player_backend_index + d));
+            root.player_backend_index = root.is_android ? Math.max(0, Math.min(1, root.player_backend_index + d)) : 0;
             root.kb_player_clamp();
             root.schedule_save();
         } else if (root.kb_pr == 1) {

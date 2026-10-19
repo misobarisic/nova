@@ -629,11 +629,16 @@ impl Bridge {
                         self.shared.lock().unwrap().active_torrent = Some(active_hash);
                     }
                 } else {
-                    // Built-in failed: external app as a fallback.
+                    // Android can use an external app as a fallback.
                     // Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    if !self.remote_receiver_playback() && !self.party_active() {
-                        let _ = crate::player::open_external(&ready.url);
+                    if !self.remote_receiver_playback()
+                        && !self.party_active()
+                        && crate::player::open_external(&ready.url).is_err()
+                    {
+                        self.set_stream_hint(Some(StreamHint::Fixed(
+                            "This stream requires the in-app player, which is unavailable.",
+                        )));
                     }
                     self.finish_playback_request();
                 }
@@ -648,7 +653,7 @@ impl Bridge {
     /// Open the in-app mpv player for `url` (replacing any previous player
     /// window). Returns false when the player can't be created (e.g. mpv or
     /// the window can't be initialized), so callers can fall back to an
-    /// external player (ACTION_VIEW on Android, xdg-open elsewhere). Only ever
+    /// external player on Android (ACTION_VIEW). Only ever
     /// runs on the main/UI thread.
     pub(super) fn remote_receiver_playback(&self) -> bool {
         self.shared
@@ -660,7 +665,7 @@ impl Bridge {
     }
 
     fn external_playback_allowed(&self) -> bool {
-        nova_config::active_cache_settings().player_external
+        nova_config::active_cache_settings().uses_external_player()
             && !self.remote_receiver_playback()
             && !self.party_active()
     }
@@ -778,7 +783,10 @@ impl Bridge {
                     Vec::new(),
                     Vec::new(),
                 ) {
-                    if private_playback || self.remote_receiver_playback() {
+                    if private_playback
+                        || self.remote_receiver_playback()
+                        || !cfg!(target_os = "android")
+                    {
                         self.provider_resolution_failed(
                             &request,
                             "This stream requires the in-app player, which is unavailable.".into(),
@@ -960,8 +968,13 @@ impl Bridge {
                             subtitles,
                         ) {
                             bridge.mark_playback_opened(false);
-                            if !bridge.remote_receiver_playback() && !bridge.party_active() {
-                                let _ = crate::player::open_external(&url);
+                            if !bridge.remote_receiver_playback()
+                                && !bridge.party_active()
+                                && crate::player::open_external(&url).is_err()
+                            {
+                                bridge.set_stream_hint(Some(StreamHint::Fixed(
+                                    "This stream requires the in-app player, which is unavailable.",
+                                )));
                             }
                         }
                     } else {

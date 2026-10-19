@@ -2999,17 +2999,17 @@ impl Bridge {
         };
         match stream.source.clone() {
             StreamSource::Url(url) => {
-                // Player backend (Settings → Player): external hands the URL to
-                // another video app unconditionally; otherwise in-app playback
-                // first (mpv on desktop and Android, HTML5 video on web), with
-                // the external app only as a fallback when the player cannot
-                // take the stream at all.
-                if nova_config::active_cache_settings().player_external {
+                // Android can hand the URL to another video app; desktop
+                // always uses the built-in player, including saved preferences.
+                if nova_config::active_cache_settings().uses_external_player() {
                     self.begin_playback_request();
                     let _ = crate::player::open_external(&url);
-                } else if !self.open_player(url.clone()) {
-                    // Detached launch; the external app manages its own process.
-                    let _ = crate::player::open_external(&url);
+                } else if !self.open_player(url.clone())
+                    && crate::player::open_external(&url).is_err()
+                {
+                    self.set_stream_hint(Some(StreamHint::Fixed(
+                        "This stream requires the in-app player, which is unavailable.",
+                    )));
                 }
             }
             StreamSource::UrlWithOptions {
@@ -4606,6 +4606,7 @@ mod tests {
                 .map(|i| {
                     let mut row = row(owner, &format!("{owner}-{i}"));
                     row.addon = label.into();
+                    row.source = StreamSource::Url(format!("https://example.invalid/{owner}/{i}"));
                     row.choice_id = Some(stream_choice_identity(
                         owner,
                         "movie",

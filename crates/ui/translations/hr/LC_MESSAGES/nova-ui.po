@@ -3502,3 +3502,6 @@ msgstr "Više najava"
 
 msgid "Show all"
 msgstr "Prikaži sve"
+
+msgid "External playback is currently unavailable on desktop."
+msgstr "Vanjska reprodukcija trenutačno nije dostupna na računalu."

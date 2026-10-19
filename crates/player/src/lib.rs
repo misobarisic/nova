@@ -684,36 +684,16 @@ fn effective_frame_rate(container_fps: Option<f32>, speed: f32) -> Option<f32> {
     container_fps.map(|fps| fps * speed)
 }
 
-/// Open `url` in the user's chosen external video app (Settings → Player →
-/// External). Desktop only — Android uses the `ACTION_VIEW` intent instead
-/// (see `external::open_external`).
-///
-/// The program comes from the active [`nova_config::DesktopExternalApp`]
-/// preference (VLC, mpv, or the platform's system default handler). Detached:
-/// the child owns its process, like the previous system-default fallback.
+/// Desktop video handoff is suspended until external progress tracking is
+/// reworked. Keep the boundary closed even for automatic fallback callers;
+/// Android still uses `external::open_external` and its `ACTION_VIEW` intent.
 #[cfg(not(target_os = "android"))]
-pub fn open_external(url: &str) -> Result<(), String> {
-    let external_app = nova_config::active_cache_settings().desktop_external_app;
-    #[cfg(target_os = "windows")]
-    if external_app == nova_config::DesktopExternalApp::SystemDefault {
-        return shell_open_url(url);
-    }
-    let program = external_app.program();
-    std::process::Command::new(program)
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not launch {program}: {e}"))
+pub fn open_external(_url: &str) -> Result<(), String> {
+    Err("External video playback is currently unavailable on desktop.".into())
 }
 
-/// Open `url` in the desktop's default **browser** — the web-link counterpart
-/// of [`open_external`], which launches the *video* app chosen in
-/// Settings → Player. Used for links the app only points at, e.g. an addon's
-/// configuration page (Settings → Addons → Configure). Detached, like the
-/// external-player launch.
+/// Open `url` in the desktop's default browser, independently of video
+/// handoff. Used for links such as an addon's configuration page.
 #[cfg(all(not(target_os = "android"), target_os = "windows"))]
 pub fn open_browser(url: &str) -> Result<(), String> {
     shell_open_url(url)
@@ -3714,6 +3694,15 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_external_video_handoff_is_disabled() {
+        // No URL or saved handler may reach a desktop process launcher.
+        for url in ["https://example.invalid/movie.mkv", "/tmp/movie.mkv"] {
+            assert!(open_external(url).is_err());
+        }
+    }
 
     #[test]
     fn android_party_resume_waits_for_host_with_or_without_renderer_loss() {

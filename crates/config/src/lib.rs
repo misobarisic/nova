@@ -625,8 +625,7 @@ impl Language {
     }
 }
 
-/// Desktop external video app (Settings → Player → External app). Which
-/// program opens the stream when the player backend is external. Unused on
+/// Retained desktop external video app preference for a future rework. Unused on
 /// Android, where the system resolver (`ACTION_VIEW`) picks the app.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum DesktopExternalApp {
@@ -790,7 +789,7 @@ cache_settings_type! {
     /// Windows/Linux decoder preference; device-local and ignored elsewhere.
     #[serde(default)]
     pub desktop_hwdec: DesktopHwdec,
-    /// Play streams in an external video app instead of the built-in mpv
+    /// Android: play streams in an external video app instead of the built-in mpv
     /// player (Settings → Player). Persisted on every platform (harmless
     /// where unused) so the same settings blob works everywhere. Local-only:
     /// never synced (see `UNSYNCED_SETTINGS_FIELDS` in `src/app/sync.rs`).
@@ -1041,6 +1040,12 @@ impl Default for CacheSettings {
 }
 
 impl CacheSettings {
+    /// Desktop external playback is suspended until its progress tracking is
+    /// reworked. Keep the saved device preference for Android and future use.
+    pub fn uses_external_player(&self) -> bool {
+        cfg!(target_os = "android") && self.player_external
+    }
+
     /// Add default built-ins to legacy layouts, preserving explicit custom rows.
     pub fn effective_home_rows(&self) -> Vec<HomeRow> {
         let rows = self.home_rows.clone().unwrap_or_else(|| {
@@ -1413,6 +1418,21 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_external_preference_only_applies_on_android() {
+        let settings = CacheSettings {
+            player_external: true,
+            desktop_external_app: DesktopExternalApp::Vlc,
+            ..CacheSettings::default()
+        };
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
+        assert!(restored.player_external);
+        assert_eq!(restored.desktop_external_app, DesktopExternalApp::Vlc);
+        assert_eq!(restored.uses_external_player(), cfg!(target_os = "android"));
+        assert!(!CacheSettings::default().uses_external_player());
+    }
 
     #[test]
     fn playback_speed_clamps_and_rounds() {

@@ -402,6 +402,44 @@ fn playback_defaults_reset_and_player_settings_fit() {
 use crate::settings_support;
 
 #[test]
+fn external_player_choice_is_android_only() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::external_player_choice_is_android_only"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(5);
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 1000));
+    app.show().unwrap();
+    for android in [false, true] {
+        app.set_is_android(android);
+        app.set_player_backend_index(0);
+        app.set_settings_scroll_y(0.0);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app, label)
+                .find(|item| {
+                    item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+                })
+                .unwrap_or_else(|| panic!("missing button {label}"))
+        };
+        assert_eq!(button("External").accessible_enabled(), Some(android));
+        button("External").mock_single_click(slint::platform::PointerEventButton::Left);
+        assert_eq!(app.get_player_backend_index(), i32::from(android));
+        button("Built-in").mock_single_click(slint::platform::PointerEventButton::Left);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_player_backend_index(), i32::from(android));
+    }
+}
+
+#[test]
 fn desktop_decoder_default_and_session_picker_are_separate_and_keyboard_accessible() {
     if !crate::isolation::run(concat!(
         module_path!(),
