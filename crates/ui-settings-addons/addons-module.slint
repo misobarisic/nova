@@ -16,6 +16,11 @@ export component SettingsAddonsModule inherits Window {
     width: SettingsContent.slot_width; height: SettingsContent.slot_height;
     private property <length> measured_min: body_layout.min-height;
     private property <length> measured_preferred: body_layout.preferred-height;
+    private property <bool> browse_keyboard: SettingsBridge.kb_zone == 19 && SettingsBridge.kb_active;
+    private property <int> browser_row_count: SettingsBridge.addon_browser_rows.length;
+    changed browser_row_count => {
+        SettingsBridge.addon_browser_control = Math.min(SettingsBridge.addon_browser_control, 6 + root.browser_row_count);
+    }
     changed measured_min => { root.publish_size(); }
     changed measured_preferred => { root.publish_size(); }
     init => { root.publish_size(); }
@@ -27,14 +32,33 @@ export component SettingsAddonsModule inherits Window {
     }
     body_layout := VerticalLayout {
         width: 100%; height: 100%; spacing: 0px;
-        Rectangle {
+        HorizontalLayout {
+            height: 44px; vertical-stretch: 0;
+            spacing: 8px; alignment: start;
+            PillButton {
+                label: @tr("Installed");
+                primary: SettingsBridge.addon_browser_tab == 0;
+                focused: SettingsBridge.kb_zone == 18 && SettingsBridge.kb_active && SettingsBridge.addon_browser_tab == 0;
+                clicked => { SettingsContent.focus_shell(); SettingsBridge.kb_zone = 18; SettingsBridge.addon_browser_tab = 0; }
+            }
+            PillButton {
+                label: @tr("Browse");
+                primary: SettingsBridge.addon_browser_tab == 1;
+                focused: SettingsBridge.kb_zone == 18 && SettingsBridge.kb_active && SettingsBridge.addon_browser_tab == 1;
+                clicked => { SettingsContent.focus_shell(); SettingsBridge.kb_zone = 18; SettingsBridge.addon_browser_tab = 1; SettingsBridge.addon_browser_load(false); }
+            }
+        }
+        Rectangle { height: 18px; vertical-stretch: 0; }
+        installed_section := Rectangle {
 
                 // Conditional layouts report vertical size at their
                 // preferred width. Use the actual viewport so narrow
                 // wrapped copy contributes its full height to scrolling.
                 width: SettingsContent.slot_width;
                 vertical-stretch: 0;
-                height: addons_body.preferred-height;
+                height: SettingsBridge.addon_browser_tab == 0 ? addons_body.preferred-height : 0px;
+                visible: SettingsBridge.addon_browser_tab == 0;
+                clip: SettingsBridge.addon_browser_tab != 0;
                 addons_body := VerticalLayout {
                 width: 100%;
                 spacing: 18px;
@@ -370,17 +394,160 @@ export component SettingsAddonsModule inherits Window {
             }
 
         }
+        if SettingsBridge.addon_browser_tab == 1: Rectangle {
+            height: browse_body.preferred-height;
+            vertical-stretch: 0;
+            browse_body := VerticalLayout {
+                width: 100%; spacing: 16px;
+                SectionHeader { label: @tr("Browse addons"); }
+                Text {
+                    text: @tr("Browse public Stremio addons and choose which to install. Nova addon ZIPs can be installed from the Installed tab.");
+                    wrap: word-wrap; font-size: 14px; color: Theme.current.text_settings;
+                }
+                HorizontalLayout {
+                    alignment: start; spacing: 8px;
+                    PillButton {
+                        label: @tr("Official"); primary: SettingsBridge.addon_browser_source == 0;
+                        focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 0 && SettingsBridge.addon_browser_source == 0;
+                        clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_source = 0; SettingsBridge.addon_browser_load(false); }
+                    }
+                    PillButton {
+                        label: @tr("Custom directory"); primary: SettingsBridge.addon_browser_source == 1;
+                        focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 0 && SettingsBridge.addon_browser_source == 1;
+                        clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_source = 1; SettingsBridge.addon_browser_filter_changed(); }
+                    }
+                }
+                if SettingsBridge.addon_browser_source == 1: VerticalLayout {
+                    spacing: 10px;
+                    browser_directory_input := SearchField {
+                        roomy: true;
+                        text <=> SettingsBridge.addon_browser_directory_url;
+                        placeholder-text: @tr("HTTPS addon-directory manifest URL");
+                        focus_changed(focused) => { SettingsContent.input_focused = focused; }
+                        edited(value) => { SettingsBridge.addon_browser_directory_url = value; }
+                        accepted(value) => { SettingsBridge.addon_browser_directory_url = value; SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); SettingsBridge.addon_browser_load(false); }
+                        KbMark { on: root.browse_keyboard && SettingsBridge.addon_browser_control == 1; active: SettingsBridge.kb_active; }
+                    }
+                    Timer { interval: 80ms; running: SettingsContent.kb_edit == 6; triggered => { browser_directory_input.focus(); } }
+                    PillButton {
+                        label: @tr("Load directory"); roomy: true;
+                        focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 2;
+                        clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_load(false); }
+                    }
+                    Text {
+                        text: @tr("Use a directory that publishes the Stremio addon_catalog resource. The directory's own terms apply.");
+                        wrap: word-wrap; font-size: 13px; color: Theme.current.text_secondary;
+                    }
+                }
+                browser_search_input := SearchField {
+                    roomy: true; search-icon: true;
+                    text <=> SettingsBridge.addon_browser_search;
+                    placeholder-text: @tr("Search public addons…");
+                    focus_changed(focused) => { SettingsContent.input_focused = focused; }
+                    edited(value) => { SettingsBridge.addon_browser_search = value; SettingsBridge.addon_browser_filter_changed(); }
+                    accepted(value) => { SettingsBridge.addon_browser_search = value; SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); SettingsBridge.addon_browser_filter_changed(); }
+                    KbMark { on: root.browse_keyboard && SettingsBridge.addon_browser_control == 3; active: SettingsBridge.kb_active; }
+                }
+                Timer { interval: 80ms; running: SettingsContent.kb_edit == 7; triggered => { browser_search_input.focus(); } }
+                Flickable {
+                    height: 40px; vertical-stretch: 0;
+                    content-width: browser_filters.preferred-width; content-height: self.height;
+                    mouse-drag-pan-enabled: true;
+                    browser_filters := HorizontalLayout {
+                        width: self.preferred-width; height: 40px; spacing: 8px; alignment: start;
+                        for caption[i] in [@tr("All"), @tr("Catalogs"), @tr("Streams"), @tr("Subtitles")]: LibraryFilterChip {
+                            label: caption;
+                            selected: SettingsBridge.addon_browser_filter == i;
+                            border-width: self.has-focus || (root.browse_keyboard && SettingsBridge.addon_browser_control == 4 && SettingsBridge.addon_browser_filter == i) ? 2px : 1px;
+                            border-color: self.has-focus || (root.browse_keyboard && SettingsBridge.addon_browser_control == 4 && SettingsBridge.addon_browser_filter == i) ? Theme.current.focus_ring : self.selected ? Theme.current.accent : Theme.current.border_strong;
+                            keyboard-focusable: true; arrow-navigation: true;
+                            touch_feedback: SettingsBridge.is_android;
+                            picked => { SettingsBridge.addon_browser_filter = i; SettingsBridge.addon_browser_filter_changed(); }
+                            navigate(direction) => { SettingsBridge.addon_browser_filter = Math.mod(i + direction + 4, 4); SettingsBridge.addon_browser_filter_changed(); }
+                        }
+                    }
+                }
+                if SettingsBridge.addon_browser_source_url != "": PillButton {
+                    label: @tr("Source: ") + SettingsBridge.addon_browser_source_name;
+                    width: 100%; min-width: 0px;
+                    wrap_label: true;
+                    focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 5;
+                    clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_source_open(); }
+                }
+                if SettingsBridge.addon_browser_status != "": Text {
+                    text: SettingsBridge.addon_browser_status;
+                    wrap: word-wrap; font-size: 14px; color: Theme.current.text_settings;
+                }
+                PillButton {
+                    label: @tr("Refresh / retry");
+                    focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 6;
+                    enabled: !SettingsBridge.addon_browser_busy;
+                    clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_load(true); }
+                }
+                if SettingsBridge.addon_browser_rows.length == 0 && !SettingsBridge.addon_browser_busy: Text {
+                    text: @tr("No addons to show. Load a directory or change your search and filters.");
+                    wrap: word-wrap; font-size: 14px; color: Theme.current.text_secondary;
+                }
+                for row[index] in SettingsBridge.addon_browser_rows: SettingsCard {
+                    border-color: root.browse_keyboard && SettingsBridge.addon_browser_control == 7 + index ? Theme.current.focus_ring : Theme.current.border_soft;
+                    border-width: root.browse_keyboard && SettingsBridge.addon_browser_control == 7 + index ? 2px : 1px;
+                    VerticalLayout {
+                        padding: 16px; spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 14px;
+                            Rectangle {
+                                width: 48px; height: 48px;
+                                background: Theme.current.settings_control; border-radius: 10px;
+                                if row.logo.width > 0: Image { source: row.logo; width: 100%; height: 100%; image-fit: contain; }
+                                if row.logo.width == 0: Text {
+                                    text: row.initial; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center;
+                                    color: Theme.current.text_bright; font-size: 22px;
+                                }
+                            }
+                            VerticalLayout {
+                                spacing: 4px; alignment: center; min-width: 0px; horizontal-stretch: 1;
+                                Text { text: row.label; wrap: word-wrap; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; }
+                                Text { text: row.capabilities; wrap: word-wrap; color: Theme.current.text_secondary; font-size: 13px; }
+                            }
+                        }
+                        // A bounded preview keeps large public descriptions
+                        // from stretching every card on phone screens.
+                        Text {
+                            text: row.description; wrap: word-wrap;
+                            overflow: elide; height: 60px;
+                            color: Theme.current.text_settings; font-size: 14px;
+                        }
+                        HorizontalLayout {
+                            alignment: start; spacing: 10px;
+                            PillButton {
+                                label: row.busy ? @tr("Installing…") : row.installed ? @tr("Installed") : row.configurable ? @tr("Configure") : @tr("Install");
+                                enabled: !row.busy && !row.installed;
+                                primary: !row.installed; roomy: true;
+                                focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 7 + index && !SettingsBridge.addon_browser_copy_column;
+                                clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_browser_action(row.url); }
+                            }
+                            PillButton {
+                                label: @tr("Copy link"); roomy: true;
+                                focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 7 + index && SettingsBridge.addon_browser_copy_column;
+                                clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_copy_link(row.url); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     // One control subtree retains its IME/focus state while its placeholder
     // continues to reserve the original section height in the document.
     installed_controls := Rectangle {
+        visible: SettingsBridge.addon_browser_tab == 0;
         property <length> target_top: SettingsContent.detail_sticky_top + SettingsContent.detail_header_height;
         property <bool> pinned: installed_controls_origin.absolute-position.y <= self.target_top;
-        property <length> pinned_height: self.pinned ? self.height + 8px : 0px;
+        property <length> pinned_height: self.pinned && SettingsBridge.addon_browser_tab == 0 ? self.height + 8px : 0px;
         changed pinned_height => { if SettingsBridge.sel == 0 { SettingsContent.detail_pinned_controls_height = self.pinned_height; } }
         init => { if SettingsBridge.sel == 0 { SettingsContent.detail_pinned_controls_height = self.pinned_height; } }
         x: 0px;
-        y: installed_controls_origin.y + Math.max(0px, self.target_top - installed_controls_origin.absolute-position.y);
+        y: installed_section.y + installed_controls_origin.y + Math.max(0px, self.target_top - installed_controls_origin.absolute-position.y);
         width: 100%;
         height: installed_controls_layout.preferred-height;
         if self.pinned: Rectangle {

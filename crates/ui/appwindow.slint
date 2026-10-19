@@ -4,7 +4,7 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -857,6 +857,20 @@ export component AppWindow inherits Window {
     in-out property <[string]> catalog_labels: [];
     in-out property <[string]> genre_names: [];
     in-out property <[AddonRow]> addon_rows: [];
+    in-out property <[AddonBrowserRow]> addon_browser_rows <=> SettingsBridge.addon_browser_rows;
+    in-out property <int> addon_browser_tab <=> SettingsBridge.addon_browser_tab;
+    in-out property <int> addon_browser_source <=> SettingsBridge.addon_browser_source;
+    in-out property <string> addon_browser_directory_url <=> SettingsBridge.addon_browser_directory_url;
+    in-out property <string> addon_browser_source_name <=> SettingsBridge.addon_browser_source_name;
+    in-out property <string> addon_browser_source_url <=> SettingsBridge.addon_browser_source_url;
+    in-out property <string> addon_browser_search <=> SettingsBridge.addon_browser_search;
+    in-out property <int> addon_browser_filter <=> SettingsBridge.addon_browser_filter;
+    in-out property <bool> addon_browser_busy <=> SettingsBridge.addon_browser_busy;
+    in-out property <string> addon_browser_status <=> SettingsBridge.addon_browser_status;
+    callback addon_browser_load(bool);
+    callback addon_browser_filter_changed();
+    callback addon_browser_action(string);
+    callback addon_browser_source_open();
     in-out property <string> addon_search_text: "";
     in-out property <int> addon_capability_filter: 0;
     callback addon_filter_changed();
@@ -2033,6 +2047,10 @@ export component AppWindow inherits Window {
     public function settings_bridge_playback_language_picked(code: string, subtitles: bool) { root.playback_language_picked(code, subtitles); }
     public function settings_bridge_playback_language_edited(code: string, action: int, subtitles: bool) { root.playback_language_edited(code, action, subtitles); }
     public function settings_bridge_addon_added(u: string) { root.addon_added(u); }
+    public function settings_bridge_addon_browser_load(force: bool) { root.addon_browser_load(force); }
+    public function settings_bridge_addon_browser_filter_changed() { root.addon_browser_filter_changed(); }
+    public function settings_bridge_addon_browser_action(u: string) { root.addon_browser_action(u); }
+    public function settings_bridge_addon_browser_source_open() { root.addon_browser_source_open(); }
     public function settings_bridge_addon_zip_import_requested() { root.addon_zip_import_requested(); }
     public function settings_bridge_addon_toggled(i: int) { root.addon_toggled(i); }
     public function settings_bridge_addon_remove(i: int) { root.addon_remove(i); }

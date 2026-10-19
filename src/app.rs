@@ -275,6 +275,7 @@ struct Shared {
     stream_prefetch: stream_prefetch::Cache,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
+    addon_browser: addon_browser::State,
     package_descriptors: std::collections::BTreeMap<String, addon_packages::PackageDescriptor>,
     loaded_packages: std::collections::BTreeMap<String, Arc<nova_providers::AddonPackage>>,
     package_fetches: HashMap<String, Arc<AtomicBool>>,
@@ -754,6 +755,7 @@ impl std::ops::Deref for Bridge {
 }
 
 mod about;
+mod addon_browser;
 mod addon_mgr;
 mod addon_packages;
 mod addon_picker;

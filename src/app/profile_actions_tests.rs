@@ -17,6 +17,7 @@ impl Drop for Fixture {
             profiles::with_context(session.context(), || {
                 self.bridge.shutdown_tracking();
                 self.bridge.shutdown_stremio();
+                self.bridge.shutdown_list_services();
             });
         }
         let until = std::time::Instant::now() + Duration::from_secs(3);
@@ -199,7 +200,28 @@ fn create_switch_and_return_restores_personal_state_and_addon_configuration() {
                 .find(|row| row.name == "Bob")
                 .unwrap()
                 .id;
+            fixture.app.set_addon_browser_tab(1);
+            fixture.app.set_addon_browser_source(1);
+            fixture
+                .app
+                .set_addon_browser_directory_url("https://alice.example/manifest.json".into());
+            fixture.app.set_addon_browser_search("alice".into());
+            fixture.app.set_addon_browser_status("alice status".into());
+            fixture.app.set_addon_browser_rows(
+                Rc::new(VecModel::from(vec![crate::AddonBrowserRow {
+                    label: "Alice directory entry".into(),
+                    url: "https://alice.example/addon".into(),
+                    ..Default::default()
+                }]))
+                .into(),
+            );
             select(fixture, &bob);
+            assert_eq!(fixture.app.get_addon_browser_tab(), 0);
+            assert_eq!(fixture.app.get_addon_browser_source(), 0);
+            assert!(fixture.app.get_addon_browser_directory_url().is_empty());
+            assert!(fixture.app.get_addon_browser_search().is_empty());
+            assert!(fixture.app.get_addon_browser_status().is_empty());
+            assert_eq!(fixture.app.get_addon_browser_rows().row_count(), 0);
             {
                 let state = fixture.bridge.shared.lock().unwrap();
                 assert!(state.entries.is_empty());

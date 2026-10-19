@@ -306,6 +306,18 @@ impl Bridge {
             app.set_catalog(Default::default());
             app.set_addon_zip_import_busy(false);
             app.set_addon_zip_import_status("".into());
+            // Directory controls are transient personal view state. Clear the
+            // shared UI globals before publishing the incoming inventory.
+            app.set_addon_browser_tab(0);
+            app.set_addon_browser_source(0);
+            app.set_addon_browser_directory_url("".into());
+            app.set_addon_browser_search("".into());
+            app.set_addon_browser_filter(0);
+            app.set_addon_browser_rows(Default::default());
+            app.set_addon_browser_source_name("".into());
+            app.set_addon_browser_source_url("".into());
+            app.set_addon_browser_status("".into());
+            app.set_addon_browser_busy(false);
             app.set_addon_config_open(false);
             app.set_addon_config_url("".into());
             app.set_addon_config_label("".into());

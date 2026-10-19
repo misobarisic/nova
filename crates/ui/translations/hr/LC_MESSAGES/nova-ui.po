@@ -3506,6 +3506,51 @@ msgstr "Prikaži sve"
 msgid "External playback is currently unavailable on desktop."
 msgstr "Vanjska reprodukcija trenutačno nije dostupna na računalu."
 
+msgid "Installed"
+msgstr "Instalirano"
+
+msgid "Browse"
+msgstr "Pregledaj"
+
+msgid "Browse addons"
+msgstr "Pregledaj dodatke"
+
+msgid "Browse public Stremio addons and choose which to install. Nova addon ZIPs can be installed from the Installed tab."
+msgstr "Pregledajte javne dodatke za Stremio i odaberite koje želite instalirati. Novini ZIP dodaci mogu se instalirati na kartici Instalirano."
+
+msgid "Official"
+msgstr "Službeni"
+
+msgid "Custom directory"
+msgstr "Vlastiti direktorij"
+
+msgid "HTTPS addon-directory manifest URL"
+msgstr "HTTPS URL manifesta direktorija dodataka"
+
+msgid "Load directory"
+msgstr "Učitaj direktorij"
+
+msgid "Use a directory that publishes the Stremio addon_catalog resource. The directory's own terms apply."
+msgstr "Upotrijebite direktorij koji objavljuje Stremiov resurs addon_catalog. Primjenjuju se uvjeti direktorija."
+
+msgid "Search public addons…"
+msgstr "Pretraži javne dodatke…"
+
+msgid "Catalogs"
+msgstr "Katalozi"
+
+msgid "Source: "
+msgstr "Izvor: "
+
+msgid "No addons to show. Load a directory or change your search and filters."
+msgstr "Nema dodataka za prikaz. Učitajte direktorij ili promijenite pretragu i filtre."
+
+msgid "Installing…"
+msgstr "Instaliranje…"
+
+msgid "Install"
+msgstr "Instaliraj"
+
 msgid "Sign in"
 msgstr "Prijavite se"
 

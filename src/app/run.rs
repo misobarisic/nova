@@ -409,6 +409,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_profile_remember_last_changed(move |enabled| b.remember_profile_on_startup(enabled));
     let b = bridge.clone();
     app.on_addon_added(move |url| b.add_addon(&url));
+    let b = bridge.clone();
+    app.on_addon_browser_load(move |force| b.load_addon_browser(force));
+    let b = bridge.clone();
+    app.on_addon_browser_filter_changed(move || b.apply_addon_browser_rows());
+    let b = bridge.clone();
+    app.on_addon_browser_action(move |url| b.addon_browser_action(&url));
+    let b = bridge.clone();
+    app.on_addon_browser_source_open(move || b.open_addon_browser_source());
     app.on_addon_zip_import_requested(super::addon_picker::pick_zip);
 
     let b = bridge.clone();

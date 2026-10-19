@@ -27,5 +27,8 @@ mod sort_config;
 #[path = "addons/addon_filters.rs"]
 mod addon_filters;
 
+#[path = "addons/browser.rs"]
+mod browser;
+
 #[path = "addons/addon_row_fit.rs"]
 mod addon_row_fit;

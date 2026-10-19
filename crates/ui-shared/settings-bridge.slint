@@ -1,6 +1,6 @@
 // The Settings contract is shared by the small host and the compiled page.
 // Mutable properties are linked across their globals before page initialization.
-import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
+import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
     in-out property <[string]> list_services_account: ["", "", ""];
@@ -55,6 +55,22 @@ export global SettingsBridge {
 
     in-out property <bool> persistence_failed: false;
     in-out property <[AddonRow]> addon_rows: [];
+    in-out property <[AddonBrowserRow]> addon_browser_rows: [];
+    in-out property <int> addon_browser_tab: 0;
+    in-out property <int> addon_browser_source: 0;
+    in-out property <string> addon_browser_directory_url: "";
+    in-out property <string> addon_browser_source_name: "";
+    in-out property <string> addon_browser_source_url: "";
+    in-out property <string> addon_browser_search: "";
+    in-out property <int> addon_browser_filter: 0;
+    in-out property <int> addon_browser_control: 0;
+    in-out property <bool> addon_browser_copy_column: false;
+    in-out property <bool> addon_browser_busy: false;
+    in-out property <string> addon_browser_status: "";
+    callback addon_browser_load(bool);
+    callback addon_browser_filter_changed();
+    callback addon_browser_action(string);
+    callback addon_browser_source_open();
     in-out property <string> addon_search_text: "";
     in-out property <int> addon_capability_filter: 0;
     in-out property <bool> cinemeta_installed: false;

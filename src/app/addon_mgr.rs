@@ -178,6 +178,7 @@ impl Bridge {
                     }
                 };
                 bridge2.onboarding_install_result(&base, Some(&msg));
+                bridge2.addon_browser_install_error(&base);
                 crate::web_log("nova: addon installation failed");
             });
         });
@@ -938,6 +939,7 @@ impl Bridge {
 
     /// Mirror matching installed addons, including disabled ones, to Settings.
     pub(super) fn apply_addon_rows(&self) {
+        self.apply_addon_browser_rows();
         self.publish_metadata_addons();
         let Some(app) = self.app() else {
             return;

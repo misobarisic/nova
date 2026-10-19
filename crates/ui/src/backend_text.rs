@@ -85,9 +85,28 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Catalogs" => "Katalozi",
+        "Subtitles" => "Titlovi",
         "Picture in picture" => "Slika u slici",
         "Play video in a floating window when leaving Nova. Disabled keeps playback paused in the background." => {
             "Reproducirajte video u plutajućem prozoru pri izlasku iz Nove. Kada je isključeno, reprodukcija ostaje pauzirana u pozadini."
+        }
+        "Stremio official addons" => "Službeni dodaci za Stremio",
+        "Enter a public HTTPS addon-directory manifest URL." => {
+            "Unesite javni HTTPS URL manifesta direktorija dodataka."
+        }
+        "Could not load this directory. Retry to try again." => {
+            "Nije moguće učitati ovaj direktorij. Pokušajte ponovno."
+        }
+        "Loading addon directory…" => "Učitavanje direktorija dodataka…",
+        "Complete configuration in your browser, then paste the configured install URL into Nova's Installed tab." => {
+            "Dovršite konfiguraciju u pregledniku, zatim zalijepite konfigurirani URL za instalaciju na Novinu karticu Instalirano."
+        }
+        "Could not open the browser. Copy the addon URL and configure it in your browser." => {
+            "Nije moguće otvoriti preglednik. Kopirajte URL dodatka i konfigurirajte ga u pregledniku."
+        }
+        "Addon installation failed. You can retry Install or use its URL in the Installed tab." => {
+            "Instalacija dodatka nije uspjela. Pokušajte ponovno ili upotrijebite njegov URL na kartici Instalirano."
         }
         "IMDb rating" => "IMDb ocjena",
         "Runtime" => "Trajanje",

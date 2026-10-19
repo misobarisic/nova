@@ -126,6 +126,19 @@ export struct AddonRow {
     capabilities: string,
 }
 
+/// A public directory entry; installation still uses the ordinary addon path.
+export struct AddonBrowserRow {
+    label: string,
+    description: string,
+    capabilities: string,
+    url: string,
+    logo: image,
+    initial: string,
+    configurable: bool,
+    installed: bool,
+    busy: bool,
+}
+
 /// One user-defined library category shown in the Settings → Categories list.
 export struct CategoryRow {
     name: string,

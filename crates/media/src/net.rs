@@ -14,6 +14,9 @@
 #[cfg(feature = "update-check")]
 pub mod updates;
 
+#[path = "public_directory.rs"]
+pub mod public_directory;
+
 /// Failure of a fetch, with the HTTP status when the server answered.
 #[derive(Debug)]
 pub struct FetchError {
