@@ -218,9 +218,9 @@ export component ProfilesPage inherits Rectangle {
             } else { reject }
         }
         profile_scroll := ScrollView {
-            x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2);
+            x: root.safe-left + 18px + (root.required ? Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2) : 0px);
             y: root.safe-top + 18px;
-            width: Math.max(1px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
+            width: Math.max(1px, root.required ? Math.min(764px, root.width - root.safe-left - root.safe-right - 36px) : root.width - root.safe-left - root.safe-right - 36px);
             height: Math.max(1px, root.height - root.safe-top - root.safe-bottom - 36px);
             content-width: self.visible-width;
             // Wrapped controls can exceed a layout's estimated height. Include
