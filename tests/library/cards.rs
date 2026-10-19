@@ -147,7 +147,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     let record = actions.clone();
     app.on_library_watch_action(move |i, a| record.borrow_mut().push((i, a)));
     click(&app, elements(&app, "library_card_menu").remove(1));
-    click(&app, label(&app, "Mark series as watched"));
+    click(&app, label(&app, "Mark watched"));
     assert_eq!(*actions.borrow(), [(1, 1)]);
     assert_eq!(*opened.borrow(), [1], "menu taps must not open the title");
     click(&app, label(&app, "Search library"));
@@ -183,7 +183,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
 
     click(&app, elements(&app, "library_card_menu").remove(1));
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+        ElementHandle::find_by_accessible_label(&app, "Mark watched")
             .next()
             .is_some()
     );
@@ -194,7 +194,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     app.set_library(Rc::new(VecModel::from(replacement)).into());
     settle();
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+        ElementHandle::find_by_accessible_label(&app, "Mark watched")
             .next()
             .is_none()
     );
@@ -259,7 +259,7 @@ fn tv_library_keeps_standard_columns_and_remote_context_actions() {
         "held OK must only open the context menu"
     );
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+        ElementHandle::find_by_accessible_label(&app, "Mark watched")
             .next()
             .is_some()
     );
@@ -303,7 +303,7 @@ fn tv_library_keeps_standard_columns_and_remote_context_actions() {
     });
     settle();
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+        ElementHandle::find_by_accessible_label(&app, "Mark watched")
             .next()
             .is_some()
     );

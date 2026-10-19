@@ -147,9 +147,9 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     assert_eq!(*tracking.borrow(), 1);
 
     for (label, action) in [
-        ("Mark series as watched", 0),
-        ("Mark as On Hold", 1),
-        ("Mark as Dropped", 2),
+        ("Mark watched", 0),
+        ("Mark on hold", 1),
+        ("Mark dropped", 2),
         ("Back to automatic", 3),
     ] {
         click(&app, element(&app, "DetailPage::library_options_button"));
@@ -159,7 +159,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     app.set_detail_library_watched(true);
     click(&app, element(&app, "DetailPage::library_options_button"));
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as unwatched")
+        ElementHandle::find_by_accessible_label(&app, "Mark unwatched")
             .next()
             .is_some()
     );
@@ -168,7 +168,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     settle();
     assert!(app.get_modal_visible());
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Mark series as unwatched")
+        ElementHandle::find_by_accessible_label(&app, "Mark unwatched")
             .next()
             .is_none()
     );

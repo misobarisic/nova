@@ -588,16 +588,16 @@ export component LibraryPage {
                                     }
                                     MenuSeparator {}
                                     MenuItem {
-                                        title: card.watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched");
+                                        title: card.watched ? @tr("Mark unwatched") : @tr("Mark watched");
                                         activated => { root.library_watch_action(i, card.watched ? 2 : 1); }
                                     }
                                     MenuSeparator {}
                                     MenuItem {
-                                        title: @tr("Mark as On Hold");
+                                        title: @tr("Mark on hold");
                                         activated => { root.library_status_action(i, 1); }
                                     }
                                     MenuItem {
-                                        title: @tr("Mark as Dropped");
+                                        title: @tr("Mark dropped");
                                         activated => { root.library_status_action(i, 2); }
                                     }
                                     MenuItem {
@@ -1117,9 +1117,9 @@ export component LibraryPage {
             sheet_title: @tr("Library options");
             items: [
                 { label: @tr("Open"), enabled: true },
-                { label: root.menu_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
-                { label: @tr("Mark as On Hold"), enabled: true },
-                { label: @tr("Mark as Dropped"), enabled: true },
+                { label: root.menu_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
+                { label: @tr("Mark on hold"), enabled: true },
+                { label: @tr("Mark dropped"), enabled: true },
                 { label: @tr("Back to automatic"), enabled: true },
                 { label: @tr("Remove from library"), enabled: true },
                 { label: root.menu_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.menu_activity_action > 0 },

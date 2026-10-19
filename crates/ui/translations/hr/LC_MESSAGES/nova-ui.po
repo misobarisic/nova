@@ -328,17 +328,17 @@ msgstr "Moja biblioteka"
 msgid "Open"
 msgstr "Otvorite"
 
-msgid "Mark series as unwatched"
-msgstr "Označite seriju kao nepogledanu"
+msgid "Mark unwatched"
+msgstr "Označite kao nepogledano"
 
-msgid "Mark series as watched"
-msgstr "Označite seriju kao pogledanu"
+msgid "Mark watched"
+msgstr "Označite kao pogledano"
 
-msgid "Mark as On Hold"
-msgstr "Označite kao Na čekanju"
+msgid "Mark on hold"
+msgstr "Stavite na čekanje"
 
-msgid "Mark as Dropped"
-msgstr "Označite kao Odbačeno"
+msgid "Mark dropped"
+msgstr "Označite kao odbačeno"
 
 msgid "Back to automatic"
 msgstr "Vratite na automatski"

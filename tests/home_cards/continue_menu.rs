@@ -238,9 +238,9 @@ fn continue_menu_matches_the_library_card_menu() {
                 );
             }
             for label in [
-                "Mark series as watched",
-                "Mark as On Hold",
-                "Mark as Dropped",
+                "Mark watched",
+                "Mark on hold",
+                "Mark dropped",
                 "Back to automatic",
                 "Remove from library",
             ] {

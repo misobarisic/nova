@@ -157,8 +157,8 @@ goes silent.
 The card’s overflow button opens a native popup on desktop and the page-level
 bottom sheet on touch. Desktop right-click also pops the menu at the cursor;
 touch hold or right-click opens the same bottom sheet, whose Cancel row closes it.
-Rows: **Open** (same as tapping the card), **Mark series as
-watched/unwatched** (label flips with state), **Mark as On Hold / Dropped /
+Rows: **Open** (same as tapping the card), **Mark watched / Mark unwatched**
+(label flips with state), **Mark on hold / Mark dropped /
 Back to automatic**, **Wait for new episodes / Resume watching** (when
 applicable), **Remove from library**. All indices resolve against the
 currently filtered/sorted view. A touch sheet closes if a background refresh

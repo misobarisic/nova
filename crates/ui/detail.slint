@@ -697,9 +697,9 @@ export component DetailPage {
     }
 
     property <[SheetItem]> library_menu_items: [
-        { label: root.library_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
-        { label: @tr("Mark as On Hold"), enabled: true },
-        { label: @tr("Mark as Dropped"), enabled: true },
+        { label: root.library_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
+        { label: @tr("Mark on hold"), enabled: true },
+        { label: @tr("Mark dropped"), enabled: true },
         { label: @tr("Back to automatic"), enabled: true },
         { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
         { label: @tr("Remove from library"), enabled: true },

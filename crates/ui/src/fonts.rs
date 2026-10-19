@@ -19,8 +19,13 @@ fn add_emoji_fallback(context: &mut FontContext) {
     // text shaper queries Roboto followed by these generic families; append
     // emoji explicitly, retaining the host's other script fallback fonts.
     for generic in [GenericFamily::SansSerif, GenericFamily::SystemUi] {
-        if !collection.generic_families(generic).any(|id| id == emoji) {
-            collection.append_generic_families(generic, std::iter::once(emoji));
+        let mut families: Vec<_> = collection.generic_families(generic).collect();
+        if !families.contains(&emoji) {
+            // Fontique checks application overrides before system families.
+            // Appending only emoji makes it the first generic font, so popup
+            // labels take their spaces from its full-width space glyph.
+            families.push(emoji);
+            collection.set_generic_families(generic, families.into_iter());
         }
     }
 }
@@ -30,6 +35,32 @@ mod tests {
     use super::*;
     use i_slint_core::textlayout::sharedparley::parley::{self, fontique};
     use std::{borrow::Cow, sync::Arc};
+
+    #[test]
+    fn generic_text_keeps_system_families_before_emoji() {
+        let mut fonts = FontContext::new(parley::FontContext::default());
+        let before: Vec<_> = fonts
+            .collection
+            .generic_families(GenericFamily::SansSerif)
+            .collect();
+        add_emoji_fallback(&mut fonts);
+        let after: Vec<_> = fonts
+            .collection
+            .generic_families(GenericFamily::SansSerif)
+            .collect();
+        assert!(
+            after.starts_with(&before),
+            "generic popup text must keep the system text fonts ahead of emoji: {before:?} -> {after:?}"
+        );
+        add_emoji_fallback(&mut fonts);
+        assert_eq!(
+            fonts
+                .collection
+                .generic_families(GenericFamily::SansSerif)
+                .collect::<Vec<_>>(),
+            after
+        );
+    }
 
     #[test]
     fn full_baseline_emoji_sequences_shape_without_system_fonts() {
