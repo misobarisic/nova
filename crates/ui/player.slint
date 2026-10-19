@@ -151,14 +151,53 @@ component SettingsMenu inherits Rectangle {
     property <length> card_limit: Math.max(0px, root.anchored
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
     // Current submenu: 0 = root, 1 = hardware decoding (Android/Windows/Linux), 2 =
-    // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
+    // subtitles, 3 = audio, 4 = playback speed, 5 = subtitle appearance,
+    // 6 = intro skipping. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
     in property <int> intro_skip_override_index: -1;
     callback intro_skip_mode_changed(int);
     // A submenu can remove a slider before its delayed pointer-up/cancel is
     // delivered. Its gesture lease must not outlive the page that owned it.
-    changed page => { SliderGesture.active = false; SliderGesture.hovered = false; }
+    changed page => {
+        SliderGesture.active = false;
+        SliderGesture.hovered = false;
+        settings_scroll.content-y = 0px;
+        // Replace the page immediately, including its focus and action targets.
+        // Only the incoming content is painted during the short push/pop reveal.
+        root.page_direction = root.page == 0 ? -1 : 1;
+        root.page_revealed = !root.page_motion;
+        // Assign both endpoints: a delayed frame must not coalesce a lazy
+        // revealed=false/true binding back into an unchanged progress of 1.
+        root.page_progress = root.page_motion ? 0 : 1;
+        page_reveal_timer.stop();
+        if root.page_motion { page_reveal_timer.start(); }
+    }
+    private property <bool> page_motion: Anim.enabled && Anim.player;
+    private property <bool> page_revealed: true;
+    private property <int> page_direction: 1;
+    private property <float> page_progress: 1;
+    animate page_progress {
+        duration: root.page_motion && root.page_revealed ? Anim.player_slide : 0ms;
+        easing: ease-out;
+    }
+    changed page_motion => {
+        if !root.page_motion {
+            page_reveal_timer.stop();
+            root.page_revealed = true;
+            root.page_progress = 1;
+            card.animated_height = card.content_height;
+        }
+    }
+    page_reveal_timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.page_revealed = true;
+            root.page_progress = 1;
+        }
+    }
 
     // Keyboard focus row on the current page (-1 = none / mouse mode).
     in property <int> focused_idx: -1;
@@ -231,7 +270,14 @@ component SettingsMenu inherits Rectangle {
     card := Rectangle {
         width: Math.max(0px, Math.min(InterfaceStyle.tv ? 560px : (root.anchored ? 400px : 380px),
             root.width - root.safe_left - root.safe_right - 32px));
-        height: card_col.preferred-height;
+        private property <length> content_height: card_col.preferred-height;
+        private property <length> animated_height: self.content_height;
+        // Explicit endpoints let motion disablement finish an existing resize;
+        // changing an animated binding's duration alone does not stop it.
+        changed content_height => { self.animated_height = self.content_height; }
+        animate animated_height { duration: Anim.player_slide; easing: ease-out; }
+        // Bypass an in-flight resize immediately when motion is disabled.
+        height: root.page_motion ? self.animated_height : card_col.preferred-height;
         x: root.anchored
             ? Math.clamp(root.anchor_x - self.width, 16px + root.safe_left,
                 Math.max(16px + root.safe_left, root.width - root.safe_right - 16px - self.width))
@@ -244,11 +290,19 @@ component SettingsMenu inherits Rectangle {
         border-color: Theme.current.player_menu_border;
         drop-shadow-blur: 24px;
         drop-shadow-color: Theme.current.scrim_shadow;
+        // Moving pages stay within the card's current animated bounds; taps
+        // outside those bounds still belong to the dismissing backdrop.
+        clip: true;
 
         // Swallow taps on the card so they don't reach the backdrop.
         TouchArea { width: 100%; height: 100%; }
 
+        // The shared scroll viewport and keyboard owner survive page changes.
         card_col := VerticalLayout {
+            x: root.page_motion ? root.page_direction * 28px * (1 - root.page_progress) : 0px;
+            width: parent.width;
+            height: parent.height;
+            opacity: root.page_motion ? root.page_progress : 1;
             padding: 16px;
             spacing: 12px;
             alignment: start;
@@ -699,7 +753,8 @@ export component PlayerOverlay {
     // modal's checkmark, mirrored from mpv's `hwdec-current`.
     in-out property <int> decoder_selected: -1;
     // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
-    // 3 = audio. Driven by the keyboard handler.
+    // 3 = audio, 4 = speed, 5 = subtitle appearance, 6 = intro skipping.
+    // Driven by the keyboard handler.
     property <int> settings_page: 0;
     // A native menu-row/preset scope may disappear when a submenu changes.
     // The player scope survives every menu body and owns nearest-layer Back.

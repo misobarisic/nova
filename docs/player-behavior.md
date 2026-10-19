@@ -310,6 +310,10 @@ Choosing audio, subtitles or speed in the OSD saves that control for the series
 (across episodes) or movie, even outside the library. Each submenu has
 **Use global default**, which clears only that control and immediately reapplies
 its current default. Speed previews from holding the video never save a choice.
+The gear panel slides and fades into submenus and reverses direction on Back.
+Its height animates to each page’s content, capped by the safe viewport with
+scrolling for larger pages. Disabling player animations or all motion changes
+pages and height immediately.
 
 Subtitle appearance and timing has the same global/title split. Settings →
 Player sets timing offset, text size, side margins, vertical position, outline
