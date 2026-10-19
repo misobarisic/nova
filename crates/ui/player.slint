@@ -812,7 +812,13 @@ export component PlayerOverlay {
     property <bool> tv_scrubbing: false;
     property <float> tv_seek_position: 0;
     property <int> tv_seek_repeats: 0;
-    private property <float> displayed_position: root.tv_scrubbing ? root.tv_seek_position : root.position;
+    // Keep previews separate from the backend's live position until release.
+    // Native progress ticks must not move a thumb held by the user.
+    property <bool> pointer_scrubbing: false;
+    property <float> pointer_seek_position: 0;
+    private property <float> displayed_position: root.pointer_scrubbing
+        ? Math.clamp(root.pointer_seek_position, 0, root.duration)
+        : root.tv_scrubbing ? root.tv_seek_position : root.position;
 
     function tv_can_seek() -> bool {
         return root.timeline_control_allowed && root.playback_started && root.duration > 0;
@@ -824,6 +830,7 @@ export component PlayerOverlay {
     }
     function tv_cancel_seek() { root.tv_scrubbing = false; root.tv_seek_repeats = 0; }
     function tv_preview_seek(direction: int, repeated: bool) {
+        root.pointer_scrubbing = false;
         if !root.tv_can_seek() { return; }
         if !root.tv_scrubbing {
             root.tv_seek_position = root.position;
@@ -915,7 +922,7 @@ export component PlayerOverlay {
     // An input held beyond the ordinary three-second timeout stays interactive.
     tv_seek_wake := Timer {
         interval: 1s;
-        running: InterfaceStyle.tv && root.tv_scrubbing && root.osd_visible;
+        running: (root.pointer_scrubbing || (InterfaceStyle.tv && root.tv_scrubbing)) && root.osd_visible;
         triggered => { root.osd_mouse_moved(); }
     }
 
@@ -965,6 +972,7 @@ export component PlayerOverlay {
     }
 
     function system_back() {
+        if root.pointer_scrubbing { root.pointer_scrubbing = false; return; }
         if InterfaceStyle.tv {
             if root.tv_scrubbing { root.tv_cancel_seek(); }
             else if root.open_popup == 4 { root.settings_back(); }
@@ -1023,7 +1031,7 @@ export component PlayerOverlay {
 
     private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.is_host);
     changed timeline_control_allowed => {
-        if !root.timeline_control_allowed { root.tv_cancel_seek(); }
+        if !root.timeline_control_allowed { root.tv_cancel_seek(); root.pointer_scrubbing = false; }
         if InterfaceStyle.tv { root.kb_clamp_focus(); }
     }
     private property <bool> party_owns_playback: (PartyBridge.active || PartyBridge.busy);
@@ -1211,11 +1219,13 @@ export component PlayerOverlay {
     changed skip_segment_shown => { root.kb_clamp_focus(); }
     changed next_episode_shown => { root.kb_clamp_focus(); }
     changed playback_started => {
-        if !root.playback_started { root.tv_cancel_seek(); }
+        if !root.playback_started { root.tv_cancel_seek(); root.pointer_scrubbing = false; }
         if InterfaceStyle.tv { root.kb_clamp_focus(); }
     }
-    changed duration => { if root.duration <= 0 { root.tv_cancel_seek(); root.kb_clamp_focus(); } }
+    changed duration => { if root.duration <= 0 { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.kb_clamp_focus(); } }
     changed screenshot_busy => { if InterfaceStyle.tv { root.kb_clamp_focus(); } }
+
+    changed osd_visible => { if !root.osd_visible { root.pointer_scrubbing = false; } }
 
     // Hover movement over the bar itself re-arms the auto-hide countdown.
     // TouchArea.moved only fires while pressed and the backdrop's mouse-x/y
@@ -1448,7 +1458,7 @@ export component PlayerOverlay {
         key_scope := FocusScope {
             width: 100%;
             height: 100%;
-            changed has-focus => { if !self.has-focus { root.tv_cancel_seek(); } }
+            changed has-focus => { if !self.has-focus { root.tv_cancel_seek(); root.pointer_scrubbing = false; } }
             init => {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
@@ -2121,12 +2131,12 @@ export component PlayerOverlay {
                         // Estimated forward cache. Keep it within the unplayed
                         // portion, including while the user moves the seek thumb.
                         buffered_track := Rectangle {
-                            x: root.duration > 0 ? Math.clamp(root.position / root.duration, 0, 1) * parent.width : 0px;
+                            x: root.duration > 0 ? Math.clamp(root.displayed_position / root.duration, 0, 1) * parent.width : 0px;
                             y: InterfaceStyle.tv ? 17px : 8px;
                             height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: root.playback_started && root.duration > 0
                                 ? Math.max(0, Math.clamp(root.buffered_until / root.duration, 0, 1)
-                                    - Math.clamp(root.position / root.duration, 0, 1)) * parent.width
+                                    - Math.clamp(root.displayed_position / root.duration, 0, 1)) * parent.width
                                 : 0px;
                             background: Theme.current.player_buffered_fill;
                             border-radius: 1.5px;
@@ -2153,7 +2163,7 @@ export component PlayerOverlay {
                             height: 11px;
                             background: Theme.current.player_progress_fill;
                             border-radius: 5.5px;
-                            opacity: seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
+                            opacity: root.pointer_scrubbing || seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
                         }
 
@@ -2162,22 +2172,31 @@ export component PlayerOverlay {
                             width: 100%;
                             height: 100%;
                             mouse-cursor: pointer;
-                            moved => {
-                                if (!root.guard_osd_control()) { return; }
-                                let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
-                                // Move the thumb immediately (the backend only
-                                // mirrors mpv's position once the seek applies;
-                                // without this the scrub guard would freeze it).
-                                root.position = pct * root.duration;
-                                root.seek(pct * root.duration);
-                                root.osd_mouse_moved();
-                            }
-                            clicked => {
-                                if (!root.guard_osd_control()) { return; }
-                                let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
-                                root.position = pct * root.duration;
-                                root.seek(pct * root.duration);
-                                root.osd_mouse_moved();
+                            pointer-event(ev) => {
+                                if ((ev.kind == PointerEventKind.down || ev.kind == PointerEventKind.up)
+                                    && ev.button != PointerEventButton.left) { return; }
+                                if ev.kind == PointerEventKind.down {
+                                    root.pointer_scrubbing = false;
+                                    if !root.guard_osd_control() || !root.tv_can_seek() || self.width <= 0px { return; }
+                                    root.pointer_seek_position = Math.clamp(self.mouse-x / self.width, 0, 1) * root.duration;
+                                    root.pointer_scrubbing = true;
+                                    root.osd_mouse_moved();
+                                } else if ev.kind == PointerEventKind.move && root.pointer_scrubbing {
+                                    root.pointer_seek_position = Math.clamp(self.mouse-x / self.width, 0, 1) * root.duration;
+                                    root.osd_mouse_moved();
+                                } else if ev.kind == PointerEventKind.up && root.pointer_scrubbing {
+                                    let target = self.width > 0px ? Math.clamp(self.mouse-x / self.width, 0, 1) * root.duration : root.position;
+                                    root.pointer_scrubbing = false;
+                                    if root.tv_can_seek() {
+                                        // Publish once so the existing native seek guard holds
+                                        // this target until mpv acknowledges the decoder seek.
+                                        root.position = target;
+                                        root.seek(target);
+                                        root.osd_mouse_moved();
+                                    }
+                                } else if ev.kind == PointerEventKind.cancel {
+                                    root.pointer_scrubbing = false;
+                                }
                             }
                         }
 
@@ -2191,11 +2210,11 @@ export component PlayerOverlay {
                             y: -self.height - 4px;
                             border-radius: 5px;
                             background: Theme.current.player_tooltip;
-                            opacity: seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
+                            opacity: root.pointer_scrubbing || seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
 
                             seek_tip := Text {
-                                text: root.format_time(root.tv_timeline_focused ? root.displayed_position : (seek_touch.mouse-x / seek_touch.width) * root.duration);
+                                text: root.format_time(root.pointer_scrubbing || root.tv_timeline_focused ? root.displayed_position : Math.clamp(seek_touch.mouse-x / seek_touch.width, 0, 1) * root.duration);
                                 color: Theme.current.text_bright;
                                 font-size: InterfaceStyle.tv ? 18px : 11px;
                                 width: 100%;

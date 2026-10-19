@@ -121,6 +121,11 @@ wrapped-row and addon-gesture tests.
 
 ## Player header, screenshots and keyboard controls
 
+Dragging the timeline previews the target position and timestamp locally, then
+seeks once on release. Native playback continues during the preview; cancellation
+discards it. A hidden timeline only wakes the controls on its first press, and
+loading/live streams or party guests cannot scrub. Held previews keep controls awake.
+
 The OSD header shows `S1E1: Episode title` beside Exit, with the show's
 name rendered as text below it. Movies show their title without an
 episode line. The party badge sits below the measured caption block with a gap.

@@ -3065,11 +3065,11 @@ impl Player {
                 0.0
             };
 
-            // While the user is scrubbing the OSD slider — or right after a
-            // seek, until mpv actually applies it — the slider value diverges
-            // from mpv's time-pos. Don't fight the thumb then: mirroring would
-            // keep overwriting the new position with the stale one and the
-            // slider would fall back to its previous state. Resume as soon as
+            // After a released OSD scrub commits a seek, until mpv actually
+            // applies it, the slider value diverges from mpv's time-pos.
+            // Don't overwrite the committed target with the stale position
+            // or the slider would fall back to its previous state. The held
+            // preview is UI-local and does not arm this guard. Resume as soon as
             // mpv's time-pos catches up with the slider. Only a seek the UI
             // actually issued arms this (`seek_pending`), so an initial resume
             // opened at the saved position (UI still at 0) mirrors mpv instead
