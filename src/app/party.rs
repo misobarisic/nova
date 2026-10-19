@@ -7,6 +7,17 @@ use nova_party::{HostCommand, LocalReport, PartyMedia, PartyRole, PartyService, 
 use nova_playback_api::MediaIdentity;
 use nova_playback_api::PlaybackAction;
 use std::time::Instant;
+use unicode_normalization::UnicodeNormalization;
+
+fn participant_initial(name: &str) -> SharedString {
+    name.trim()
+        .nfc()
+        .next()
+        .and_then(|c| c.to_uppercase().next())
+        .unwrap_or('?')
+        .to_string()
+        .into()
+}
 
 #[derive(Default)]
 pub(super) struct State {
@@ -908,6 +919,7 @@ impl Bridge {
                     .map(|p| crate::PartyMemberRow {
                         id: p.id.clone().into(),
                         name: p.name.clone().into(),
+                        initial: participant_initial(&p.name),
                         is_host: p.is_host,
                         ready: p.ready,
                         can_remove: room.role == PartyRole::Host && !p.is_host,
@@ -959,6 +971,17 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn participant_initial_uses_a_readable_normalized_letter() {
+        for (name, initial) in [
+            (" Mišo ", "M"),
+            ("e\u{301}va", "É"),
+            ("ßara", "S"),
+            ("", "?"),
+        ] {
+            assert_eq!(participant_initial(name), initial);
+        }
+    }
     fn media(id: &str, episode: u32) -> PartyMedia {
         PartyMedia {
             identity: MediaIdentity {

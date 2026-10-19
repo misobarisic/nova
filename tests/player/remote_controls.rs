@@ -104,12 +104,38 @@ fn controls_require_confirmed_session_and_back_only_detaches() {
     let header = element("RemoteControlsPage::controls_header");
     let timeline = element("RemoteControlsPage::timeline");
     let volume = element("RemoteControlsPage::volume_label");
-    let stop_bottom = stop.absolute_position().y + stop.size().height;
-    assert!(stop_bottom <= timeline.absolute_position().y);
-    assert!(stop_bottom <= volume.absolute_position().y);
-    assert!(stop.absolute_position().x >= header.absolute_position().x + header.size().width);
-    assert!(stop.absolute_position().x > 160.0);
+    assert!(stop.absolute_position().y >= timeline.absolute_position().y + timeline.size().height);
+    assert!(stop.absolute_position().y >= volume.absolute_position().y + volume.size().height);
+    assert!(stop.absolute_position().y > header.absolute_position().y + header.size().height);
+    assert!(stop.absolute_position().x >= 0.0);
     assert!(stop.absolute_position().x + stop.size().width <= 320.0);
+    // Stop follows the compact playback panels. Reach it through the real
+    // viewport, including on phones whose footer initially needs scrolling.
+    let scroll = element("RemoteControlsPage::controls_scroll");
+    let viewport_top = scroll.absolute_position().y;
+    let viewport_bottom = viewport_top + scroll.size().height;
+    for _ in 0..6 {
+        let top = stop.absolute_position().y;
+        let bottom = top + stop.size().height;
+        if top >= viewport_top && bottom <= viewport_bottom {
+            break;
+        }
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(
+                    scroll.absolute_position().x + 2.0,
+                    (viewport_top + viewport_bottom) / 2.0,
+                ),
+                delta_x: 0.0,
+                delta_y: if top < viewport_top { 240.0 } else { -240.0 },
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    }
+    assert!(stop.absolute_position().y >= viewport_top);
+    assert!(
+        stop.absolute_position().y + stop.size().height <= viewport_bottom,
+        "the separate Stop action must be reachable by scrolling"
+    );
     click(&app, "Stop");
     assert_eq!(
         actions.borrow().last().unwrap(),
@@ -219,8 +245,132 @@ fn devices_cards_stay_compact_and_only_ready_sessions_open() {
         );
     }
     assert_eq!(&*opened.borrow(), &["active", "active"]);
+    // Desktop selection stays bound to a peer when discovery reorders the rows.
+    let offline = ElementHandle::find_by_element_id(&app, "RemoteDevicesPage::device_card")
+        .find(|item| item.accessible_label().as_deref() == Some("Laptop"))
+        .unwrap();
+    offline.mock_single_click(slint::platform::PointerEventButton::Left);
+    let selected = || {
+        ElementHandle::find_by_element_id(&app, "RemoteDevicesPage::selected_device_name")
+            .next()
+            .unwrap()
+            .accessible_label()
+    };
+    assert_eq!(selected().as_deref(), Some("Laptop"));
+    app.set_remote_devices(
+        Rc::new(slint::VecModel::from(vec![
+            nova::RemoteDeviceRow {
+                id: "offline".into(),
+                name: "Laptop".into(),
+                ..Default::default()
+            },
+            nova::RemoteDeviceRow {
+                id: "idle".into(),
+                name: "Bedroom".into(),
+                ..Default::default()
+            },
+            nova::RemoteDeviceRow {
+                id: "active".into(),
+                name: "Living room".into(),
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert_eq!(selected().as_deref(), Some("Laptop"));
+    assert_eq!(
+        opened.borrow().len(),
+        2,
+        "selecting a peer must not open controls"
+    );
     key(&app, slint::platform::Key::Escape);
     assert!(!app.get_remote_devices_open());
+}
+
+#[test]
+fn compact_controls_keep_secondary_actions_and_captured_preview_session() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::compact_controls_keep_secondary_actions_and_captured_preview_session"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(360, 1600));
+    app.set_remote_controls_open(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("session-a".into());
+    app.set_remote_can_speed(true);
+    app.set_remote_can_fullscreen(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_remote_action(move |name, value, token| {
+        recorded
+            .borrow_mut()
+            .push((name.to_string(), value, token.to_string()))
+    });
+    app.window().show().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert!(
+        ElementHandle::find_by_element_id(&app, "RemoteControlsPage::reset_speed")
+            .next()
+            .is_none()
+    );
+    let speed_toggle = ElementHandle::find_by_element_id(&app, "RemoteControlsPage::speed_toggle")
+        .next()
+        .unwrap();
+    speed_toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    click(&app, "Use global default");
+    let more_toggle = ElementHandle::find_by_element_id(&app, "RemoteControlsPage::more_toggle")
+        .next()
+        .unwrap();
+    more_toggle.mock_single_click(slint::platform::PointerEventButton::Left);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    click(&app, "Fullscreen on device");
+    let hold = ElementHandle::find_by_element_id(&app, "RemoteControlsPage::speed_hold")
+        .next()
+        .unwrap();
+    let p = hold.absolute_position();
+    let size = hold.size();
+    let position = LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    app.set_remote_session("session-b".into());
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert_eq!(
+        &*actions.borrow(),
+        &[
+            ("reset_speed".into(), 0.0, "session-a".into()),
+            ("fullscreen".into(), 0.0, "session-a".into()),
+            ("speed_preview".into(), 2.0, "session-a".into()),
+            ("speed_preview_end".into(), 0.0, "session-a".into()),
+        ]
+    );
+    app.window().set_size(slint::PhysicalSize::new(1200, 1000));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    let transport = ElementHandle::find_by_element_id(&app, "RemoteControlsPage::transport_panel")
+        .next()
+        .unwrap();
+    let volume = ElementHandle::find_by_element_id(&app, "RemoteControlsPage::volume_label")
+        .next()
+        .unwrap();
+    assert!(
+        transport.absolute_position().x + transport.size().width <= volume.absolute_position().x
+    );
+    assert!(
+        volume.absolute_position().y < transport.absolute_position().y + transport.size().height
+    );
 }
 
 #[test]

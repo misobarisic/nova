@@ -1,8 +1,10 @@
 import { RemoteBridge, Theme, SettingsStyle, InterfaceStyle } from "@NovaUiShared";
-import { PillButton, MiniSlider, SettingsCard } from "settings-controls.slint";
+import { PillButton, MiniSlider } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
 import { MenuRow } from "player-menu-row.slint";
+import { SessionPanel, SessionTransportButton, SessionStatus } from "session-controls.slint";
+import { IcDisplay } from "icons.slint";
 
 // A preview belongs to the session at press time. Every release path uses that
 // captured identity, so reconnecting or replacing playback cannot reset a new session.
@@ -56,6 +58,9 @@ export component RemoteControlsPage inherits Rectangle {
     in property <length> safe-bottom;
     in property <length> safe-left;
     in property <length> safe-right;
+    private property <bool> wide: !InterfaceStyle.tv && root.width - root.safe-left - root.safe-right >= 900px;
+    property <bool> speed_expanded: false;
+    property <bool> more_expanded: false;
     private property <bool> ready: RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
     changed ready => { if InterfaceStyle.tv { root.tv-index = -1; focus.focus(); } }
     background: Theme.current.artwork_canvas;
@@ -149,140 +154,171 @@ export component RemoteControlsPage inherits Rectangle {
             else if root.ready && RemoteBridge.can_screenshot && e.text == "s" { if !e.repeat { root.action("screenshot", 0); } accept }
             else { reject }
         }
-    controls_scroll := ScrollView {
-        x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2); y: root.safe-top + 18px;
-        width: Math.max(0px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
-        height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
-        content-width: self.visible-width;
-        VerticalLayout {
-            width: 100%; spacing: 12px; alignment: start;
-            HorizontalLayout {
-                spacing: 8px;
+        controls_scroll := ScrollView {
+            x: root.safe-left + 18px; y: root.safe-top + 18px;
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+            height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+            content-width: self.visible-width;
+            VerticalLayout {
+                width: 100%; spacing: 12px; alignment: start;
                 controls_header := PageHeader {
-                    min-width: 0px; horizontal-stretch: 1;
-                    title: @tr("Controls"); subtitle: RemoteBridge.target_name;
+                    min-width: 0px; title: @tr("Controls"); subtitle: RemoteBridge.target_name;
                     narrow: root.width < 700px; show-back: true;
                     back => { RemoteBridge.device_close(); }
                 }
-                stop_button := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 0;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    label: @tr("Stop"); compact: true; destructive: true;
-                    horizontal-stretch: 0; vertical-stretch: 0;
-                    enabled: root.ready && RemoteBridge.can_stop;
-                    clicked => { if InterfaceStyle.tv { root.tv-index = 0; } root.action("stop", 0); }
-                }
-            }
-            SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 8px;
-                    Text { text: RemoteBridge.title; color: Theme.current.text_bright; font-size: 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
-                    if RemoteBridge.episode != "": Text { text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
-                    Text { text: RemoteBridge.error != "" ? RemoteBridge.error : RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; color: RemoteBridge.error != "" ? Theme.current.text_destructive : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                    Text { text: RemoteBridge.time_text; color: Theme.current.text_primary; }
-                    timeline := MiniSlider {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 1;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { if InterfaceStyle.tv { root.tv-index = 1; } root.action("seek", v); } }
-                    HorizontalLayout { alignment: center; spacing: 8px;
-                        seek_back := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 2;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 2; } root.action("seek_relative", -10); } }
-                        pause_button := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; compact: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { if InterfaceStyle.tv { root.tv-index = 3; } root.action("pause", 0); } }
-                        seek_forward := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 4; } root.action("seek_relative", 10); } }
+                controls_body := GridLayout {
+                    spacing: 16px;
+                    transport_panel := SessionPanel {
+                        row: 0; col: 0; horizontal-stretch: 1; vertical-stretch: 0;
+                        VerticalLayout {
+                            padding: root.wide ? 32px : 16px; spacing: root.wide ? 16px : 10px; alignment: start;
+                            Text { horizontal-alignment: center; text: RemoteBridge.title; color: Theme.current.text_bright; font-size: root.wide ? 28px : 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                            if RemoteBridge.episode != "": Text { horizontal-alignment: center; text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
+                            if RemoteBridge.error != "": Text { text: RemoteBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; horizontal-alignment: center; }
+                            if RemoteBridge.error == "": SessionStatus { label: RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; connected: root.ready; }
+                            transport_buttons := Rectangle {
+                                height: 80px;
+                                seek_back := SessionTransportButton {
+                                    kind: -1; x: parent.width / 2 - 104px; y: 14px;
+                                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 2;
+                                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 2; } root.action("seek_relative", -10); } }
+                                pause_button := SessionTransportButton {
+                                    kind: 0; x: (parent.width - self.width) / 2; y: 0px;
+                                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
+                                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } paused: RemoteBridge.paused; caption: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; compact: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { if InterfaceStyle.tv { root.tv-index = 3; } root.action("pause", 0); } }
+                                seek_forward := SessionTransportButton {
+                                    kind: 1; x: parent.width / 2 + 52px; y: 14px;
+                                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
+                                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 4; } root.action("seek_relative", 10); } }
+                            }
+                            timeline := MiniSlider {
+                                property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 1;
+                                changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { if InterfaceStyle.tv { root.tv-index = 1; } root.action("seek", v); } }
+                            Text { text: RemoteBridge.time_text; color: Theme.current.text_secondary; horizontal-alignment: center; font-size: 13px; }
+                        }
+                    }
+                    playback_panel := VerticalLayout {
+                        row: root.wide ? 0 : 1; col: root.wide ? 1 : 0;
+                        min-width: root.wide ? 300px : 0px; max-width: root.wide ? 340px : 100000px;
+                        horizontal-stretch: root.wide ? 0 : 1; vertical-stretch: 0; spacing: 10px;
+                        SessionPanel {
+                            VerticalLayout { padding: 12px; spacing: 6px;
+                                HorizontalLayout {
+                                    volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
+                                    Text { text: Math.round(RemoteBridge.volume) + "%"; color: Theme.current.text_muted; }
+                                }
+                                HorizontalLayout { spacing: 10px;
+                                    volume_slider := MiniSlider {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } horizontal-stretch: 1; name: @tr("Volume"); enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { if InterfaceStyle.tv { root.tv-index = 5; } root.action("volume", v); } }
+                                    mute_button := PillButton {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 6;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } horizontal-stretch: 0; compact: true; label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { if InterfaceStyle.tv { root.tv-index = 6; } root.action("mute", 0); } }
+                                }
+                            }
+                        }
+                        if RemoteBridge.can_tracks: SessionPanel {
+                            VerticalLayout { padding: 4px; spacing: 0px;
+                                audio_picker := MenuRow {
+                                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 10;
+                                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Audio tracks"); icon_kind: 1; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 10; } root.open_tracks(1); } }
+                                subtitle_picker := MenuRow {
+                                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 11;
+                                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Subtitles"); icon_kind: 2; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 11; } root.open_tracks(2); } }
+                            }
+                        }
+                        SessionPanel {
+                            VerticalLayout { padding: root.wide || InterfaceStyle.tv || root.speed_expanded ? 12px : 4px; spacing: 8px;
+                                if !root.wide && !InterfaceStyle.tv: speed_toggle := MenuRow {
+                                    label: @tr("Playback speed"); value: "" + RemoteBridge.speed + "×";
+                                    icon_kind: 3; submenu: !root.speed_expanded;
+                                    activate => { root.speed_expanded = !root.speed_expanded; }
+                                }
+                                if root.wide || InterfaceStyle.tv: HorizontalLayout {
+                                    Text { text: @tr("Playback speed"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
+                                    Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
+                                }
+                                if root.wide || InterfaceStyle.tv || root.speed_expanded: VerticalLayout { spacing: 8px;
+                                    speed_slider := MiniSlider {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 7;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback speed"); enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; step: 0.05; value: RemoteBridge.speed; changed(v) => { if InterfaceStyle.tv { root.tv-index = 7; } root.action("speed", v); } }
+                                    reset_speed := PillButton {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 8;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { if InterfaceStyle.tv { root.tv-index = 8; } root.action("reset_speed", 0); } }
+                                }
+                            }
+                        }
+                        SessionPanel {
+                            VerticalLayout { padding: 4px; spacing: 8px;
+                                if !root.wide && !InterfaceStyle.tv: more_toggle := MenuRow {
+                                    label: @tr("More"); submenu: !root.more_expanded;
+                                    activate => { root.more_expanded = !root.more_expanded; }
+                                }
+                                if root.wide || InterfaceStyle.tv || root.more_expanded: VerticalLayout { padding: 8px; spacing: 8px;
+                                    fullscreen_button := PillButton {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 12;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { if InterfaceStyle.tv { root.tv-index = 12; } root.action("fullscreen", 0); } }
+                                    screenshot_button := PillButton {
+                                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 13;
+                                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Screenshot on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_screenshot; clicked => { if InterfaceStyle.tv { root.tv-index = 13; } root.action("screenshot", 0); } }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 8px;
-                    HorizontalLayout {
-                        volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
-                        Text { text: Math.round(RemoteBridge.volume) + "%"; color: Theme.current.text_muted; }
-                    }
-                    volume_slider := MiniSlider {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Volume"); enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { if InterfaceStyle.tv { root.tv-index = 5; } root.action("volume", v); } }
-                    mute_button := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 6;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { if InterfaceStyle.tv { root.tv-index = 6; } root.action("mute", 0); } }
-                }
-            }
-            SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 8px;
-                    HorizontalLayout {
-                        Text { text: @tr("Playback speed"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
-                        Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
-                    }
-                    speed_slider := MiniSlider {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 7;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback speed"); enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; step: 0.05; value: RemoteBridge.speed; changed(v) => { if InterfaceStyle.tv { root.tv-index = 7; } root.action("speed", v); } }
-                    reset_speed := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 8;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { if InterfaceStyle.tv { root.tv-index = 8; } root.action("reset_speed", 0); } }
+                HorizontalLayout { alignment: center;
                     speed_hold := RemoteSpeedHold {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 9;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } enabled: root.ready && RemoteBridge.can_speed; }
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 9;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } width: Math.min(240px, controls_scroll.visible-width); enabled: root.ready && RemoteBridge.can_speed; }
                 }
-            }
-            if RemoteBridge.can_tracks: SettingsCard {
-                VerticalLayout { padding: 8px; spacing: 4px;
-                    audio_picker := MenuRow {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 10;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Audio tracks"); icon_kind: 1; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 10; } root.open_tracks(1); } }
-                    subtitle_picker := MenuRow {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 11;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Subtitles"); icon_kind: 2; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 11; } root.open_tracks(2); } }
+                // Keep Stop apart from ordinary transport and volume actions.
+                HorizontalLayout { alignment: center;
+                    stop_button := PillButton {
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 0;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        label: @tr("Stop"); compact: true; destructive: true;
+                        horizontal-stretch: 0; vertical-stretch: 0;
+                        enabled: root.ready && RemoteBridge.can_stop;
+                        clicked => { if InterfaceStyle.tv { root.tv-index = 0; } root.action("stop", 0); }
+                    }
                 }
-            }
-            SettingsCard {
-                VerticalLayout { padding: 12px; spacing: 8px;
-                    fullscreen_button := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 12;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { if InterfaceStyle.tv { root.tv-index = 12; } root.action("fullscreen", 0); } }
-                    screenshot_button := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 13;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Screenshot on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_screenshot; clicked => { if InterfaceStyle.tv { root.tv-index = 13; } root.action("screenshot", 0); } }
+                if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
+                    Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
+                    prompt_accept := PillButton {
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 14;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 14; } RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
+                    if RemoteBridge.resume_prompt: prompt_restart := PillButton {
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 15;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Start over"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } RemoteBridge.action("prompt_reject", 0, RemoteBridge.prompt_token); } }
+                    prompt_cancel := PillButton {
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 16;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Cancel"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 16; } RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
                 }
+                if RemoteBridge.offers.length > 0: Text { text: @tr("Choose a stream"); color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
+                for offer[index] in RemoteBridge.offers: VerticalLayout { spacing: 4px;
+                    PillButton { focused: InterfaceStyle.tv && root.tv-index == 17 + index; label: offer.title; wrap_label: true; enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 17 + index; } RemoteBridge.stream_picked(index); } }
+                    if offer.description != "": Text { text: offer.description; color: Theme.current.text_muted; wrap: word-wrap; }
+                }
+                Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
             }
-            if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
-                Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
-                prompt_accept := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 14;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 14; } RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
-                if RemoteBridge.resume_prompt: prompt_restart := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 15;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Start over"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } RemoteBridge.action("prompt_reject", 0, RemoteBridge.prompt_token); } }
-                prompt_cancel := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 16;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Cancel"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 16; } RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
-            }
-            if RemoteBridge.offers.length > 0: Text { text: @tr("Choose a stream"); color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
-            for offer[index] in RemoteBridge.offers: VerticalLayout { spacing: 4px;
-                PillButton { focused: InterfaceStyle.tv && root.tv-index == 17 + index; label: offer.title; wrap_label: true; enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 17 + index; } RemoteBridge.stream_picked(index); } }
-                if offer.description != "": Text { text: offer.description; color: Theme.current.text_muted; wrap: word-wrap; }
-            }
-            Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
         }
-    }
     }
     if RemoteBridge.track_picker != 0: Rectangle {
         width: 100%; height: 100%; background: Theme.current.scrim_shadow;
@@ -346,8 +382,12 @@ export component RemoteDevicesPage inherits Rectangle {
     in property <length> safe-left; in property <length> safe-right;
     background: Theme.current.artwork_canvas;
     property <int> tv-index: -1;
+    private property <bool> wide: !InterfaceStyle.tv && root.width - root.safe-left - root.safe-right >= 900px;
+    property <string> selected_device_id;
     private property <int> device-count: RemoteBridge.devices.length;
-    changed device-count => { root.tv-index = Math.min(root.tv-index, root.device-count - 1); }
+    // Polling may reorder rows; retain selection by identity. Membership changes
+    // return to the first peer, including when the selected peer was removed.
+    changed device-count => { root.tv-index = Math.min(root.tv-index, root.device-count - 1); root.selected_device_id = ""; }
     FocusScope { enabled: root.active; width: 100%; height: 100%; init => { self.focus(); }
         key-pressed(e) => {
             if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
@@ -386,35 +426,68 @@ export component RemoteDevicesPage inherits Rectangle {
                 color: Theme.current.text_muted; wrap: word-wrap;
                 min-width: 0px; vertical-stretch: 0;
             }
-            for device[index] in RemoteBridge.devices: device_card := Rectangle {
-                min-width: 0px; vertical-stretch: 0;
-                // Explicit content height prevents spare viewport height stretching each row.
-                height: card_content.preferred-height;
-                background: Theme.current.card;
-                border-radius: Theme.card_corner_radius;
-                border-width: 1px; border-color: Theme.current.border_soft;
-                card_content := VerticalLayout {
-                    padding: 16px; spacing: 6px;
-                    device_name := Text {
-                        text: device.name; color: Theme.current.text_bright;
-                        font-weight: 700; wrap: word-wrap; min-width: 0px;
+            devices_body := GridLayout { spacing: 16px;
+                devices_list := VerticalLayout { row: 0; col: 0; min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0; spacing: 10px;
+                    for device[index] in RemoteBridge.devices: device_card := Rectangle {
+                        min-width: 0px; vertical-stretch: 0;
+                        // Explicit content height prevents spare viewport height stretching each row.
+                        height: card_content.preferred-height;
+                        background: device.ready && device.has_session ? Theme.current.settings_control : Theme.current.card;
+                        border-radius: Theme.card_corner_radius;
+                        border-width: device_focus.has-focus && SettingsStyle.keyboard-mode ? 2px : 1px;
+                        border-color: device_focus.has-focus && SettingsStyle.keyboard-mode ? Theme.current.focus_ring : root.wide && (root.selected_device_id == device.id || (root.selected_device_id == "" && index == 0)) ? Theme.current.accent : Theme.current.border_soft;
+                        accessible-role: button; accessible-label: device.name; accessible-enabled: root.active;
+                        forward-focus: device_focus;
+                        device_focus := FocusScope {
+                            enabled: root.active && !InterfaceStyle.tv;
+                            key-pressed(e) => {
+                                SettingsStyle.keyboard-mode = true;
+                                if e.text == Key.Return || e.text == " " { if !e.repeat { root.selected_device_id = device.id; } accept } else { reject }
+                            }
+                        }
+                        TouchArea { enabled: root.active; width: 100%; height: 100%; mouse-cursor: pointer; clicked => { root.selected_device_id = device.id; } }
+                        card_content := HorizontalLayout { padding: 16px; spacing: 12px;
+                            Rectangle { width: 36px; IcDisplay { width: 30px; height: 30px; y: (parent.height - self.height) / 2; fill: device.ready ? Theme.current.accent_soft : Theme.current.text_muted; } }
+                            device_caption := VerticalLayout {
+                                spacing: 5px; min-width: 0px; horizontal-stretch: 1; alignment: center;
+                                device_name := Text {
+                                    text: device.name; color: Theme.current.text_bright;
+                                    font-weight: 700; wrap: word-wrap; min-width: 0px;
+                                }
+                                device_status := Text {
+                                    text: device.status; color: Theme.current.text_muted;
+                                    wrap: word-wrap; min-width: 0px;
+                                }
+                                if device.has_session && device.playing_title != "": Text {
+                                    text: device.playing_title; color: Theme.current.text_primary;
+                                    wrap: word-wrap; min-width: 0px;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                device_controls := PillButton {
+                                    label: @tr("Controls"); compact: true; focused: InterfaceStyle.tv && root.tv-index == index;
+                                    changed focused => { if self.focused { let top = self.absolute-position.y - devices_scroll.absolute-position.y; if top < 0px { devices_scroll.content-y -= top; } else if top + self.height > devices_scroll.visible-height { devices_scroll.content-y -= top + self.height - devices_scroll.visible-height; } } }
+                                    horizontal-stretch: 0; vertical-stretch: 0;
+                                    enabled: root.active && device.has_session && device.ready;
+                                    clicked => { root.selected_device_id = device.id; if InterfaceStyle.tv { root.tv-index = index; } RemoteBridge.device_open(device.id); }
+                                }
+                            }
+                        }
                     }
-                    device_status := Text {
-                        text: device.status; color: Theme.current.text_muted;
-                        wrap: word-wrap; min-width: 0px;
-                    }
-                    if device.has_session && device.playing_title != "": Text {
-                        text: device.playing_title; color: Theme.current.text_primary;
-                        wrap: word-wrap; min-width: 0px;
-                    }
-                    HorizontalLayout {
-                        alignment: start;
-                        device_controls := PillButton {
-                            label: @tr("Controls"); compact: true; focused: InterfaceStyle.tv && root.tv-index == index;
-                            changed focused => { if self.focused { let top = self.absolute-position.y - devices_scroll.absolute-position.y; if top < 0px { devices_scroll.content-y -= top; } else if top + self.height > devices_scroll.visible-height { devices_scroll.content-y -= top + self.height - devices_scroll.visible-height; } } }
-                            horizontal-stretch: 0; vertical-stretch: 0;
-                            enabled: device.has_session && device.ready;
-                            clicked => { if InterfaceStyle.tv { root.tv-index = index; } RemoteBridge.device_open(device.id); }
+                }
+                if root.wide: selected_device_panel := VerticalLayout {
+                    row: 0; col: 1; min-width: 260px; max-width: 420px; horizontal-stretch: 1; vertical-stretch: 0;
+                    for device[index] in RemoteBridge.devices: VerticalLayout {
+                        spacing: 0px;
+                        if root.selected_device_id == device.id || (root.selected_device_id == "" && index == 0): SessionPanel {
+                            VerticalLayout { padding: 24px; spacing: 18px; alignment: start;
+                                Rectangle { height: 72px; IcDisplay { width: 64px; height: 64px; x: (parent.width - self.width) / 2; fill: Theme.current.accent_soft; } }
+                                selected_device_name := Text { text: device.name; color: Theme.current.text_bright; font-size: 24px; font-weight: 700; wrap: word-wrap; min-width: 0px; horizontal-alignment: center; }
+                                SessionStatus { label: device.status; connected: device.ready; }
+                                if device.playing_title != "": Text { text: device.playing_title; font-size: 18px; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
+                                PillButton { label: @tr("Controls"); primary: true; enabled: device.has_session && device.ready && root.active; clicked => { RemoteBridge.device_open(device.id); } }
+                            }
                         }
                     }
                 }

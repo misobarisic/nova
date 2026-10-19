@@ -145,6 +145,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
         Rc::new(slint::VecModel::from(vec![nova_ui::PartyMemberRow {
             id: "guest".into(),
             name: "A guest with a long device name that needs more than one line".into(),
+            initial: "A".into(),
             status: "Choosing a stream".into(),
             can_remove: true,
             ..Default::default()
@@ -417,7 +418,7 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
     app.set_party_duration(7200.0);
     settle();
     assert!(
-        ElementHandle::find_by_accessible_label(&app, "Now watching")
+        ElementHandle::find_by_accessible_label(&app, "The next film")
             .next()
             .is_some()
     );
@@ -447,6 +448,151 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
         button(&app, "Change what to watch").accessible_enabled(),
         Some(false)
     );
+}
+
+#[test]
+fn room_places_people_beside_desktop_playback_and_below_phone_playback() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::room_places_people_beside_desktop_playback_and_below_phone_playback"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_party_page_open(true);
+    app.set_party_active(true);
+    app.set_party_has_media(true);
+    app.set_party_can_return_to_player(true);
+    app.set_party_duration(3600.0);
+    app.set_party_title("A film to watch together".into());
+    app.set_party_participants(
+        Rc::new(slint::VecModel::from(vec![nova_ui::PartyMemberRow {
+            id: "guest".into(),
+            name: "A friend".into(),
+            initial: "A".into(),
+            status: "Ready".into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.window().show().unwrap();
+    for host in [true, false] {
+        app.set_party_is_host(host);
+        for width in [360, 840, 1280] {
+            app.window().set_size(slint::PhysicalSize::new(width, 900));
+            settle();
+            let timeline = ElementHandle::find_by_element_id(&app, "PartyPage::party_timeline")
+                .next()
+                .expect("room timeline");
+            let participant = ElementHandle::find_by_element_id(&app, "PartyPage::participant")
+                .next()
+                .expect("room participant");
+            let stream = button(&app, "Choose a stream");
+            if width >= 900 {
+                assert!(
+                    participant.absolute_position().x
+                        > timeline.absolute_position().x + timeline.size().width,
+                    "desktop people occupy a separate column (host={host})"
+                );
+                assert!(
+                    participant.absolute_position().y < stream.absolute_position().y,
+                    "desktop sidebar starts beside the playback panel"
+                );
+            } else {
+                assert!(
+                    participant.absolute_position().y
+                        > stream.absolute_position().y + stream.size().height,
+                    "narrow people follow the playback panel (host={host}, width={width})"
+                );
+                assert!(
+                    (participant.absolute_position().x - timeline.absolute_position().x).abs()
+                        < 1.0,
+                    "stacked panels share their content inset"
+                );
+            }
+            for item in [&timeline, &participant, &stream] {
+                assert!(item.absolute_position().x >= 0.0);
+                assert!(item.absolute_position().x + item.size().width <= width as f32);
+            }
+            assert_eq!(timeline.accessible_enabled(), Some(host));
+        }
+    }
+}
+
+#[test]
+fn room_tv_focus_visits_return_before_stream_actions_for_hosts_and_guests() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::room_tv_focus_visits_return_before_stream_actions_for_hosts_and_guests"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let key = |app: &nova::AppWindow, key: slint::platform::Key| {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
+        settle();
+    };
+    for host in [true, false] {
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::Anim>().set_enabled(false);
+        app.global::<nova::InterfaceStyle>().set_tv(true);
+        app.window().set_size(slint::PhysicalSize::new(1280, 900));
+        app.set_party_page_open(true);
+        app.set_party_active(true);
+        app.set_party_is_host(host);
+        app.set_party_has_media(true);
+        app.set_party_can_return_to_player(true);
+        app.set_party_duration(3600.0);
+        app.set_party_title("A film".into());
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let recorded = actions.clone();
+        app.on_party_set_paused(move |_| recorded.borrow_mut().push("pause"));
+        let recorded = actions.clone();
+        app.on_party_return_to_player(move || recorded.borrow_mut().push("return"));
+        let recorded = actions.clone();
+        app.on_party_choose_stream(move || recorded.borrow_mut().push("stream"));
+        let recorded = actions.clone();
+        app.on_party_choose_media(move || recorded.borrow_mut().push("media"));
+        app.on_toggle_pause(|| panic!("room navigation invoked the local player"));
+        app.window().show().unwrap();
+        settle();
+        if host {
+            key(&app, slint::platform::Key::DownArrow); // timeline
+            key(&app, slint::platform::Key::DownArrow); // pause
+            key(&app, slint::platform::Key::Return);
+            assert_eq!(&*actions.borrow(), &["pause"]);
+            actions.borrow_mut().clear();
+        } else {
+            for absent in ["Pause", "Change what to watch", "−10 s", "+10 s"] {
+                assert!(
+                    ElementHandle::find_by_accessible_label(&app, absent)
+                        .next()
+                        .is_none(),
+                    "guest exposes host action {absent}"
+                );
+            }
+        }
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(&*actions.borrow(), &["return"]);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(&*actions.borrow(), &["return", "stream"]);
+        if host {
+            key(&app, slint::platform::Key::DownArrow);
+            key(&app, slint::platform::Key::Return);
+            assert_eq!(&*actions.borrow(), &["return", "stream", "media"]);
+            key(&app, slint::platform::Key::UpArrow);
+        }
+        key(&app, slint::platform::Key::UpArrow);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(actions.borrow().last(), Some(&"return"));
+    }
 }
 
 #[test]

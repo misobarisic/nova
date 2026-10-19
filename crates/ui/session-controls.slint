@@ -1,0 +1,48 @@
+import { Theme, InterfaceStyle } from "@NovaUiShared";
+import { PillButton, SettingsCard } from "settings-controls.slint";
+import { IcPlay, IcPause, IcReplay10, IcForward10 } from "icons.slint";
+
+// Shared visual language for the room and controller; ownership and actions
+// stay in their page so these controls never acquire a local playback session.
+export component SessionPanel inherits SettingsCard {
+    min-width: 0px;
+    border-radius: 16px;
+    border-color: Theme.current.border_soft;
+}
+
+export component SessionTransportButton inherits PillButton {
+    in property <string> caption;
+    in property <int> kind: 0;
+    in property <bool> paused;
+    in property <length> diameter: root.primary ? 80px : 52px;
+    width: root.diameter; height: root.diameter;
+    border-radius: root.diameter / 2;
+    border-width: root.keyboard_focused ? 2px : root.primary ? 0px : 1px;
+    border-color: root.keyboard_focused ? Theme.current.focus_ring : Theme.current.control_border;
+    label: "";
+    accessible-label: root.caption;
+    if root.kind < 0: IcReplay10 { width: 26px; height: 26px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_primary; }
+    if root.kind > 0: IcForward10 { width: 26px; height: 26px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_primary; }
+    if root.kind == 0 && root.paused: IcPlay { width: 36px; height: 36px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: root.primary ? Theme.current.on_accent : Theme.current.text_primary; }
+    if root.kind == 0 && !root.paused: IcPause { width: 36px; height: 36px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: root.primary ? Theme.current.on_accent : Theme.current.text_primary; }
+}
+
+export component SessionStatus inherits Rectangle {
+    in property <string> label;
+    in property <bool> connected;
+    height: Math.max(20px, status_text.preferred-height);
+    min-width: 0px;
+    HorizontalLayout {
+        alignment: center; spacing: 7px;
+        Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.connected ? Theme.current.accent : Theme.current.text_muted; y: (parent.height - self.height) / 2; }
+        status_text := Text { text: root.label; font-size: InterfaceStyle.tv ? 18px : 13px; color: root.connected ? Theme.current.accent_soft : Theme.current.text_muted; overflow: elide; vertical-alignment: center; min-width: 0px; }
+    }
+}
+
+export component SessionAvatar inherits Rectangle {
+    in property <string> initial;
+    width: 36px; height: 36px;
+    border-radius: 18px;
+    background: Theme.current.accent;
+    Text { width: 100%; height: 100%; text: root.initial; font-size: 17px; font-weight: 600; color: Theme.current.on_accent; horizontal-alignment: center; vertical-alignment: center; }
+}

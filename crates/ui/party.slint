@@ -3,6 +3,7 @@ import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
 import { SettingsCard, SettingsInput, PillButton, MiniSlider, ToggleSwitch, SectionHeader } from "settings-controls.slint";
 import { IcSync } from "icons.slint";
+import { SessionPanel, SessionTransportButton, SessionAvatar } from "session-controls.slint";
 
 // The room remains independent of sync setup and of the selected local source.
 export component PartyPage inherits Rectangle {
@@ -15,6 +16,7 @@ export component PartyPage inherits Rectangle {
     in property <length> safe-right;
     background: Theme.current.artwork_canvas;
     property <int> tv-index: -1;
+    private property <bool> wide: !InterfaceStyle.tv && root.width - root.safe-left - root.safe-right >= 900px;
     private property <bool> party-active: PartyBridge.active;
     private property <bool> party-busy: PartyBridge.busy;
     changed party-active => { if InterfaceStyle.tv { root.tv-index = -1; party_scope.focus(); } }
@@ -34,9 +36,9 @@ export component PartyPage inherits Rectangle {
             if root.tv-index < 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
             if root.tv-index < 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
             if root.tv-index < 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
-            if root.tv-index < 6 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 6; return; }
-            if root.tv-index < 7 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 7; return; }
-            if root.tv-index < 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 8; return; }
+            if root.tv-index < 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
+            if root.tv-index < 7 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 7; return; }
+            if root.tv-index < 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 8; return; }
             if root.tv-index < 9 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && PartyBridge.waiting && !PartyBridge.busy) { root.tv-index = 9; return; }
             if root.tv-index < 10 && (PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 10; return; }
             if root.tv-index < 11 && (PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "") { root.tv-index = 11; return; }
@@ -50,9 +52,9 @@ export component PartyPage inherits Rectangle {
             if root.tv-index > 11 && (PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "") { root.tv-index = 11; return; }
             if root.tv-index > 10 && (PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 10; return; }
             if root.tv-index > 9 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && PartyBridge.waiting && !PartyBridge.busy) { root.tv-index = 9; return; }
-            if root.tv-index > 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 8; return; }
-            if root.tv-index > 7 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 7; return; }
-            if root.tv-index > 6 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 6; return; }
+            if root.tv-index > 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 8; return; }
+            if root.tv-index > 7 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 7; return; }
+            if root.tv-index > 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
             if root.tv-index > 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
             if root.tv-index > 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
             if root.tv-index > 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
@@ -79,9 +81,9 @@ export component PartyPage inherits Rectangle {
             } else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) { root.tv_move(e.text == Key.UpArrow ? -1 : 1); accept } else { reject }
         }
     room_scroll := ScrollView {
-        x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 900px) / 2);
+        x: root.safe-left + 18px;
         y: root.safe-top + 18px;
-        width: Math.max(0px, Math.min(864px, root.width - root.safe-left - root.safe-right - 36px));
+        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
         height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
         content-width: self.visible-width;
         mouse-drag-pan-enabled: true;
@@ -103,7 +105,9 @@ export component PartyPage inherits Rectangle {
                     Text { text: PartyBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
                 }
             }
-            if !PartyBridge.active: SettingsCard {
+            party_body := GridLayout { spacing: 16px;
+                party_main := VerticalLayout { row: 0; col: 0; min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0; spacing: 12px;
+            if !PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("Host a party"); icon-kind: 5; }
                     Text { text: @tr("Invite friends, then choose a film or episode together. Everyone chooses their own stream."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
@@ -113,7 +117,67 @@ export component PartyPage inherits Rectangle {
                     init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Create party"); primary: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 0; } PartyBridge.create(); } }
                 }
             }
-            if !PartyBridge.active: SettingsCard {
+            if PartyBridge.active && !PartyBridge.has_media: SessionPanel {
+                VerticalLayout { padding: 16px; spacing: 12px;
+                    SectionHeader { label: @tr("Party lobby"); icon-kind: 5; }
+                    Text { text: PartyBridge.is_host ? @tr("Invite friends and choose what everyone will watch. You can change it later without ending the party.") : @tr("Waiting for the host to choose what to watch."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.status != "": Text { font-size: 13px; text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.is_host: choose_media := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Choose what to watch"); primary: true; wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 3; } PartyBridge.choose_media(); } }
+                }
+            }
+            if PartyBridge.active && PartyBridge.has_media: SessionPanel {
+                VerticalLayout { padding: 16px; spacing: 10px;
+                    Text { text: PartyBridge.title; color: Theme.current.text_bright; font-size: root.wide ? 28px : 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.episode != "": Text { font-size: 14px; text: PartyBridge.episode; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.status != "": Text { text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
+                    Text { font-size: 13px; text: PartyBridge.time_text; color: Theme.current.text_muted; }
+                    party_timeline := MiniSlider {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); minimum: 0; maximum: Math.max(1, PartyBridge.duration); value: PartyBridge.position; enabled: PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0; changed(value) => { if InterfaceStyle.tv { root.tv-index = 4; } PartyBridge.seek(value); } }
+                    if PartyBridge.is_host: party_transport := Rectangle { height: 80px;
+                    if !InterfaceStyle.tv: SessionTransportButton { kind: -1; caption: @tr("−10 s"); x: parent.width / 2 - 104px; y: 14px; enabled: !PartyBridge.busy && PartyBridge.duration > 0; clicked => { PartyBridge.seek(Math.clamp(PartyBridge.position - 10, 0, PartyBridge.duration)); } }
+                    party_pause := SessionTransportButton {
+                    diameter: 80px; x: (parent.width - self.width) / 2; y: 0px; paused: PartyBridge.paused;
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: PartyBridge.paused ? @tr("Play") : @tr("Pause"); primary: false; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 5; } PartyBridge.set_paused(!PartyBridge.paused); } }
+                    if !InterfaceStyle.tv: SessionTransportButton { kind: 1; caption: @tr("+10 s"); x: parent.width / 2 + 52px; y: 14px; enabled: !PartyBridge.busy && PartyBridge.duration > 0; clicked => { PartyBridge.seek(Math.clamp(PartyBridge.position + 10, 0, PartyBridge.duration)); } }
+                    }
+                    if !PartyBridge.is_host: Text { text: @tr("The host controls the timeline. Audio and subtitles stay yours."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.can_return_to_player: return_to_player := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 6;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Return to player"); primary: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 6; } PartyBridge.return_to_player(); } }
+                    GridLayout { spacing: 8px;
+                    choose_stream := PillButton { row: 0; col: 0;
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 7;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } horizontal-stretch: 1; label: @tr("Choose a stream"); wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 7; } PartyBridge.choose_stream(); } }
+                    if PartyBridge.is_host: change_media := PillButton { row: room_scroll.visible-width < 500px ? 1 : 0; col: room_scroll.visible-width < 500px ? 0 : 1;
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 8;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } horizontal-stretch: 1; label: @tr("Change what to watch"); wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 8; } PartyBridge.choose_media(); } }
+                    }
+                }
+            }
+            if PartyBridge.active && PartyBridge.has_media && (PartyBridge.warning != "" || PartyBridge.waiting): SessionPanel {
+                VerticalLayout { padding: 16px; spacing: 10px;
+                    if PartyBridge.waiting: Text { text: @tr("Waiting for everyone"); font-weight: 600; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.warning != "": Text { text: PartyBridge.warning; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                    Text { text: @tr("Different cuts may not line up. If playback stalls, choose a lower-quality stream."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.is_host && PartyBridge.waiting: party_continue := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 9;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Continue without waiting"); wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 9; } PartyBridge.continue_without_waiting(); } }
+                }
+            }
+                }
+                party_side := VerticalLayout { row: root.wide ? 0 : 1; col: root.wide ? 1 : 0; min-width: root.wide ? 300px : 0px; max-width: root.wide ? 380px : 100000px; horizontal-stretch: root.wide ? 0 : 1; vertical-stretch: 0; spacing: 12px;
+            if !PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("Join a party"); icon-kind: 7; }
                     Text { text: @tr("Paste an invite from your host. Device pairing is not required."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
@@ -129,68 +193,17 @@ export component PartyPage inherits Rectangle {
                     init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.busy ? @tr("Connecting…") : @tr("Join party"); primary: true; enabled: !PartyBridge.busy && invite_input.full-text != ""; clicked => { if InterfaceStyle.tv { root.tv-index = 2; } PartyBridge.join(invite_input.full-text); } }
                 }
             }
-            if PartyBridge.active && !PartyBridge.has_media: SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 12px;
-                    SectionHeader { label: @tr("Party lobby"); icon-kind: 5; }
-                    Text { text: PartyBridge.is_host ? @tr("Invite friends and choose what everyone will watch. You can change it later without ending the party.") : @tr("Waiting for the host to choose what to watch."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.status != "": Text { text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.is_host: choose_media := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Choose what to watch"); primary: true; wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 3; } PartyBridge.choose_media(); } }
-                }
-            }
-            if PartyBridge.active && PartyBridge.has_media: SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 10px;
-                    SectionHeader { label: @tr("Now watching"); icon-kind: 5; }
-                    Text { text: PartyBridge.title; color: Theme.current.text_bright; font-size: 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.episode != "": Text { text: PartyBridge.episode; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.status != "": Text { text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
-                    Text { text: PartyBridge.time_text; color: Theme.current.text_muted; }
-                    party_timeline := MiniSlider {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); minimum: 0; maximum: Math.max(1, PartyBridge.duration); value: PartyBridge.position; enabled: PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0; changed(value) => { if InterfaceStyle.tv { root.tv-index = 4; } PartyBridge.seek(value); } }
-                    if PartyBridge.is_host: party_pause := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 5; } PartyBridge.set_paused(!PartyBridge.paused); } }
-                    if !PartyBridge.is_host: Text { text: @tr("The host controls the timeline. Audio and subtitles stay yours."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                    choose_stream := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 6;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Choose a stream"); enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 6; } PartyBridge.choose_stream(); } }
-                    if PartyBridge.is_host: change_media := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 7;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Change what to watch"); wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 7; } PartyBridge.choose_media(); } }
-                    if PartyBridge.can_return_to_player: return_to_player := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 8;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Return to player"); enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 8; } PartyBridge.return_to_player(); } }
-                }
-            }
-            if PartyBridge.active && PartyBridge.has_media && (PartyBridge.warning != "" || PartyBridge.waiting): SettingsCard {
-                VerticalLayout { padding: 16px; spacing: 10px;
-                    if PartyBridge.waiting: Text { text: @tr("Waiting for everyone"); font-weight: 600; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.warning != "": Text { text: PartyBridge.warning; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                    Text { text: @tr("Different cuts may not line up. If playback stalls, choose a lower-quality stream."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                    if PartyBridge.is_host && PartyBridge.waiting: party_continue := PillButton {
-                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 9;
-                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Continue without waiting"); wrap_label: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 9; } PartyBridge.continue_without_waiting(); } }
-                }
-            }
-            if PartyBridge.active: SettingsCard {
+            if PartyBridge.active: SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("People"); icon-kind: 7; }
                     for member[index] in PartyBridge.participants: participant := Rectangle {
                         height: Math.max(64px, member_col.preferred-height + 20px);
-                        background: Theme.current.settings_control; border-radius: Theme.button_corner_radius;
+                        background: transparent; border-radius: Theme.button_corner_radius;
                         HorizontalLayout { padding: 10px; spacing: 10px;
+                            SessionAvatar { initial: member.initial; y: (parent.height - self.height) / 2; }
                             member_col := VerticalLayout { min-width: 0px; horizontal-stretch: 1; spacing: 4px; alignment: center;
-                                Text { text: member.name; color: Theme.current.text_bright; font-weight: 600; wrap: word-wrap; min-width: 0px; }
-                                Text { text: member.is_host ? @tr("Host") : member.status; color: member.ready ? Theme.current.accent_soft : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                                Text { font-size: 14px; text: member.name; color: Theme.current.text_bright; font-weight: 600; overflow: elide; min-width: 0px; }
+                                Text { font-size: 13px; text: member.is_host ? @tr("Host") : member.status; color: member.ready ? Theme.current.accent_soft : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
                             }
                             if PartyBridge.is_host && member.can_remove: PillButton { focused: InterfaceStyle.tv && root.tv-index == index + 14; changed focused => { if self.focused { root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Remove"); compact: true; destructive: true; vertical-stretch: 0; enabled: !PartyBridge.busy; clicked => { PartyBridge.remove_member(member.id); } }
                         }
@@ -204,7 +217,7 @@ export component PartyPage inherits Rectangle {
                     }
                 }
             }
-            if PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "": SettingsCard {
+            if PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "": SessionPanel {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("Invite friends"); icon-kind: 7; }
                     // Invites are shown only in the explicitly opened room.
@@ -228,9 +241,11 @@ export component PartyPage inherits Rectangle {
                 }
             }
             if PartyBridge.active: party_leave := PillButton {
+                    width: Math.min(240px, room_scroll.visible-width); horizontal-stretch: 0;
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 12;
                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? @tr("End party") : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 12; } PartyBridge.leave(); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? @tr("End party") : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 12; } PartyBridge.leave(); } }                }
+            }
         }
     }
     }
