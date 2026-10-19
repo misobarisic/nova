@@ -137,6 +137,9 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
     app.set_party_can_return_to_player(true);
     app.set_party_waiting(true);
     app.set_party_invite("NVP1-test-invite".into());
+    app.set_party_invite_qr(slint::Image::from_rgb8(slint::SharedPixelBuffer::<
+        slint::Rgb8Pixel,
+    >::new(8, 8)));
     app.set_party_title("A very long film title that must wrap inside a phone screen".into());
     app.set_party_participants(
         Rc::new(slint::VecModel::from(vec![nova_ui::PartyMemberRow {
@@ -198,7 +201,17 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
                 let mut saw_invite = false;
                 let mut saw_participant = false;
                 let mut saw_choice = false;
+                let mut saw_qr = false;
                 for _ in 0..16 {
+                    if let Some(qr) =
+                        ElementHandle::find_by_element_id(&app, "PartyPage::party_invite_qr").next()
+                    {
+                        saw_qr = true;
+                        assert!((qr.size().width - qr.size().height).abs() < 0.5);
+                        assert!(qr.size().width > 0.0 && qr.size().width <= 232.5);
+                        assert!(qr.absolute_position().x >= 0.0);
+                        assert!(qr.absolute_position().x + qr.size().width <= width as f32 + 0.5);
+                    }
                     for item in i_slint_backend_testing::ElementQuery::from_root(&app)
                         .find_all()
                         .into_iter()
@@ -228,7 +241,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
                             "participant stretched into spare height"
                         );
                     }
-                    if saw_leave && saw_invite && saw_participant && saw_choice {
+                    if saw_leave && saw_invite && saw_participant && saw_choice && saw_qr {
                         break;
                     }
                     scroll(-(height as f32 * 0.6));
@@ -237,6 +250,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
                     saw_choice,
                     "{language} {width}×{height}: cannot reach media choice"
                 );
+                assert!(saw_qr, "host invite includes its QR code");
                 assert!(
                     saw_leave,
                     "{language} {width}×{height}: cannot scroll to End party"
@@ -253,6 +267,13 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
         }
     }
     slint::select_bundled_translation("en").unwrap();
+    app.set_party_is_host(false);
+    settle();
+    assert!(
+        ElementHandle::find_by_element_id(&app, "PartyPage::party_invite_qr")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

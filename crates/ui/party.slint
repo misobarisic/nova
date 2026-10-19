@@ -208,6 +208,18 @@ export component PartyPage inherits Rectangle {
                 VerticalLayout { padding: 16px; spacing: 12px;
                     SectionHeader { label: @tr("Invite friends"); icon-kind: 7; }
                     // Invites are shown only in the explicitly opened room.
+                    if PartyBridge.invite_qr.width > 0: HorizontalLayout {
+                        alignment: center;
+                        party_invite_qr := Image {
+                            width: Math.max(0px, Math.min(232px, room_scroll.visible-width - 32px));
+                            height: self.width;
+                            source: PartyBridge.invite_qr;
+                            image-fit: contain;
+                            image-rendering: pixelated;
+                            accessible-role: image;
+                            accessible-label: @tr("Party invite");
+                        }
+                    }
                     Text { text: PartyBridge.invite; color: Theme.current.text_secondary; overflow: elide; min-width: 0px; }
                     party_copy := PillButton {
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 11;

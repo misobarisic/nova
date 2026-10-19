@@ -273,6 +273,7 @@ impl Bridge {
         };
         app.set_party_busy(true);
         app.set_party_error("".into());
+        app.set_party_invite_qr(Image::default());
         self.release_speed_preview_for_party();
         // Pause unrelated playback while creating/joining the lobby; only a
         // subsequent source selection can bind it to the room.
@@ -326,6 +327,11 @@ impl Bridge {
                         }
                         b.release_speed_preview_for_party();
                         b.player.set_party_playback_rate(Some(1.0));
+                        app.set_party_invite_qr(if invite_is_host {
+                            invite_qr_image(&ticket).unwrap_or_default()
+                        } else {
+                            Image::default()
+                        });
                         app.set_party_invite(ticket.into());
                         app.set_party_active(true);
                         b.party_publish();
@@ -382,6 +388,7 @@ impl Bridge {
             app.set_party_busy(false);
             app.set_party_waiting(false);
             app.set_party_invite("".into());
+            app.set_party_invite_qr(Image::default());
             app.set_party_participants(Default::default());
             app.set_party_status("".into());
             app.set_party_error("".into());

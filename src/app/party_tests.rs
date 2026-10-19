@@ -390,6 +390,7 @@ fn leaving_retires_pending_work_and_temporary_rate_without_changing_sync_setting
             app.set_party_busy(true);
             app.set_party_waiting(true);
             app.set_party_invite("temporary-invite".into());
+            app.set_party_invite_qr(invite_qr_image("temporary-invite").unwrap());
 
             bridge.party_leave();
 
@@ -413,6 +414,7 @@ fn leaving_retires_pending_work_and_temporary_rate_without_changing_sync_setting
             assert!(!app.get_party_busy());
             assert!(!app.get_party_waiting());
             assert!(app.get_party_invite().is_empty());
+            assert_eq!(app.get_party_invite_qr().size().width, 0);
             assert_eq!(bridge.player.effective_playback_speed(), 1.5);
             assert_eq!(nova_sync::read_settings(), sync);
             assert_eq!(

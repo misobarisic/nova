@@ -1,6 +1,6 @@
-//! QR encoding of the sync invite ticket.
+//! QR encoding of sync and watch-party invite tickets.
 //!
-//! The invite ticket (`NV1` + base32) is the only payload the QR carries —
+//! The invite ticket (`NV1` sync or `NVP2` watch party) is the only QR payload —
 //! scanning it is equivalent to pasting it, so no protocol change is needed.
 //! The matrix is rendered to an RGB buffer and handed to Slint as an `Image`;
 //! `settings.slint` draws it with `image-rendering: pixelated` so the module
@@ -18,7 +18,7 @@ const QUIET_ZONE: usize = 4;
 const MODULE_SCALE: usize = 6;
 
 /// Build the invite QR as a Slint image, or `None` if the ticket does not fit
-/// a QR symbol (it always should — the ticket is ~82 alphanumeric chars).
+/// a QR symbol. The complete original capability is retained as its payload.
 pub(crate) fn invite_qr_image(ticket: &str) -> Option<Image> {
     let (side, modules) = qr_modules(ticket)?;
     let scale = MODULE_SCALE;
@@ -62,6 +62,22 @@ fn qr_modules(ticket: &str) -> Option<(usize, Vec<bool>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qr_round_trips_longer_party_payloads() {
+        let ticket = format!("NVP2{}", "0123456789abcdef".repeat(30));
+        let (side, modules) = qr_modules(&ticket).expect("party payload fits");
+        let mut image = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+            if modules[y * side + x] { 0 } else { 255 }
+        });
+        let decoded = image
+            .detect_grids()
+            .iter()
+            .find_map(|grid| grid.decode().ok())
+            .expect("party QR decodes");
+        assert_eq!(decoded.1, ticket);
+        assert!(invite_qr_image(&ticket).is_some());
+    }
 
     /// The display and scan halves must agree: a ticket encoded to modules and
     /// fed back through the decoder (the same crate the Android scanner uses)
