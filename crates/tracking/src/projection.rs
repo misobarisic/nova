@@ -176,6 +176,12 @@ impl Projection {
         self.remote_progress.max(self.acknowledged_progress)
     }
 
+    pub(crate) fn watched_checkpoint(&self, episode: &SourceEpisode) -> bool {
+        self.observations
+            .iter()
+            .any(|observation| observation.episode == *episode && observation.watched)
+    }
+
     pub fn proposal(&self, target: &Target) -> Result<ProgressProposal, ProjectionError> {
         if target.key != self.target {
             return Err(ProjectionError::WrongTarget);

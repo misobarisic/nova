@@ -11,6 +11,8 @@ pub struct PendingCompletion {
     pub target: TargetKey,
     pub account_generation: NonZeroU64,
     pub mappings: Vec<MappingStamp>,
+    /// Watch-event sequence, or the explicit link's prompt-only authorization
+    /// just beyond the current journal/policy boundary.
     pub sequence: u64,
 }
 
@@ -52,6 +54,67 @@ impl TrackingState {
             .is_some_and(|p| p.may_complete)
     }
 
+    fn target_checkpoint_complete(&self, key: &TargetKey) -> bool {
+        let Some(total) = self
+            .targets
+            .iter()
+            .find(|target| target.key == *key && target.release_finished)
+            .and_then(|target| target.final_episode_total)
+        else {
+            return false;
+        };
+        self.projections
+            .iter()
+            .find(|projection| projection.target == *key)
+            .is_some_and(|projection| {
+                self.bindings
+                    .iter()
+                    .filter(|binding| {
+                        binding.enabled
+                            && binding.target == *key
+                            && binding.account_generation == projection.account_generation
+                    })
+                    .any(|binding| {
+                        binding.assignments.iter().any(|assignment| {
+                            assignment.target_episode == total
+                                && projection.watched_checkpoint(&SourceEpisode {
+                                    source: binding.source.clone(),
+                                    episode_id: assignment.episode_id.clone(),
+                                })
+                        })
+                    })
+            })
+    }
+
+    /// An explicit title link can offer a rating for its already-watched final
+    /// mapped episode without accepting that history as tracker progress. The
+    /// caller excludes imported history before authorizing this manual offer.
+    pub fn record_link_completion(&mut self, key: &TargetKey, sequence: u64) {
+        if !self.target_checkpoint_complete(key)
+            || self.snapshots.iter().any(|snapshot| {
+                snapshot.target == *key
+                    && snapshot.remote.as_ref().is_some_and(|remote| {
+                        remote.status == ListStatus::Completed
+                            || self
+                                .targets
+                                .iter()
+                                .find(|target| target.key == *key)
+                                .and_then(|target| target.final_episode_total)
+                                .is_some_and(|total| remote.progress >= total.get())
+                    })
+            })
+        {
+            return;
+        }
+        // The manual link is a fresh authorization after the policy boundary,
+        // even when no watched event has advanced the journal since enabling.
+        // This stamps the prompt only; it never advances a history checkpoint.
+        let Some(sequence) = sequence.max(self.completion.watermark).checked_add(1) else {
+            return;
+        };
+        self.record_completion(key, sequence);
+    }
+
     pub(crate) fn record_completion(&mut self, key: &TargetKey, sequence: u64) {
         if !self.completion.enabled
             || sequence <= self.completion.watermark
@@ -89,7 +152,8 @@ impl TrackingState {
             && self.accounts.iter().any(|a| {
                 a.key == pending.target.account && a.generation == pending.account_generation
             })
-            && self.target_may_complete(&pending.target)
+            && (self.target_may_complete(&pending.target)
+                || self.target_checkpoint_complete(&pending.target))
             && !pending.mappings.is_empty()
             && pending.mappings.iter().all(|stamp| {
                 self.bindings.iter().any(|b| {

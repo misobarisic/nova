@@ -1854,6 +1854,14 @@ impl Coordinator {
         if self.session(service)?.epoch != epoch {
             return Err(input_message());
         }
+        self.apply_completion_shared(false)?;
+        let enabled = self
+            .bridge
+            .personal_state()
+            .ok_or_else(input_message)?
+            .cache_settings
+            .completion_rating_prompts_enabled;
+        self.configure_completion(enabled)?;
         let owner = nova_sync::local_store().map_err(|_| storage_message())?;
         let mut history = owner.lock().unwrap();
         history.save().map_err(|_| storage_message())?;
@@ -3933,6 +3941,17 @@ fn prepare_link_state(
             }
         }
     }
+    for key in &affected {
+        if state
+            .targets
+            .iter()
+            .find(|target| target.key == *key && target.release_finished)
+            .and_then(|target| target.final_episode_total)
+            .is_some_and(|total| history_progress(&state, key, map) >= total.get())
+        {
+            state.record_link_completion(key, sequence);
+        }
+    }
     state.validate().map_err(|_| input_message())?;
     Ok(state)
 }
@@ -4137,6 +4156,168 @@ mod batch_link_tests {
         state.validate().unwrap();
     }
     #[test]
+    fn manual_links_offer_completed_release_ratings_without_uploading_history() {
+        for service in [Service::MyAnimeList, Service::AniList] {
+            let (mut original, source, mut viewer, history, mut links) = fixture();
+            viewer.account.service = service;
+            original.accounts[0].key = viewer.account.clone();
+            original.active_accounts = vec![viewer.account.clone()];
+            for (choice, _, _) in &mut links {
+                choice.service = service;
+            }
+            // An explicit link qualifies even without a new watched event
+            // after enabling; the unchanged journal boundary remains durable.
+            original.configure_completion_prompts(true, 20);
+            let state = prepare_link_state(
+                &original,
+                &source,
+                &viewer,
+                NonZeroU64::MIN,
+                20,
+                &history,
+                links,
+                false,
+            )
+            .unwrap();
+            let pending = state.pending_completions();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].target.remote_media_id, n(49926));
+            assert!(state.outbox.pending().is_empty());
+            assert!(state.outbox.edits().is_empty());
+            assert!(state.link_checkpoints.iter().all(|c| c.sequence == 20));
+            assert_eq!(display_progress(&state, &pending[0].target), 0);
+            state.validate().unwrap();
+        }
+    }
+    #[test]
+    fn manual_link_ratings_follow_each_split_releases_final_ordinal() {
+        let (mut original, source, viewer, mut history, links) = fixture();
+        original.configure_completion_prompts(true, 0);
+        for episode in history.values_mut() {
+            episode.watched = episode.episode_id != "s2e7";
+        }
+        history.insert(
+            progress_map_key("merged", "s2e18"),
+            EpisodeProgress {
+                series_id: "merged".into(),
+                episode_id: "s2e18".into(),
+                watched: true,
+                ..Default::default()
+            },
+        );
+        let state = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            false,
+        )
+        .unwrap();
+        let pending = state.pending_completions();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].target.remote_media_id, n(47778));
+        assert!(state.outbox.pending().is_empty());
+    }
+    #[test]
+    fn manual_link_ratings_respect_policy_remote_state_and_local_history() {
+        for guard in 0..8 {
+            let (mut original, source, viewer, mut history, mut links) = fixture();
+            original.configure_completion_prompts(guard != 0, 20);
+            let remote = RemoteEntry {
+                account: viewer.account.clone(),
+                media_id: links[0].0.media.id,
+                entry_id: None,
+                progress: 1,
+                status: ListStatus::Watching,
+                score_tenths: 0,
+                started: ListDate::default(),
+                completed: ListDate::default(),
+                repeating: false,
+            };
+            links[0].1 = Some(remote);
+            match guard {
+                1 => links[0].1.as_mut().unwrap().score_tenths = 80,
+                2 => links[0].1.as_mut().unwrap().progress = 7,
+                3 => links[0].1.as_mut().unwrap().status = ListStatus::Completed,
+                4 => links[0].2.finished = false,
+                5 => links[0].2.episodes = None,
+                6 => history
+                    .values_mut()
+                    .for_each(|episode| episode.watched = false),
+                7 => history.values_mut().for_each(|episode| {
+                    episode.history = Some(PlaybackHistory {
+                        engaged_secs: Some(0.0),
+                        ..Default::default()
+                    });
+                }),
+                _ => {}
+            }
+            let state = prepare_link_state(
+                &original,
+                &source,
+                &viewer,
+                NonZeroU64::MIN,
+                20,
+                &history,
+                links,
+                false,
+            )
+            .unwrap();
+            assert!(state.pending_completions().is_empty(), "guard {guard}");
+            assert!(state.outbox.pending().is_empty());
+        }
+    }
+    #[test]
+    fn manual_relink_does_not_repeat_pending_dismissed_or_saved_ratings() {
+        for decision in 0..3 {
+            let (mut original, source, viewer, history, links) = fixture();
+            original.configure_completion_prompts(true, 0);
+            let mut state = prepare_link_state(
+                &original,
+                &source,
+                &viewer,
+                NonZeroU64::MIN,
+                20,
+                &history,
+                links,
+                false,
+            )
+            .unwrap();
+            let key = state.pending_completions()[0].target.clone();
+            match decision {
+                1 => state.dismiss_completion(&key).unwrap(),
+                2 => {
+                    state.enqueue_completion_rating(&key, 80).unwrap();
+                }
+                _ => {}
+            }
+            let (_, _, _, _, mut links) = fixture();
+            let mut link = links.remove(0);
+            link.0.repair_id = Some(state.bindings[0].id.clone());
+            let relinked = prepare_link_state(
+                &state,
+                &source,
+                &viewer,
+                NonZeroU64::MIN,
+                21,
+                &history,
+                vec![link],
+                false,
+            )
+            .unwrap();
+            // Repair invalidates the first draft; it cannot grant another
+            // offer, whether that draft was pending, dismissed or saved.
+            assert!(relinked.pending_completions().is_empty());
+            assert_eq!(relinked.completion.seen, vec![key.clone()]);
+            if decision != 0 {
+                assert_eq!(relinked.completion.handled, vec![key]);
+            }
+        }
+    }
+    #[test]
     fn higher_remote_progress_and_unrelated_fields_are_preserved() {
         let (original, source, viewer, history, mut links) = fixture();
         links[1].1 = Some(RemoteEntry {
@@ -4275,7 +4456,8 @@ mod batch_link_tests {
     }
     #[test]
     fn failed_storage_keeps_the_whole_batch_unlinked_and_restart_recovers_complete_success() {
-        let (original, source, viewer, history, links) = fixture();
+        let (mut original, source, viewer, history, links) = fixture();
+        original.configure_completion_prompts(true, 0);
         let candidate = prepare_link_state(
             &original,
             &source,
@@ -4287,6 +4469,7 @@ mod batch_link_tests {
             true,
         )
         .unwrap();
+        assert_eq!(candidate.pending_completions().len(), 1);
         let db = Memory::default();
         let mut store = Store::load(db.clone()).unwrap();
         store.save(original.clone()).unwrap();
