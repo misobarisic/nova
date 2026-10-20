@@ -106,6 +106,92 @@ fn android_pip_hides_entire_scene_and_restores_player_state() {
 }
 
 #[test]
+fn android_pip_return_restores_native_back_without_a_pointer_press() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::android_pip_return_restores_native_back_without_a_pointer_press"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_is_android(true);
+    app.set_touch_menus(true);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_osd_visible(true);
+    let closes = Rc::new(std::cell::Cell::new(0));
+    let count = closes.clone();
+    app.on_close_player(move || count.set(count.get() + 1));
+    app.show().unwrap();
+    advance(&app, 30);
+
+    for cycle in 1..=3 {
+        app.set_android_pip_active(true);
+        advance(&app, 30);
+        // Android can lose native keyboard focus while the entire scene is
+        // hidden. Re-expansion must recover it without tapping a control first.
+        let window = i_slint_core::window::WindowInner::from_pub(app.window());
+        let focused = window.focus_item.borrow().upgrade();
+        if let Some(focused) = focused {
+            window.set_focus_item(
+                &focused,
+                false,
+                i_slint_core::input::FocusReason::Programmatic,
+            );
+        }
+        app.set_android_pip_active(false);
+        advance(&app, 30);
+        for event in [
+            slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            },
+            slint::platform::WindowEvent::KeyPressRepeated {
+                text: slint::platform::Key::Back.into(),
+            },
+            slint::platform::WindowEvent::KeyReleased {
+                text: slint::platform::Key::Back.into(),
+            },
+        ] {
+            assert!(matches!(
+                app.window().dispatch_event_with_result(event),
+                Ok(slint::platform::WindowEventDispatchResult::Accepted)
+            ));
+        }
+        advance(&app, 30);
+        assert_eq!(closes.get(), cycle, "Back closes exactly once after PiP");
+    }
+
+    // A Home/PiP transition may interrupt Back before its release arrives.
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    advance(&app, 30);
+    assert_eq!(closes.get(), 4);
+    app.set_android_pip_active(true);
+    advance(&app, 30);
+    app.set_android_pip_active(false);
+    advance(&app, 30);
+    key(&app, slint::platform::Key::Back);
+    assert_eq!(closes.get(), 5, "PiP clears an interrupted Back press");
+
+    // A retained player menu still owns the first Back after expansion.
+    element(&app, "PlayerOverlay::settings_gear")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    advance(&app, 30);
+    app.set_android_pip_active(true);
+    advance(&app, 30);
+    app.set_android_pip_active(false);
+    advance(&app, 30);
+    key(&app, slint::platform::Key::Back);
+    assert_eq!(closes.get(), 5, "Back dismisses Settings before the player");
+    key(&app, slint::platform::Key::Back);
+    assert_eq!(closes.get(), 6);
+}
+
+#[test]
 fn end_menu_fits_translations_and_routes_pointer_keyboard_and_system_back() {
     if !crate::isolation::run(concat!(
         module_path!(),

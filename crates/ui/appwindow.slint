@@ -1689,6 +1689,13 @@ export component AppWindow inherits Window {
     in-out property <bool> player_open: false;
     // The existing native underlay continues drawing; PiP contains video only.
     in-out property <bool> android_pip_active: false;
+    changed android_pip_active => {
+        // PiP hides the shared Back scope and can drop its native focus (or
+        // interrupt a held Back). Recover after the scene is visible again,
+        // preserving any surviving popup/editor through the usual page guard.
+        root.system_back_held = false;
+        if !root.android_pip_active { page_release_timer.start(); }
+    }
     in-out property <bool> playback_started: false;
     in-out property <bool> is_paused: true;
     in-out property <float> position: 0.0;
