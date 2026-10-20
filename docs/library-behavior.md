@@ -229,7 +229,7 @@ category names sync as their own domains, and the bucket/badge/checkmark
 trio is re-derived from them on every device, so two devices with the same
 records always agree.
 
-Settings → Tracking can connect a Stremio account and preview the initial merge
+Settings → Integrations can connect a Stremio account and preview the initial merge
 of both libraries before starting two-way membership and watch-progress sync.
 Removing membership keeps watch history; Nova's categories and manual status
 pins stay within Nova's device mesh and are not written to Stremio. Progress

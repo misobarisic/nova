@@ -781,7 +781,9 @@ impl Coordinator {
                         .load(Ordering::Acquire)
                         == s.epoch
             })
-            .ok_or_else(|| text::tr("Connect this service in Settings → Tracking first.").into())
+            .ok_or_else(|| {
+                text::tr("Connect this service in Settings → Integrations first.").into()
+            })
     }
     fn command(&mut self, command: Command) -> Result<(), String> {
         if !self.live() {
@@ -1036,9 +1038,10 @@ impl Coordinator {
                         self.suggest(service, generation, false)
                     }
                 } else {
-                    self.notice =
-                        text::tr("Connect a service in Settings → Tracking to see suggestions.")
-                            .into();
+                    self.notice = text::tr(
+                        "Connect a service in Settings → Integrations to see suggestions.",
+                    )
+                    .into();
                     Ok(())
                 }
             }

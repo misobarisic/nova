@@ -1,7 +1,7 @@
 # Anime tracking
 
 Nova can send progress for explicitly linked anime releases to MyAnimeList and
-AniList. Open **Settings → Tracking**, connect a service, then open a title and
+AniList. Open **Settings → Integrations**, connect a service, then open a title and
 choose **Tracking** to open its full-screen page (the sync icon opens the same page). Connection alone does not link any titles.
 
 ## Connecting
@@ -269,7 +269,7 @@ account/release once and sync as grow-only `tracking_completion` receipts; local
 prompt queues, enablement watermarks and drafts are not shared. Offline devices
 may independently prompt before receipts synchronize.
 
-Settings → Tracking → Ask for ratings after completion defaults on and follows
+Settings → Integrations → Ask for ratings after completion defaults on and follows
 normal settings sync/override policy. Disabling clears pending prompts; enabling
 starts at the current journal boundary rather than replaying existing history.
 Account, mapping and score-format guards invalidate stale drafts. Completion

@@ -1525,7 +1525,7 @@ export component SettingsPage {
         if (root.kb_zone == 0) {
             if (!root.phone_layout) { root.kb_nav = NavState.step(root.kb_nav, 1, false); }
         } else if (root.kb_zone == 1) {
-            if (root.kb_actl < 3) {
+            if (root.kb_actl < 2) {
                 root.kb_actl += 1;
             }
         } else if (root.kb_zone == 2) {
@@ -1624,8 +1624,6 @@ export component SettingsPage {
                 root.kb_edit = 1;
             } else if (root.kb_actl == 1) {
                 root.addon_added(root.addon_url);
-            } else if (root.kb_actl == 3) {
-                root.kb_edit = 8;
             } else if (!root.addon_zip_import_busy) {
                 root.addon_zip_import_requested();
             }

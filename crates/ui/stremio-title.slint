@@ -16,7 +16,7 @@ export component StremioTitle inherits VerticalLayout {
         wrap: word-wrap; min-width: 0px; color: Theme.current.text_settings;
     }
     if !SettingsBridge.stremio_connected: Text {
-        text: @tr("Connect Stremio in Settings → Tracking first.");
+        text: @tr("Connect Stremio in Settings → Integrations first.");
         wrap: word-wrap; min-width: 0px; color: Theme.current.text_settings;
     }
     if SettingsBridge.stremio_connected: SettingsInput {

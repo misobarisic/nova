@@ -1,6 +1,6 @@
 # Stremio account sync
 
-Settings → Tracking connects one Stremio account through a browser/code flow.
+Settings → Integrations connects one Stremio account through a browser/code flow.
 Nova verifies the account before showing the initial library merge preview;
 Start begins the two-way merge. Settings offers **Full library sync** and
 **Selected titles**; existing connections retain full-library mode until an

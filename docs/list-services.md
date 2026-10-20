@@ -1,6 +1,6 @@
 # Simkl, MDBList and Trakt sync
 
-Settings → Tracking includes separate Simkl, MDBList and Trakt account cards. Each
+Settings → Integrations includes separate Simkl, MDBList and Trakt account cards. Each
 account belongs to the selected Nova profile. Connecting verifies the remote
 account and saves its sign-in; it does not enable a whole-library upload.
 

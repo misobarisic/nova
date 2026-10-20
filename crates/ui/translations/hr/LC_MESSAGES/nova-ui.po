@@ -1042,8 +1042,8 @@ msgstr "Izvorni ID-ovi nisu usklađeni. Unesite ID usluge praćenja ili pretraž
 msgid "Connect"
 msgstr "Povežite"
 
-msgid "Connect this service in Settings → Tracking first."
-msgstr "Prvo povežite ovu uslugu u Postavke → Praćenje."
+msgid "Connect this service in Settings → Integrations first."
+msgstr "Prvo povežite ovu uslugu u Postavke → Integracije."
 
 msgid "Connected for this session. Retained updates for this account can resume."
 msgstr "Povezano za ovu sesiju. Spremljena ažuriranja ovog računa mogu se nastaviti."
@@ -1315,8 +1315,8 @@ msgstr "Otvori na servisu"
 msgid "Restore automatic status and dates"
 msgstr "Vrati automatski status i datume"
 
-msgid "Connect a service in Settings → Tracking to see suggestions."
-msgstr "Povežite uslugu u Postavkama → Praćenje za prikaz prijedloga."
+msgid "Connect a service in Settings → Integrations to see suggestions."
+msgstr "Povežite uslugu u Postavkama → Integracije za prikaz prijedloga."
 
 msgid "No new suggestions. Search a title or enter a tracker ID to link another release."
 msgstr "Nema novih prijedloga. Pretražite naslov ili unesite ID na usluzi za povezivanje drugog izdanja."
@@ -3359,8 +3359,8 @@ msgstr "Sinkronizirajte samo naslove koje izričito omogućite na njihovoj stran
 msgid "Loading Stremio matches…"
 msgstr "Učitavanje Stremio podudaranja…"
 
-msgid "Connect Stremio in Settings → Tracking first."
-msgstr "Prvo povežite Stremio u Postavke → Praćenje."
+msgid "Connect Stremio in Settings → Integrations first."
+msgstr "Prvo povežite Stremio u Postavke → Integracije."
 
 msgid "Could not prepare Stremio tracking. Try again."
 msgstr "Nije moguće pripremiti Stremio praćenje. Pokušajte ponovno."
@@ -3634,3 +3634,9 @@ msgstr "TMDB API ključ (v3)"
 
 msgid "This product uses the TMDB API but is not endorsed or certified by TMDB."
 msgstr "Ovaj proizvod upotrebljava TMDB API, ali TMDB ga ne podržava niti certificira."
+
+msgid "Integrations"
+msgstr "Integracije"
+
+msgid "Tracking services and metadata"
+msgstr "Usluge praćenja i metapodaci"

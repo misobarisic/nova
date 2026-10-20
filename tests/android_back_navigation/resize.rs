@@ -98,7 +98,7 @@ async fn open_settings(
 ) -> bool {
     for _ in 0..3 {
         let id = match title {
-            "Tracking" => "settings:tracking",
+            "Integrations" => "settings:tracking",
             "Addons" => "settings:addons",
             _ => panic!("unsupported settings destination {title}"),
         };
@@ -108,7 +108,7 @@ async fn open_settings(
             link.single_click(slint::platform::PointerEventButton::Left)
                 .await;
             settle().await;
-            let opened = if title == "Tracking" {
+            let opened = if title == "Integrations" {
                 ElementHandle::find_by_element_type_name(app, "TrackingSettings").count() == 1
             } else {
                 ElementHandle::find_by_element_id(app, "SettingsAddonsModule::addon_url_narrow")
@@ -260,7 +260,7 @@ fn focused_editors_keep_back_navigation_after_rotation() {
         app.set_show_home(false);
         app.set_show_settings(true);
         settle().await;
-        if !open_settings(&app, "Tracking", failures).await {
+        if !open_settings(&app, "Integrations", failures).await {
             slint::quit_event_loop().unwrap();
             return;
         }

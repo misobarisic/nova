@@ -227,3 +227,61 @@ fn list_service_modes_require_explicit_start_and_reset_pending_consent() {
         }
     }
 }
+
+#[test]
+fn integrations_keeps_empty_notices_compact_and_hosts_the_synced_tmdb_editor() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::integrations_keeps_empty_notices_compact_and_hosts_the_synced_tmdb_editor"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(12);
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 4000));
+    app.show().unwrap();
+    settle(&app);
+    let edited = Rc::new(RefCell::new(Vec::new()));
+    let events = edited.clone();
+    app.on_settings_edited(move |key| events.borrow_mut().push(key.to_string()));
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 4000));
+        app.set_settings_scroll_y(0.0);
+        settle(&app);
+        let header = control(&app, "Simkl").unwrap();
+        header.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        let header_bottom = header.absolute_position().y + header.size().height;
+        let mode = control(&app, "Simkl · Sync mode").unwrap();
+        let gap = mode.absolute_position().y - header_bottom;
+        assert!(
+            gap < 100.0,
+            "empty notices must not reserve a line above the sync control: {width}: {gap}"
+        );
+        let key = ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
+            .expect("TMDB key field under Integrations");
+        assert!(key.size().height >= 44.0);
+        let position = key.absolute_position();
+        assert!(position.x >= 0.0 && position.x + key.size().width <= width as f32 + 0.5);
+        key.set_accessible_value("0123456789abcdef0123456789abcdef");
+        settle(&app);
+        assert_eq!(app.get_tmdb_api_key(), "0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            app.global::<nova::SettingsBridge>().get_tmdb_api_key(),
+            app.get_tmdb_api_key()
+        );
+        assert_eq!(
+            edited.borrow().last().map(String::as_str),
+            Some("tmdb_api_key")
+        );
+        header.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+    }
+}

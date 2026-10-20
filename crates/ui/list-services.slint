@@ -36,7 +36,7 @@ export component ListServiceSettings inherits TrackingAccountCard {
     brand_dark: root.service == 0 ? #12344e : root.service == 1 ? #183522 : #48191e;
     VerticalLayout {
         alignment: start; spacing: 12px;
-        Text { text: SettingsBridge.list_services_status[root.service]; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
+        if SettingsBridge.list_services_status[root.service] != "": Text { text: SettingsBridge.list_services_status[root.service]; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
         SettingsRow {
             row-title: @tr("Sync mode");
             Dropdown {

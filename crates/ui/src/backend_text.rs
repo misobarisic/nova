@@ -152,8 +152,8 @@ pub fn tr(english: &str) -> &str {
             "Sinkronizirajte samo naslove koje izričito omogućite na njihovoj stranici Praćenje."
         }
         "Loading Stremio matches…" => "Učitavanje Stremio podudaranja…",
-        "Connect Stremio in Settings → Tracking first." => {
-            "Prvo povežite Stremio u Postavke → Praćenje."
+        "Connect Stremio in Settings → Integrations first." => {
+            "Prvo povežite Stremio u Postavke → Integracije."
         }
         "Could not prepare Stremio tracking. Try again." => {
             "Nije moguće pripremiti Stremio praćenje. Pokušajte ponovno."
@@ -569,8 +569,8 @@ pub fn tr(english: &str) -> &str {
         "Choose another release" => "Odaberi drugo izdanje",
         "Save adjustment" => "Spremi prilagodbu",
         "Back to review" => "Natrag na pregled",
-        "Connect a service in Settings → Tracking to see suggestions." => {
-            "Povežite uslugu u Postavkama → Praćenje za prikaz prijedloga."
+        "Connect a service in Settings → Integrations to see suggestions." => {
+            "Povežite uslugu u Postavkama → Integracije za prikaz prijedloga."
         }
         "No new suggestions. Search a title or enter a tracker ID to link another release." => {
             "Nema novih prijedloga. Pretražite naslov ili unesite ID na usluzi za povezivanje drugog izdanja."
@@ -609,8 +609,8 @@ pub fn tr(english: &str) -> &str {
             "Izvorni ID-ovi nisu usklađeni. Unesite ID usluge praćenja ili pretražite ručno."
         }
         "Connect" => "Povežite",
-        "Connect this service in Settings → Tracking first." => {
-            "Prvo povežite ovu uslugu u Postavke → Praćenje."
+        "Connect this service in Settings → Integrations first." => {
+            "Prvo povežite ovu uslugu u Postavke → Integracije."
         }
         "Shared tracking data needs alignment or a newer Nova version." => {
             "Dijeljeni podaci praćenja zahtijevaju usklađivanje ili noviju verziju Nove."

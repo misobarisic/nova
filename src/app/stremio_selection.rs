@@ -345,7 +345,7 @@ pub(super) fn review_error(bridge: &Bridge, generation: u64, error: ApiError) {
         app.set_stremio_title_can_confirm(false);
         app.set_stremio_title_status(
             text::tr(if error == ApiError::Authentication {
-                "Connect Stremio in Settings → Tracking first."
+                "Connect Stremio in Settings → Integrations first."
             } else {
                 "Could not prepare Stremio tracking. Try again."
             })
