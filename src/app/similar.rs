@@ -1,6 +1,22 @@
-//! Bounded suggestions from the current profile's installed metadata sources.
+//! Profile-owned TMDB recommendations with an installed-source fallback.
 use super::*;
 use std::time::Instant;
+mod tmdb;
+
+pub(super) fn settings_authority(settings: &CacheSettings) -> u64 {
+    let config = tmdb::Settings::from_settings(settings);
+    fnv1a(&serde_json::to_vec(&config.authority()).unwrap_or_default())
+}
+
+pub(super) fn supported_identity(type_: &str, id: &str) -> bool {
+    nova_providers::ExternalId::parse(id).is_some()
+        || (matches!(type_, "movie" | "series")
+            && id.strip_prefix("tmdb:").is_some_and(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit())
+                    && id.parse::<u32>().is_ok_and(|id| id > 0)
+            }))
+}
 
 const LIMIT: usize = 24;
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
@@ -18,7 +34,7 @@ fn saved_key(type_: &str, id: &str) -> String {
     format!("similar_titles:v1:{type_}\u{1}{id}")
 }
 
-fn saved_authority(installed: &[Installed]) -> Option<u64> {
+fn saved_authority(installed: &[Installed], tmdb: &tmdb::Settings) -> Option<u64> {
     // Runtime generations deliberately stay out of persistent identity: an
     // unchanged provider configuration can reuse this cache after a restart.
     let sources = installed
@@ -33,7 +49,7 @@ fn saved_authority(installed: &[Installed]) -> Option<u64> {
         .transpose()
         .ok()?
         .unwrap_or_else(|| serde_json::json!({}));
-    let mut value = serde_json::to_value((sources, settings)).ok()?;
+    let mut value = serde_json::to_value((sources, settings, tmdb.authority())).ok()?;
     // Flattened manifest maps have randomized iteration order. Canonicalize
     // them before hashing so a process restart does not invalidate the cache.
     value.sort_all_objects();
@@ -50,8 +66,13 @@ impl SavedTitles {
     }
 }
 
-fn read_saved(installed: &[Installed], type_: &str, id: &str) -> Option<SavedTitles> {
-    let authority = saved_authority(installed)?;
+fn read_saved(
+    installed: &[Installed],
+    type_: &str,
+    id: &str,
+    tmdb: &tmdb::Settings,
+) -> Option<SavedTitles> {
+    let authority = saved_authority(installed, tmdb)?;
     read_json::<SavedTitles>(&saved_key(type_, id))
         .filter(|saved| saved.usable(authority, now_secs()))
 }
@@ -61,14 +82,15 @@ pub(super) struct Cache {
     entries: HashMap<String, (Instant, Vec<MetaPreview>)>,
 }
 
-fn inventory_key(installed: &[Installed]) -> String {
-    serde_json::to_string(
+fn inventory_key(installed: &[Installed], tmdb: &tmdb::Settings) -> String {
+    serde_json::to_string(&(
         &installed
             .iter()
             .filter(|addon| addon.enabled && addon.available)
             .map(|addon| (&addon.url, addon.generation, &addon.manifest))
             .collect::<Vec<_>>(),
-    )
+        tmdb.authority(),
+    ))
     .unwrap_or_default()
 }
 
@@ -100,11 +122,15 @@ impl Bridge {
         } else {
             Some(nova_providers::OwnedProviderSnapshot::capture())
         };
-        let (installed, cache) = {
+        let (installed, cache, tmdb) = {
             let state = self.shared.lock().unwrap();
-            (state.installed.clone(), state.similar_cache.clone())
+            (
+                state.installed.clone(),
+                state.similar_cache.clone(),
+                tmdb::Settings::from_settings(&state.cache_settings),
+            )
         };
-        let authority = inventory_key(&installed);
+        let authority = inventory_key(&installed, &tmdb);
         let key = serde_json::to_string(&(&authority, settings_generation, &type_, &id))
             .unwrap_or_default();
         let shared = self.shared.clone();
@@ -124,7 +150,13 @@ impl Bridge {
                                 && settings.is_current()
                                 && nova_providers::plugin_settings::settings_generation()
                                     == settings_generation
-                                && inventory_key(&shared.lock().unwrap().installed) == authority
+                                && {
+                                    let state = shared.lock().unwrap();
+                                    inventory_key(
+                                        &state.installed,
+                                        &tmdb::Settings::from_settings(&state.cache_settings),
+                                    ) == authority
+                                }
                         };
                         if !current() {
                             then(Vec::new());
@@ -141,8 +173,8 @@ impl Bridge {
                             then(rows);
                             return;
                         }
-                        let save_authority = saved_authority(&installed);
-                        let saved = read_saved(&installed, &type_, &id);
+                        let save_authority = saved_authority(&installed, &tmdb);
+                        let saved = read_saved(&installed, &type_, &id, &tmdb);
                         if let Some(saved) = &saved
                             && now_secs().saturating_sub(saved.fetched_at) < TTL.as_secs()
                         {
@@ -150,10 +182,11 @@ impl Bridge {
                             return;
                         }
                         let started = Instant::now();
-                        let mut remaining_requests = 8;
+                        let mut remaining_requests = if tmdb.configured() { 18 } else { 8 };
+                        let budget = if tmdb.configured() { 20 } else { 12 };
                         let mut fetch = |url: &str| {
                             let remaining =
-                                Duration::from_secs(12).saturating_sub(started.elapsed());
+                                Duration::from_secs(budget).saturating_sub(started.elapsed());
                             if remaining_requests == 0 || remaining.is_zero() || !current() {
                                 return None;
                             }
@@ -165,7 +198,7 @@ impl Bridge {
                             )
                             .ok()
                         };
-                        let mut rows = retrieve(&installed, &type_, &id, &mut fetch);
+                        let mut rows = retrieve(&installed, &type_, &id, &tmdb, &mut fetch);
                         if !current() {
                             then(Vec::new());
                             return;
@@ -213,21 +246,40 @@ impl Bridge {
         {
             return;
         }
-        let Some((type_, id, token)) = self
+        let prefer_tmdb =
+            tmdb::Settings::from_settings(&self.shared.lock().unwrap().cache_settings).configured();
+        let Some((type_, id, token, original_rows)) = self
             .shared
             .lock()
             .unwrap()
             .modal_item
             .as_ref()
-            .filter(|modal| modal.details.related.is_empty())
-            .map(|m| (m.type_.clone(), m.id.clone(), m.open_token.clone()))
+            .filter(|modal| {
+                modal.details.related.is_empty()
+                    || (prefer_tmdb
+                        && !modal.details.related.iter().any(|row| {
+                            row.extra
+                                .get("novaRecommendationSource")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("tmdb")
+                        }))
+            })
+            .map(|m| {
+                (
+                    m.type_.clone(),
+                    m.id.clone(),
+                    m.open_token.clone(),
+                    m.details.related.clone(),
+                )
+            })
         else {
             return;
         };
-        let authority = inventory_key(&self.shared.lock().unwrap().installed);
+        let tmdb = tmdb::Settings::from_settings(&self.shared.lock().unwrap().cache_settings);
+        let authority = inventory_key(&self.shared.lock().unwrap().installed, &tmdb);
         let cached_rows = {
             let installed = self.shared.lock().unwrap().installed.clone();
-            read_saved(&installed, &type_, &id).map(|saved| saved.rows)
+            read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows)
         };
         if let Some(rows) = &cached_rows {
             if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut()
@@ -250,7 +302,11 @@ impl Bridge {
                 }
                 let changed = {
                     let mut state = bridge.shared.lock().unwrap();
-                    if inventory_key(&state.installed) != authority {
+                    if inventory_key(
+                        &state.installed,
+                        &tmdb::Settings::from_settings(&state.cache_settings),
+                    ) != authority
+                    {
                         return;
                     }
                     if let Some(modal) = state.modal_item.as_mut()
@@ -258,6 +314,7 @@ impl Bridge {
                         && modal.id == id
                         && Arc::ptr_eq(&modal.open_token, &token)
                         && (modal.details.related.is_empty()
+                            || modal.details.related == original_rows
                             || cached_rows.as_ref() == Some(&modal.details.related))
                         && !rows.is_empty()
                     {
@@ -279,6 +336,7 @@ fn retrieve(
     installed: &[Installed],
     type_: &str,
     id: &str,
+    tmdb: &tmdb::Settings,
     fetch: &mut impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> Vec<MetaPreview> {
     // Without the originating catalog URL an opaque ID cannot establish
@@ -288,12 +346,13 @@ fn retrieve(
         || id.is_empty()
         || id.len() > 512
         || id.chars().any(char::is_control)
-        || nova_providers::ExternalId::parse(id).is_none()
+        || !supported_identity(type_, id)
     {
         return Vec::new();
     }
     let enabled = installed.iter().filter(|a| a.enabled && a.available);
     let mut seed = None;
+    let mut explicit_rows = Vec::new();
     for addon in enabled
         .clone()
         .filter(|a| a.manifest.accepts("meta", type_, id))
@@ -317,7 +376,12 @@ fn retrieve(
                     .extra
                     .insert("novaSourceUrl".into(), addon.url.clone().into());
             }
-            return explicit;
+            if !tmdb.configured() {
+                return explicit;
+            }
+            if explicit_rows.is_empty() {
+                explicit_rows = explicit;
+            }
         }
         if seed.is_none()
             || seed
@@ -326,6 +390,24 @@ fn retrieve(
         {
             seed = Some(item);
         }
+    }
+    let mut tmdb_seed = seed
+        .as_ref()
+        .map(|item| item.preview.clone())
+        .unwrap_or_else(|| MetaPreview {
+            id: id.to_owned(),
+            type_: type_.to_owned(),
+            ..Default::default()
+        });
+    if let Some(seed) = &seed {
+        tmdb_seed.extra.extend(seed.extra.clone());
+    }
+    let recommendations = tmdb::recommendations(&tmdb_seed, installed, tmdb, fetch);
+    if !recommendations.is_empty() {
+        return recommendations;
+    }
+    if !explicit_rows.is_empty() {
+        return explicit_rows;
     }
     let Some(mut seed) = seed else {
         return Vec::new();
@@ -758,18 +840,26 @@ mod tests {
             manifest: serde_json::from_value(json!({"id":"test", "version":"1.0.0", "name":"Test", "resources":["meta","catalog"], "types":["series"], "catalogs":[{"id":"top", "type":"series", "name":"Top", "extra":[{"name":"genre","options":["Drama","Comedy","Animation","Anime"]}]}]})).unwrap(),
         };
         let mut requests = Vec::new();
-        let rows = retrieve(&[addon], "series", "tt100", &mut |url| {
-            requests.push(url.to_owned());
-            let value = if url.contains("/meta/series/tt100.") {
-                json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "genres":["Drama","Comedy","Animation"], "country":"Japan", "description":"A university student discovers time travel."}})
-            } else if url.contains("/meta/series/tt200.") {
-                json!({"meta":{"id":"tt200", "type":"series", "name":"Candidate", "genres":["Animation","Drama"], "country":"Japan", "novaSourceUrl":"https://forged.example"}})
-            } else {
-                assert!(url.contains("genre=Anime.json") || url.contains("genre=Animation.json"));
-                json!({"metas":[{"id":"tt200", "type":"series", "name":"Candidate", "genres":["Animation","Drama"], "description":"A university student discovers time travel."}, {"id":"tt300", "type":"series", "name":"Live action", "genres":["Comedy","Drama"], "description":"A university student discovers time travel."}]})
-            };
-            Some(serde_json::to_vec(&value).unwrap())
-        });
+        let rows = retrieve(
+            &[addon],
+            "series",
+            "tt100",
+            &tmdb::Settings::default(),
+            &mut |url| {
+                requests.push(url.to_owned());
+                let value = if url.contains("/meta/series/tt100.") {
+                    json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "genres":["Drama","Comedy","Animation"], "country":"Japan", "description":"A university student discovers time travel."}})
+                } else if url.contains("/meta/series/tt200.") {
+                    json!({"meta":{"id":"tt200", "type":"series", "name":"Candidate", "genres":["Animation","Drama"], "country":"Japan", "novaSourceUrl":"https://forged.example"}})
+                } else {
+                    assert!(
+                        url.contains("genre=Anime.json") || url.contains("genre=Animation.json")
+                    );
+                    json!({"metas":[{"id":"tt200", "type":"series", "name":"Candidate", "genres":["Animation","Drama"], "description":"A university student discovers time travel."}, {"id":"tt300", "type":"series", "name":"Live action", "genres":["Comedy","Drama"], "description":"A university student discovers time travel."}]})
+                };
+                Some(serde_json::to_vec(&value).unwrap())
+            },
+        );
         assert_eq!(requests.len(), 4);
         assert!(requests[1].contains("genre=Anime.json"));
         assert_eq!(rows.len(), 1);
@@ -836,9 +926,12 @@ mod tests {
         reloaded.generation = 99;
         reloaded.manifest =
             serde_json::from_value(serde_json::to_value(&addon.manifest).unwrap()).unwrap();
-        assert_eq!(saved_authority(&[addon]), saved_authority(&[reloaded]));
+        assert_eq!(
+            saved_authority(&[addon], &tmdb::Settings::default()),
+            saved_authority(&[reloaded], &tmdb::Settings::default())
+        );
         let saved = SavedTitles {
-            authority: saved_authority(&[]).unwrap(),
+            authority: saved_authority(&[], &tmdb::Settings::default()).unwrap(),
             fetched_at: now_secs(),
             rows: vec![MetaPreview {
                 id: "tt1".into(),
@@ -848,10 +941,15 @@ mod tests {
             }],
         };
         write_json(&saved_key("series", "tt100"), &saved);
-        assert_eq!(read_saved(&[], "series", "tt100").unwrap().rows, saved.rows);
-        assert!(read_saved(&[], "movie", "tt100").is_none());
+        assert_eq!(
+            read_saved(&[], "series", "tt100", &tmdb::Settings::default())
+                .unwrap()
+                .rows,
+            saved.rows
+        );
+        assert!(read_saved(&[], "movie", "tt100", &tmdb::Settings::default()).is_none());
         storage::try_set_str("plugin_settings", r#"{"source":{"filter":"different"}}"#).unwrap();
-        assert!(read_saved(&[], "series", "tt100").is_none());
+        assert!(read_saved(&[], "series", "tt100", &tmdb::Settings::default()).is_none());
     }
 
     #[test]
@@ -881,16 +979,26 @@ mod tests {
         };
         let mut calls = 0;
         assert!(
-            retrieve(&[addon.clone()], "series", "private:123", &mut |_| {
-                panic!("opaque seed must not query wildcard sources")
-            })
+            retrieve(
+                &[addon.clone()],
+                "series",
+                "private:123",
+                &tmdb::Settings::default(),
+                &mut |_| { panic!("opaque seed must not query wildcard sources") }
+            )
             .is_empty()
         );
-        let explicit = retrieve(&[addon.clone()], "series", "tt100", &mut |url| {
-            calls += 1;
-            assert!(url.starts_with("https://installed.example/meta/series/tt100.json"));
-            Some(serde_json::to_vec(&json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "related":[{"id":"related","type":"series","name":"Actual relation", "novaSourceUrl":"https://forged.example"}]}})).unwrap())
-        });
+        let explicit = retrieve(
+            &[addon.clone()],
+            "series",
+            "tt100",
+            &tmdb::Settings::default(),
+            &mut |url| {
+                calls += 1;
+                assert!(url.starts_with("https://installed.example/meta/series/tt100.json"));
+                Some(serde_json::to_vec(&json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "related":[{"id":"related","type":"series","name":"Actual relation", "novaSourceUrl":"https://forged.example"}]}})).unwrap())
+            },
+        );
         assert_eq!(calls, 1);
         assert_eq!(explicit[0].id, "related");
         assert_eq!(
@@ -899,13 +1007,17 @@ mod tests {
         );
         addon.enabled = false;
         assert!(
-            retrieve(&[addon.clone()], "series", "tt100", &mut |_| panic!(
-                "disabled source requested"
-            ))
+            retrieve(
+                &[addon.clone()],
+                "series",
+                "tt100",
+                &tmdb::Settings::default(),
+                &mut |_| panic!("disabled source requested")
+            )
             .is_empty()
         );
         addon.enabled = true;
-        assert!(retrieve(&[addon], "series", "tt100", &mut |_| Some(br#"{"meta":{"id":"wrong","type":"series","name":"Wrong","genres":["Drama","Crime"]}}"#.to_vec())).is_empty());
+        assert!(retrieve(&[addon], "series", "tt100", &tmdb::Settings::default(), &mut |_| Some(br#"{"meta":{"id":"wrong","type":"series","name":"Wrong","genres":["Drama","Crime"]}}"#.to_vec())).is_empty());
     }
 
     #[test]
@@ -929,9 +1041,14 @@ mod tests {
             manifest,
         };
         let mut requests = Vec::new();
-        let rows = retrieve(&[addon], "series", "tt100", &mut |url| {
-            requests.push(url.to_owned());
-            Some(serde_json::to_vec(&if url.contains("/meta/") {
+        let rows = retrieve(
+            &[addon],
+            "series",
+            "tt100",
+            &tmdb::Settings::default(),
+            &mut |url| {
+                requests.push(url.to_owned());
+                Some(serde_json::to_vec(&if url.contains("/meta/") {
                 json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "genres":["Not advertised", "Action & Adventure", "Crime", "Mystery", "Drama"], "description":"An investigator uncovers a criminal conspiracy behind mysterious disappearances."}})
             } else {
                 json!({"metas":[
@@ -939,7 +1056,8 @@ mod tests {
                     {"id":"broad", "type":"series", "name":"Unrelated", "genres":["Drama"]}
                 ]})
             }).unwrap())
-        });
+            },
+        );
         assert_eq!(requests.len(), 3);
         assert!(
             requests[1].contains("/catalog/series/popular/genre=Action%20%26%20Adventure.json")

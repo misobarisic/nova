@@ -277,6 +277,7 @@ impl Bridge {
             app.set_cache_show_unwatched_thumbs(settings.show_unwatched_thumbs);
             app.set_cache_lru_mb(settings.lru_cache_mb as f32);
             app.set_cache_prefetch_metadata(settings.prefetch_metadata);
+            app.set_tmdb_api_key(settings.tmdb_api_key.clone().into());
             app.set_discover_min_cols(settings.discover_min_cols as i32);
             app.set_discover_catalog_addon_names(settings.discover_catalog_addon_names);
             app.set_home_continue_enabled(
@@ -496,6 +497,7 @@ impl Bridge {
         let settings = {
             let state = self.shared.lock().unwrap();
             CacheSettings {
+                tmdb_api_key: app.get_tmdb_api_key().trim().to_owned(),
                 cache_images: app.get_cache_images(),
                 image_disk_cache_limit_mb: DISK_CACHE_LIMITS
                     .get(app.get_cache_disk_limit_index().max(0) as usize)
@@ -1481,6 +1483,28 @@ mod tests {
         bridge.settings_to_ui();
         bridge.torrent_settings_to_ui();
         bridge.persist_settings();
+        app.set_tmdb_api_key(" 0123456789abcdef0123456789abcdef ".into());
+        app.invoke_settings_edited("tmdb_api_key".into());
+        bridge.persist_settings();
+        assert_eq!(
+            read_settings().tmdb_api_key,
+            "0123456789abcdef0123456789abcdef"
+        );
+        app.set_tmdb_api_key("".into());
+        bridge.settings_to_ui();
+        assert_eq!(app.get_tmdb_api_key(), "0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "tmdb_api_key")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("\"0123456789abcdef0123456789abcdef\"")
+        );
+        app.set_tmdb_api_key("".into());
+        app.invoke_settings_edited("tmdb_api_key".into());
         app.set_desktop_hwdec_index(2);
         app.set_android_pip_enabled(false);
         app.invoke_settings_edited("android_pip_enabled".into());

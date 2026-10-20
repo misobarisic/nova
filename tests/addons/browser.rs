@@ -81,6 +81,17 @@ fn directory_cards_and_tabs_keep_actions_and_manual_installation() {
             settings::settle().await;
             assert_eq!(app.get_addon_browser_tab(), 0);
             assert!(button(&app, "Install addon ZIP…").size().height >= 44.0);
+            let key = ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+                .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
+                .expect("TMDB key field on Installed");
+            assert!(key.size().height >= 44.0);
+            let position = key.absolute_position();
+            assert!(position.x >= 0.0 && position.x + key.size().width <= width as f32);
+            app.set_tmdb_api_key("0123456789abcdef0123456789abcdef".into());
+            assert_eq!(
+                app.global::<nova::SettingsBridge>().get_tmdb_api_key(),
+                app.get_tmdb_api_key()
+            );
         }
         assert_eq!(
             &*actions.borrow(),

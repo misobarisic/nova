@@ -390,6 +390,34 @@ export component SettingsAddonsModule inherits Window {
                         }
                     }
                 }
+                SettingsCard {
+                    VerticalLayout {
+                        spacing: 12px; padding: 16px;
+                        Text { text: @tr("TMDB recommendations"); font-size: 16px; font-weight: 700; color: Theme.current.text_bright; }
+                        Text {
+                            text: @tr("Use TMDB for Similar titles and Because you watched. Leave the key empty to use installed metadata sources.");
+                            color: Theme.current.text_secondary; font-size: 14px; wrap: word-wrap;
+                        }
+                        tmdb_key := SearchField {
+                            text <=> SettingsBridge.tmdb_api_key;
+                            placeholder-text: @tr("TMDB API key (v3)");
+                            accessible-role: text-input;
+                            accessible-label: @tr("TMDB API key (v3)");
+                            input-type: password; roomy: true;
+                            keyboard-mode: SettingsBridge.kb_active;
+                            border-width: SettingsBridge.kb_active && SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 3 ? 2px : 1px;
+                            border-color: self.has-focus || (SettingsBridge.kb_active && SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 3) ? Theme.current.focus_ring : Theme.current.control_border;
+                            focus_changed(focused) => { SettingsContent.input_focused = focused; if focused { SettingsBridge.kb_zone = 1; SettingsContent.kb_actl = 3; SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                            edited(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); }
+                            accepted(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); }
+                        }
+                        Timer { interval: 80ms; running: SettingsContent.kb_edit == 8; triggered => { tmdb_key.focus(); } }
+                        Text {
+                            text: @tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
+                            color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap;
+                        }
+                    }
+                }
 
             }
 

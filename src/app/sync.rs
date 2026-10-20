@@ -3488,6 +3488,25 @@ mod tests {
     }
 
     #[test]
+    fn tmdb_recommendation_key_syncs_and_preserves_unrelated_settings() {
+        let local = CacheSettings {
+            tmdb_api_key: "0123456789abcdef0123456789abcdef".into(),
+            ..Default::default()
+        };
+        let fields = settings_fields(&local);
+        let key = fields
+            .iter()
+            .find(|(field, _, _)| field == "tmdb_api_key")
+            .unwrap();
+        let merged =
+            merge_settings_fields(&CacheSettings::default(), &[(key.0.clone(), key.1.clone())]);
+        assert_eq!(merged.tmdb_api_key, local.tmdb_api_key);
+        assert_eq!(merged.language, Language::English);
+        let cleared = merge_settings_fields(&merged, &[("tmdb_api_key".into(), "\"\"".into())]);
+        assert!(cleared.tmdb_api_key.is_empty());
+    }
+
+    #[test]
     fn automatic_next_episode_syncs_independently_and_supports_override() {
         let local = CacheSettings {
             auto_next_episode: true,

@@ -355,6 +355,17 @@ export component AboutPage inherits Rectangle {
                                 color: Theme.current.text_secondary;
                                 wrap: word-wrap;
                             }
+                            Image {
+                                source: @image-url("../../assets/tmdb-logo.svg");
+                                width: 112px; height: 16px; image-fit: contain;
+                                accessible-role: image; accessible-label: "TMDB";
+                            }
+                            Text {
+                                text: @tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
+                                color: Theme.current.text_secondary;
+                                font-size: InterfaceStyle.tv ? 18px : 12px;
+                                wrap: word-wrap;
+                            }
                             about_licenses_button := PillButton {
                                 enabled: root.active && !root.licenses_open;
                                 label: @tr("Licenses");

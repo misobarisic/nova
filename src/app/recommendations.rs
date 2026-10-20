@@ -11,6 +11,7 @@ struct Signature {
     seeds: Vec<(String, String)>,
     providers: Vec<(String, u64)>,
     settings: u64,
+    recommendation_settings: u64,
 }
 
 #[derive(Default)]
@@ -109,7 +110,7 @@ impl Bridge {
                     .filter(|entry| {
                         entry.meaningful
                             && matches!(entry.type_.as_str(), "series" | "movie")
-                            && nova_providers::ExternalId::parse(&entry.series_id).is_some()
+                            && similar::supported_identity(&entry.type_, &entry.series_id)
                     })
                     .map(|entry| (entry.type_.clone(), entry.series_id.clone()))
                     .take(MAX_SEEDS)
@@ -121,6 +122,7 @@ impl Bridge {
                     .map(|addon| (addon.url.clone(), addon.generation))
                     .collect(),
                 settings: nova_providers::plugin_settings::settings_generation(),
+                recommendation_settings: similar::settings_authority(&state.cache_settings),
             };
             let same = state.recommendations.signature.as_ref() == Some(&signature);
             if same
@@ -172,6 +174,8 @@ impl Bridge {
                             .home_row_enabled(&HomeRowSource::BecauseYouWatched)
                         || signature.settings
                             != nova_providers::plugin_settings::settings_generation()
+                        || signature.recommendation_settings
+                            != similar::settings_authority(&state.cache_settings)
                         || signature.providers
                             != state
                                 .installed

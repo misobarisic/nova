@@ -697,6 +697,9 @@ macro_rules! cache_settings_type {
     };
 }
 cache_settings_type! {
+    /// TMDB v3 API key for title recommendations; profile-owned and synced.
+    #[serde(default)]
+    pub tmdb_api_key: String,
     /// Master switch for on-disk image caching: when false, posters and
     /// thumbnails are never read from nor written to disk (each launch
     /// re-downloads them; the in-memory decoded cache still applies within
@@ -984,6 +987,7 @@ const fn default_status_bar_gradient() -> u32 {
 impl Default for CacheSettings {
     fn default() -> Self {
         Self {
+            tmdb_api_key: String::new(),
             cache_images: true,
             image_disk_cache_limit_mb: default_image_disk_cache_limit(),
             enabled: false,

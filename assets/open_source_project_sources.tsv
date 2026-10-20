@@ -1,4 +1,5 @@
 Nova root app	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/src
+Nuvio Mobile TMDB recommendation flow (adapted)	GPL-3.0	https://github.com/NuvioMedia/NuvioMobile/tree/324afcffb962f1f7df45c5fa951131acec5a15a7/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb
 Nova addons crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/addons
 Nova UI crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/ui
 Nova storage crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/storage
@@ -29,3 +30,4 @@ Android NDK system libraries (not bundled)	Android platform terms	https://develo
 Linux libmpv/X11 runtime (system-provided)	Distribution-provided licenses	https://github.com/mpv-player/mpv
 FemtoVG 0.27 COLRv1 fork	MIT OR Apache-2.0	https://github.com/misobarisic/femtovg/tree/dcbc52d06378b4dcb08921e7dce04e59b681aab7
 tiny-skia 0.12 sweep normalization fork	BSD-3-Clause	https://github.com/misobarisic/tiny-skia/tree/7cb203434cc55baa98333b5c480da158d08ce866
+TMDB official logo and attribution	TMDB branding terms	https://www.themoviedb.org/about/logos-attribution

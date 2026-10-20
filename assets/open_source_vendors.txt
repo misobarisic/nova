@@ -1,5 +1,15 @@
 THIRD-PARTY VENDOR INVENTORY
 
+ADAPTED APPLICATION CODE
+The TMDB recommendation flow in src/app/similar/tmdb.rs is adapted into Rust
+from Nuvio Mobile's TmdbService.kt and TmdbMetadataService.kt (ensureTmdbId and
+fetchMoreLikeThis), by the Nuvio Mobile contributors, under GPL-3.0.
+Source: https://github.com/NuvioMedia/NuvioMobile/tree/324afcffb962f1f7df45c5fa951131acec5a15a7/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb
+Nova adds typed identity checks, bounded transport and addon-compatible IDs.
+The full GPL v3 text is included in this catalog's project-license section.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+
 Nova project code is GPL-3.0-or-later. See the full root LICENSE included after
 this inventory. The in-app catalog is generated for the actual Cargo target and
 features; it lists all runtime Cargo crates and their selected SPDX license
@@ -33,3 +43,9 @@ included below.
 NotoColorEmoji.ttf is bundled at assets/fonts/NotoColorEmoji.ttf under
 OFL-1.1. Its complete license is assets/fonts/NotoColorEmoji-LICENSE.txt and
 is included below.
+
+TMDB BRAND ASSET
+assets/tmdb-logo.svg is TMDB's unmodified official blue long logo.
+Source: https://www.themoviedb.org/about/logos-attribution
+Use follows TMDB's API attribution and branding requirements; it is not
+covered by Nova's project-code license.

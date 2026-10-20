@@ -3622,3 +3622,15 @@ msgstr "Slične serije"
 
 msgid "Similar movies"
 msgstr "Slični filmovi"
+
+msgid "TMDB recommendations"
+msgstr "TMDB preporuke"
+
+msgid "Use TMDB for Similar titles and Because you watched. Leave the key empty to use installed metadata sources."
+msgstr "Upotrijebite TMDB za slične naslove i preporuke na temelju gledanja. Ostavite ključ prazan za upotrebu instaliranih izvora metapodataka."
+
+msgid "TMDB API key (v3)"
+msgstr "TMDB API ključ (v3)"
+
+msgid "This product uses the TMDB API but is not endorsed or certified by TMDB."
+msgstr "Ovaj proizvod upotrebljava TMDB API, ali TMDB ga ne podržava niti certificira."
