@@ -7,6 +7,8 @@ use crate::player::OnlineSubtitle;
 pub(super) struct State {
     session: u64,
     selection: u64,
+    secondary_selection: u64,
+    secondary_automatic_attempted: bool,
     pending: usize,
     failed: usize,
     pub(super) automatic_attempted: bool,
@@ -27,7 +29,16 @@ struct SubtitleFile(PathBuf);
 
 impl State {
     fn accepts(&self, session: u64, selection: u64) -> bool {
-        self.session == session && self.selection == selection
+        self.accepts_slot(session, selection, false)
+    }
+
+    fn accepts_slot(&self, session: u64, selection: u64, secondary: bool) -> bool {
+        self.session == session
+            && if secondary {
+                self.secondary_selection == selection
+            } else {
+                self.selection == selection
+            }
     }
 }
 impl Drop for SubtitleFile {
@@ -269,6 +280,20 @@ impl Bridge {
         }
     }
 
+    pub(super) fn cancel_secondary_subtitle_download(&self) {
+        let mut state = self.shared.lock().unwrap();
+        state.addon_subtitles.secondary_selection =
+            state.addon_subtitles.secondary_selection.wrapping_add(1);
+        state.addon_subtitles.secondary_automatic_attempted = true;
+        drop(state);
+        if let Some(app) = self
+            .app()
+            .filter(|app| app.get_subtitle_addon_status() == 2)
+        {
+            app.set_subtitle_addon_status(0);
+        }
+    }
+
     pub(super) fn retry_addon_subtitles(&self) {
         if !self
             .app()
@@ -297,23 +322,46 @@ impl Bridge {
         {
             return;
         }
+        if self
+            .app()
+            .is_some_and(|app| app.get_subtitle_addon_status() == 2)
         {
+            return;
+        }
+        let primary = {
             let mut state = self.shared.lock().unwrap();
             let state = &mut state.addon_subtitles;
-            if state.session != self.player.screenshot_session()
-                || state.pending > 0
-                || state.automatic_attempted
-            {
+            if state.session != self.player.screenshot_session() || state.pending > 0 {
                 return;
             }
+            let primary = !state.automatic_attempted;
             state.automatic_attempted = true;
-        }
-        if let Some(id) = self.player.automatic_online_subtitle() {
+            primary
+        };
+        if primary && let Some(id) = self.player.automatic_online_subtitle() {
             self.load_addon_subtitle(id, false);
+            return;
+        }
+        let secondary = {
+            let mut state = self.shared.lock().unwrap();
+            let secondary = !state.addon_subtitles.secondary_automatic_attempted;
+            state.addon_subtitles.secondary_automatic_attempted = true;
+            secondary
+        };
+        if secondary && let Some(id) = self.player.automatic_secondary_online_subtitle() {
+            self.load_secondary_addon_subtitle(id, false);
         }
     }
 
     pub(super) fn load_addon_subtitle(&self, id: i32, manual: bool) {
+        self.load_addon_subtitle_for_slot(id, manual, false);
+    }
+
+    pub(super) fn load_secondary_addon_subtitle(&self, id: i32, manual: bool) {
+        self.load_addon_subtitle_for_slot(id, manual, true);
+    }
+
+    fn load_addon_subtitle_for_slot(&self, id: i32, manual: bool, secondary: bool) {
         let Some(subtitle) = self.player.online_subtitle(id) else {
             return;
         };
@@ -333,8 +381,13 @@ impl Bridge {
             }
             let (owner, generation) = (owner.clone(), *generation);
             let state = &mut state.addon_subtitles;
-            state.selection = state.selection.wrapping_add(1);
-            (state.selection, owner, generation)
+            let selection = if secondary {
+                &mut state.secondary_selection
+            } else {
+                &mut state.selection
+            };
+            *selection = selection.wrapping_add(1);
+            (*selection, owner, generation)
         };
         if let Some(app) = self.app() {
             app.set_subtitle_addon_status(2);
@@ -351,7 +404,12 @@ impl Bridge {
                 }
                 {
                     let state = bridge.shared.lock().unwrap();
-                    if !state.addon_subtitles.accepts(session, selection)
+                    let accepts = if secondary {
+                        state.addon_subtitles.accepts_slot(session, selection, true)
+                    } else {
+                        state.addon_subtitles.accepts(session, selection)
+                    };
+                    if !accepts
                         || !state.installed.iter().any(|addon| {
                             addon.url == owner
                                 && addon.generation == generation
@@ -363,11 +421,19 @@ impl Bridge {
                     }
                 }
                 let result = result.and_then(|file| {
-                    let id = bridge.player.add_online_subtitle(
-                        &file.0.to_string_lossy(),
-                        &subtitle.title,
-                        &subtitle.language,
-                    )?;
+                    let id = if secondary {
+                        bridge.player.add_online_secondary_subtitle(
+                            &file.0.to_string_lossy(),
+                            &subtitle.title,
+                            &subtitle.language,
+                        )
+                    } else {
+                        bridge.player.add_online_subtitle(
+                            &file.0.to_string_lossy(),
+                            &subtitle.title,
+                            &subtitle.language,
+                        )
+                    }?;
                     bridge
                         .shared
                         .lock()
@@ -379,7 +445,13 @@ impl Bridge {
                 });
                 match result {
                     Ok(id) => {
-                        if manual {
+                        if secondary {
+                            if manual {
+                                bridge.pick_secondary_playback_track(id);
+                            } else {
+                                let _ = bridge.player.pick_secondary_subtitle(id);
+                            }
+                        } else if manual {
                             bridge.pick_playback_track(false, id);
                         } else {
                             bridge.player.pick_sub_track(id);
@@ -414,6 +486,27 @@ mod tests {
         state.session += 1;
         state.selection = 2; // The next episode may reuse a selection counter.
         assert!(!state.accepts(7, 2));
+    }
+
+    #[test]
+    fn secondary_download_selection_is_independent_and_cannot_cross_sessions() {
+        let mut state = State {
+            session: 7,
+            selection: 2,
+            secondary_selection: 4,
+            ..Default::default()
+        };
+        assert!(state.accepts_slot(7, 4, true));
+        state.selection += 1;
+        assert!(
+            state.accepts_slot(7, 4, true),
+            "a primary choice must not cancel the second language"
+        );
+        state.secondary_selection += 1;
+        assert!(!state.accepts_slot(7, 4, true));
+        assert!(state.accepts(7, 3));
+        state.session += 1;
+        assert!(!state.accepts_slot(7, 5, true));
     }
 
     #[test]

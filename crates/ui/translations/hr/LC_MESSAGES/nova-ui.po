@@ -3658,3 +3658,305 @@ msgstr "Automatsko zakretanje pri reprodukciji"
 
 msgid "Open videos in landscape. When leaving the player, follow how you hold your phone. Applies only to this device."
 msgstr "Otvori videozapise vodoravno. Pri izlasku iz reproduktora prati kako držiš telefon. Vrijedi samo za ovaj uređaj."
+
+
+# Viewing journal, evening queue, playback tools and sync inspector.
+msgid "Rewatch completed"
+msgstr "Ponovno gledanje dovršeno"
+
+msgid "Rewatch"
+msgstr "Ponovno gledanje"
+
+msgid "First watched: {}"
+msgstr "Prvo gledanje: {}"
+
+msgid "Finished: {}"
+msgstr "Dovršeno: {}"
+
+msgid "Caught up: {}"
+msgstr "Pogledano do kraja: {}"
+
+msgid "Viewing journal"
+msgstr "Dnevnik gledanja"
+
+msgid "Your viewing time, completed watches and the stories you return to."
+msgstr "Vrijeme gledanja, dovršena gledanja i priče kojima se vraćate."
+
+msgid "All time"
+msgstr "Sve vrijeme"
+
+msgid "Yearly recap"
+msgstr "Godišnji pregled"
+
+msgid "Previous year"
+msgstr "Prethodna godina"
+
+msgid "Next year"
+msgstr "Sljedeća godina"
+
+msgid "Time watched · h:mm:ss"
+msgstr "Vrijeme gledanja · h:mm:ss"
+
+msgid "Titles explored"
+msgstr "Gledani naslovi"
+
+msgid "Completed watches"
+msgstr "Dovršena gledanja"
+
+msgid "Completed rewatches"
+msgstr "Dovršena ponovna gledanja"
+
+msgid "Viewing sessions"
+msgstr "Sesije gledanja"
+
+msgid "Days watching"
+msgstr "Dani gledanja"
+
+msgid "A fresh chapter"
+msgstr "Novo poglavlje"
+
+msgid "Your story starts here"
+msgstr "Vaša priča počinje ovdje"
+
+msgid "No viewing sessions recorded for this year. Choose another year or start watching."
+msgstr "Nema zabilježenih gledanja za ovu godinu. Odaberite drugu godinu ili počnite gledati."
+
+msgid "Watch something in Nova and your dated sessions will appear here. Existing progress stays as it is; earlier viewing dates are never guessed."
+msgstr "Pogledajte nešto u aplikaciji Nova i ovdje će se pojaviti datirana gledanja. Postojeći napredak ostaje sačuvan; prijašnji datumi gledanja ne procjenjuju se."
+
+msgid "A year of watching"
+msgstr "Godina gledanja"
+
+msgid "Time watched by month"
+msgstr "Vrijeme gledanja po mjesecima"
+
+msgid "Your most watched titles"
+msgstr "Vaši najgledaniji naslovi"
+
+msgid "The stories you spend time with"
+msgstr "Priče kojima posvećujete vrijeme"
+
+msgid "Recent sessions"
+msgstr "Nedavna gledanja"
+
+msgid "Showing the latest 100 sessions. Totals include your full journal."
+msgstr "Prikazuje se posljednjih 100 gledanja. Ukupni podaci uključuju cijeli dnevnik."
+
+msgid "Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."
+msgstr "Zabilježeno na ovom uređaju za ovaj profil. Datumi su u UTC-u. Vrijeme uključuje aktivnu reprodukciju bez pauza, učitavanja i preskakanja. Gledanje je dovršeno na 90% filma ili epizode. Datum gledanja do kraja zahtijeva sve poznate objavljene epizode."
+
+msgid "Watch queue"
+msgstr "Red gledanja"
+
+msgid "Your evening, in order."
+msgstr "Vaša večer, vaš redoslijed."
+
+msgid "TONIGHT"
+msgstr "VEČERAS"
+
+msgid "Make room for a good story"
+msgstr "Napravite mjesta za dobru priču"
+
+msgid "Mix movies and episodes from different shows. Choose a stream whenever you're ready."
+msgstr "Kombinirajte filmove i epizode različitih serija. Odaberite izvor kad budete spremni."
+
+msgid "Play first"
+msgstr "Pokrenite prvo"
+
+msgid "Clear watched"
+msgstr "Uklonite pogledano"
+
+msgid "A little planning. A great night."
+msgstr "Malo planiranja. Odlična večer."
+
+msgid "Add a movie from its detail page, or open an episode's options and choose Add to watch queue."
+msgstr "Dodajte film sa stranice s pojedinostima ili u opcijama epizode odaberite Dodajte u red gledanja."
+
+msgid "UP NEXT"
+msgstr "SLJEDEĆE"
+
+msgid "#{}"
+msgstr "#{}"
+
+msgid "Watched"
+msgstr "Pogledano"
+
+msgid "Choose stream"
+msgstr "Odaberite izvor"
+
+msgid "Remove from queue"
+msgstr "Uklonite iz reda"
+
+msgid "Dated sessions, rewatches and your year in stories"
+msgstr "Datirana gledanja, ponovna gledanja i vaša godina u pričama"
+
+msgid "Line up tonight's movies and episodes"
+msgstr "Poredajte večerašnje filmove i epizode"
+
+msgid "Second subtitles"
+msgstr "Drugi titlovi"
+
+msgid "Scene bookmarks"
+msgstr "Oznake scena"
+
+msgid "Try another stream"
+msgstr "Isprobajte drugi izvor"
+
+msgid "Keep position and track preferences"
+msgstr "Sačuvajte položaj, zvuk i titlove"
+
+msgid "A second language appears at the top of the video."
+msgstr "Drugi jezik prikazuje se na vrhu videozapisa."
+
+msgid "Optional note"
+msgstr "Neobavezna bilješka"
+
+msgid "Bookmark this scene"
+msgstr "Označite ovu scenu"
+
+msgid "Save a moment to return to it later."
+msgstr "Spremite trenutak za kasniji povratak."
+
+msgid "Scene bookmark"
+msgstr "Oznaka scene"
+
+msgid "Delete bookmark"
+msgstr "Izbrišite oznaku"
+
+msgid "SYNC INSPECTOR"
+msgstr "PREGLED SINKRONIZACIJE"
+
+msgid "Understand this device's sync state"
+msgstr "Pregledajte stanje sinkronizacije ovog uređaja"
+
+msgid "Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off."
+msgstr "Pregledajte spremljene podatke, promjene koje čekaju primjenu i razloge statusa epizode. Pregled je dostupan i kad je sinkronizacija isključena."
+
+msgid "Close inspector"
+msgstr "Zatvorite pregled"
+
+msgid "Open inspector"
+msgstr "Otvorite pregled"
+
+msgid "CURRENT PROFILE · LOCAL INVENTORY"
+msgstr "TRENUTAČNI PROFIL · LOKALNI PODACI"
+
+msgid "Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here."
+msgstr "Spremljeni zapisi predstavljaju stanje sinkronizacije ovog uređaja. Snimka dovršene razmjene lokalna je granica, a ne potvrda da je drugi uređaj primijenio sve zapise. Noviji zapisi možda trebaju novu razmjenu; njihova dostava nije poznata. Promjene na čekanju još treba primijeniti ovdje."
+
+msgid "No sync records stored yet. Local changes appear here after they are saved."
+msgstr "Još nema zapisa sinkronizacije. Lokalne promjene pojavljuju se nakon spremanja."
+
+msgid "Refresh inspector"
+msgstr "Osvježite pregled"
+
+msgid "Hide episode explanations"
+msgstr "Sakrijte objašnjenja epizoda"
+
+msgid "Explain watched states"
+msgstr "Objasnite statuse gledanja"
+
+msgid "Find a saved title or episode"
+msgstr "Pronađite spremljeni naslov ili epizodu"
+
+msgid "Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history."
+msgstr "Do 80 posljednjih promijenjenih odgovarajućih epizoda. Satovi radnji prikazuju milisekunde, logički brojač i ID uređaja za razrješenje izjednačenja. Opisuju prevladavajuće registre, a ne cijelu povijest događaja."
+
+msgid "No matching saved episode states."
+msgstr "Nema odgovarajućih spremljenih statusa epizoda."
+
+msgid "In watch queue"
+msgstr "U redu gledanja"
+
+msgid "Add to watch queue"
+msgstr "Dodajte u red gledanja"
+
+msgid "Watch history and progress"
+msgstr "Povijest gledanja i napredak"
+
+msgid "Playback preferences"
+msgstr "Postavke reprodukcije"
+
+msgid "Last stream choices"
+msgstr "Posljednji odabrani izvori"
+
+msgid "Other account data"
+msgstr "Ostali podaci računa"
+
+msgid "Stored on this device"
+msgstr "Spremljeno na ovom uređaju"
+
+msgid "Local sync records unavailable"
+msgstr "Lokalni zapisi sinkronizacije nisu dostupni"
+
+msgid "Refresh after local storage becomes available."
+msgstr "Osvježite kad lokalna pohrana bude dostupna."
+
+msgid "Unavailable"
+msgstr "Nedostupno"
+
+msgid "Episode with no saved title"
+msgstr "Epizoda bez spremljenog naslova"
+
+msgid "Unwatched"
+msgstr "Nije pogledano"
+
+msgid "Latest activity"
+msgstr "Posljednja aktivnost"
+
+msgid "Watch action"
+msgstr "Radnja označavanja kao pogledano"
+
+msgid "Unwatch action"
+msgstr "Radnja označavanja kao nepogledano"
+
+msgid "Device"
+msgstr "Uređaj"
+
+msgid "Exchange recorded"
+msgstr "Razmjena zabilježena"
+
+msgid "Delivery unknown"
+msgstr "Dostava nije poznata"
+
+msgid "No completed exchange snapshot is recorded for this device. Delivery is unknown."
+msgstr "Za ovaj uređaj nema snimke dovršene razmjene. Dostava nije poznata."
+
+msgid "The watch action is newer than the unwatch action. Playback activity alone does not clear watched."
+msgstr "Oznaka pogledanog novija je od oznake nepogledanog. Sama reprodukcija ne uklanja oznaku pogledanog."
+
+msgid "The unwatch action wins over the watch action. Equal action clocks favor unwatch."
+msgstr "Oznaka nepogledanog prevladava nad oznakom pogledanog. Pri jednakim satovima radnji prednost ima nepogledano."
+
+msgid "No watch action is recorded. Playback activity alone does not mark this episode watched."
+msgstr "Nema zabilježene oznake pogledanog. Sama reprodukcija ne označava ovu epizodu kao pogledanu."
+
+msgid "The local view differs from this stored sync state; application may still be pending."
+msgstr "Lokalni prikaz razlikuje se od spremljenog stanja sinkronizacije; primjena možda još čeka."
+
+msgid "Includes action registers from confirmed episode aliases."
+msgstr "Uključuje registre radnji potvrđenih alternativnih oznaka epizode."
+
+msgid "Some viewing sessions could not be read. Your saved records have been preserved."
+msgstr "Neka gledanja nije moguće pročitati. Vaši spremljeni zapisi su sačuvani."
+
+msgid "Your queue could not be loaded. Saved data has been preserved."
+msgstr "Red gledanja nije moguće učitati. Spremljeni podaci su sačuvani."
+
+msgid "Your queue could not be saved. Please try again."
+msgstr "Red gledanja nije moguće spremiti. Pokušajte ponovno."
+
+msgid "Your queue is full. Remove an item before adding another."
+msgstr "Red gledanja je pun. Uklonite stavku prije dodavanja nove."
+
+msgid "{n} session"
+msgid_plural "{n} sessions"
+msgstr[0] "{n} sesija"
+msgstr[1] "{n} sesije"
+msgstr[2] "{n} sesija"
+
+msgid "{n} rewatch"
+msgid_plural "{n} rewatches"
+msgstr[0] "{n} ponovno gledanje"
+msgstr[1] "{n} ponovna gledanja"
+msgstr[2] "{n} ponovnih gledanja"

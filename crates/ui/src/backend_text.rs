@@ -85,6 +85,55 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Watched" => "Pogledano",
+        "Watch history and progress" => "Povijest gledanja i napredak",
+        "Playback preferences" => "Postavke reprodukcije",
+        "Last stream choices" => "Posljednji odabrani izvori",
+        "Other account data" => "Ostali podaci računa",
+        "Stored on this device" => "Spremljeno na ovom uređaju",
+        "Local sync records unavailable" => "Lokalni zapisi sinkronizacije nisu dostupni",
+        "Refresh after local storage becomes available." => {
+            "Osvježite kad lokalna pohrana bude dostupna."
+        }
+        "Unavailable" => "Nedostupno",
+        "Episode with no saved title" => "Epizoda bez spremljenog naslova",
+        "Unwatched" => "Nije pogledano",
+        "Latest activity" => "Posljednja aktivnost",
+        "Watch action" => "Radnja označavanja kao pogledano",
+        "Unwatch action" => "Radnja označavanja kao nepogledano",
+        "Device" => "Uređaj",
+        "Exchange recorded" => "Razmjena zabilježena",
+        "Delivery unknown" => "Dostava nije poznata",
+        "No completed exchange snapshot is recorded for this device. Delivery is unknown." => {
+            "Za ovaj uređaj nema snimke dovršene razmjene. Dostava nije poznata."
+        }
+        "The watch action is newer than the unwatch action. Playback activity alone does not clear watched." => {
+            "Oznaka pogledanog novija je od oznake nepogledanog. Sama reprodukcija ne uklanja oznaku pogledanog."
+        }
+        "The unwatch action wins over the watch action. Equal action clocks favor unwatch." => {
+            "Oznaka nepogledanog prevladava nad oznakom pogledanog. Pri jednakim satovima radnji prednost ima nepogledano."
+        }
+        "No watch action is recorded. Playback activity alone does not mark this episode watched." => {
+            "Nema zabilježene oznake pogledanog. Sama reprodukcija ne označava ovu epizodu kao pogledanu."
+        }
+        "The local view differs from this stored sync state; application may still be pending." => {
+            "Lokalni prikaz razlikuje se od spremljenog stanja sinkronizacije; primjena možda još čeka."
+        }
+        "Includes action registers from confirmed episode aliases." => {
+            "Uključuje registre radnji potvrđenih alternativnih oznaka epizode."
+        }
+        "Some viewing sessions could not be read. Your saved records have been preserved." => {
+            "Neka gledanja nije moguće pročitati. Vaši spremljeni zapisi su sačuvani."
+        }
+        "Your queue could not be loaded. Saved data has been preserved." => {
+            "Red gledanja nije moguće učitati. Spremljeni podaci su sačuvani."
+        }
+        "Your queue could not be saved. Please try again." => {
+            "Red gledanja nije moguće spremiti. Pokušajte ponovno."
+        }
+        "Your queue is full. Remove an item before adding another." => {
+            "Red gledanja je pun. Uklonite stavku prije dodavanja nove."
+        }
         "Chapter" => "Poglavlje",
         "Open in browser" => "Otvori u pregledniku",
         "Could not open this link in your browser." => {
@@ -2356,4 +2405,92 @@ fn nova_download_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// Active viewing time as an unambiguous clock, without language-specific units.
+pub fn journal_duration(seconds: f64) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    format!(
+        "{}:{:02}:{:02}",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60
+    )
+}
+
+pub fn watch_queue_summary(movies: usize, episodes: usize) -> String {
+    if croatian() {
+        let films = plural(movies as u64, "film", "filma", "filmova");
+        let eps = plural(episodes as u64, "epizoda", "epizode", "epizoda");
+        format!("{movies} {films} · {episodes} {eps}")
+    } else {
+        format!(
+            "{movies} {} · {episodes} {}",
+            if movies == 1 { "movie" } else { "movies" },
+            if episodes == 1 { "episode" } else { "episodes" }
+        )
+    }
+}
+
+pub fn sync_inspector_count(label: &str, count: usize) -> String {
+    format!("{}: {count}", tr(label))
+}
+
+pub fn sync_inspector_clock(label: &str, ts: u64, counter: u32, device: u64) -> String {
+    format!("{}: {ts}:{counter} · {device:016x}", tr(label))
+}
+
+pub fn sync_inspector_exchange(at: &str, newer: usize) -> String {
+    if croatian() {
+        format!("Sat snimke posljednje dovršene razmjene: {at} · {newer} zapisa novijih od snimke")
+    } else {
+        format!(
+            "Last completed exchange snapshot clock: {at} · {newer} records newer than its snapshot"
+        )
+    }
+}
+
+pub fn sync_inspector_inventory(live: usize, deleted: usize, pending: bool) -> String {
+    let mut value = if croatian() {
+        format!("{live} trenutačnih · {deleted} sačuvanih brisanja")
+    } else {
+        format!("{live} current · {deleted} deletions retained")
+    };
+    if pending {
+        value.push_str(if croatian() {
+            " · čeka primjenu na ovom uređaju"
+        } else {
+            " · waiting to apply on this device"
+        });
+    }
+    value
+}
+
+/// Journal dates are explicitly UTC, matching the recap's calendar boundaries.
+pub fn journal_date(at: u64, with_time: bool) -> String {
+    // Gregorian civil date from Unix days (Howard Hinnant's algorithm).
+    let days = (at / 86400).min(i64::MAX as u64 - 719468) as i64 + 719468;
+    let era = days / 146097;
+    let day_of_era = days - era * 146097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_from_march + 2) / 5 + 1;
+    let month = if month_from_march < 10 {
+        month_from_march + 3
+    } else {
+        month_from_march - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    if with_time {
+        format!(
+            "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+            at / 3600 % 24,
+            at / 60 % 60
+        )
+    } else {
+        format!("{year:04}-{month:02}-{day:02}")
+    }
 }

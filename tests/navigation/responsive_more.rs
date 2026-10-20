@@ -311,8 +311,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        6,
-        "wide More contains Profiles, Sync, Devices, Watch party, Settings and About"
+        8,
+        "wide More includes journal and queue alongside the existing destinations"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;

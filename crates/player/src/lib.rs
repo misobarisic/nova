@@ -49,6 +49,7 @@ mod desktop_decoder;
 mod subtitle_position;
 mod subtitle_sync;
 pub use addon_subtitles::OnlineSubtitle;
+mod secondary_subtitles;
 mod track_preferences;
 use libmpv2::Mpv;
 use nova_config::playback_preferences::{
@@ -969,6 +970,7 @@ struct State {
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
     native_subtitle_defaults: nova_config::playback_preferences::SubtitleStyle,
     preferences: Mutex<PreferenceSession>,
+    secondary_subtitles: Mutex<TrackChoice>,
     /// Temporary clock correction; never written to title/device preferences.
     party_playback_rate: Mutex<Option<f64>>,
     /// Retain real cache starvation through a transient unavailable property.
@@ -1273,6 +1275,7 @@ impl Player {
                 manual_audio: false,
                 manual_subtitles: false,
             }),
+            secondary_subtitles: Mutex::new(TrackChoice::Off),
             party_playback_rate: Mutex::new(None),
             buffering: AtomicBool::new(false),
             mpv: Mutex::new(mpv.ok()),
@@ -1821,6 +1824,8 @@ impl Player {
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
             app.set_player_chapters(Default::default());
+            app.set_secondary_sub_tracks(Default::default());
+            app.set_secondary_sub_track_label(Default::default());
         }
         *self.state.preferences.lock().unwrap() = PreferenceSession {
             preferences,
@@ -1828,6 +1833,7 @@ impl Player {
             manual_audio: false,
             manual_subtitles: false,
         };
+        *self.state.secondary_subtitles.lock().unwrap() = TrackChoice::Off;
         *self.state.preference_source.lock().unwrap() = url.to_owned();
         self.state.online_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
@@ -2368,6 +2374,7 @@ impl Player {
             }
             choice
         };
+        self.reapply_secondary_subtitle();
         self.refresh_tracks();
         Some(choice)
     }
@@ -2696,6 +2703,7 @@ impl Player {
                 let _ = mpv.set_property(if audio { "aid" } else { "sid" }, "auto");
             }
         }
+        self.resolve_secondary_subtitle(mpv, &tracks);
         true
     }
 
@@ -2734,6 +2742,12 @@ impl Player {
         let Some(mpv) = mpv.as_ref() else {
             return;
         };
+        if self.state.pending.lock().unwrap().is_some()
+            || mpv.get_property::<String>("path").ok().as_deref()
+                != Some(self.state.preference_source.lock().unwrap().as_str())
+        {
+            return;
+        }
         // MPV_FORMAT_STRING on a node property returns its JSON form.
         let raw: String = match mpv.get_property("track-list") {
             Ok(s) => s,
@@ -2833,6 +2847,25 @@ impl Player {
         let sub_label = Self::track_selection_label(&sub_rows);
         let audio_label = Self::track_selection_label(&audio_rows);
         app.set_audio_tracks(Rc::new(VecModel::from(audio_rows)).into());
+        let secondary = if matches!(
+            &*self.state.secondary_subtitles.lock().unwrap(),
+            TrackChoice::Off
+        ) {
+            -1 // Automatic alignment may own a deliberately invisible reference.
+        } else {
+            track_id_prop("secondary-sid").unwrap_or(-1)
+        };
+        let secondary_rows = sub_rows
+            .iter()
+            .filter(|row| row.index != -1 && Some(row.index) != sid)
+            .cloned()
+            .map(|mut row| {
+                row.selected = row.index == secondary;
+                row
+            })
+            .collect::<Vec<_>>();
+        app.set_secondary_sub_track_label(Self::track_selection_label(&secondary_rows));
+        app.set_secondary_sub_tracks(Rc::new(VecModel::from(secondary_rows)).into());
         app.set_sub_tracks(Rc::new(VecModel::from(sub_rows)).into());
         app.set_sub_track_label(sub_label);
         app.set_audio_track_label(audio_label);

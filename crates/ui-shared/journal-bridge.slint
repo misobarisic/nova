@@ -1,0 +1,43 @@
+// Profile-local viewing facts. No stream URLs or inherited progress are recorded.
+export struct JournalSessionRow {
+    id: string,
+    title: string,
+    episode: string,
+    date: string,
+    watched: string,
+    completed: bool,
+    rewatch: bool,
+}
+export struct JournalTitleRow {
+    title: string,
+    is_movie: bool,
+    first_date: string,
+    finished_date: string,
+    watched: string,
+    sessions: int,
+    rewatches: int,
+}
+export struct JournalMonthRow {
+    label: string,
+    fraction: float,
+    watched: string,
+}
+export global JournalBridge {
+    in-out property <bool> open;
+    // Zero selects all time. Positive years select the yearly recap.
+    in-out property <int> year;
+    in-out property <int> current_year;
+    in-out property <int> oldest_year;
+    in-out property <string> watched;
+    in-out property <int> session_count;
+    in-out property <int> title_count;
+    in-out property <int> completion_count;
+    in-out property <int> rewatch_count;
+    in-out property <int> active_days;
+    in-out property <string> error;
+    in-out property <[JournalSessionRow]> sessions;
+    in-out property <[JournalTitleRow]> titles;
+    in-out property <[JournalMonthRow]> months;
+    callback opened();
+    callback select_year(int);
+}

@@ -5,6 +5,23 @@ import { SearchField } from "../ui/searchfield.slint";
 
 import { PillButton, ToggleSwitch, Segmented, SectionHeader, SettingsRow } from "../ui/settings-controls.slint";
 
+component InspectorRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> status;
+    background: Theme.current.card;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.current.border_soft;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 7px;
+        Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+        Text { text: root.status; color: Theme.current.accent_soft; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+        Text { text: root.detail; color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+    }
+}
+
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
 export component SettingsSyncModule inherits Window {
@@ -15,7 +32,9 @@ export component SettingsSyncModule inherits Window {
     private property <length> measured_preferred: body_layout.preferred-height;
     changed measured_min => { root.publish_size(); }
     changed measured_preferred => { root.publish_size(); }
-    init => { root.publish_size(); }
+    private property <bool> inspector_open: false;
+    private property <bool> inspector_episodes_open: false;
+    init => { root.publish_size(); SettingsBridge.sync_inspector_active = false; }
     function publish_size() {
         if SettingsBridge.sel == 7 {
             SettingsContent.content_min_height = root.measured_min;
@@ -87,6 +106,93 @@ export component SettingsSyncModule inherits Window {
                             label: @tr("Deny");
                             clicked => { SettingsBridge.sync_respond_pair(SettingsBridge.sync_pair_prompt_id, false); }
                         }
+                    }
+                }
+            }
+
+            SectionHeader { label: @tr("SYNC INSPECTOR"); }
+            Rectangle {
+                background: Theme.current.card;
+                border-radius: 16px;
+                border-width: 1px;
+                border-color: Theme.current.border_soft;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    Text {
+                        text: @tr("Understand this device's sync state");
+                        color: Theme.current.text_bright;
+                        font-size: 16px;
+                        font-weight: 600;
+                        wrap: word-wrap; min-width: 0px;
+                    }
+                    Text {
+                        text: @tr("Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off.");
+                        color: Theme.current.text_settings;
+                        font-size: 13px;
+                        wrap: word-wrap; min-width: 0px;
+                    }
+                    PillButton {
+                        accessible-id: "sync-inspector-toggle";
+                        label: root.inspector_open ? @tr("Close inspector") : @tr("Open inspector");
+                        clicked => { root.inspector_open = !root.inspector_open; SettingsBridge.sync_inspector_active = root.inspector_open; if root.inspector_open { SettingsBridge.sync_inspector_refresh(); } }
+                    }
+                }
+            }
+            if root.inspector_open: VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: @tr("CURRENT PROFILE · LOCAL INVENTORY");
+                    color: Theme.current.text_bright; font-size: 12px; font-weight: 600;
+                    wrap: word-wrap; min-width: 0px;
+                }
+                Text {
+                    text: @tr("Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here.");
+                    color: Theme.current.text_settings; font-size: 12px;
+                    wrap: word-wrap; min-width: 0px;
+                }
+                for row in SettingsBridge.sync_inspector_rows: InspectorRow {
+                    title: row.title; detail: row.detail; status: row.status;
+                }
+                if SettingsBridge.sync_inspector_rows.length == 0: Text {
+                    text: @tr("No sync records stored yet. Local changes appear here after they are saved.");
+                    color: Theme.current.text_settings; font-size: 13px;
+                    wrap: word-wrap; min-width: 0px;
+                }
+                PillButton {
+                    accessible-id: "sync-inspector-refresh";
+                    label: @tr("Refresh inspector");
+                    clicked => { SettingsBridge.sync_inspector_refresh(); }
+                }
+                PillButton {
+                    accessible-id: "sync-inspector-episodes";
+                    label: root.inspector_episodes_open ? @tr("Hide episode explanations") : @tr("Explain watched states");
+                    clicked => { root.inspector_episodes_open = !root.inspector_episodes_open; }
+                }
+                if root.inspector_episodes_open: VerticalLayout {
+                    spacing: 12px;
+                    SearchField {
+                        min-width: 0px;
+                        show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                        roomy: true;
+                        text <=> SettingsBridge.sync_inspector_query;
+                        placeholder-text: @tr("Find a saved title or episode");
+                        focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                        edited(query) => { SettingsBridge.sync_inspector_query_changed(query); }
+                        accepted(query) => { SettingsBridge.sync_inspector_query_changed(query); }
+                    }
+                    Text {
+                        text: @tr("Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history.");
+                        color: Theme.current.text_settings; font-size: 12px;
+                        wrap: word-wrap; min-width: 0px;
+                    }
+                    for row in SettingsBridge.sync_inspector_episodes: InspectorRow {
+                        title: row.title; detail: row.detail; status: row.status;
+                    }
+                    if SettingsBridge.sync_inspector_episodes.length == 0: Text {
+                        text: @tr("No matching saved episode states.");
+                        color: Theme.current.text_settings; font-size: 13px;
+                        wrap: word-wrap; min-width: 0px;
                     }
                 }
             }

@@ -399,6 +399,9 @@ impl Bridge {
         self.remote_control_policy_changed(settings.remote_control_enabled);
         self.shared.lock().unwrap().restoring_models = false;
         self.apply_library_to_ui();
+        self.refresh_watch_queue();
+        self.refresh_viewing_journal();
+        self.refresh_playback_tools();
         self.profile_loaded_epoch
             .store(profiles::active_context().epoch, Ordering::Release);
         self.refresh_profiles();

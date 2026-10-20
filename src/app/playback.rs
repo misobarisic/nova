@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Default)]
 struct PlaybackContext {
     intro_download: Option<crate::download::DownloadJob>,
+    retry_preferences: Option<nova_config::playback_preferences::SessionPreferences>,
     subtitle_hints: Vec<(String, String)>,
     title: String,
     episode_label: String,
@@ -46,6 +47,22 @@ pub(super) struct PlaybackIntent {
     private_playback: bool,
     context: PlaybackContext,
     detached: bool,
+}
+
+// A failed resolver has no worker authority. Keep only a display/source-selection
+// snapshot, scoped to the exact detail opening that supplied its stream list.
+#[derive(Clone)]
+pub(super) struct RetryContext {
+    context: PlaybackContext,
+    modal_token: Arc<()>,
+}
+impl RetryContext {
+    fn matches(&self, modal: &ModalItem) -> bool {
+        Arc::ptr_eq(&self.modal_token, &modal.open_token)
+            && self.context.media_id == modal.id
+            && self.context.media_type == modal.type_
+            && self.context.request_id == modal.request_id
+    }
 }
 
 impl PlaybackIntent {
@@ -197,6 +214,18 @@ impl Bridge {
             rejected.cancel();
             return rejected;
         }
+        let retry = {
+            let mut state = self.shared.lock().unwrap();
+            let retry = state.playback_tools.pending_retry.take();
+            retry
+                .filter(|retry| {
+                    state
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|modal| retry.matches(modal))
+                })
+                .map(|retry| retry.context)
+        };
         self.persist_outgoing_playback();
         self.finish_playback_request();
         let (episode_label, osd_episode_title, episode_number) = self
@@ -380,10 +409,115 @@ impl Bridge {
         }) {
             context.history_resume = Some(0.0);
         }
+        if let Some(retry) = retry {
+            context = retry;
+        }
         state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
         self.publish_player_context(&context);
         token
+    }
+
+    pub(super) fn alternate_stream_index(&self) -> Option<usize> {
+        let app = self.app()?;
+        if !app.get_player_open() || self.remote_receiver_playback() {
+            return None;
+        }
+        let state = self.shared.lock().unwrap();
+        if !state.remote_playback.can_play_locally() {
+            return None;
+        }
+        let modal = state.modal_item.as_ref()?;
+        let active = state.playback_intent.as_ref().is_some_and(|intent| {
+            intent.in_app
+                && intent.token.is_current()
+                && modal.id == intent.context.media_id
+                && modal.type_ == intent.context.media_type
+                && modal.request_id == intent.context.request_id
+                && intent
+                    .modal_token
+                    .as_ref()
+                    .is_some_and(|token| Arc::ptr_eq(token, &modal.open_token))
+        });
+        let failed = state
+            .playback_tools
+            .failed_retry
+            .as_ref()
+            .is_some_and(|retry| retry.matches(modal));
+        if !active && !failed {
+            return None;
+        }
+        let selected = usize::try_from(app.get_detail_kb_s()).ok()?;
+        let current = state.streams.get(selected)?;
+        (1..state.streams.len())
+            .map(|offset| (selected + offset) % state.streams.len())
+            .find(|index| {
+                let candidate = &state.streams[*index];
+                (current.choice_id.is_none() || candidate.choice_id != current.choice_id)
+                    && matches!(
+                        candidate.source,
+                        StreamSource::Url(_)
+                            | StreamSource::UrlWithOptions { .. }
+                            | StreamSource::Resolver { .. }
+                            | StreamSource::Torrent { .. }
+                    )
+            })
+    }
+
+    pub(super) fn try_another_stream(&self) {
+        let Some(index) = self.alternate_stream_index() else {
+            return;
+        };
+        let Some(app) = self.app() else {
+            return;
+        };
+        let preferences = if app.get_playback_started() {
+            self.player.retry_preferences()
+        } else {
+            self.prepare_playback_preferences()
+        };
+        let mut state = self.shared.lock().unwrap();
+        let context = state
+            .playback_intent
+            .as_ref()
+            .map(|intent| intent.context.clone())
+            .or_else(|| {
+                state
+                    .playback_tools
+                    .failed_retry
+                    .as_ref()
+                    .map(|retry| retry.context.clone())
+            });
+        let Some(mut context) = context else {
+            return;
+        };
+        let Some(modal) = state.modal_item.as_ref() else {
+            return;
+        };
+        let modal_token = modal.open_token.clone();
+        let position = if app.get_playback_started() {
+            app.get_position() as f64
+        } else {
+            context
+                .history_resume
+                .or_else(|| state.playback.as_ref().and_then(|target| target.resume_pos))
+                .unwrap_or(0.0)
+        };
+        context.history_resume = Some(if position.is_finite() {
+            position.max(0.0)
+        } else {
+            0.0
+        });
+        if app.get_playback_started() || context.retry_preferences.is_none() {
+            context.retry_preferences = Some(preferences);
+        }
+        state.playback_tools.pending_retry = Some(RetryContext {
+            context,
+            modal_token,
+        });
+        drop(state);
+        self.clear_playback_end_menu();
+        self.stream_picked(index);
     }
 
     pub(super) fn playback_request_is_current(
@@ -398,10 +532,13 @@ impl Bridge {
     }
 
     pub(super) fn finish_playback_request(&self) {
+        self.finish_viewing_journal();
         self.clear_playback_end_menu();
         self.playback_closed();
         {
             let mut state = self.shared.lock().unwrap();
+            state.playback_tools.failed_retry = None;
+            state.playback_tools.pending_retry = None;
             if let Some(intent) = state.playback_intent.take() {
                 intent.token.cancel();
             }
@@ -999,6 +1136,7 @@ impl Bridge {
 
     /// Save the last observation before another episode replaces its target.
     pub(super) fn persist_outgoing_playback(&self) {
+        self.finish_viewing_journal();
         self.persist_playback_checkpoint(true);
     }
 
@@ -1117,7 +1255,25 @@ impl Bridge {
             })
         };
         if !receiver_owned {
+            let preferences = self.prepare_playback_preferences();
+            let retry = {
+                let state = self.shared.lock().unwrap();
+                state.playback_intent.as_ref().and_then(|intent| {
+                    let mut context = intent.context.clone();
+                    if context.retry_preferences.is_none() {
+                        context.retry_preferences = Some(preferences);
+                    }
+                    context.history_resume = context
+                        .history_resume
+                        .or_else(|| state.playback.as_ref().and_then(|target| target.resume_pos));
+                    Some(RetryContext {
+                        context,
+                        modal_token: intent.modal_token.clone()?,
+                    })
+                })
+            };
             self.finish_playback_request();
+            self.shared.lock().unwrap().playback_tools.failed_retry = retry;
             self.set_stream_hint(Some(StreamHint::ResolverFailure(message.clone())));
         }
         self.player.source_failed(&message);
@@ -1315,7 +1471,10 @@ impl Bridge {
         };
 
         self.publish_player_context(&context);
-        let preferences = self.prepare_playback_preferences();
+        let preferences = context
+            .retry_preferences
+            .clone()
+            .unwrap_or_else(|| self.prepare_playback_preferences());
         let allow_external = !self.remote_receiver_playback()
             && !self.party_active()
             && !self
@@ -1334,7 +1493,11 @@ impl Bridge {
             allow_external,
         ) {
             Ok(()) => {
+                if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+                    intent.context.retry_preferences = None;
+                }
                 self.mark_playback_opened(true);
+                self.prepare_secondary_subtitles();
                 self.start_addon_subtitles(
                     &context.media_type,
                     &context.request_id,
@@ -1420,6 +1583,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        self.note_viewing_journal();
         self.refresh_next_episode_prompt();
         if self.player.take_external_handoff() {
             self.mark_playback_opened(false);
@@ -2888,5 +3052,61 @@ mod history_tests {
         bridge.watch_history_action(&entry.type_, &entry.series_id, 1);
         assert!(app.get_modal_visible());
         assert!(!app.get_stream_selector_open());
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn retry_snapshot_never_crosses_episode_title_or_modal_reopening() {
+        let token = Arc::new(());
+        let mut modal = ModalItem {
+            details: Default::default(),
+            open_token: token.clone(),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "show".into(),
+            type_: "series".into(),
+            request_id: "episode-2".into(),
+            videos: Vec::new(),
+            season_backdrops: HashMap::new(),
+            seasons: Vec::new(),
+            season_index: 0,
+            episode_page: 0,
+            name: String::new(),
+            year: String::new(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            logo_url: String::new(),
+            description: String::new(),
+            genres: Vec::new(),
+        };
+        let retry = RetryContext {
+            modal_token: token.clone(),
+            context: PlaybackContext {
+                media_id: "show".into(),
+                media_type: "series".into(),
+                request_id: "episode-2".into(),
+                history_resume: Some(123.75),
+                ..Default::default()
+            },
+        };
+        assert!(retry.matches(&modal));
+        modal.request_id = "episode-3".into();
+        assert!(!retry.matches(&modal));
+        modal.request_id = "episode-2".into();
+        modal.type_ = "movie".into();
+        assert!(!retry.matches(&modal));
+        modal.type_ = "series".into();
+        modal.open_token = Arc::new(());
+        assert!(
+            !retry.matches(&modal),
+            "a reopened detail page owns a different stream list"
+        );
+        modal.open_token = token;
+        modal.id = "other-show".into();
+        assert!(!retry.matches(&modal));
     }
 }

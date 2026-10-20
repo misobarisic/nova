@@ -270,6 +270,9 @@ struct HomeCatalogGroup {
 
 #[derive(Default)]
 struct Shared {
+    viewing_journal: viewing_journal::JournalTracker,
+    watch_queue: watch_queue::State,
+    playback_tools: playback_tools::PlaybackToolsState,
     similar_cache: Arc<Mutex<similar::Cache>>,
     recommendations: recommendations::State,
     addon_subtitles: subtitles::State,
@@ -789,6 +792,7 @@ mod playback;
 mod playback_actions;
 mod playback_end;
 mod playback_preferences;
+mod playback_tools;
 mod plugin_cache;
 mod plugin_settings;
 mod posters;
@@ -807,10 +811,13 @@ mod settings_sync;
 mod similar;
 mod stream_prefetch;
 mod subtitles;
+mod sync_inspector;
 #[cfg(feature = "update-check")]
 mod updates;
+mod viewing_journal;
 mod watch_history;
 mod watch_history_actions;
+mod watch_queue;
 pub use run::run;
 
 mod qr;

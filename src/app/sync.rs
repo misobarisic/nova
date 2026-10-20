@@ -2210,7 +2210,7 @@ impl Bridge {
 
 /// Only fresh, one-to-one metadata proof may join histories. Caption/number
 /// matches and stale or multiply claimed aliases are deliberately ignored.
-fn episode_progress_alias_groups(videos: &[Video]) -> Vec<(String, Vec<String>)> {
+pub(super) fn episode_progress_alias_groups(videos: &[Video]) -> Vec<(String, Vec<String>)> {
     let groups = videos
         .iter()
         .map(|video| {
@@ -2381,6 +2381,7 @@ impl Bridge {
         app.set_sync_local_discovery(settings.enable_local_discovery);
         app.set_sync_interval_index(sync_interval_index(settings.interval_secs));
         app.set_sync_background(settings.background_enabled);
+        self.refresh_sync_inspector();
         match nova_sync::engine() {
             Some(engine) => {
                 let names = engine.peer_names();

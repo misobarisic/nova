@@ -2358,6 +2358,7 @@ impl Bridge {
     /// Keep the advertised episode identical to the primary action's target,
     /// independent of the selected season, text filter or episode page.
     pub(super) fn refresh_watch_action(&self) {
+        self.refresh_watch_queue();
         let label = {
             let state = self.shared.lock().unwrap();
             let Some(modal) = state.modal_item.as_ref() else {

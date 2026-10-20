@@ -180,6 +180,9 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "watch_history_hidden:v1"
             | "new_episodes_hidden:v1"
             | "playback_preferences:v1"
+            | "scene_bookmarks:v1"
+            | "secondary_subtitles:v1"
+            | "watch_queue:v1"
             | "addons"
             | "addon_packages:v1"
             | "discover:search_history:v2"
@@ -187,7 +190,8 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "home:showcase:v1"
             | "home:catalog-rows:v1"
             | "plugin_settings"
-    ) || key.starts_with("tracking:")
+    ) || key.starts_with("viewing_journal:v1:")
+        || key.starts_with("tracking:")
         || key.starts_with("similar_titles:")
         || key.starts_with("stremio:")
         || key.starts_with("list_services:")
@@ -622,6 +626,10 @@ mod tests {
         assert!(scoped_key("list_services:boundary:v1:account"));
         assert!(scoped_key("list_services:simkl_cache:v1:account"));
         assert!(scoped_key("plugin_settings"));
+        assert!(scoped_key("watch_queue:v1"));
+        assert!(scoped_key("scene_bookmarks:v1"));
+        assert!(scoped_key("secondary_subtitles:v1"));
+        assert!(scoped_key("viewing_journal:v1:session-1"));
         assert!(scoped_key("similar_titles:v1:series\u{1}tt1910272"));
         for key in [
             "downloads:v1",

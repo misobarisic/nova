@@ -79,6 +79,8 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    JournalBridge,
+    QueueBridge,
     InterfaceStyle,
     CompletionBridge,
     PartyBridge,

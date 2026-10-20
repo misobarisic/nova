@@ -14,10 +14,10 @@ export component MenuRow inherits Rectangle {
     accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
     callback activate();
     callback reveal(length, length);
-    changed focused => { if root.focused && InterfaceStyle.tv { reveal_timer.start(); } }
+    changed focused => { if root.focused { reveal_timer.start(); } }
     reveal_timer := Timer {
         interval: 1ms; running: false;
-        triggered => { self.stop(); if root.focused && InterfaceStyle.tv { root.reveal(root.absolute-position.y, root.height); } }
+        triggered => { self.stop(); if root.focused { root.reveal(root.absolute-position.y, root.height); } }
     }
     forward-focus: row_focus;
     row_focus := FocusScope {

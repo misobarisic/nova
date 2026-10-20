@@ -386,6 +386,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.wire_remote_playback();
     bridge.wire_party();
     bridge.wire_completion_prompts();
+    bridge.setup_viewing_journal();
+    bridge.setup_watch_queue();
+    bridge.setup_sync_inspector();
 
     bridge
         .last_stream
@@ -1289,6 +1292,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = b.dispatch_playback_action(action);
     });
 
+    let b = bridge.clone();
+    app.on_pick_secondary_sub_track(move |id| b.pick_secondary_playback_track(id));
+    let b = bridge.clone();
+    app.on_add_scene_bookmark(move |note| b.add_scene_bookmark(&note));
+    let b = bridge.clone();
+    app.on_delete_scene_bookmark(move |index| b.delete_scene_bookmark(index));
+    let b = bridge.clone();
+    app.on_try_another_stream(move || b.try_another_stream());
+
     // Transient rate preview (press-and-hold 2×): session only, never stored.
     let b = bridge.clone();
     app.on_playback_speed_preview(move |_speed| {
@@ -1460,6 +1472,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.party_tick();
             tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
+            tick_bridge.refresh_playback_tools();
             tick_bridge.refresh_playback_end_menu();
             tick_bridge.refresh_intro_skip();
             tick_bridge.note_torrent_progress_from_ui();

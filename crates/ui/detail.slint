@@ -1,12 +1,13 @@
 import { DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
 
-import { DetailContent, DetailBridge } from "@NovaUiShared";
+import { QueueBridge, DetailContent, DetailBridge } from "@NovaUiShared";
 import { TitleArtwork } from "title-artwork.slint";
 import { DetailExtrasPanel } from "detail-extras.slint";
 
 
 
 import { MenuSheet } from "menusheet.slint";
+import { TrackingButton } from "tracking-controls.slint";
 import { IcPlay, IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 
 
@@ -1236,6 +1237,15 @@ export component DetailPage {
                             if root.detail_tab == 0: VerticalLayout {
                                 spacing: 10px;
                                 alignment: start;
+                                if root.is_movie: HorizontalLayout {
+                                    TrackingButton {
+                                        text: QueueBridge.detail_queued ? @tr("In watch queue") : @tr("Add to watch queue");
+                                        selected: QueueBridge.detail_queued;
+                                        clicked => { QueueBridge.add_detail(); }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+
 
                                 GridLayout {
                                     spacing: root.narrow ? 16px : 24px;
@@ -1406,6 +1416,7 @@ export component DetailPage {
                     { label: @tr("Mark episode and previous as watched"), enabled: !root.menu_flag },
                 { label: @tr("Clear resume position"), enabled: !root.menu_flag && root.menu_progress > 0 },
                 { label: @tr("Open episode"), enabled: true },
+                { label: @tr("Add to watch queue"), enabled: true },
             ];
             picked(a) => {
                 if (a == 0) {
@@ -1414,9 +1425,11 @@ export component DetailPage {
                     root.episode_watch_action(root.menu_idx, 3);
                 } else if (a == 2) {
                     root.episode_watch_action(root.menu_idx, 4);
-                } else {
+                } else if (a == 3) {
                     root.kb_active = false;
                     root.episode_picked(root.menu_idx);
+                } else {
+                    QueueBridge.add_episode(root.menu_idx);
                 }
                 root.close_menu();
             }

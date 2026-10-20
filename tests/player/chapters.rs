@@ -100,8 +100,13 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
         element(&app, "PlayerOverlay::settings_gear")
             .mock_single_click(slint::platform::PointerEventButton::Left);
         settle(&app);
-        // Chapters is last, including when below the short landscape viewport.
-        for _ in 0..7 {
+        // Chapters keeps its row before the additional playback tools.
+        let chapter_row = if android || app.get_desktop_decoder_available() {
+            6
+        } else {
+            5
+        };
+        for _ in 0..chapter_row {
             key(&app, slint::platform::Key::DownArrow);
             settle(&app);
         }

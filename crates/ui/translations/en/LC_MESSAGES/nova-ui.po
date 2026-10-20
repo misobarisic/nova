@@ -439,3 +439,303 @@ msgstr "Later"
 
 msgid "HW uses copy-back decoding with a software fallback. SW uses software decoding."
 msgstr "HW uses copy-back decoding with a software fallback. SW uses software decoding."
+
+
+# Viewing journal, evening queue, playback tools and sync inspector.
+msgid "Rewatch completed"
+msgstr "Rewatch completed"
+
+msgid "Rewatch"
+msgstr "Rewatch"
+
+msgid "First watched: {}"
+msgstr "First watched: {}"
+
+msgid "Finished: {}"
+msgstr "Finished: {}"
+
+msgid "Caught up: {}"
+msgstr "Caught up: {}"
+
+msgid "Viewing journal"
+msgstr "Viewing journal"
+
+msgid "Your viewing time, completed watches and the stories you return to."
+msgstr "Your viewing time, completed watches and the stories you return to."
+
+msgid "All time"
+msgstr "All time"
+
+msgid "Yearly recap"
+msgstr "Yearly recap"
+
+msgid "Previous year"
+msgstr "Previous year"
+
+msgid "Next year"
+msgstr "Next year"
+
+msgid "Time watched · h:mm:ss"
+msgstr "Time watched · h:mm:ss"
+
+msgid "Titles explored"
+msgstr "Titles explored"
+
+msgid "Completed watches"
+msgstr "Completed watches"
+
+msgid "Completed rewatches"
+msgstr "Completed rewatches"
+
+msgid "Viewing sessions"
+msgstr "Viewing sessions"
+
+msgid "Days watching"
+msgstr "Days watching"
+
+msgid "A fresh chapter"
+msgstr "A fresh chapter"
+
+msgid "Your story starts here"
+msgstr "Your story starts here"
+
+msgid "No viewing sessions recorded for this year. Choose another year or start watching."
+msgstr "No viewing sessions recorded for this year. Choose another year or start watching."
+
+msgid "Watch something in Nova and your dated sessions will appear here. Existing progress stays as it is; earlier viewing dates are never guessed."
+msgstr "Watch something in Nova and your dated sessions will appear here. Existing progress stays as it is; earlier viewing dates are never guessed."
+
+msgid "A year of watching"
+msgstr "A year of watching"
+
+msgid "Time watched by month"
+msgstr "Time watched by month"
+
+msgid "Your most watched titles"
+msgstr "Your most watched titles"
+
+msgid "The stories you spend time with"
+msgstr "The stories you spend time with"
+
+msgid "Recent sessions"
+msgstr "Recent sessions"
+
+msgid "Showing the latest 100 sessions. Totals include your full journal."
+msgstr "Showing the latest 100 sessions. Totals include your full journal."
+
+msgid "Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."
+msgstr "Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."
+
+msgid "Watch queue"
+msgstr "Watch queue"
+
+msgid "Your evening, in order."
+msgstr "Your evening, in order."
+
+msgid "TONIGHT"
+msgstr "TONIGHT"
+
+msgid "Make room for a good story"
+msgstr "Make room for a good story"
+
+msgid "Mix movies and episodes from different shows. Choose a stream whenever you're ready."
+msgstr "Mix movies and episodes from different shows. Choose a stream whenever you're ready."
+
+msgid "Play first"
+msgstr "Play first"
+
+msgid "Clear watched"
+msgstr "Clear watched"
+
+msgid "A little planning. A great night."
+msgstr "A little planning. A great night."
+
+msgid "Add a movie from its detail page, or open an episode's options and choose Add to watch queue."
+msgstr "Add a movie from its detail page, or open an episode's options and choose Add to watch queue."
+
+msgid "UP NEXT"
+msgstr "UP NEXT"
+
+msgid "#{}"
+msgstr "#{}"
+
+msgid "Watched"
+msgstr "Watched"
+
+msgid "Choose stream"
+msgstr "Choose stream"
+
+msgid "Remove from queue"
+msgstr "Remove from queue"
+
+msgid "Dated sessions, rewatches and your year in stories"
+msgstr "Dated sessions, rewatches and your year in stories"
+
+msgid "Line up tonight's movies and episodes"
+msgstr "Line up tonight's movies and episodes"
+
+msgid "Second subtitles"
+msgstr "Second subtitles"
+
+msgid "Scene bookmarks"
+msgstr "Scene bookmarks"
+
+msgid "Try another stream"
+msgstr "Try another stream"
+
+msgid "Keep position and track preferences"
+msgstr "Keep position and track preferences"
+
+msgid "A second language appears at the top of the video."
+msgstr "A second language appears at the top of the video."
+
+msgid "Optional note"
+msgstr "Optional note"
+
+msgid "Bookmark this scene"
+msgstr "Bookmark this scene"
+
+msgid "Save a moment to return to it later."
+msgstr "Save a moment to return to it later."
+
+msgid "Scene bookmark"
+msgstr "Scene bookmark"
+
+msgid "Delete bookmark"
+msgstr "Delete bookmark"
+
+msgid "SYNC INSPECTOR"
+msgstr "SYNC INSPECTOR"
+
+msgid "Understand this device's sync state"
+msgstr "Understand this device's sync state"
+
+msgid "Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off."
+msgstr "Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off."
+
+msgid "Close inspector"
+msgstr "Close inspector"
+
+msgid "Open inspector"
+msgstr "Open inspector"
+
+msgid "CURRENT PROFILE · LOCAL INVENTORY"
+msgstr "CURRENT PROFILE · LOCAL INVENTORY"
+
+msgid "Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here."
+msgstr "Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here."
+
+msgid "No sync records stored yet. Local changes appear here after they are saved."
+msgstr "No sync records stored yet. Local changes appear here after they are saved."
+
+msgid "Refresh inspector"
+msgstr "Refresh inspector"
+
+msgid "Hide episode explanations"
+msgstr "Hide episode explanations"
+
+msgid "Explain watched states"
+msgstr "Explain watched states"
+
+msgid "Find a saved title or episode"
+msgstr "Find a saved title or episode"
+
+msgid "Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history."
+msgstr "Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history."
+
+msgid "No matching saved episode states."
+msgstr "No matching saved episode states."
+
+msgid "In watch queue"
+msgstr "In watch queue"
+
+msgid "Add to watch queue"
+msgstr "Add to watch queue"
+
+msgid "Watch history and progress"
+msgstr "Watch history and progress"
+
+msgid "Playback preferences"
+msgstr "Playback preferences"
+
+msgid "Last stream choices"
+msgstr "Last stream choices"
+
+msgid "Other account data"
+msgstr "Other account data"
+
+msgid "Stored on this device"
+msgstr "Stored on this device"
+
+msgid "Local sync records unavailable"
+msgstr "Local sync records unavailable"
+
+msgid "Refresh after local storage becomes available."
+msgstr "Refresh after local storage becomes available."
+
+msgid "Unavailable"
+msgstr "Unavailable"
+
+msgid "Episode with no saved title"
+msgstr "Episode with no saved title"
+
+msgid "Unwatched"
+msgstr "Unwatched"
+
+msgid "Latest activity"
+msgstr "Latest activity"
+
+msgid "Watch action"
+msgstr "Watch action"
+
+msgid "Unwatch action"
+msgstr "Unwatch action"
+
+msgid "Device"
+msgstr "Device"
+
+msgid "Exchange recorded"
+msgstr "Exchange recorded"
+
+msgid "Delivery unknown"
+msgstr "Delivery unknown"
+
+msgid "No completed exchange snapshot is recorded for this device. Delivery is unknown."
+msgstr "No completed exchange snapshot is recorded for this device. Delivery is unknown."
+
+msgid "The watch action is newer than the unwatch action. Playback activity alone does not clear watched."
+msgstr "The watch action is newer than the unwatch action. Playback activity alone does not clear watched."
+
+msgid "The unwatch action wins over the watch action. Equal action clocks favor unwatch."
+msgstr "The unwatch action wins over the watch action. Equal action clocks favor unwatch."
+
+msgid "No watch action is recorded. Playback activity alone does not mark this episode watched."
+msgstr "No watch action is recorded. Playback activity alone does not mark this episode watched."
+
+msgid "The local view differs from this stored sync state; application may still be pending."
+msgstr "The local view differs from this stored sync state; application may still be pending."
+
+msgid "Includes action registers from confirmed episode aliases."
+msgstr "Includes action registers from confirmed episode aliases."
+
+msgid "Some viewing sessions could not be read. Your saved records have been preserved."
+msgstr "Some viewing sessions could not be read. Your saved records have been preserved."
+
+msgid "Your queue could not be loaded. Saved data has been preserved."
+msgstr "Your queue could not be loaded. Saved data has been preserved."
+
+msgid "Your queue could not be saved. Please try again."
+msgstr "Your queue could not be saved. Please try again."
+
+msgid "Your queue is full. Remove an item before adding another."
+msgstr "Your queue is full. Remove an item before adding another."
+
+msgid "{n} session"
+msgid_plural "{n} sessions"
+msgstr[0] "{n} session"
+msgstr[1] "{n} sessions"
+
+msgid "{n} rewatch"
+msgid_plural "{n} rewatches"
+msgstr[0] "{n} rewatch"
+msgstr[1] "{n} rewatches"

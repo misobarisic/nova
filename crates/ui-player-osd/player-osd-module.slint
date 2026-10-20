@@ -8,6 +8,15 @@ export component PlayerOsdModule inherits Window {
     width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;
     page := PlayerOverlay {
         width: 100%; height: 100%;
+        secondary_sub_tracks <=> PlayerOsdBridge.secondary_sub_tracks;
+        secondary_sub_track_label <=> PlayerOsdBridge.secondary_sub_track_label;
+        scene_bookmarks <=> PlayerOsdBridge.scene_bookmarks;
+        scene_bookmarks_available <=> PlayerOsdBridge.scene_bookmarks_available;
+        try_another_stream_available <=> PlayerOsdBridge.try_another_stream_available;
+        pick_secondary_sub_track(i) => { PlayerOsdBridge.pick_secondary_sub_track(i); }
+        add_scene_bookmark(note) => { PlayerOsdBridge.add_scene_bookmark(note); }
+        delete_scene_bookmark(i) => { PlayerOsdBridge.delete_scene_bookmark(i); }
+        try_another_stream() => { PlayerOsdBridge.try_another_stream(); }
         intro_skip_override_index <=> PlayerOsdBridge.intro_skip_override_index;
         intro_skip_mode_changed(i) => { PlayerOsdBridge.intro_skip_mode_changed(i); }
         skip_segment_kind <=> PlayerOsdBridge.skip_segment_kind;

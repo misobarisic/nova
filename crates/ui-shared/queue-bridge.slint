@@ -1,0 +1,25 @@
+export struct WatchQueueRow {
+    id: string,
+    title: string,
+    context: string,
+    poster: image,
+    has_poster: bool,
+    watched: bool,
+}
+
+// Queue identities contain the media type, title and exact episode. Reordering
+// a row must never redirect an already pressed action to its new neighbour.
+export global QueueBridge {
+    in-out property <bool> open;
+    in-out property <[WatchQueueRow]> rows;
+    in-out property <string> summary;
+    in-out property <string> notice;
+    in-out property <bool> detail_queued;
+    callback opened();
+    callback add_detail();
+    callback add_episode(int);
+    callback play(string);
+    callback move(string, int);
+    callback remove(string);
+    callback clear_watched();
+}

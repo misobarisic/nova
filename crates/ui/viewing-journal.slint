@@ -1,0 +1,185 @@
+import { JournalBridge, JournalSessionRow, JournalTitleRow, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { PageHeader } from "page-header.slint";
+import { PillButton } from "settings-controls.slint";
+import { ScrollView } from "scrollview.slint";
+
+component JournalStat inherits Rectangle {
+    in property <string> value;
+    in property <string> label;
+    border-radius: Theme.card_corner_radius;
+    background: Theme.current.card;
+    border-width: 1px; border-color: Theme.current.border_card;
+    VerticalLayout {
+        padding: 16px; spacing: 8px; alignment: start;
+        Text { text: root.value; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 30px : 25px; font-weight: 700; overflow: elide; }
+        Text { text: root.label; color: Theme.current.text_secondary; font-size: 13px; wrap: word-wrap; }
+    }
+}
+
+component JournalSession inherits Rectangle {
+    in property <JournalSessionRow> entry;
+    in property <bool> narrow;
+    border-radius: Theme.card_corner_radius;
+    background: Theme.current.card;
+    border-width: 1px; border-color: Theme.current.border_card;
+    height: body.preferred-height + 28px;
+    body := VerticalLayout {
+        x: 14px; y: 14px; width: parent.width - 28px;
+        spacing: 7px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: root.entry.title; font-size: 16px; font-weight: 600; color: Theme.current.text_bright; overflow: elide; horizontal-stretch: 1; min-width: 0px; }
+            Text { text: root.entry.watched; font-size: 14px; color: Theme.current.accent; }
+        }
+        if root.entry.episode != "": Text { text: root.entry.episode; color: Theme.current.text_primary; overflow: elide; font-size: 13px; }
+        Text { text: root.entry.date; color: Theme.current.text_muted; font-size: 12px; }
+        if root.entry.completed || root.entry.rewatch: Text {
+            text: root.entry.completed ? (root.entry.rewatch ? @tr("Rewatch completed") : @tr("Completed")) : @tr("Rewatch");
+            color: Theme.current.accent; font-size: 12px;
+        }
+    }
+}
+
+component JournalTitle inherits Rectangle {
+    in property <JournalTitleRow> entry;
+    in property <bool> narrow;
+    border-radius: Theme.card_corner_radius;
+    background: Theme.current.card;
+    border-width: 1px; border-color: Theme.current.border_card;
+    height: body.preferred-height + 28px;
+    body := VerticalLayout {
+        x: 14px; y: 14px; width: parent.width - 28px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: root.entry.title; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; overflow: elide; min-width: 0px; horizontal-stretch: 1; }
+            Text { text: root.entry.watched; color: Theme.current.accent; font-size: 14px; }
+        }
+        Text { text: @tr("First watched: {}", root.entry.first_date); color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
+        if root.entry.finished_date != "": Text { text: root.entry.is_movie ? @tr("Finished: {}", root.entry.finished_date) : @tr("Caught up: {}", root.entry.finished_date); color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
+        Text {
+            text: @tr("{n} session" | "{n} sessions" % root.entry.sessions) + (root.entry.rewatches > 0 ? " · " + @tr("{n} rewatch" | "{n} rewatches" % root.entry.rewatches) : "");
+            color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap;
+        }
+    }
+}
+
+// More owns navigation; this page owns a single, keyboard-scrollable reading
+// surface and only exposes recorded playback facts for the selected profile.
+export component ViewingJournalPage inherits Rectangle {
+    in property <bool> active: true;
+    in property <bool> narrow: root.width < 700px;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback back();
+    public function focus_shell() { if root.active { focus.focus(); } }
+    background: Theme.current.artwork_canvas;
+    clip: true;
+    changed active => { if root.active { focus.focus(); } }
+    focus := FocusScope {
+        enabled: root.active;
+        width: 100%; height: 100%;
+        init => { if root.active { self.focus(); } }
+        key-pressed(e) => {
+            if e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape {
+                if !e.repeat { root.back(); } accept
+            } else if e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.PageUp || e.text == Key.PageDown {
+                SettingsStyle.keyboard-mode = true;
+                let step = e.text == Key.PageUp || e.text == Key.PageDown ? journal_scroll.visible-height * 0.8 : 64px;
+                journal_scroll.content-y = Math.max(Math.min(0px, journal_scroll.visible-height - journal_scroll.content-height), Math.min(0px, journal_scroll.content-y + (e.text == Key.UpArrow || e.text == Key.PageUp ? step : -step)));
+                accept
+            } else if e.text == Key.Home {
+                journal_scroll.content-y = 0px; accept
+            } else if e.text == Key.End {
+                journal_scroll.content-y = Math.min(0px, journal_scroll.visible-height - journal_scroll.content-height); accept
+            } else if JournalBridge.year > 0 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                if !e.repeat { JournalBridge.select_year(JournalBridge.year + (e.text == Key.LeftArrow ? -1 : 1)); } accept
+            } else { reject }
+        }
+        journal_scroll := ScrollView {
+            x: root.safe-left + 18px; y: root.safe-top + 18px;
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+            height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+            VerticalLayout {
+                spacing: 18px; alignment: start;
+                PageHeader {
+                    title: @tr("Viewing journal");
+                    subtitle: @tr("Your viewing time, completed watches and the stories you return to.");
+                    narrow: root.narrow; show-back: true;
+                    back => { root.back(); }
+                }
+                // The mode rail and year controls wrap into separate lanes on
+                // phones, preserving finger-sized controls at narrow widths.
+                HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    PillButton { label: @tr("All time"); primary: JournalBridge.year == 0; clicked => { JournalBridge.select_year(0); } }
+                    PillButton { label: @tr("Yearly recap"); primary: JournalBridge.year > 0; clicked => { JournalBridge.select_year(JournalBridge.current_year); } }
+                }
+                if JournalBridge.year > 0: HorizontalLayout {
+                    spacing: 12px; alignment: start;
+                    PillButton { label: "‹"; btn_min_width: 44px; enabled: JournalBridge.year > JournalBridge.oldest_year; accessible-label: @tr("Previous year"); clicked => { JournalBridge.select_year(JournalBridge.year - 1); } }
+                    Text { text: JournalBridge.year; color: Theme.current.text_bright; font-size: 24px; font-weight: 700; vertical-alignment: center; }
+                    PillButton { label: "›"; btn_min_width: 44px; enabled: JournalBridge.year < JournalBridge.current_year; accessible-label: @tr("Next year"); clicked => { JournalBridge.select_year(JournalBridge.year + 1); } }
+                }
+                if JournalBridge.error != "": Text { text: JournalBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; }
+                stats := Rectangle {
+                    private property <int> cols: root.narrow ? 2 : 3;
+                    private property <length> cell-width: Math.max(0px, (self.width - (self.cols - 1) * 10px) / self.cols);
+                    height: root.narrow ? 350px : 230px;
+                    JournalStat { x: 0px; y: 0px; width: stats.cell-width; height: 110px; value: JournalBridge.watched; label: @tr("Time watched · h:mm:ss"); }
+                    JournalStat { x: stats.cell-width + 10px; y: 0px; width: stats.cell-width; height: 110px; value: JournalBridge.title_count; label: @tr("Titles explored"); }
+                    JournalStat { x: root.narrow ? 0px : 2 * (stats.cell-width + 10px); y: root.narrow ? 120px : 0px; width: stats.cell-width; height: 110px; value: JournalBridge.completion_count; label: @tr("Completed watches"); }
+                    JournalStat { x: root.narrow ? stats.cell-width + 10px : 0px; y: 120px; width: stats.cell-width; height: 110px; value: JournalBridge.rewatch_count; label: @tr("Completed rewatches"); }
+                    JournalStat { x: root.narrow ? 0px : stats.cell-width + 10px; y: root.narrow ? 240px : 120px; width: stats.cell-width; height: 110px; value: JournalBridge.session_count; label: @tr("Viewing sessions"); }
+                    JournalStat { x: root.narrow ? stats.cell-width + 10px : 2 * (stats.cell-width + 10px); y: root.narrow ? 240px : 120px; width: stats.cell-width; height: 110px; value: JournalBridge.active_days; label: @tr("Days watching"); }
+                }
+                if JournalBridge.session_count == 0: Rectangle {
+                    height: empty_body.preferred-height + 48px;
+                    background: Theme.current.card; border-radius: Theme.card_corner_radius;
+                    border-width: 1px; border-color: Theme.current.border_card;
+                    empty_body := VerticalLayout {
+                        x: 24px; y: 24px; width: parent.width - 48px; spacing: 10px;
+                        Text { text: JournalBridge.year > 0 ? @tr("A fresh chapter") : @tr("Your story starts here"); color: Theme.current.text_bright; font-weight: 600; font-size: 22px; wrap: word-wrap; }
+                        Text { text: JournalBridge.year > 0 ? @tr("No viewing sessions recorded for this year. Choose another year or start watching.") : @tr("Watch something in Nova and your dated sessions will appear here. Existing progress stays as it is; earlier viewing dates are never guessed."); color: Theme.current.text_secondary; wrap: word-wrap; font-size: 14px; }
+                    }
+                }
+                if JournalBridge.year > 0 && JournalBridge.session_count > 0: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: @tr("A year of watching"); color: Theme.current.text_bright; font-size: 21px; font-weight: 600; }
+                    Text { text: @tr("Time watched by month"); color: Theme.current.text_secondary; font-size: 13px; }
+                    chart := Rectangle {
+                        height: 150px;
+                        for month[index] in JournalBridge.months: Rectangle {
+                            x: index * parent.width / 12; width: parent.width / 12; height: parent.height;
+                            accessible-role: text;
+                            accessible-label: month.label + ": " + month.watched;
+                            Rectangle {
+                                x: parent.width * 0.2; width: parent.width * 0.6;
+                                y: 120px - self.height; height: Math.max(2px, month.fraction * 110px);
+                                background: month.fraction > 0 ? Theme.current.accent : Theme.current.settings_control;
+                                border-radius: 3px;
+                            }
+                            Text { y: 128px; width: 100%; height: 20px; text: month.label; accessible-label: month.label + ": " + month.watched; horizontal-alignment: center; color: Theme.current.text_muted; font-size: 11px; }
+                        }
+                    }
+                }
+                if JournalBridge.titles.length > 0: VerticalLayout {
+                    spacing: 10px;
+                    Text { text: JournalBridge.year > 0 ? @tr("Your most watched titles") : @tr("The stories you spend time with"); color: Theme.current.text_bright; font-size: 21px; font-weight: 600; wrap: word-wrap; }
+                    for entry in JournalBridge.titles: JournalTitle { entry: entry; narrow: root.narrow; }
+                }
+                if JournalBridge.sessions.length > 0: VerticalLayout {
+                    spacing: 10px;
+                    Text { text: @tr("Recent sessions"); color: Theme.current.text_bright; font-size: 21px; font-weight: 600; }
+                    for entry in JournalBridge.sessions: JournalSession { entry: entry; narrow: root.narrow; }
+                    if JournalBridge.session_count > 100: Text { text: @tr("Showing the latest 100 sessions. Totals include your full journal."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                }
+                Text { text: @tr("Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                Rectangle { height: 8px; }
+            }
+        }
+    }
+    forward-focus: focus;
+}

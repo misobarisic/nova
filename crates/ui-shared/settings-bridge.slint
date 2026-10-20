@@ -1,6 +1,6 @@
 // The Settings contract is shared by the small host and the compiled page.
 // Mutable properties are linked across their globals before page initialization.
-import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
+import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SyncInspectorRow, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
     in-out property <[string]> list_services_account: ["", "", ""];
@@ -181,6 +181,12 @@ export global SettingsBridge {
     in-out property <string> torrent_disk_usage: "";
     in-out property <bool> download_auto_delete_watched: false;
     in-out property <[DownloadRow]> downloads_rows: [];
+    in-out property <bool> sync_inspector_active: false;
+    in-out property <[SyncInspectorRow]> sync_inspector_rows: [];
+    in-out property <[SyncInspectorRow]> sync_inspector_episodes: [];
+    in-out property <string> sync_inspector_query: "";
+    callback sync_inspector_refresh();
+    callback sync_inspector_query_changed(string);
     in-out property <bool> sync_enabled: false;
     in-out property <string> sync_identity: "";
     in-out property <[SyncPeer]> sync_peers: [];

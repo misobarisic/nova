@@ -16,6 +16,7 @@ struct LoadedSubtitle {
     language: String,
     id: i32,
     restore: bool,
+    secondary: bool,
 }
 
 // Bound retained local paths even if a session repeatedly loads addon choices.
@@ -38,24 +39,40 @@ impl LoadedSubtitles {
             language: language.into(),
             id,
             restore: false,
+            secondary: false,
         });
         while self.tracks.len() > LOADED_SUBTITLE_LIMIT {
             self.tracks.pop_front();
         }
     }
 
+    #[cfg(test)]
     fn arm(&mut self, selected: i32) -> Option<i32> {
+        self.arm_pair(selected, -1)
+    }
+
+    fn arm_pair(&mut self, selected: i32, secondary: i32) -> Option<i32> {
         // Another teardown can precede the first recovered frame. Its native
         // track list is incomplete, so keep the already captured file identity.
-        if let Some(track) = self.tracks.iter().find(|track| track.restore) {
-            return Some(track.id);
+        if self.tracks.iter().any(|track| track.restore) {
+            return self
+                .tracks
+                .iter()
+                .find(|track| track.restore && !track.secondary)
+                .map(|track| track.id);
         }
         // Only the selected addon returns after reload. Retiring every other
         // numeric ID prevents it from aliasing a recovered embedded track.
-        self.tracks.retain(|track| track.id == selected);
-        let track = self.tracks.front_mut()?;
-        track.restore = true;
-        Some(track.id)
+        self.tracks
+            .retain(|track| track.id == selected || track.id == secondary);
+        for track in &mut self.tracks {
+            track.restore = true;
+            track.secondary = track.id == secondary;
+        }
+        self.tracks
+            .iter()
+            .find(|track| !track.secondary)
+            .map(|track| track.id)
     }
 
     fn restore(
@@ -63,14 +80,24 @@ impl LoadedSubtitles {
         mpv: &Mpv,
         sync: &mut subtitle_sync::SubtitleSync,
     ) -> Result<bool, String> {
-        let Some(track) = self.tracks.front_mut().filter(|track| track.restore) else {
-            return Ok(false);
-        };
-        let id = add_local_subtitle(mpv, &track.path, &track.title, &track.language)?;
-        sync.remap(track.id, id);
-        track.id = id;
-        track.restore = false;
-        Ok(true)
+        let mut restored_primary = false;
+        for track in self.tracks.iter_mut().filter(|track| track.restore) {
+            let primary = mpv
+                .get_property::<String>("sid")
+                .unwrap_or_else(|_| "no".into());
+            let id = add_local_subtitle(mpv, &track.path, &track.title, &track.language)?;
+            if track.secondary {
+                let _ = mpv.set_property("sid", primary);
+                let _ = mpv.set_property("secondary-sid", id.to_string());
+                let _ = mpv.set_property("secondary-sub-visibility", true);
+            } else {
+                sync.remap(track.id, id);
+                restored_primary = true;
+            }
+            track.id = id;
+            track.restore = false;
+        }
+        Ok(restored_primary)
     }
 
     pub(super) fn clear(&mut self) {
@@ -91,12 +118,21 @@ impl Player {
     #[cfg(target_os = "android")]
     pub(super) fn arm_online_subtitle_restore(&self) {
         let selected = self.selected_track_id(false);
+        let secondary = self
+            .state
+            .mpv
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|mpv| mpv.get_property::<String>("secondary-sid").ok())
+            .and_then(|id| id.parse::<i32>().ok())
+            .unwrap_or(-1);
         let restore = self
             .state
             .loaded_online_subtitles
             .lock()
             .unwrap()
-            .arm(selected);
+            .arm_pair(selected, secondary);
         if let Some(mpv) = self.state.mpv.lock().unwrap().as_ref() {
             self.state
                 .subtitle_sync
@@ -178,6 +214,16 @@ impl Player {
         title: &str,
         language: &str,
     ) -> Result<i32, String> {
+        self.add_online_subtitle_for_slot(path, title, language, false)
+    }
+
+    pub(super) fn add_online_subtitle_for_slot(
+        &self,
+        path: &str,
+        title: &str,
+        language: &str,
+        secondary: bool,
+    ) -> Result<i32, String> {
         if self.state.pending.lock().unwrap().is_some() {
             return Err("video is still loading".into());
         }
@@ -188,7 +234,16 @@ impl Player {
         {
             return Err("video has changed".into());
         }
+        // Keep primary capture, native add and restoration under the same
+        // engine lock so Android recovery cannot invalidate a numeric ID.
+        let primary = secondary.then(|| {
+            mpv.get_property::<String>("sid")
+                .unwrap_or_else(|_| "no".into())
+        });
         let id = add_local_subtitle(mpv, path, title, language)?;
+        if let Some(primary) = primary {
+            let _ = mpv.set_property("sid", primary);
+        }
         let base = self
             .state
             .preferences
@@ -216,6 +271,22 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_recovery_retains_a_secondary_only_addon() {
+        let mut loaded = LoadedSubtitles::default();
+        loaded.register("second.srt", "Second language", "hr", 7);
+        assert_eq!(loaded.arm_pair(2, 7), None);
+        assert_eq!(loaded.tracks.len(), 1);
+        assert!(loaded.tracks[0].secondary);
+        assert!(loaded.tracks[0].restore);
+        assert_eq!(loaded.arm_pair(-1, -1), None);
+        assert_eq!(
+            loaded.tracks.len(),
+            1,
+            "a reload without tracks must retain its pending file identity"
+        );
+    }
 
     #[test]
     fn local_subtitle_selection_and_recovery_keep_the_selected_addon() {
@@ -362,6 +433,28 @@ mod tests {
             "restore runs once per reload"
         );
         assert_eq!(loaded.arm(restored_id), Some(restored_id));
+        // Both languages selected from addons must survive a renderer reload.
+        loaded.clear();
+        let primary =
+            add_local_subtitle(&mpv, &subtitle.to_string_lossy(), "Primary", "en").unwrap();
+        loaded.register(&subtitle.to_string_lossy(), "Primary", "en", primary);
+        let secondary = add_local_subtitle(&mpv, &other.to_string_lossy(), "Second", "hr").unwrap();
+        loaded.register(&other.to_string_lossy(), "Second", "hr", secondary);
+        mpv.set_property("sid", primary.to_string()).unwrap();
+        mpv.set_property("secondary-sid", secondary.to_string())
+            .unwrap();
+        assert_eq!(loaded.arm_pair(primary, secondary), Some(primary));
+        assert_eq!(loaded.tracks.len(), 2);
+        assert!(loaded.restore(&mpv, &mut sync).unwrap());
+        let primary = mpv.get_property::<String>("sid").unwrap();
+        let secondary = mpv.get_property::<String>("secondary-sid").unwrap();
+        assert_ne!(primary, secondary);
+        assert_ne!(primary, "no");
+        assert_ne!(secondary, "no");
+        assert!(
+            mpv.get_property::<bool>("secondary-sub-visibility")
+                .unwrap()
+        );
         loaded.clear();
         assert!(loaded.tracks.is_empty());
         assert!(!loaded.restore(&mpv, &mut sync).unwrap());

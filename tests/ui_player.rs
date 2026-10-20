@@ -47,3 +47,6 @@ mod tv_controls;
 
 #[path = "player/party.rs"]
 mod party;
+
+#[path = "player/tools.rs"]
+mod tools;

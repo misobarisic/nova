@@ -20,10 +20,11 @@ pub use nova_ui_shared::{
     AddonBrowserRow, AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ChapterRow,
     CompletionDestination, ContinueRow, DetailActionRow, DetailInfo, DownloadEpisode,
     DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
-    LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow, ProfileRow, RemoteDeviceRow,
-    RemoteOfferRow, SeasonCard, SettingSyncInfo, SheetItem, StreamRow, SyncInvite, SyncPeer,
-    ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
-    TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+    JournalMonthRow, JournalSessionRow, JournalTitleRow, LicenseSource, MediaCard, PartyMemberRow,
+    PluginSettingRow, ProfileRow, RemoteDeviceRow, RemoteOfferRow, SeasonCard, SettingSyncInfo,
+    SheetItem, StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow,
+    TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow,
+    TrackingSetupRow, UpcomingRow, WatchQueueRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

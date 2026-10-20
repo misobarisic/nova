@@ -23,3 +23,9 @@ mod responsive_more;
 
 #[path = "navigation/root_destination_headers.rs"]
 mod root_destination_headers;
+
+#[path = "navigation/viewing_journal.rs"]
+mod viewing_journal;
+
+#[path = "navigation/watch_queue.rs"]
+mod watch_queue;

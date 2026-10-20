@@ -366,3 +366,79 @@ fn incoming_pairing_code_fits_phone_widths_in_both_languages() {
     }
     slint::select_bundled_translation("en").unwrap();
 }
+
+#[test]
+fn sync_inspector_explanations_wrap_across_phone_and_landscape_sizes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::sync_inspector_explanations_wrap_across_phone_and_landscape_sizes"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.invoke_more_bridge_sync_picked();
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 1000));
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..12 {
+            let _ = max_right_edge(&app);
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(25));
+        }
+    };
+    let click = |id: &str| {
+        let query_id = id.to_owned();
+        ElementQuery::from_root(&app)
+            .match_predicate(move |element| {
+                element.accessible_id().as_deref() == Some(query_id.as_str())
+            })
+            .find_first()
+            .unwrap_or_else(|| panic!("missing inspector action {id}"))
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+    };
+    settle();
+    click("sync-inspector-toggle");
+    settle();
+    assert!(
+        app.global::<nova::SettingsBridge>()
+            .get_sync_inspector_active()
+    );
+    click("sync-inspector-episodes");
+    let long = "VeryLongUnbrokenEpisodeTitle".repeat(12);
+    app.global::<nova::SettingsBridge>()
+        .set_sync_inspector_rows(
+            Rc::new(VecModel::from(vec![nova::SyncInspectorRow {
+                title: long.clone().into(),
+                detail: "120 current · 3 deletions retained · waiting to apply on this device"
+                    .into(),
+                status: "Stored on this device".into(),
+            }]))
+            .into(),
+        );
+    app.global::<nova::SettingsBridge>().set_sync_inspector_episodes(
+        Rc::new(VecModel::from(vec![nova::SyncInspectorRow {
+            title: long.into(),
+            detail: "The unwatch action wins over the watch action.\nWatch action: 1760000000000:123 · ffffffffffffffff\nUnwatch action: 1760000000000:124 · aaaaaaaaaaaaaaaa".into(),
+            status: "Unwatched".into(),
+        }]))
+        .into(),
+    );
+    for locale in ["en", "hr"] {
+        slint::select_bundled_translation(locale).unwrap();
+        for (width, height) in [(320, 800), (360, 800), (720, 320), (1280, 900)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            settle();
+            let edge = max_right_edge(&app);
+            assert!(
+                edge <= width as f32 + 1.0,
+                "{locale} inspector at {width}x{height}: content reaches {edge}"
+            );
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

@@ -45,6 +45,7 @@ pub use package::{
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
 pub use playback::{ALPN as PLAYBACK_ALPN, PreparedPlaybackRequest};
 pub use profiles::{is_progress_domain, parse_profile_domain, profile_domain};
+pub use progress::{ProgressInspection, inspect_progress};
 pub use protocol::ALPN;
 pub use store::{AckFloor, Store};
 pub use ticket::{decode_ticket, encode_ticket};
@@ -754,6 +755,13 @@ impl SyncEngine {
             (Some(a), Some(b)) => Some(a.max(b)),
             (direct, mesh) => direct.or(mesh),
         }
+    }
+
+    /// Local digest snapshot from the last completed exchange with this peer.
+    /// This is a GC watermark, not a per-record delivery receipt or a remote
+    /// application/projection acknowledgement. No network request is made.
+    pub fn peer_exchange_clock(&self, peer: &str) -> Option<Hlc> {
+        self.handler.ack_clock(peer)
     }
 
     pub fn status(&self) -> SyncStatus {

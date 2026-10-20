@@ -61,6 +61,35 @@ fn state(record: &Record) -> Option<State> {
         activity: c,
     })
 }
+/// Read-only explanation of the same action registers used by `render`.
+/// The versions identify actions, not a log of every playback event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProgressInspection {
+    pub watched: bool,
+    pub activity: Version,
+    pub watch_action: Option<Version>,
+    pub unwatch_action: Option<Version>,
+}
+
+pub fn inspect_progress(record: &Record) -> Option<ProgressInspection> {
+    if record.is_deleted() || !valid(record) {
+        return None;
+    }
+    let state = state(record)?;
+    let watched = state.watched.as_ref().is_some_and(|watch| {
+        state
+            .unwatch
+            .as_ref()
+            .is_none_or(|unwatch| watch.version.newer_than(&unwatch.version))
+    });
+    Some(ProgressInspection {
+        watched,
+        activity: state.activity.version,
+        watch_action: state.watched.map(|action| action.version),
+        unwatch_action: state.unwatch.map(|action| action.version),
+    })
+}
+
 pub(crate) fn valid(record: &Record) -> bool {
     let Some(raw) = record.value.as_ref() else {
         return true;
@@ -194,6 +223,41 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn inspection_explains_actions_without_turning_activity_into_watch_intent() {
+        let watched = rec(1, true, 0, 100);
+        let unwatched = rec(2, false, 1, 0);
+        let activity = rec(3, false, 0, 12);
+        let record = merged(&merged(&watched, &unwatched), &activity);
+        let before = record.clone();
+        let inspection = inspect_progress(&record).unwrap();
+        assert!(!inspection.watched);
+        assert_eq!(inspection.activity, activity.version);
+        assert_eq!(inspection.watch_action, Some(watched.version));
+        assert_eq!(inspection.unwatch_action, Some(unwatched.version));
+        assert_eq!(record, before);
+        assert!(inspect_progress(&Record::tombstone(record.version)).is_none());
+    }
+
+    #[test]
+    fn inspection_matches_unwatch_tie_and_legacy_watch_rules() {
+        let watched = rec(1, true, 0, 100);
+        let unwatched = rec(1, false, 1, 0);
+        assert!(
+            !inspect_progress(&merged(&watched, &unwatched))
+                .unwrap()
+                .watched
+        );
+        let legacy = Record::present(
+            serde_json::json!({"watched": true, "position_secs": 100}).to_string(),
+            watched.version,
+        );
+        let inspection = inspect_progress(&legacy).unwrap();
+        assert!(inspection.watched);
+        assert_eq!(inspection.watch_action, Some(watched.version));
+        assert_eq!(inspection.unwatch_action, None);
+    }
+
     #[test]
     fn progress_registers_are_commutative_associative_and_idempotent() {
         let a = rec(1, true, 0, 100);

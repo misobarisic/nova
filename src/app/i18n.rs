@@ -119,6 +119,9 @@ impl Bridge {
         self.apply_category_rows();
         self.update_library_badges();
         self.refresh_home_language_text();
+        self.refresh_watch_queue();
+        self.refresh_viewing_journal();
+        self.refresh_sync_inspector();
         self.refresh_addon_picker_language_text();
         self.apply_addon_rows();
         self.refresh_catalog_language_text();

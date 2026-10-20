@@ -6,6 +6,8 @@ import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCa
 
 import { SubtitleControls } from "subtitle-controls.slint";
 
+import { SearchField } from "searchfield.slint";
+
 import { SpeedControl } from "speedcontrol.slint";
 
 
@@ -211,6 +213,16 @@ component SettingsMenu inherits Rectangle {
     in property <[TrackRow]> sub_tracks;
     in property <int> subtitle_addon_status: 0;
     in property <[TrackRow]> audio_tracks;
+    in property <[TrackRow]> secondary_sub_tracks;
+    in property <string> secondary_sub_track_label;
+    in property <[ChapterRow]> scene_bookmarks;
+    in property <bool> scene_bookmarks_available;
+    in-out property <int> bookmark_note_focus_request: 0;
+    in property <bool> try_another_stream_available;
+    callback pick_secondary_sub_track(int);
+    callback add_scene_bookmark(string);
+    callback delete_scene_bookmark(int);
+    callback try_another_stream();
     in property <[ChapterRow]> player_chapters;
     in property <float> chapter_position;
     in property <bool> chapter_seek_allowed;
@@ -264,6 +276,8 @@ component SettingsMenu inherits Rectangle {
         if root.page == 5 { return @tr("Subtitle appearance and timing"); }
         if root.page == 6 { return @tr("Intro skipping"); }
         if root.page == 7 { return @tr("Chapters"); }
+        if root.page == 8 { return @tr("Second subtitles"); }
+        if root.page == 9 { return @tr("Scene bookmarks"); }
         return @tr("Playback settings");
     }
 
@@ -463,6 +477,98 @@ component SettingsMenu inherits Rectangle {
                             label: @tr("Chapters");
                             focused: root.focused_idx == (root.decoder_available ? 6 : 5);
                             activate => { root.page = 7; }
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            icon_kind: 2; submenu: true;
+                            label: @tr("Second subtitles");
+                            value: root.secondary_sub_track_label == "" ? @tr("Off") : root.secondary_sub_track_label;
+                            focused: root.focused_idx == (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0);
+                            activate => { root.page = 8; }
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            submenu: true;
+                            label: @tr("Scene bookmarks");
+                            focused: root.focused_idx == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
+                            activate => { root.page = 9; }
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Try another stream");
+                            value: @tr("Keep position and track preferences");
+                            enabled: root.try_another_stream_available;
+                            focused: root.focused_idx == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0);
+                            activate => { root.try_another_stream(); root.closed(); }
+                        }
+                    }
+
+                    if root.page == 8: VerticalLayout {
+                        spacing: 4px;
+                        if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
+                        Text {
+                            text: @tr("A second language appears at the top of the video.");
+                            wrap: word-wrap; color: Theme.current.text_player_muted;
+                            font-size: InterfaceStyle.tv ? 20px : 13px;
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Off");
+                            selected: root.secondary_sub_track_label == "";
+                            focused: root.focused_idx == 0;
+                            activate => { root.pick_secondary_sub_track(-1); }
+                        }
+                        for track[i] in root.secondary_sub_tracks: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: track.lang + (track.title != "" ? " — " + track.title : "");
+                            value: track.codec; selected: track.selected;
+                            focused: root.focused_idx == i + 1;
+                            activate => { root.pick_secondary_sub_track(track.index); }
+                        }
+                    }
+
+                    if root.page == 9: VerticalLayout {
+                        spacing: 6px;
+                        note := SearchField {
+                            roomy: true;
+                            placeholder-text: @tr("Optional note");
+                            keyboard-mode: root.focused_idx == 0;
+                            border-width: root.focused_idx == 0 ? 2px : 1px;
+                            border-color: root.focused_idx == 0 ? Theme.current.focus_ring : Theme.current.control_border;
+                            property <int> focus-request: root.bookmark_note_focus_request;
+                            changed focus-request => { if self.enabled { self.focus_at_end(); } }
+                            enabled: root.scene_bookmarks_available;
+                            accepted(value) => { root.add_scene_bookmark(value); self.text = ""; }
+                        }
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Bookmark this scene");
+                            value: root.format_time(root.chapter_position);
+                            enabled: root.scene_bookmarks_available;
+                            focused: root.focused_idx == 1;
+                            activate => { root.add_scene_bookmark(note.full-text); note.text = ""; }
+                        }
+                        if root.scene_bookmarks.length == 0: Text {
+                            text: @tr("Save a moment to return to it later.");
+                            wrap: word-wrap; color: Theme.current.text_player_muted;
+                            font-size: InterfaceStyle.tv ? 20px : 13px;
+                        }
+                        for bookmark[i] in root.scene_bookmarks: VerticalLayout {
+                            spacing: 0px;
+                            MenuRow {
+                                reveal(y, h) => { root.reveal_row(y, h); }
+                                label: bookmark.title == "" ? @tr("Scene bookmark") : bookmark.title;
+                                value: root.format_time(bookmark.position);
+                                enabled: root.chapter_seek_allowed;
+                                focused: root.focused_idx == 2 + i * 2;
+                                activate => { root.pick_chapter(bookmark.position); }
+                            }
+                            MenuRow {
+                                reveal(y, h) => { root.reveal_row(y, h); }
+                                label: @tr("Delete bookmark");
+                                focused: root.focused_idx == 3 + i * 2;
+                                activate => { root.delete_scene_bookmark(i); }
+                            }
                         }
                     }
 
@@ -767,6 +873,16 @@ export component PlayerOverlay {
     in-out property <float> position: 0.0;
     in-out property <float> duration: 0.0;
     in property <float> buffered_until: 0.0;
+    in property <[TrackRow]> secondary_sub_tracks;
+    in property <string> secondary_sub_track_label;
+    in property <[ChapterRow]> scene_bookmarks;
+    in property <bool> scene_bookmarks_available;
+    in-out property <int> bookmark_note_focus_request: 0;
+    in property <bool> try_another_stream_available;
+    callback pick_secondary_sub_track(int);
+    callback add_scene_bookmark(string);
+    callback delete_scene_bookmark(int);
+    callback try_another_stream();
     in property <[ChapterRow]> player_chapters;
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
@@ -793,7 +909,7 @@ export component PlayerOverlay {
     // A native menu-row/preset scope may disappear when a submenu changes.
     // The player scope survives every menu body and owns nearest-layer Back.
     changed settings_page => {
-        if root.settings_page == 2 { root.tracks_popup_opened(2); }
+        if root.settings_page == 2 || root.settings_page == 8 { root.tracks_popup_opened(2); }
         if root.settings_page == 1 { root.kb_menu = root.hw_plus_available ? 0 : 1; }
         if root.settings_page == 7 { root.kb_menu = 0; }
         key_scope.focus();
@@ -1058,7 +1174,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0);
+                return (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1072,6 +1188,8 @@ export component PlayerOverlay {
             if root.settings_page == 5 { return 8; }
             if root.settings_page == 6 { return 4; }
             if root.settings_page == 7 { return root.player_chapters.length; }
+            if root.settings_page == 8 { return root.secondary_sub_tracks.length + 1; }
+            if root.settings_page == 9 { return root.scene_bookmarks.length * 2 + 2; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1258,6 +1376,12 @@ export component PlayerOverlay {
                 } else if (root.decoder_available && root.kb_menu == 2) {
                     root.settings_page = 1;
                     root.kb_menu = root.hw_plus_available ? 0 : 1;
+                } else if root.kb_menu == (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.settings_page = 8; root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.settings_page = 9; root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    if root.try_another_stream_available { root.open_popup = 0; root.try_another_stream(); }
                 } else if root.player_chapters.length > 0 && root.kb_menu == (root.decoder_available ? 6 : 5) {
                     root.settings_page = 7;
                     root.kb_menu = 0;
@@ -1292,6 +1416,22 @@ export component PlayerOverlay {
                 } else if (root.kb_menu - 1 < root.audio_tracks.length) {
                     root.pick_audio_track(root.audio_tracks[root.kb_menu - 1].index);
                     root.open_popup = 0;
+                }
+            } else if root.settings_page == 8 {
+                if root.kb_menu == 0 { root.pick_secondary_sub_track(-1); }
+                else if root.kb_menu - 1 < root.secondary_sub_tracks.length {
+                    root.pick_secondary_sub_track(root.secondary_sub_tracks[root.kb_menu - 1].index);
+                }
+            } else if root.settings_page == 9 {
+                if root.kb_menu == 0 && root.scene_bookmarks_available { root.bookmark_note_focus_request += 1; }
+                else if root.kb_menu == 1 && root.scene_bookmarks_available { root.add_scene_bookmark(""); }
+                else if root.kb_menu > 1 && Math.floor((root.kb_menu - 2) / 2) < root.scene_bookmarks.length {
+                    let bookmark_index = Math.floor((root.kb_menu - 2) / 2);
+                    if Math.mod(root.kb_menu - 2, 2) == 0 && root.tv_can_seek() {
+                        root.seek(root.scene_bookmarks[bookmark_index].position); root.open_popup = 0;
+                    } else if Math.mod(root.kb_menu - 2, 2) == 1 {
+                        root.delete_scene_bookmark(bookmark_index); root.kb_menu = Math.min(root.kb_menu, root.kb_menu_n() - 1);
+                    }
                 }
             } else if root.settings_page == 7 {
                 if root.tv_can_seek() && root.kb_menu < root.player_chapters.length {
@@ -1958,6 +2098,15 @@ export component PlayerOverlay {
                     text: root.player_status; color: Theme.current.text_bright;
                     font-size: 18px; horizontal-alignment: center;
                     wrap: word-wrap; width: 80%;
+                }
+            }
+            if root.try_another_stream_available: HorizontalLayout {
+                alignment: center;
+                MenuRow {
+                    width: Math.min(340px, root.width - root.safe-left - root.safe-right - 32px);
+                    label: @tr("Try another stream");
+                    value: @tr("Keep position and track preferences");
+                    activate => { root.try_another_stream(); }
                 }
             }
         }
@@ -2946,6 +3095,16 @@ export component PlayerOverlay {
             sub_tracks: root.sub_tracks;
             subtitle_addon_status: root.subtitle_addon_status;
             audio_tracks: root.audio_tracks;
+            secondary_sub_tracks: root.secondary_sub_tracks;
+            secondary_sub_track_label: root.secondary_sub_track_label;
+            scene_bookmarks: root.scene_bookmarks;
+            scene_bookmarks_available: root.scene_bookmarks_available;
+            bookmark_note_focus_request: root.bookmark_note_focus_request;
+            try_another_stream_available: root.try_another_stream_available;
+            pick_secondary_sub_track(i) => { root.pick_secondary_sub_track(i); }
+            add_scene_bookmark(note) => { root.add_scene_bookmark(note); }
+            delete_scene_bookmark(i) => { root.delete_scene_bookmark(i); }
+            try_another_stream() => { root.try_another_stream(); }
             player_chapters: root.player_chapters;
             chapter_position: root.displayed_position;
             chapter_seek_allowed: root.tv_can_seek();

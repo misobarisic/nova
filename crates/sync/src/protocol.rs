@@ -251,6 +251,10 @@ impl Handler {
         Ok(())
     }
 
+    pub(crate) fn ack_clock(&self, id: &str) -> Option<crate::Hlc> {
+        self.acks.lock().ok()?.get(id).copied()
+    }
+
     /// This device's direct ack clock for `id` (unix secs), if we ever
     /// completed an exchange with it.
     pub(crate) fn ack_secs(&self, id: &str) -> Option<u64> {
