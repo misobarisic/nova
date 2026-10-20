@@ -409,7 +409,7 @@ impl Bridge {
             {
                 return;
             }
-            let rows: Vec<_> = state
+            let mut rows: Vec<_> = state
                 .stream_all
                 .iter()
                 .filter(|r| {
@@ -417,13 +417,16 @@ impl Bridge {
                 })
                 .cloned()
                 .collect();
+            stream_filters::apply_stream_rules(&mut rows, &state.cache_settings.stream_filters);
+            let rows =
+                stream_filters::preferred_stream_rules(&rows, &state.cache_settings.stream_filters);
             plan.primary
                 .as_ref()
-                .and_then(|p| recommended_stream(&rows, None, p))
+                .and_then(|p| recommended_stream(rows, None, p))
                 .or_else(|| {
                     plan.secondary
                         .as_ref()
-                        .and_then(|p| recommended_stream(&rows, None, p))
+                        .and_then(|p| recommended_stream(rows, None, p))
                 })
                 .map(|i| rows[i].clone())
         };
@@ -474,6 +477,19 @@ impl Bridge {
             if !plan.current(&state) || plan.review {
                 return;
             }
+            if !state
+                .cache_settings
+                .stream_filters
+                .accepts(&row.card.filter_facts)
+            {
+                drop(state);
+                if let Some(app) = self.app() {
+                    app.set_season_download_status(
+                        text::tr("This source no longer matches your stream rules.").into(),
+                    );
+                }
+                return;
+            }
             if !downloadable(&row) {
                 return;
             }
@@ -506,6 +522,28 @@ impl Bridge {
     }
 
     pub(super) fn season_download_confirm(&self) {
+        let matches_rules = {
+            let state = self.shared.lock().unwrap();
+            state.season_download.as_ref().is_none_or(|plan| {
+                plan.selected.iter().all(|row| {
+                    state
+                        .cache_settings
+                        .stream_filters
+                        .accepts(&row.card.filter_facts)
+                })
+            })
+        };
+        if !matches_rules {
+            if let Some(app) = self.app() {
+                app.set_season_download_status(
+                    text::tr(
+                        "Selected sources no longer match your stream rules. Choose streams again.",
+                    )
+                    .into(),
+                );
+            }
+            return;
+        }
         let valid = {
             let state = self.shared.lock().unwrap();
             state.season_download.as_ref().is_some_and(|p| {

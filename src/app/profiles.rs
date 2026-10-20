@@ -182,6 +182,7 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "playback_preferences:v1"
             | "scene_bookmarks:v1"
             | "secondary_subtitles:v1"
+            | "secondary_subtitle_positions:v1"
             | "watch_queue:v1"
             | "addons"
             | "addon_packages:v1"
@@ -629,6 +630,7 @@ mod tests {
         assert!(scoped_key("watch_queue:v1"));
         assert!(scoped_key("scene_bookmarks:v1"));
         assert!(scoped_key("secondary_subtitles:v1"));
+        assert!(scoped_key("secondary_subtitle_positions:v1"));
         assert!(scoped_key("viewing_journal:v1:session-1"));
         assert!(scoped_key("similar_titles:v1:series\u{1}tt1910272"));
         for key in [

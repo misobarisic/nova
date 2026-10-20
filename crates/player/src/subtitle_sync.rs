@@ -382,6 +382,12 @@ impl SubtitleSync {
         *self = Self::default();
     }
 
+    pub(super) fn owns_reference(&self, mpv: &Mpv) -> bool {
+        self.reference
+            .as_ref()
+            .is_some_and(|reference| selected(mpv, "secondary-sid") == Some(reference.id))
+    }
+
     pub(super) fn release_reference(&mut self, mpv: &Mpv) {
         if let Some(reference) = self.reference.take() {
             reference.release(mpv);
@@ -709,6 +715,25 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(selected(&mpv, "sid"), Some(downloaded));
+        // An unrelated audio switch refreshes track metadata while automatic
+        // alignment owns the hidden secondary slot. Visible-secondary Off must
+        // leave that reference selected and invisible, so matching continues.
+        let old_audio = mpv.get_property::<String>("aid").unwrap();
+        mpv.command("audio-add", &[&audio.to_string_lossy(), "select"])
+            .unwrap();
+        assert_ne!(mpv.get_property::<String>("aid").unwrap(), old_audio);
+        super::super::secondary_subtitles::apply_secondary_track(
+            &mpv,
+            &mut sync,
+            &nova_config::playback_preferences::TrackChoice::Off,
+            -1,
+        );
+        sync.poll(&mpv, 0.0, false);
+        assert!(sync.owns_reference(&mpv));
+        assert!(
+            !mpv.get_property::<bool>("secondary-sub-visibility")
+                .unwrap()
+        );
         mpv.command("seek", &["2", "absolute+exact"]).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {

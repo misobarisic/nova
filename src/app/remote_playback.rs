@@ -145,6 +145,56 @@ struct PendingReplacement {
     token: String,
     offer: String,
     session: Option<SessionId>,
+    scene: Option<SceneStart>,
+}
+
+/// The opaque offer is content-bound by the receiver lookup, and only that
+/// exact Start response may bind its newly allocated session. Display titles
+/// in later snapshots are deliberately never used as content identifiers.
+struct SceneStart {
+    media: MediaIdentity,
+    position: f64,
+    offer: String,
+    profile: profiles::Context,
+}
+struct RemoteSceneResume {
+    start: SceneStart,
+    session: Option<SessionId>,
+    created: Instant,
+    dismissed_resume: bool,
+}
+impl RemoteSceneResume {
+    fn new(start: SceneStart) -> Self {
+        Self {
+            start,
+            session: None,
+            created: Instant::now(),
+            dismissed_resume: false,
+        }
+    }
+    fn accept_start(
+        &mut self,
+        offer: &str,
+        expected: Option<SessionId>,
+        snapshot: &PlaybackSnapshot,
+    ) -> bool {
+        if self.start.offer != offer
+            || self.start.profile != profiles::active_context()
+            || !profiles::is_current(&self.start.profile)
+            || !snapshot.ready
+            || snapshot.role != PlaybackRole::Local
+            || snapshot.session.is_none()
+            || snapshot.session == expected
+            || matches!(
+                snapshot.phase,
+                PlaybackPhase::Idle | PlaybackPhase::Ended | PlaybackPhase::Failed
+            )
+        {
+            return false;
+        }
+        self.session = snapshot.session;
+        true
+    }
 }
 
 /// Discovery and control share retry policy, but keep independent attempt clocks.
@@ -230,6 +280,8 @@ pub(super) struct State {
     selector_lookups: HashMap<String, CachedRemoteLookup>,
     selector_engine: Option<std::sync::Weak<nova_sync::SyncEngine>>,
     visible_offers: Vec<PlaybackOffer>,
+    visible_media: Option<MediaIdentity>,
+    scene_resume: Option<RemoteSceneResume>,
     remote_filter: usize,
     remote_page: usize,
     queued: VecDeque<Request>,
@@ -252,6 +304,47 @@ pub(super) struct State {
 }
 
 impl State {
+    fn scene_resume_command(&mut self, snapshot: &PlaybackSnapshot) -> Option<Request> {
+        let mut pending = self.scene_resume.take()?;
+        if pending.start.profile != profiles::active_context()
+            || !profiles::is_current(&pending.start.profile)
+            || pending.created.elapsed() > Duration::from_secs(120)
+            || !snapshot.ready
+            || snapshot.role != PlaybackRole::Local
+        {
+            return None;
+        }
+        let Some(session) = pending.session else {
+            self.scene_resume = Some(pending);
+            return None;
+        };
+        if snapshot.session != Some(session)
+            || matches!(
+                snapshot.phase,
+                PlaybackPhase::Idle | PlaybackPhase::Ended | PlaybackPhase::Failed
+            )
+        {
+            return None;
+        }
+        if snapshot.resume_prompt {
+            let dismiss = !pending.dismissed_resume && snapshot.capabilities.resume;
+            pending.dismissed_resume |= dismiss;
+            self.scene_resume = Some(pending);
+            return dismiss.then_some(Request::Command {
+                session,
+                action: PlaybackAction::Resume(false),
+            });
+        }
+        if snapshot.capabilities.seek {
+            return Some(Request::Command {
+                session,
+                action: PlaybackAction::SeekAbsolute(pending.start.position),
+            });
+        }
+        self.scene_resume = Some(pending);
+        None
+    }
+
     fn control_request_due(&self, now: Instant) -> bool {
         let interacting = self.interacting_until.is_some_and(|until| now < until);
         let interval = control_poll_interval(
@@ -287,6 +380,8 @@ impl State {
         self.snapshot = None;
         self.remote_offers.clear();
         self.visible_offers.clear();
+        self.visible_media = None;
+        self.scene_resume = None;
         self.replacement = None;
         self.control_poll = PeerPoll::default();
         self.discovered.clear();
@@ -1112,6 +1207,23 @@ impl Bridge {
             done(Response::Error(PlaybackError::NotFound));
             return;
         }
+        // Offers belong to this receiver profile. Controller-side caps never
+        // remove sources that the target device can use.
+        let rules = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .stream_filters
+            .clone()
+            .normalized();
+        let mut rows = rows
+            .into_iter()
+            .filter(|(row, _)| rules.accepts(&row.card.filter_facts))
+            .collect::<Vec<_>>();
+        if rules.enabled && !rules.audio_languages.is_empty() {
+            rows.sort_by_key(|(row, _)| rules.audio_rank(&row.card.filter_facts));
+        }
         let mut offers = Vec::new();
         // Receiver-owned completed artifacts stay ahead of addon streams.
         for job in self
@@ -1229,6 +1341,11 @@ impl Bridge {
                 || offer.created.elapsed() > Duration::from_secs(300)
                 || offer.settings_generation
                     != nova_providers::plugin_settings::settings_generation()
+                || (!matches!(offer.stream.source, StreamSource::Downloaded { .. })
+                    && !state
+                        .cache_settings
+                        .stream_filters
+                        .accepts(&offer.stream.card.filter_facts))
                 || (!offer.stream.owner_url.is_empty()
                     && !state.installed.iter().any(|a| {
                         a.url == offer.stream.owner_url
@@ -1317,6 +1434,8 @@ impl Bridge {
             r.interacting_until = None;
             r.remote_offers.clear();
             r.visible_offers.clear();
+            r.visible_media = None;
+            r.scene_resume = None;
             r.replacement = None;
             std::mem::take(&mut r.target)
         };
@@ -1541,12 +1660,13 @@ impl Bridge {
                                 state.remote_playback.selector_lookups.insert(
                                     target.clone(),
                                     CachedRemoteLookup {
-                                        media,
+                                        media: media.clone(),
                                         offers: offers.clone(),
                                         started,
                                     },
                                 );
                             }
+                            state.remote_playback.visible_media = Some(media);
                             state.remote_playback.remote_offers = offers;
                             state.remote_playback.remote_filter = 0;
                             state.remote_playback.remote_page = 0;
@@ -1568,6 +1688,7 @@ impl Bridge {
         let Some(offers) = state.remote_playback.cached_selector_offers(target, media) else {
             return false;
         };
+        state.remote_playback.visible_media = Some(media.clone());
         state.remote_playback.remote_offers = offers;
         state.remote_playback.remote_filter = 0;
         state.remote_playback.remote_page = 0;
@@ -1663,7 +1784,7 @@ impl Bridge {
     }
 
     pub(super) fn remote_stream_selected(&self, index: usize) -> bool {
-        let (target, offer, generation) = {
+        let (target, offer, generation, media) = {
             let state = self.shared.lock().unwrap();
             let r = &state.remote_playback;
             if r.target.is_empty() {
@@ -1682,8 +1803,24 @@ impl Bridge {
             let Some(offer) = row.and_then(|i| offers.get(i)) else {
                 return true;
             };
-            (r.target.clone(), offer.id.clone(), r.generation)
+            (
+                r.target.clone(),
+                offer.id.clone(),
+                r.generation,
+                (!self.app().is_some_and(|a| a.get_remote_controls_open()))
+                    .then(|| r.visible_media.clone())
+                    .flatten(),
+            )
         };
+        let scene = media.and_then(|media| {
+            let position = self.take_remote_bookmark_resume(&media)?;
+            Some(SceneStart {
+                media,
+                position,
+                offer: offer.clone(),
+                profile: profiles::capture(),
+            })
+        });
         let Some(engine) = nova_sync::engine() else {
             return true;
         };
@@ -1695,7 +1832,9 @@ impl Bridge {
         thread::spawn(move || {
             let response = engine.request_prepared_playback(request);
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                if b.shared.lock().unwrap().remote_playback.generation != generation {
+                if b.shared.lock().unwrap().remote_playback.generation != generation
+                    || !nova_sync::engine().is_some_and(|current| Arc::ptr_eq(&current, &engine))
+                {
                     return;
                 }
                 match response {
@@ -1707,13 +1846,14 @@ impl Bridge {
                                     token: token.clone(),
                                     offer,
                                     session: snapshot.session,
+                                    scene,
                                 });
                             if let Some(app) = b.app() {
                                 app.set_remote_replacement_title(snapshot.title.into());
                                 app.set_remote_replacement_token(token.into());
                             }
                         } else {
-                            b.send_remote_start(offer, None);
+                            b.send_remote_start(offer, None, scene);
                         }
                     }
                     _ => {
@@ -1744,11 +1884,21 @@ impl Bridge {
             app.set_remote_replacement_token(SharedString::default());
         }
         if accept {
-            self.send_remote_start(pending.offer, pending.session);
+            self.send_remote_start(pending.offer, pending.session, pending.scene);
         }
     }
 
-    fn send_remote_start(&self, offer: String, expected: Option<SessionId>) {
+    fn send_remote_start(
+        &self,
+        offer: String,
+        expected: Option<SessionId>,
+        scene: Option<SceneStart>,
+    ) {
+        if scene.as_ref().is_some_and(|scene| {
+            scene.profile != profiles::active_context() || !profiles::is_current(&scene.profile)
+        }) {
+            return;
+        }
         let target = self.shared.lock().unwrap().remote_playback.target.clone();
         // Reserve the controller role before network I/O, including start prompts.
         if self.shared.lock().unwrap().remote_playback.role == Role::Local {
@@ -1756,6 +1906,23 @@ impl Bridge {
         }
         // Retain selection offers across opening the controller.
         self.open_remote_controls(&target);
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.remote_playback.target != target || state.remote_playback.role != Role::Remote
+            {
+                return;
+            }
+            state.remote_playback.scene_resume = scene
+                .filter(|scene| {
+                    scene.offer == offer
+                        && scene.profile == profiles::active_context()
+                        && profiles::is_current(&scene.profile)
+                        && !scene.media.media_type.is_empty()
+                        && !scene.media.title_id.is_empty()
+                        && !scene.media.episode_id.is_empty()
+                })
+                .map(RemoteSceneResume::new);
+        }
         self.shared
             .lock()
             .unwrap()
@@ -1853,6 +2020,16 @@ impl Bridge {
         // A bounded command queue preserves order without replay on reconnect.
         let r = &mut state.remote_playback;
         r.interacting_until = Some(Instant::now() + Duration::from_secs(1));
+        if matches!(
+            action,
+            PlaybackAction::SeekAbsolute(_)
+                | PlaybackAction::SeekRelative(_)
+                | PlaybackAction::Stop
+                | PlaybackAction::Resume(_)
+                | PlaybackAction::CancelResume
+        ) {
+            r.scene_resume = None;
+        }
         // Only consecutive slider updates commute. Searching further back
         // could move a new absolute seek before an intervening relative seek,
         // or a new speed before ResetSpeed, reversing the user's final intent.
@@ -1993,6 +2170,9 @@ impl Bridge {
                 Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into(),
             );
         }
+        if let Some(command) = state.remote_playback.scene_resume_command(&snapshot) {
+            state.remote_playback.queued.push_front(command);
+        }
         state.remote_playback.snapshot = Some(snapshot);
         drop(state);
         if app.get_remote_controls_open() {
@@ -2004,7 +2184,9 @@ impl Bridge {
         // Slint timers can still tick around Android lifecycle transitions.
         // Backgrounding must never launch discovery or controller polling.
         if !FOREGROUND.load(Ordering::Acquire) {
-            self.shared.lock().unwrap().remote_playback.queued.clear();
+            let mut state = self.shared.lock().unwrap();
+            state.remote_playback.queued.clear();
+            state.remote_playback.scene_resume = None;
             return;
         }
         let Some(app) = self.app() else { return };
@@ -2077,6 +2259,7 @@ impl Bridge {
         }
         if app.get_remote_controls_open() {
             let Some(engine) = nova_sync::engine() else {
+                self.shared.lock().unwrap().remote_playback.scene_resume = None;
                 app.set_remote_connected(false);
                 return;
             };
@@ -2120,6 +2303,13 @@ impl Bridge {
                     r.snapshot.as_ref().and_then(|s| s.session),
                 )
             };
+            let started_offer = match &request {
+                Request::Start {
+                    offer_id,
+                    expected_session,
+                } => Some((offer_id.clone(), *expected_session)),
+                _ => None,
+            };
             let request = match engine.prepare_playback_request(&target, request) {
                 Ok(request) => request,
                 Err(_) => {
@@ -2131,6 +2321,7 @@ impl Bridge {
                     }
                     state.remote_playback.control_poll.complete(None);
                     state.remote_playback.queued.clear();
+                    state.remote_playback.scene_resume = None;
                     drop(state);
                     app.set_remote_error(error_text(&PlaybackError::Unavailable).into());
                     return;
@@ -2156,6 +2347,7 @@ impl Bridge {
                             state.remote_playback.in_flight = false;
                             state.remote_playback.lookup_in_flight = false;
                             state.remote_playback.queued.clear();
+                            state.remote_playback.scene_resume = None;
                             return;
                         }
                         if is_lookup {
@@ -2165,9 +2357,26 @@ impl Bridge {
                         }
                         if !FOREGROUND.load(Ordering::Acquire) {
                             state.remote_playback.queued.clear();
+                            state.remote_playback.scene_resume = None;
                             return;
                         }
                         let r = &mut state.remote_playback;
+                        if let Some((offer, expected)) = &started_offer {
+                            let accepted = match (&mut r.scene_resume, &response) {
+                                (Some(pending), Ok(Response::Snapshot(snapshot))) => {
+                                    pending.accept_start(offer, *expected, snapshot)
+                                }
+                                _ => false,
+                            };
+                            if !accepted {
+                                r.scene_resume = None;
+                            }
+                        } else if !matches!(
+                            &response,
+                            Ok(Response::Snapshot(_) | Response::Accepted | Response::Offers(_))
+                        ) {
+                            r.scene_resume = None;
+                        }
                         match &response {
                             Ok(Response::Snapshot(snapshot)) => {
                                 r.control_poll.complete(Some(snapshot.clone()))
@@ -2463,6 +2672,119 @@ mod tests {
             ["first", "second", "third"]
         );
         assert!(batch.push(1, vec![]).is_none());
+    }
+
+    fn scene_start() -> SceneStart {
+        SceneStart {
+            media: MediaIdentity {
+                media_type: "series".into(),
+                title_id: "show".into(),
+                episode_id: "show:1:2".into(),
+                ..Default::default()
+            },
+            position: 137.25,
+            offer: "receiver-opaque-offer".into(),
+            profile: profiles::active_context(),
+        }
+    }
+    fn scene_snapshot(sequence: u64) -> PlaybackSnapshot {
+        PlaybackSnapshot {
+            ready: true,
+            session: Some(SessionId {
+                epoch: 77,
+                sequence,
+            }),
+            phase: PlaybackPhase::Loading,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_scene_binds_exact_start_and_seeks_once_after_dismissing_resume_prompt() {
+        // Replacement confirmation retains both the content-bound offer and
+        // exact scene, while its CAS session remains the old receiver session.
+        let replacement = PendingReplacement {
+            token: "confirmation".into(),
+            offer: "receiver-opaque-offer".into(),
+            session: scene_snapshot(1).session,
+            scene: Some(scene_start()),
+        };
+        let mut waiting = State {
+            scene_resume: Some(RemoteSceneResume::new(replacement.scene.unwrap())),
+            ..Default::default()
+        };
+        let mut unrelated = scene_snapshot(90);
+        unrelated.capabilities.seek = true;
+        assert!(
+            waiting.scene_resume_command(&unrelated).is_none(),
+            "polling cannot bind a session before Start responds"
+        );
+        let mut scene = waiting.scene_resume.take().unwrap();
+        let mut loading = scene_snapshot(2);
+        assert!(!scene.accept_start("unrelated-offer", replacement.session, &loading));
+        assert!(scene.session.is_none());
+        assert!(!scene.accept_start(&replacement.offer, replacement.session, &scene_snapshot(1)));
+        assert!(scene.accept_start(&replacement.offer, replacement.session, &loading));
+        let mut state = State {
+            scene_resume: Some(scene),
+            ..Default::default()
+        };
+        assert!(state.scene_resume_command(&loading).is_none());
+        loading.resume_prompt = true;
+        loading.capabilities.resume = true;
+        assert_eq!(
+            state.scene_resume_command(&loading),
+            Some(Request::Command {
+                session: loading.session.unwrap(),
+                action: PlaybackAction::Resume(false),
+            })
+        );
+        assert!(
+            state.scene_resume_command(&loading).is_none(),
+            "do not repeat prompt commands"
+        );
+        loading.resume_prompt = false;
+        loading.phase = PlaybackPhase::Playing;
+        loading.capabilities.seek = true;
+        assert_eq!(
+            state.scene_resume_command(&loading),
+            Some(Request::Command {
+                session: loading.session.unwrap(),
+                action: PlaybackAction::SeekAbsolute(137.25),
+            })
+        );
+        assert!(
+            state.scene_resume_command(&loading).is_none(),
+            "never seek twice"
+        );
+    }
+
+    #[test]
+    fn saved_scene_never_seeks_replaced_session_or_survives_profile_and_engine_changes() {
+        let accepted = scene_snapshot(2);
+        let pending = || {
+            let mut scene = RemoteSceneResume::new(scene_start());
+            assert!(scene.accept_start("receiver-opaque-offer", None, &accepted));
+            scene
+        };
+        let mut state = State {
+            scene_resume: Some(pending()),
+            ..Default::default()
+        };
+        let mut unrelated = scene_snapshot(3);
+        unrelated.capabilities.seek = true;
+        assert!(state.scene_resume_command(&unrelated).is_none());
+        assert!(state.scene_resume.is_none());
+        let mut stale = pending();
+        stale.start.profile.epoch = stale.start.profile.epoch.wrapping_add(1);
+        state.scene_resume = Some(stale);
+        assert!(state.scene_resume_command(&accepted).is_none());
+        assert!(state.scene_resume.is_none());
+        state.scene_resume = Some(pending());
+        let old_generation = state.generation;
+        state.invalidate_polling_engine();
+        assert_ne!(state.generation, old_generation);
+        assert!(state.scene_resume.is_none());
     }
 
     #[test]

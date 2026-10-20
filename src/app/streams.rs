@@ -198,6 +198,7 @@ pub(super) fn recommended_stream(
 /// accessibility, while the card can give the release title its own style.
 #[derive(Clone, Default)]
 pub(crate) struct StreamCardText {
+    pub filter_facts: nova_config::stream_filters::StreamFacts,
     pub title: String,
     pub metadata: String,
     pub description: String,
@@ -212,6 +213,7 @@ pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
     let display = stream_display(stream);
     let detail = display.strip_prefix(&label).unwrap_or_default().trim();
     let mut card = split_stream_card(&label, detail);
+    card.filter_facts = stream_filters::stream_facts(stream);
     // externalUrl represents a browser destination, not a downloadable file.
     if stream.extra.contains_key("externalUrl") {
         return card;
@@ -279,6 +281,7 @@ fn split_stream_card(label: &str, detail: &str) -> StreamCardText {
         listing_bytes: None,
         binge_group: None,
         subtitle_hints: Vec::new(),
+        filter_facts: Default::default(),
     }
 }
 

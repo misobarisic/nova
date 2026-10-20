@@ -364,6 +364,16 @@ impl Bridge {
         self.refresh_setting_sync();
         self.refresh_cache_disk_usage();
         self.apply_category_rows();
+        self.refresh_stream_filter_settings();
+        self.refresh_smart_collections();
+        if let Some(app) = self.app() {
+            if app.get_stream_selector_open() {
+                self.apply_stream_filter();
+            }
+            if app.get_show_library() && !self.shared.lock().unwrap().restoring_models {
+                self.apply_library_to_ui();
+            }
+        }
     }
 
     /// Apply the effective palette to all mounted pages.
@@ -502,6 +512,8 @@ impl Bridge {
         let settings = {
             let state = self.shared.lock().unwrap();
             CacheSettings {
+                stream_filters: state.cache_settings.stream_filters.clone(),
+                smart_collections: state.cache_settings.smart_collections.clone(),
                 tmdb_api_key: app.get_tmdb_api_key().trim().to_owned(),
                 cache_images: app.get_cache_images(),
                 image_disk_cache_limit_mb: DISK_CACHE_LIMITS

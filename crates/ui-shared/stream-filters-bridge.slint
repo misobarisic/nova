@@ -1,0 +1,23 @@
+// Effective account defaults plus this device's ordinary Settings override.
+export global StreamFiltersBridge {
+    in-out property <bool> open;
+    in-out property <bool> enabled;
+    in-out property <int> max_resolution_index;
+    in-out property <int> max_size_index;
+    in-out property <string> max_resolution_label;
+    in-out property <string> max_size_label;
+    in-out property <bool> allow_avc;
+    in-out property <bool> allow_hevc;
+    in-out property <bool> allow_av1;
+    in-out property <bool> allow_vp9;
+    in-out property <bool> allow_other;
+    in-out property <string> audio_languages;
+    in-out property <bool> require_audio;
+    in-out property <bool> retain_unknown: true;
+    in-out property <int> hidden_count;
+    in-out property <string> notice;
+    callback opened();
+    callback edited(int, string);
+    callback reset();
+    callback closed();
+}

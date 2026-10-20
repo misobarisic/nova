@@ -49,6 +49,7 @@ mod desktop_decoder;
 mod subtitle_position;
 mod subtitle_sync;
 pub use addon_subtitles::OnlineSubtitle;
+mod secondary_subtitle_position;
 mod secondary_subtitles;
 mod track_preferences;
 use libmpv2::Mpv;
@@ -971,6 +972,7 @@ struct State {
     native_subtitle_defaults: nova_config::playback_preferences::SubtitleStyle,
     preferences: Mutex<PreferenceSession>,
     secondary_subtitles: Mutex<TrackChoice>,
+    secondary_subtitle_position: Mutex<secondary_subtitle_position::Placement>,
     /// Temporary clock correction; never written to title/device preferences.
     party_playback_rate: Mutex<Option<f64>>,
     /// Retain real cache starvation through a transient unavailable property.
@@ -1276,6 +1278,7 @@ impl Player {
                 manual_subtitles: false,
             }),
             secondary_subtitles: Mutex::new(TrackChoice::Off),
+            secondary_subtitle_position: Mutex::new(Default::default()),
             party_playback_rate: Mutex::new(None),
             buffering: AtomicBool::new(false),
             mpv: Mutex::new(mpv.ok()),
@@ -2374,7 +2377,9 @@ impl Player {
             }
             choice
         };
-        self.reapply_secondary_subtitle();
+        if !audio {
+            self.reapply_secondary_subtitle();
+        }
         self.refresh_tracks();
         Some(choice)
     }
@@ -3100,6 +3105,7 @@ impl Player {
         self.resolve_preferred_tracks();
 
         self.poll_subtitle_sync();
+        self.poll_secondary_subtitle_position();
 
         // Sample actual starvation on the regular native-player cadence even
         // when party telemetry is sent less often or a UI seek skips mirroring.

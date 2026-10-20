@@ -1,12 +1,14 @@
 import { RemoteTargetMenu } from "remote-controls.slint";
-import { InterfaceStyle, PartyBridge, RemoteBridge, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
+import { InterfaceStyle, PartyBridge, RemoteBridge, StreamFiltersBridge, SettingsSync, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
 
 
+
+import { StreamFilterPanel } from "stream-filter-panel.slint";
 
 import { Spinner } from "std-widgets.slint";
 import { PillButton } from "settings-controls.slint";
 import { MenuSheet } from "menusheet.slint";
-import { IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
+import { IcMoreHoriz, IcChevronLeft, IcChevronRight, IcSettingsGear } from "icons.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
 export component StreamFilterPill inherits Rectangle {
@@ -574,6 +576,7 @@ export component StreamSelector inherits Rectangle {
     private property <int> output_open_request: 0;
     function tv_activate() {
         if (root.focus_zone == 0) { root.request_back(); }
+        else if root.focus_zone == 5 { StreamFiltersBridge.opened(); }
         else if (root.focus_zone == 4 && root.has_output_choice) { root.output_open_request += 1; }
         else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) {
             if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(root.kb_index); }
@@ -644,7 +647,9 @@ export component StreamSelector inherits Rectangle {
     changed has_output_choice => { if (!root.has_output_choice && root.focus_zone == 4) { root.focus_zone = 2; } }
 
     function request_back() {
-        if (root.action_open) { root.action_open = false; }
+        if SettingsSync.open { SettingsSync.open = false; }
+        else if StreamFiltersBridge.open { StreamFiltersBridge.closed(); selector_scope.focus(); }
+        else if (root.action_open) { root.action_open = false; }
         else { root.back(); }
     }
     function move_page(delta: int) {
@@ -848,7 +853,7 @@ export component StreamSelector inherits Rectangle {
                 min-width: 0px;
                 spacing: root.short ? 8px : (root.narrow ? 12px : 16px);
                 stream_heading := HorizontalLayout {
-                    height: InterfaceStyle.tv ? 56px : (root.short ? 32px : 40px);
+                    height: InterfaceStyle.tv ? 56px : (root.short ? 44px : 40px);
                     spacing: 8px;
                     heading_title := Text {
                         text: @tr("Choose a stream");
@@ -863,6 +868,27 @@ export component StreamSelector inherits Rectangle {
                         font-size: InterfaceStyle.tv ? 18px : 13px; vertical-alignment: center;
                         horizontal-stretch: 0;
                     }
+                    // Short windows keep their results viewport usable by
+                    // sharing the heading lane instead of reserving another row.
+                    if root.short && (RemoteBridge.target_id == "" || PartyBridge.active): compact_rules := Rectangle {
+                        width: 44px; height: 44px; border-radius: 12px;
+                        background: StreamFiltersBridge.enabled ? Theme.current.primary_button
+                            : compact_rules_touch.has-hover ? Theme.current.hero_control_hover : Theme.current.hero_control;
+                        border-width: root.kb_active && root.focus_zone == 5 ? 2px : 1px;
+                        border-color: root.kb_active && root.focus_zone == 5 ? Theme.current.focus_ring
+                            : StreamFiltersBridge.enabled ? Theme.current.accent : Theme.current.border_strong;
+                        accessible-role: button; accessible-label: @tr("Universal filters");
+                        accessible-description: @tr("Universal stream filters");
+                        accessible-action-default => { StreamFiltersBridge.opened(); }
+                        IcSettingsGear {
+                            x: 10px; y: 10px; width: 24px; height: 24px;
+                            fill: StreamFiltersBridge.enabled ? Theme.current.on_accent : Theme.current.accent_soft;
+                        }
+                        compact_rules_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.kb_active = false; StreamFiltersBridge.opened(); }
+                        }
+                    }
                     if root.has_output_choice: output_picker := RemoteTargetMenu {
                         property <int> open_request: root.output_open_request;
                         changed open_request => { self.open_menu(); }
@@ -876,6 +902,19 @@ export component StreamSelector inherits Rectangle {
                         page: root.page; count: root.page_count;
                         picked(p) => { root.kb_active = false; root.move_page(p - root.page); }
                     }
+                }
+                if !root.short && (RemoteBridge.target_id == "" || PartyBridge.active): HorizontalLayout {
+                    spacing: 8px;
+                    PillButton {
+                        label: @tr("Universal filters"); primary: StreamFiltersBridge.enabled;
+                        roomy: true; compact: true; focused: root.kb_active && root.focus_zone == 5;
+                        clicked => { StreamFiltersBridge.opened(); }
+                    }
+                    if StreamFiltersBridge.enabled: PillButton {
+                        label: @tr("Clear"); roomy: true; compact: true;
+                        clicked => { StreamFiltersBridge.reset(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
                 }
                 // Reserve the same slot while the independent horizontal bar floats
                 // above this viewport and becomes sticky in touch landscape.
@@ -1003,7 +1042,11 @@ export component StreamSelector inherits Rectangle {
                 } else { reject }
             }
             key-pressed(e) => {
-                if (InterfaceStyle.tv && e.text == Key.Return) {
+                if (RemoteBridge.target_id == "" || PartyBridge.active) && (e.text == "f" || e.text == "F") {
+                    if !e.repeat { StreamFiltersBridge.opened(); } accept
+                } else if (RemoteBridge.target_id == "" || PartyBridge.active) && e.text == Key.Tab {
+                    root.kb_active = true; root.focus_zone = root.focus_zone == 5 ? 2 : 5; accept
+                } else if (InterfaceStyle.tv && e.text == Key.Return) {
                     root.kb_active = true;
                     if (!e.repeat) { root.tv_ok_pending = true; root.tv_ok_held = false; tv_ok_hold.stop(); tv_ok_hold.start(); }
                     accept
@@ -1042,17 +1085,27 @@ export component StreamSelector inherits Rectangle {
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                 root.kb_active = true;
                 let delta = e.text == Key.LeftArrow ? -1 : 1;
-                if (root.focus_zone == 1) { root.pick_filter(root.addon_filter + delta); }
+                if (root.focus_zone == 0 && e.text == Key.RightArrow && (RemoteBridge.target_id == "" || PartyBridge.active)) { root.focus_zone = 5; }
+                else if root.focus_zone == 5 { root.focus_zone = 0; }
+                else if (root.focus_zone == 1) { root.pick_filter(root.addon_filter + delta); }
                 else if (root.focus_zone > 1 && root.focus_zone != 4) { root.move_page(delta); }
                 accept
             } else if (e.text == Key.Return || e.text == " ") {
                 root.kb_active = true;
-                if (root.focus_zone == 0) {
+                if root.focus_zone == 5 { StreamFiltersBridge.opened(); }
+                else if (root.focus_zone == 0) {
                     root.request_back();
                 } else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) { if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(root.kb_index); } else { root.picked(root.kb_index); } }
                 accept
             } else { reject }
         }
+    }
+
+    StreamFilterPanel {
+        width: 100%; height: 100%;
+        safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+        safe-left: root.safe-left; safe-right: root.safe-right;
+        closed => { selector_scope.focus(); }
     }
 
     MenuSheet {

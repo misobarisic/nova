@@ -120,8 +120,11 @@ impl Bridge {
         self.update_library_badges();
         self.refresh_home_language_text();
         self.refresh_watch_queue();
+        self.refresh_bookmarks();
         self.refresh_viewing_journal();
         self.refresh_sync_inspector();
+        self.refresh_stream_filter_settings();
+        self.refresh_smart_collections();
         self.refresh_addon_picker_language_text();
         self.apply_addon_rows();
         self.refresh_catalog_language_text();

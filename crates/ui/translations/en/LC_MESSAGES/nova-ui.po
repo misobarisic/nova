@@ -457,8 +457,8 @@ msgstr "Finished: {}"
 msgid "Caught up: {}"
 msgstr "Caught up: {}"
 
-msgid "Viewing journal"
-msgstr "Viewing journal"
+msgid "Stats"
+msgstr "Stats"
 
 msgid "Your viewing time, completed watches and the stories you return to."
 msgstr "Your viewing time, completed watches and the stories you return to."
@@ -739,3 +739,274 @@ msgid "{n} rewatch"
 msgid_plural "{n} rewatches"
 msgstr[0] "{n} rewatch"
 msgstr[1] "{n} rewatches"
+
+
+# Shared rules, collections and bookmark management.
+msgid "Smart collections"
+msgstr "Smart collections"
+
+msgid "Create"
+msgstr "Create"
+
+msgid "All titles"
+msgstr "All titles"
+
+msgid "New smart collection"
+msgstr "New smart collection"
+
+msgid "Edit smart collection"
+msgstr "Edit smart collection"
+
+msgid "Save a rule. Your library keeps the collection up to date as you watch and add titles."
+msgstr "Save a rule. Your library keeps the collection up to date as you watch and add titles."
+
+msgid "Collection name"
+msgstr "Collection name"
+
+msgid "Name your collection"
+msgstr "Name your collection"
+
+msgid "Media type"
+msgstr "Media type"
+
+msgid "Movies"
+msgstr "Movies"
+
+msgid "Series"
+msgstr "Series"
+
+msgid "Any media type"
+msgstr "Any media type"
+
+msgid "Watch state"
+msgstr "Watch state"
+
+msgid "Any watch state"
+msgstr "Any watch state"
+
+msgid "Any genre, or enter one like Sci-Fi"
+msgstr "Any genre, or enter one like Sci-Fi"
+
+msgid "Runtime under (minutes)"
+msgstr "Runtime under (minutes)"
+
+msgid "No limit, or enter minutes"
+msgstr "No limit, or enter minutes"
+
+msgid "For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."
+msgstr "For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."
+
+msgid "Save collection"
+msgstr "Save collection"
+
+msgid "Delete collection"
+msgstr "Delete collection"
+
+msgid "Delete this collection? Your saved titles and manual categories will stay in your library."
+msgstr "Delete this collection? Your saved titles and manual categories will stay in your library."
+
+msgid "Keep collection"
+msgstr "Keep collection"
+
+msgid "Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."
+msgstr "Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."
+
+msgid "Universal stream filters"
+msgstr "Universal stream filters"
+
+msgid "Universal filters"
+msgstr "Universal filters"
+
+msgid "STREAM PREFERENCES"
+msgstr "STREAM PREFERENCES"
+
+msgid "These rules apply to every addon. Defaults sync between your devices."
+msgstr "These rules apply to every addon. Defaults sync between your devices."
+
+msgid "Use stream rules"
+msgstr "Use stream rules"
+
+msgid "Maximum resolution"
+msgstr "Maximum resolution"
+
+msgid "Any resolution"
+msgstr "Any resolution"
+
+msgid "Maximum size"
+msgstr "Maximum size"
+
+msgid "Any size"
+msgstr "Any size"
+
+msgid "Allowed video codecs"
+msgstr "Allowed video codecs"
+
+msgid "All codecs when none selected"
+msgstr "All codecs when none selected"
+
+msgid "Other video codecs"
+msgstr "Other video codecs"
+
+msgid "Audio language codes"
+msgstr "Audio language codes"
+
+msgid "Use language codes such as en, ja, hr."
+msgstr "Use language codes such as en, ja, hr."
+
+msgid "Apply languages"
+msgstr "Apply languages"
+
+msgid "Require one of these audio languages"
+msgstr "Require one of these audio languages"
+
+msgid "Languages are preferred in the order listed. Enable the requirement to hide other advertised audio languages."
+msgstr "Languages are preferred in the order listed. Enable the requirement to hide other advertised audio languages."
+
+msgid "Keep streams with unknown details"
+msgstr "Keep streams with unknown details"
+
+msgid "Reset rules"
+msgstr "Reset rules"
+
+msgid "Automatic placement avoids known primary text positions. Use Top or Bottom if captions overlap."
+msgstr "Automatic placement avoids known primary text positions. Use Top or Bottom if captions overlap."
+
+msgid "Second subtitle position"
+msgstr "Second subtitle position"
+
+msgid "Automatic (best effort)"
+msgstr "Automatic (best effort)"
+
+msgid "Top"
+msgstr "Top"
+
+msgid "Bottom"
+msgstr "Bottom"
+
+msgid "No saved titles match this smart collection yet. It updates automatically as your library, watch progress and cached metadata change."
+msgstr "No saved titles match this smart collection yet. It updates automatically as your library, watch progress and cached metadata change."
+
+msgid "Edit collection"
+msgstr "Edit collection"
+
+msgid "Clear collection filter"
+msgstr "Clear collection filter"
+
+msgid "Bookmarks"
+msgstr "Bookmarks"
+
+msgid "Choose a saved scene, update a note or remove a bookmark."
+msgstr "Choose a saved scene, update a note or remove a bookmark."
+
+msgid "The scenes you wanted to come back to."
+msgstr "The scenes you wanted to come back to."
+
+msgid "Search titles, episodes and notes"
+msgstr "Search titles, episodes and notes"
+
+msgid "Latest added"
+msgstr "Latest added"
+
+msgid "Keep a moment worth revisiting"
+msgstr "Keep a moment worth revisiting"
+
+msgid "No matching bookmarks"
+msgstr "No matching bookmarks"
+
+msgid "Save a scene from the player's bookmark menu. Movies and shows with saved scenes will appear here."
+msgstr "Save a scene from the player's bookmark menu. Movies and shows with saved scenes will appear here."
+
+msgid "No note"
+msgstr "No note"
+
+msgid "Play scene"
+msgstr "Play scene"
+
+msgid "Edit note"
+msgstr "Edit note"
+
+msgid "Bookmark note"
+msgstr "Bookmark note"
+
+msgid "Save note"
+msgstr "Save note"
+
+msgid "Clear note"
+msgstr "Clear note"
+
+msgid "Editing saved bookmark"
+msgstr "Editing saved bookmark"
+
+msgid "Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."
+msgstr "Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."
+
+msgid "Return to saved scenes and notes"
+msgstr "Return to saved scenes and notes"
+
+msgid "Added date unknown"
+msgstr "Added date unknown"
+
+msgid "Untitled saved title"
+msgstr "Untitled saved title"
+
+msgid "Bookmarks could not be loaded. Saved data has been preserved."
+msgstr "Bookmarks could not be loaded. Saved data has been preserved."
+
+msgid "Bookmarks could not be saved. Please try again."
+msgstr "Bookmarks could not be saved. Please try again."
+
+msgid "Enter a runtime from 1 to 1440 minutes, or leave it empty."
+msgstr "Enter a runtime from 1 to 1440 minutes, or leave it empty."
+
+msgid "Choose a collection name of up to 80 characters and a genre of up to 80 characters."
+msgstr "Choose a collection name of up to 80 characters and a genre of up to 80 characters."
+
+msgid "This collection was removed. Close the editor and create a new collection."
+msgstr "This collection was removed. Close the editor and create a new collection."
+
+msgid "You can save up to 32 smart collections."
+msgstr "You can save up to 32 smart collections."
+
+msgid "This source no longer matches your stream rules."
+msgstr "This source no longer matches your stream rules."
+
+msgid "Selected sources no longer match your stream rules. Choose streams again."
+msgstr "Selected sources no longer match your stream rules. Choose streams again."
+
+msgid "No addon streams match your rules."
+msgstr "No addon streams match your rules."
+
+msgid "No streams match your rules."
+msgstr "No streams match your rules."
+
+msgid "Clear stream rules"
+msgstr "Clear stream rules"
+
+msgid "No smart collections"
+msgstr "No smart collections"
+
+msgid "Required audio"
+msgstr "Required audio"
+
+msgid "Preferred audio"
+msgstr "Preferred audio"
+
+msgid "Unknown details kept"
+msgstr "Unknown details kept"
+
+msgid "Unknown details hidden"
+msgstr "Unknown details hidden"
+
+
+# Shared rules, collections and bookmark management.
+msgid "Could not read your scene bookmarks. Your saved data has been kept."
+msgstr "Could not read your scene bookmarks. Your saved data has been kept."
+
+msgid "Could not save your scene bookmark. Your note has been kept."
+msgstr "Could not save your scene bookmark. Your note has been kept."
+
+msgid "On"
+msgstr "On"
+
+msgid "Cross-device sync"
+msgstr "Cross-device sync"

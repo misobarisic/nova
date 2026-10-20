@@ -54,25 +54,19 @@ impl Player {
             .ok()
             .and_then(|id| id.parse::<i32>().ok());
         let id = secondary_track_id(tracks, &choice, primary);
-        // Explicit secondary display takes priority over automatic alignment's
-        // invisible reference. Off leaves that existing helper free to operate.
+        apply_secondary_track(
+            mpv,
+            &mut self.state.subtitle_sync.lock().unwrap(),
+            &choice,
+            id,
+        );
         if !matches!(choice, TrackChoice::Off) {
             self.state
-                .subtitle_sync
+                .secondary_subtitle_position
                 .lock()
                 .unwrap()
-                .release_reference(mpv);
+                .apply(mpv);
         }
-        let _ = mpv.set_property(
-            "secondary-sid",
-            if id < 0 {
-                "no".to_owned()
-            } else {
-                id.to_string()
-            },
-        );
-        let _ = mpv.set_property("secondary-sub-visibility", true);
-        let _ = mpv.set_property("secondary-sub-pos", 0_i64);
     }
 
     pub(super) fn reapply_secondary_subtitle(&self) {
@@ -91,6 +85,41 @@ impl Player {
         if let Ok(raw) = mpv.get_property::<String>("track-list") {
             self.resolve_secondary_subtitle(mpv, &track_preferences::parse_tracks(&raw));
         }
+    }
+
+    pub fn set_secondary_subtitle_position(&self, index: i32) {
+        self.state
+            .secondary_subtitle_position
+            .lock()
+            .unwrap()
+            .set_mode(index);
+        self.poll_secondary_subtitle_position();
+    }
+
+    pub(super) fn poll_secondary_subtitle_position(&self) {
+        if self.state.pending.lock().unwrap().is_some()
+            || !self.state.started.load(Ordering::SeqCst)
+            || matches!(
+                &*self.state.secondary_subtitles.lock().unwrap(),
+                TrackChoice::Off
+            )
+        {
+            return;
+        }
+        let engine = self.state.mpv.lock().unwrap();
+        let Some(mpv) = engine.as_ref() else {
+            return;
+        };
+        if mpv.get_property::<String>("path").ok().as_deref()
+            != Some(self.state.preference_source.lock().unwrap().as_str())
+        {
+            return;
+        }
+        self.state
+            .secondary_subtitle_position
+            .lock()
+            .unwrap()
+            .apply(mpv);
     }
 
     pub fn automatic_secondary_online_subtitle(&self) -> Option<i32> {
@@ -186,6 +215,31 @@ impl Player {
         }
         preferences
     }
+}
+
+/// Off describes the viewer's visible slot, while automatic timing may own a
+/// hidden native reference. Unrelated track refreshes must not steal it.
+pub(super) fn apply_secondary_track(
+    mpv: &Mpv,
+    sync: &mut subtitle_sync::SubtitleSync,
+    choice: &TrackChoice,
+    id: i32,
+) {
+    if matches!(choice, TrackChoice::Off) && sync.owns_reference(mpv) {
+        return;
+    }
+    if !matches!(choice, TrackChoice::Off) {
+        sync.release_reference(mpv);
+    }
+    let _ = mpv.set_property(
+        "secondary-sid",
+        if id < 0 {
+            "no".to_owned()
+        } else {
+            id.to_string()
+        },
+    );
+    let _ = mpv.set_property("secondary-sub-visibility", true);
 }
 
 fn secondary_track_id(

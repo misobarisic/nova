@@ -1,0 +1,20 @@
+export struct SmartCollectionRow { id: string, name: string }
+// Rules live in profile settings. Selection and an unfinished editor are UI-only.
+export global SmartCollectionsBridge {
+    in-out property <[SmartCollectionRow]> rows;
+    in-out property <string> profile_id;
+    in-out property <string> selected_id;
+    in-out property <string> selected_name;
+    in-out property <bool> editor_open;
+    in-out property <string> editing_id;
+    in-out property <string> name;
+    in-out property <int> media_type;
+    in-out property <int> watch_state;
+    in-out property <string> genre;
+    in-out property <string> max_runtime;
+    in-out property <string> error;
+    callback selected(string);
+    callback edit(string);
+    callback save();
+    callback remove(string);
+}

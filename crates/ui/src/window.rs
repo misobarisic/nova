@@ -79,6 +79,9 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    SmartCollectionsBridge,
+    StreamFiltersBridge,
+    BookmarksBridge,
     JournalBridge,
     QueueBridge,
     InterfaceStyle,

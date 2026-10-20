@@ -4,11 +4,11 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -217,9 +217,11 @@ export component AppWindow inherits Window {
     public function player_bridge_pick_audio_track(i: int) { root.pick_audio_track(i); }
     public function player_bridge_pick_sub_track(i: int) { root.pick_sub_track(i); }
     public function player_bridge_pick_secondary_sub_track(i: int) { root.pick_secondary_sub_track(i); }
-    public function player_bridge_add_scene_bookmark(note: string) { root.add_scene_bookmark(note); }
-    public function player_bridge_delete_scene_bookmark(i: int) { root.delete_scene_bookmark(i); }
+    public function player_bridge_add_scene_bookmark(note: string) -> bool { return root.add_scene_bookmark(note); }
+    public function player_bridge_delete_scene_bookmark(id: string) -> bool { return root.delete_scene_bookmark(id); }
+    public function player_bridge_edit_scene_bookmark(id: string, note: string) -> bool { return root.edit_scene_bookmark(id, note); }
     public function player_bridge_try_another_stream() { root.try_another_stream(); }
+    public function player_bridge_secondary_subtitle_position_changed(index: int) { root.secondary_subtitle_position_changed(index); }
     public function player_bridge_pick_decoder(i: int) { root.pick_decoder(i); }
     public function player_bridge_playback_speed_changed(v: float) { root.playback_speed_changed(v); }
     public function player_bridge_playback_speed_stepped(d: int) { root.playback_speed_stepped(d); }
@@ -273,7 +275,9 @@ export component AppWindow inherits Window {
         sub_tracks <=> root.sub_tracks;
         secondary_sub_tracks <=> root.secondary_sub_tracks;
         secondary_sub_track_label <=> root.secondary_sub_track_label;
+        secondary_subtitle_position_index <=> root.secondary_subtitle_position_index;
         scene_bookmarks <=> root.scene_bookmarks;
+        scene_bookmark_notice <=> root.scene_bookmark_notice;
         scene_bookmarks_available <=> root.scene_bookmarks_available;
         try_another_stream_available <=> root.try_another_stream_available;
         subtitle_addon_status <=> root.subtitle_addon_status;
@@ -1074,6 +1078,9 @@ export component AppWindow inherits Window {
     in-out property <length> about_licenses_scroll_y: 0px;
     // More owns transient navigation state while its children share stationary chrome.
     in-out property <bool> more_open: false;
+    changed more_open => { if !root.more_open { JournalBridge.open = false; QueueBridge.open = false; BookmarksBridge.open = false; } }
+    in-out property <bool> bookmarks_open <=> BookmarksBridge.open;
+    changed bookmarks_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } }
     in-out property <bool> journal_open <=> JournalBridge.open;
     in-out property <bool> watch_queue_open <=> QueueBridge.open;
     changed journal_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } }
@@ -1179,7 +1186,10 @@ export component AppWindow inherits Window {
     function route_page(index: int, from_more: bool) {
         if root.profiles_require_selection { return; }
         root.profiles_open = false;
-        JournalBridge.open = false; QueueBridge.open = false;
+        SmartCollectionsBridge.editor_open = false;
+        StreamFiltersBridge.open = false;
+        SettingsSync.open = false;
+        JournalBridge.open = false; QueueBridge.open = false; BookmarksBridge.open = false;
         let previous_nav = root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : root.show_downloads ? 5 : root.show_home ? 0 : root.show_library ? 2 : 1;
         root.preserve_back_focus();
         root.cancel_more_subpage_back();
@@ -1762,7 +1772,9 @@ export component AppWindow inherits Window {
     in-out property <[TrackRow]> sub_tracks: [];
     in-out property <[TrackRow]> secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label;
-    in-out property <[ChapterRow]> scene_bookmarks;
+    in-out property <int> secondary_subtitle_position_index;
+    in-out property <[SceneBookmarkRow]> scene_bookmarks;
+    in-out property <string> scene_bookmark_notice;
     in-out property <bool> scene_bookmarks_available;
     in-out property <bool> try_another_stream_available;
     in-out property <int> subtitle_addon_status: 0;
@@ -1787,8 +1799,10 @@ export component AppWindow inherits Window {
     callback pick_audio_track(int);
     callback pick_sub_track(int);
     callback pick_secondary_sub_track(int);
-    callback add_scene_bookmark(string);
-    callback delete_scene_bookmark(int);
+    callback secondary_subtitle_position_changed(int);
+    callback add_scene_bookmark(string) -> bool;
+    callback delete_scene_bookmark(string) -> bool;
+    callback edit_scene_bookmark(string, string) -> bool;
     callback try_another_stream();
     // Android/Windows/Linux runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
     callback pick_decoder(int);
@@ -2283,7 +2297,9 @@ export component AppWindow inherits Window {
                     // The fullscreen selector owns Back independently of the hidden
                     // detail navigation, including when returning from playback.
                     root.preserve_back_focus();
-                    if (root.stream_action_open) { root.stream_action_open = false; }
+                    if SettingsSync.open { SettingsSync.open = false; }
+                    else if StreamFiltersBridge.open { StreamFiltersBridge.closed(); }
+                    else if (root.stream_action_open) { root.stream_action_open = false; }
                     else { root.stream_selector_back(); }
                     accept
                 } else {

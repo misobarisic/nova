@@ -442,3 +442,186 @@ fn sync_inspector_explanations_wrap_across_phone_and_landscape_sizes() {
     }
     slint::select_bundled_translation("en").unwrap();
 }
+
+#[test]
+#[ignore = "requires a display; optional native sync inspector design preview"]
+fn render_sync_inspector_previews() {
+    if !crate::isolation::run(concat!(module_path!(), "::render_sync_inspector_previews")) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.invoke_more_bridge_sync_picked();
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.show().unwrap();
+    let step = Rc::new(std::cell::Cell::new(0usize));
+    let phase = step.clone();
+    let weak = app.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(700), move || {
+        let app = weak.upgrade().unwrap();
+        let click = |id: &str| {
+            let query_id = id.to_owned();
+            let control = ElementQuery::from_root(&app)
+                .match_predicate(move |element| element.accessible_id().as_deref() == Some(query_id.as_str()))
+                .find_first().unwrap_or_else(|| panic!("missing native inspector action {id}"));
+            let origin = control.absolute_position();
+            let size = control.size();
+            let position = slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+            // Native input avoids advancing testing timers recursively while
+            // this fixture's own timer is running.
+            app.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position, button: slint::platform::PointerEventButton::Left,
+            });
+            app.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position, button: slint::platform::PointerEventButton::Left,
+            });
+        };
+        match phase.get() {
+            0 => click("sync-inspector-toggle"),
+            1 => {
+                click("sync-inspector-episodes");
+                app.global::<nova::SettingsBridge>().set_sync_inspector_rows(Rc::new(VecModel::from(vec![
+                    nova::SyncInspectorRow {
+                        title: "Library".into(), status: "Stored on this device · current profile".into(),
+                        detail: "32 current · 1 deletion retained".into(),
+                    },
+                    nova::SyncInspectorRow {
+                        title: "Watch history and progress".into(), status: "Stored on this device · current profile".into(),
+                        detail: "148 current · 2 deletions retained · waiting to apply on this device".into(),
+                    },
+                    nova::SyncInspectorRow {
+                        title: "Living room TV".into(), status: "Exchange recorded".into(),
+                        detail: "Last completed exchange snapshot clock: 1792514400000:4 · 3 records newer than its snapshot".into(),
+                    },
+                ])).into());
+                app.global::<nova::SettingsBridge>().set_sync_inspector_episodes(Rc::new(VecModel::from(vec![
+                    nova::SyncInspectorRow {
+                        title: "The Quiet Sea · S2 E4 · A signal in the dark".into(), status: "Unwatched".into(),
+                        detail: "The unwatch action wins over the watch action. Equal action clocks favor unwatch.\nLatest activity: 1792514420000:2 · 7a5c3f109e204bd6\nWatch action: 1792514300000:1 · 28a09d47c6e1b305\nUnwatch action: 1792514410000:0 · 7a5c3f109e204bd6\nIncludes action registers from confirmed episode aliases.".into(),
+                    },
+                    nova::SyncInspectorRow {
+                        title: "City of Amber".into(), status: "Watched".into(),
+                        detail: "The watch action is newer than the unwatch action. Playback activity alone does not clear watched.\nLatest activity: 1792427400000:3 · 28a09d47c6e1b305\nWatch action: 1792427390000:1 · 28a09d47c6e1b305".into(),
+                    },
+                ])).into());
+            }
+            2..=5 => {
+                let names = ["sync-inspector-desktop", "sync-inspector-explanations-desktop", "sync-inspector-phone", "sync-inspector-explanations-phone"];
+                let pixels = app.window().take_snapshot().unwrap();
+                if let Some(dir) = std::env::var_os("NOVA_FEATURE_PREVIEW_DIR") {
+                    std::fs::create_dir_all(&dir).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("{}.png", names[phase.get() - 2])), pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8).unwrap();
+                }
+                match phase.get() {
+                    2 => app.set_settings_scroll_y(-600.0),
+                    3 => {
+                        app.window().set_size(slint::PhysicalSize::new(390, 844));
+                        app.set_settings_scroll_y(0.0);
+                    }
+                    4 => app.set_settings_scroll_y(-1000.0),
+                    _ => slint::quit_event_loop().unwrap(),
+                }
+            }
+            _ => unreachable!(),
+        }
+        phase.set(phase.get() + 1);
+    });
+    app.run().unwrap();
+}
+
+#[test]
+fn inspector_cards_keep_intrinsic_height_without_spreading_text() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::inspector_cards_keep_intrinsic_height_without_spreading_text"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.invoke_more_bridge_sync_picked();
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..12 {
+            let _ = max_right_edge(&app);
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(25));
+        }
+    };
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    settle();
+    let click = |id: &str| {
+        let id = id.to_owned();
+        ElementQuery::from_root(&app)
+            .match_predicate(move |element| element.accessible_id().as_deref() == Some(id.as_str()))
+            .find_first()
+            .expect("inspector action")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+    };
+    click("sync-inspector-toggle");
+    settle();
+    click("sync-inspector-episodes");
+    app.global::<nova::SettingsBridge>()
+        .set_sync_inspector_rows(
+            Rc::new(VecModel::from(vec![nova::SyncInspectorRow {
+                title: "Profile library records".into(),
+                status: "Stored on this device".into(),
+                detail: "32 current · 1 deletion retained".into(),
+            }]))
+            .into(),
+        );
+    app.global::<nova::SettingsBridge>().set_sync_inspector_episodes(Rc::new(VecModel::from(vec![nova::SyncInspectorRow {
+        title: "The Quiet Sea · Episode 4".into(), status: "Unwatched".into(),
+        detail: "The unwatch action wins over the watch action.\nWatch action: 1792514300000:1\nUnwatch action: 1792514410000:0".into(),
+    }])).into());
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        app.set_settings_scroll_y(0.0);
+        settle();
+        let intro = ElementHandle::find_by_element_id(&app, "SettingsSyncModule::inspector_intro")
+            .next()
+            .expect("intro card");
+        assert!(
+            intro.size().height <= if width == 390 { 230.0 } else { 200.0 },
+            "{width}px intro must fit its heading, description and button without stretched blank space: {:?}",
+            intro.size()
+        );
+        let library = ElementHandle::find_by_accessible_label(&app, "Profile library records")
+            .find(|element| element.absolute_position().y > intro.absolute_position().y)
+            .expect("inventory title");
+        let status = ElementHandle::find_by_accessible_label(&app, "Stored on this device")
+            .next()
+            .expect("inventory status");
+        let detail =
+            ElementHandle::find_by_accessible_label(&app, "32 current · 1 deletion retained")
+                .next()
+                .expect("inventory detail");
+        assert!(
+            status.absolute_position().y - library.absolute_position().y <= 32.0,
+            "{width}px title/status gap must stay intrinsic"
+        );
+        assert!(
+            detail.absolute_position().y - status.absolute_position().y <= 30.0,
+            "{width}px status/detail gap must stay intrinsic"
+        );
+        let rows =
+            ElementHandle::find_by_element_type_name(&app, "InspectorRow").collect::<Vec<_>>();
+        assert!(!rows.is_empty(), "inventory rows must be mounted");
+        for row in rows {
+            assert!(
+                row.size().height <= if width == 390 { 210.0 } else { 180.0 },
+                "{width}px row must fit its actual text: {:?}",
+                row.size()
+            );
+        }
+    }
+}

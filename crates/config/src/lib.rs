@@ -4,6 +4,10 @@
 //! platform paths without depending on the whole app.
 
 pub mod playback_preferences;
+pub mod smart_collections;
+pub mod stream_filters;
+pub use smart_collections::{SmartCollection, SmartMediaType, SmartWatchState};
+pub use stream_filters::StreamFilterRules;
 
 /// Device-local presentation preference. Never included in synced settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -697,6 +701,12 @@ macro_rules! cache_settings_type {
     };
 }
 cache_settings_type! {
+    /// Profile-owned source rules, shared unless this device overrides the field.
+    #[serde(default)]
+    pub stream_filters: StreamFilterRules,
+    /// Dynamic Library collections with the same field-level override policy.
+    #[serde(default, deserialize_with = "smart_collections::deserialize_collections")]
+    pub smart_collections: Vec<SmartCollection>,
     /// TMDB v3 API key for title recommendations; profile-owned and synced.
     #[serde(default)]
     pub tmdb_api_key: String,
@@ -993,6 +1003,8 @@ const fn default_status_bar_gradient() -> u32 {
 impl Default for CacheSettings {
     fn default() -> Self {
         Self {
+            stream_filters: StreamFilterRules::default(),
+            smart_collections: Vec::new(),
             tmdb_api_key: String::new(),
             cache_images: true,
             image_disk_cache_limit_mb: default_image_disk_cache_limit(),

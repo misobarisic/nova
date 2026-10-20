@@ -1,12 +1,14 @@
-import { PlayerOsdBridge, OnboardingBridge, TrackRow, ChapterRow } from "@NovaUiShared";
+import { PlayerOsdBridge, OnboardingBridge, TrackRow, ChapterRow, SceneBookmarkRow } from "@NovaUiShared";
 // Connect backend aliases once for the AppWindow lifetime. Conditional hosts
 // must never reconnect an already-joined backend/global property pool.
 
 export component PlayerOsdBindings {
     in-out property <[TrackRow]> secondary_sub_tracks <=> PlayerOsdBridge.secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label <=> PlayerOsdBridge.secondary_sub_track_label;
-    in-out property <[ChapterRow]> scene_bookmarks <=> PlayerOsdBridge.scene_bookmarks;
+    in-out property <int> secondary_subtitle_position_index <=> PlayerOsdBridge.secondary_subtitle_position_index;
+    in-out property <[SceneBookmarkRow]> scene_bookmarks <=> PlayerOsdBridge.scene_bookmarks;
     in-out property <bool> scene_bookmarks_available <=> PlayerOsdBridge.scene_bookmarks_available;
+    in-out property <string> scene_bookmark_notice <=> PlayerOsdBridge.scene_bookmark_notice;
     in-out property <bool> try_another_stream_available <=> PlayerOsdBridge.try_another_stream_available;
     in-out property <int> intro_skip_override_index <=> PlayerOsdBridge.intro_skip_override_index;
     in-out property <int> skip_segment_kind <=> PlayerOsdBridge.skip_segment_kind;

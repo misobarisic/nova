@@ -1,15 +1,19 @@
-import { TrackRow, ChapterRow } from "../ui/types.slint";
+import { TrackRow, ChapterRow, SceneBookmarkRow } from "../ui/types.slint";
 
 // Shared canonical data handles; this global owns no visual tree.
 export global PlayerOsdBridge {
     in-out property <[TrackRow]> secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label;
-    in-out property <[ChapterRow]> scene_bookmarks;
+    in-out property <int> secondary_subtitle_position_index;
+    callback secondary_subtitle_position_changed(int);
+    in-out property <[SceneBookmarkRow]> scene_bookmarks;
     in-out property <bool> scene_bookmarks_available;
+    in-out property <string> scene_bookmark_notice;
     in-out property <bool> try_another_stream_available;
     callback pick_secondary_sub_track(int);
-    callback add_scene_bookmark(string);
-    callback delete_scene_bookmark(int);
+    callback add_scene_bookmark(string) -> bool;
+    callback delete_scene_bookmark(string) -> bool;
+    callback edit_scene_bookmark(string, string) -> bool;
     callback try_another_stream();
     callback focus_shell();
     in-out property <component-factory> factory;

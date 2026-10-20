@@ -2,16 +2,12 @@
 use super::*;
 use nova_config::playback_preferences::TrackChoice;
 
-const BOOKMARKS_KEY: &str = "scene_bookmarks:v1";
+use super::bookmarks::{
+    Bookmark, clean_note, identity_key, load_bookmarks, new_bookmark, save_bookmarks, scene_id,
+};
+
 const SECONDARY_KEY: &str = "secondary_subtitles:v1";
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct Bookmark {
-    position: f64,
-    note: String,
-}
-
-type Bookmarks = HashMap<String, Vec<Bookmark>>;
+const SECONDARY_POSITION_KEY: &str = "secondary_subtitle_positions:v1";
 
 #[derive(Default)]
 pub(super) struct PlaybackToolsState {
@@ -19,16 +15,8 @@ pub(super) struct PlaybackToolsState {
     bookmarks: Vec<Bookmark>,
     pub(super) failed_retry: Option<playback::RetryContext>,
     pub(super) pending_retry: Option<playback::RetryContext>,
-}
-
-fn identity_key(identity: &nova_playback_api::MediaIdentity) -> String {
-    // Length-prefixing through JSON avoids collisions between provider IDs.
-    serde_json::to_string(&(
-        &identity.media_type,
-        &identity.title_id,
-        &identity.episode_id,
-    ))
-    .expect("string tuple is serializable")
+    pub(super) bookmark_resume: Option<playback::BookmarkResume>,
+    pub(super) pending_stream_selection: Option<playback::SelectedStream>,
 }
 
 fn title_key(media_type: &str, title_id: &str) -> String {
@@ -47,14 +35,14 @@ impl Bridge {
         let key = identity.as_ref().map(identity_key);
         let changed = self.shared.lock().unwrap().playback_tools.identity != key;
         if changed {
-            let bookmarks = key
+            let mut bookmarks = key
                 .as_ref()
-                .and_then(|key| read_json::<Bookmarks>(BOOKMARKS_KEY)?.remove(key))
+                .and_then(|key| load_bookmarks().ok()?.remove(key))
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|bookmark| bookmark.position.is_finite() && bookmark.position >= 0.0)
-                .take(200)
                 .collect::<Vec<_>>();
+            bookmarks.sort_by(|a, b| a.position.total_cmp(&b.position));
             let mut state = self.shared.lock().unwrap();
             state.playback_tools.identity = key;
             state.playback_tools.bookmarks = bookmarks;
@@ -65,107 +53,152 @@ impl Bridge {
         app.set_try_another_stream_available(self.alternate_stream_index().is_some());
     }
 
+    pub(super) fn reload_scene_bookmarks(&self) {
+        self.shared.lock().unwrap().playback_tools.identity = None;
+        self.refresh_playback_tools();
+    }
+
     fn publish_scene_bookmarks(&self) {
-        let rows = self
-            .shared
-            .lock()
-            .unwrap()
+        let state = self.shared.lock().unwrap();
+        let key = state.playback_tools.identity.as_deref().unwrap_or("");
+        let rows = state
             .playback_tools
             .bookmarks
             .iter()
-            .map(|bookmark| nova_ui::ChapterRow {
+            .map(|bookmark| nova_ui::SceneBookmarkRow {
+                id: scene_id(key, bookmark).into(),
                 position: bookmark.position as f32,
-                title: bookmark.note.clone().into(),
+                note: bookmark.note.clone().into(),
             })
             .collect::<Vec<_>>();
+        drop(state);
         if let Some(app) = self.app() {
             app.set_scene_bookmarks(Rc::new(VecModel::from(rows)).into());
         }
     }
 
-    pub(super) fn add_scene_bookmark(&self, note: &str) {
+    fn scene_bookmark_error(&self, message: &str) -> bool {
+        if let Some(app) = self.app() {
+            app.set_scene_bookmark_notice(text::tr(message).into());
+        }
+        false
+    }
+
+    pub(super) fn add_scene_bookmark(&self, note: &str) -> bool {
         let Some(app) = self
             .app()
             .filter(|app| app.get_player_open() && app.get_playback_started())
         else {
-            return;
+            return false;
         };
         let Some(identity) = self.current_playback_identity() else {
-            return;
+            return false;
         };
         let position = app.get_position() as f64;
-        if !position.is_finite() || position < 0.0 || !writable_key(BOOKMARKS_KEY) {
-            return;
+        if !position.is_finite() || position < 0.0 {
+            return false;
         }
         let key = identity_key(&identity);
-        let mut values = read_json::<Bookmarks>(BOOKMARKS_KEY).unwrap_or_default();
-        let rows = values.entry(key.clone()).or_default();
-        let note: String = note
-            .trim()
-            .chars()
-            .filter(|character| !character.is_control())
-            .take(280)
-            .collect();
+        let Ok(mut values) = load_bookmarks() else {
+            return self.scene_bookmark_error(
+                "Could not read your scene bookmarks. Your saved data has been kept.",
+            );
+        };
+        let poster = detail::read_meta_header_for(&identity.media_type, &identity.title_id)
+            .map(|header| header.poster_url)
+            .unwrap_or_default();
+        let added = new_bookmark(position, note, &identity, &poster);
+        let rows = values.entry(key).or_default();
         if let Some(existing) = rows
             .iter_mut()
             .find(|bookmark| (bookmark.position - position).abs() < 0.5)
         {
+            let note = clean_note(note);
             if !note.is_empty() {
                 existing.note = note;
             }
-        } else if rows.len() < 200 {
-            rows.push(Bookmark { position, note });
+            if existing.metadata.is_none() {
+                existing.metadata = added.metadata;
+            }
         } else {
-            return;
+            rows.push(added);
         }
         rows.sort_by(|a, b| a.position.total_cmp(&b.position));
-        let bookmarks = rows.clone();
-        let failures = write_failures();
-        write_json(BOOKMARKS_KEY, &values);
-        if failures != write_failures() {
-            return;
+        if save_bookmarks(&values).is_err() {
+            return self.scene_bookmark_error(
+                "Could not save your scene bookmark. Your note has been kept.",
+            );
         }
-        let mut state = self.shared.lock().unwrap();
-        state.playback_tools.identity = Some(key);
-        state.playback_tools.bookmarks = bookmarks;
-        drop(state);
-        self.publish_scene_bookmarks();
+        self.reload_scene_bookmarks();
+        self.refresh_bookmarks();
+        if let Some(app) = self.app() {
+            app.set_scene_bookmark_notice("".into());
+        }
+        true
     }
 
-    pub(super) fn delete_scene_bookmark(&self, index: i32) {
-        if index < 0 || !writable_key(BOOKMARKS_KEY) {
-            return;
-        }
+    pub(super) fn edit_scene_bookmark(&self, id: &str, note: &str) -> bool {
         let Some(identity) = self.current_playback_identity() else {
-            return;
+            return false;
         };
         let key = identity_key(&identity);
-        let selected = {
-            let state = self.shared.lock().unwrap();
-            if state.playback_tools.identity.as_ref() != Some(&key) {
-                return;
-            }
-            state.playback_tools.bookmarks.get(index as usize).cloned()
+        let Ok(mut values) = load_bookmarks() else {
+            return self.scene_bookmark_error(
+                "Could not read your scene bookmarks. Your saved data has been kept.",
+            );
         };
-        let Some(selected) = selected else {
-            return;
+        let Some(bookmark) = values.get_mut(&key).and_then(|rows| {
+            rows.iter_mut()
+                .find(|bookmark| scene_id(&key, bookmark) == id)
+        }) else {
+            return false;
         };
-        let mut values = read_json::<Bookmarks>(BOOKMARKS_KEY).unwrap_or_default();
+        bookmark.note = clean_note(note);
+        if save_bookmarks(&values).is_err() {
+            return self.scene_bookmark_error(
+                "Could not save your scene bookmark. Your note has been kept.",
+            );
+        }
+        self.reload_scene_bookmarks();
+        self.refresh_bookmarks();
+        if let Some(app) = self.app() {
+            app.set_scene_bookmark_notice("".into());
+        }
+        true
+    }
+
+    pub(super) fn delete_scene_bookmark(&self, id: &str) -> bool {
+        let Some(identity) = self.current_playback_identity() else {
+            return false;
+        };
+        let key = identity_key(&identity);
+        let Ok(mut values) = load_bookmarks() else {
+            return self.scene_bookmark_error(
+                "Could not read your scene bookmarks. Your saved data has been kept.",
+            );
+        };
         let Some(rows) = values.get_mut(&key) else {
-            return;
+            return false;
         };
-        rows.retain(|bookmark| bookmark.position != selected.position);
-        let bookmarks = rows.clone();
+        let before = rows.len();
+        rows.retain(|bookmark| scene_id(&key, bookmark) != id);
+        if before == rows.len() {
+            return false;
+        }
         if rows.is_empty() {
             values.remove(&key);
         }
-        let failures = write_failures();
-        write_json(BOOKMARKS_KEY, &values);
-        if failures != write_failures() {
-            return;
+        if save_bookmarks(&values).is_err() {
+            return self.scene_bookmark_error(
+                "Could not save your scene bookmark. Your note has been kept.",
+            );
         }
-        self.shared.lock().unwrap().playback_tools.bookmarks = bookmarks;
-        self.publish_scene_bookmarks();
+        self.reload_scene_bookmarks();
+        self.refresh_bookmarks();
+        if let Some(app) = self.app() {
+            app.set_scene_bookmark_notice("".into());
+        }
+        true
     }
 
     pub(super) fn prepare_secondary_subtitles(&self) {
@@ -176,7 +209,50 @@ impl Bridge {
                     .remove(&title_key(&media_type, &id))
             })
             .unwrap_or(TrackChoice::Off);
+        let position = self
+            .playback_preference_identity(true)
+            .and_then(|(media_type, id)| {
+                read_json::<HashMap<String, i32>>(SECONDARY_POSITION_KEY)?
+                    .remove(&title_key(&media_type, &id))
+            })
+            .filter(|position| (0..=2).contains(position))
+            .unwrap_or(0);
+        self.player.set_secondary_subtitle_position(position);
+        if let Some(app) = self.app() {
+            app.set_secondary_subtitle_position_index(position);
+        }
         self.player.set_secondary_subtitle_preference(choice);
+    }
+
+    pub(super) fn change_secondary_subtitle_position(&self, index: i32) {
+        if !(0..=2).contains(&index)
+            || !self
+                .shared
+                .lock()
+                .unwrap()
+                .remote_playback
+                .can_play_locally()
+        {
+            return;
+        }
+        let Some((media_type, title)) = self.playback_preference_identity(false) else {
+            return;
+        };
+        let mut values =
+            read_json::<HashMap<String, i32>>(SECONDARY_POSITION_KEY).unwrap_or_default();
+        if !writable_key(SECONDARY_POSITION_KEY) {
+            return;
+        }
+        values.insert(title_key(&media_type, &title), index);
+        let failures = write_failures();
+        write_json(SECONDARY_POSITION_KEY, &values);
+        if failures != write_failures() {
+            return;
+        }
+        self.player.set_secondary_subtitle_position(index);
+        if let Some(app) = self.app() {
+            app.set_secondary_subtitle_position_index(index);
+        }
     }
 
     pub(super) fn pick_secondary_playback_track(&self, id: i32) {

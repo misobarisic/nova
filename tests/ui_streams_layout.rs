@@ -17,3 +17,6 @@ mod selector;
 
 #[path = "streams_layout/selector_landscape.rs"]
 mod selector_landscape;
+
+#[path = "streams_layout/universal_filters.rs"]
+mod universal_filters;

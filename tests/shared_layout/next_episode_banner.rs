@@ -121,11 +121,51 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
                         "banner overflow at {width}x{height}: {p:?} {s:?}"
                     );
                     assert!((width as f32 - p.x - s.width - 16.0).abs() <= 1.0);
-                    let bottom_gap = if osd_visible { 80.0 } else { 16.0 };
-                    assert!(
-                        (height as f32 - p.y - s.height - bottom_gap).abs() <= 1.0,
-                        "banner must anchor bottom-right and clear visible controls"
+                    let actual_gap = height as f32 - p.y - s.height;
+                    let state = format!(
+                        "{width}x{height}, android={android}, osd={osd_visible}, language={language}, banner={p:?} {s:?}, bottom_gap={actual_gap}"
                     );
+                    if osd_visible {
+                        let footer =
+                            ElementHandle::find_by_element_id(&app, "PlayerOverlay::player_header")
+                                .next()
+                                .expect("measured player footer caption");
+                        let footer_top = footer.absolute_position().y;
+                        assert!(
+                            footer.computed_opacity() > 0.99,
+                            "fixture must reveal controls: {state}"
+                        );
+                        assert!(
+                            p.y + s.height <= footer_top - 11.0,
+                            "banner must clear the actual caption/footer with 12px spacing: {state}, footer_top={footer_top}"
+                        );
+                        let preferred_bottom = footer_top - 12.0;
+                        let center = ElementHandle::find_by_element_id(
+                            &app,
+                            "PlayerOverlay::center_transport",
+                        )
+                        .next()
+                        .filter(|control| control.computed_opacity() > 0.99);
+                        let avoids_center = center.as_ref().is_some_and(|control| {
+                            let c = control.absolute_position();
+                            let size = control.size();
+                            p.x < c.x + size.width
+                                && p.x + s.width > c.x
+                                && preferred_bottom - s.height < c.y + size.height
+                                && preferred_bottom > c.y
+                        });
+                        if !avoids_center {
+                            assert!(
+                                (p.y + s.height - preferred_bottom).abs() <= 1.0,
+                                "offer retains bottom-right anchoring when the footer lane is clear: {state}, footer_top={footer_top}"
+                            );
+                        }
+                    } else {
+                        assert!(
+                            (actual_gap - 16.0).abs() <= 1.0,
+                            "hidden controls keep the offer 16px from the bottom: {state}"
+                        );
+                    }
                     assert!(
                         banner
                             .query_descendants()
@@ -181,10 +221,20 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
                     assert!(d.x >= a.x + size.width && d.x + ds.width <= p.x + s.width + 1.0);
                     assert!((d.y - a.y).abs() <= 1.0, "actions must stay on one row");
                     if android && osd_visible {
-                        let transport_top = height as f32 / 2.0 - 36.0;
+                        let transport = ElementHandle::find_by_element_id(
+                            &app,
+                            "PlayerOverlay::center_transport",
+                        )
+                        .next()
+                        .expect("visible Android center transport");
+                        let c = transport.absolute_position();
+                        let size = transport.size();
                         assert!(
-                            p.y + s.height <= transport_top || p.y >= transport_top + 72.0,
-                            "banner overlaps center transport at {width}x{height}"
+                            p.x + s.width <= c.x
+                                || p.x >= c.x + size.width
+                                || p.y + s.height <= c.y
+                                || p.y >= c.y + size.height,
+                            "banner overlaps actual center transport: {state}, transport={c:?} {size:?}"
                         );
                     }
                 }
@@ -254,6 +304,9 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::Shift.into(),
         });
+    // Reverse traversal includes the existing speed shortcut before Camera;
+    // Android skips its absent fullscreen control between Camera and Settings.
+    key(&app, slint::platform::Key::Tab); // Playback speed.
     key(&app, slint::platform::Key::Tab); // Camera.
     key(&app, slint::platform::Key::Tab); // Settings gear.
     app.window()
@@ -261,6 +314,10 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
             text: slint::platform::Key::Shift.into(),
         });
     key(&app, slint::platform::Key::Return); // Settings gear.
+    let menu = ElementHandle::find_by_element_type_name(&app, "SettingsMenu")
+        .next()
+        .expect("keyboard traversal must open the player settings menu");
+    assert!(menu.computed_opacity() > 0.99);
     assert!(banner(&app).is_none(), "banner must yield to player menus");
     key(&app, slint::platform::Key::Escape);
     assert!(banner(&app).is_some());

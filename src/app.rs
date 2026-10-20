@@ -270,6 +270,7 @@ struct HomeCatalogGroup {
 
 #[derive(Default)]
 struct Shared {
+    bookmarks: bookmarks::State,
     viewing_journal: viewing_journal::JournalTracker,
     watch_queue: watch_queue::State,
     playback_tools: playback_tools::PlaybackToolsState,
@@ -769,6 +770,7 @@ mod addon_browser;
 mod addon_mgr;
 mod addon_packages;
 mod addon_picker;
+mod bookmarks;
 mod bridge;
 mod cache_gc;
 mod calendar;
@@ -809,6 +811,8 @@ mod season_downloads;
 mod settings;
 mod settings_sync;
 mod similar;
+mod smart_collections;
+mod stream_filters;
 mod stream_prefetch;
 mod subtitles;
 mod sync_inspector;
@@ -867,6 +871,9 @@ pub(crate) use settings::*;
 pub(crate) use streams::*;
 pub(crate) use sync::*;
 pub(crate) use watch_state::*;
+
+#[cfg(test)]
+mod feature_rules_tests;
 
 #[cfg(test)]
 mod tests;

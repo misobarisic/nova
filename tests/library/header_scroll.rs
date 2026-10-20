@@ -28,6 +28,18 @@ fn settle(app: &nova::AppWindow) {
 /// independent of native Flickable momentum.
 fn drag_up(app: &nova::AppWindow, from: LogicalPosition, dy: f32) {
     use slint::platform::{PointerEventButton, WindowEvent};
+    // Transparent navigation reserves zero layout height while its real 68px
+    // tap targets overlay the scroll viewport. Begin above that tap bar so
+    // these gestures exercise scrolling rather than navigation hit testing.
+    let window = app.window().size();
+    let from = LogicalPosition::new(
+        from.x,
+        if window.width < 700 {
+            from.y.min(window.height as f32 - 68.0 - 30.0)
+        } else {
+            from.y
+        },
+    );
     app.window().dispatch_event(WindowEvent::PointerPressed {
         position: from,
         button: PointerEventButton::Left,
@@ -118,7 +130,8 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
             settle(&app);
             assert!(
                 (app.get_library_scroll_y() + 280.0).abs() < 2.0,
-                "header collapse must not change drag distance"
+                "header collapse must not change drag distance: width={width}, list={list}, offset={}, viewport={viewport_pos:?} {viewport_size:?}",
+                app.get_library_scroll_y()
             );
             // Keep the handle: visible-element queries omit the clipped hero.
             assert!(
@@ -127,7 +140,16 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
             );
             let filter_y = element(&app, "filter_rail").absolute_position().y;
             assert!(filter_y < original_filter_y - 40.0);
-            assert!((filter_y - viewport_pos.y).abs() < 0.5);
+            let smart = element(&app, "smart_rail");
+            let smart_y = smart.absolute_position().y;
+            assert!(
+                (smart_y - viewport_pos.y).abs() < 0.5,
+                "smart collection controls pin first"
+            );
+            assert!(
+                (filter_y - smart_y - smart.size().height - 14.0).abs() < 0.5,
+                "category filters pin immediately below the smart collection rail"
+            );
             let controls_y = element(&app, "library_sort_controls").absolute_position().y;
             assert!(controls_y > filter_y);
             drag_up(
@@ -139,7 +161,12 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
                 200.0,
             );
             settle(&app);
-            assert!((app.get_library_scroll_y() + 480.0).abs() < 2.0);
+            assert!(
+                (app.get_library_scroll_y() + 480.0).abs() < 2.0,
+                "second drag preserves exact distance at width={width}, list={list}: {}",
+                app.get_library_scroll_y()
+            );
+            assert!((element(&app, "smart_rail").absolute_position().y - smart_y).abs() < 0.5);
             assert!((element(&app, "filter_rail").absolute_position().y - filter_y).abs() < 0.5);
             assert!(
                 (element(&app, "library_sort_controls").absolute_position().y - controls_y).abs()

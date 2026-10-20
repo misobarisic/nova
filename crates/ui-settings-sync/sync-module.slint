@@ -9,11 +9,16 @@ component InspectorRow inherits Rectangle {
     in property <string> title;
     in property <string> detail;
     in property <string> status;
+    // The section slot may be taller than its content; keep record text
+    // intrinsic instead of distributing that surplus across wrapped labels.
+    vertical-stretch: 0;
+    height: row_body.preferred-height;
     background: Theme.current.card;
     border-radius: 12px;
     border-width: 1px;
     border-color: Theme.current.border_soft;
-    VerticalLayout {
+    row_body := VerticalLayout {
+        alignment: start;
         padding: 14px;
         spacing: 7px;
         Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
@@ -111,12 +116,15 @@ export component SettingsSyncModule inherits Window {
             }
 
             SectionHeader { label: @tr("SYNC INSPECTOR"); }
-            Rectangle {
+            inspector_intro := Rectangle {
+                vertical-stretch: 0;
+                height: intro_body.preferred-height;
                 background: Theme.current.card;
                 border-radius: 16px;
                 border-width: 1px;
                 border-color: Theme.current.border_soft;
-                VerticalLayout {
+                intro_body := VerticalLayout {
+                    alignment: start;
                     padding: 16px;
                     spacing: 12px;
                     Text {
@@ -140,6 +148,8 @@ export component SettingsSyncModule inherits Window {
                 }
             }
             if root.inspector_open: VerticalLayout {
+                vertical-stretch: 0;
+                alignment: start;
                 spacing: 12px;
                 Text {
                     text: @tr("CURRENT PROFILE · LOCAL INVENTORY");
@@ -170,6 +180,8 @@ export component SettingsSyncModule inherits Window {
                     clicked => { root.inspector_episodes_open = !root.inspector_episodes_open; }
                 }
                 if root.inspector_episodes_open: VerticalLayout {
+                    vertical-stretch: 0;
+                    alignment: start;
                     spacing: 12px;
                     SearchField {
                         min-width: 0px;
@@ -197,7 +209,7 @@ export component SettingsSyncModule inherits Window {
                 }
             }
 
-            SectionHeader { label: @tr("Enablement"); }
+            SectionHeader { label: @tr("Cross-device sync"); }
 
             // ---- Sync --------------------------------------
             // Cross-device sync (opt-in). Peers are added by

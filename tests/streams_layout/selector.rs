@@ -745,7 +745,15 @@ fn paired_output_picker_keeps_short_results_and_routes_receiver_selection() {
     app.set_streams(Rc::new(VecModel::from((0..25).map(row).collect::<Vec<_>>())).into());
     app.window().set_size(slint::PhysicalSize::new(1280, 576));
     idle();
-    assert!(element(&app, "StreamSelector::output_picker").size().height <= 32.0);
+    // The heading wrapper now shares a 44px lane with the filter action;
+    // Play on itself remains the same compact 32px button, centered in it.
+    assert!(element(&app, "StreamSelector::output_picker").size().height <= 44.0);
+    assert!(
+        element(&app, "RemoteTargetMenu::output_button")
+            .size()
+            .height
+            <= 32.0
+    );
     app.window()
         .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
             position: slint::LogicalPosition::new(600.0, 350.0),

@@ -10,6 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const PREFIX: &str = "viewing_journal:v1:";
 const CHECKPOINT_SECONDS: f64 = 15.0;
+const LOAD_RETRY_DELAY: Duration = Duration::from_secs(5);
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 static WRITER: Mutex<()> = Mutex::new(());
 
@@ -62,6 +63,9 @@ struct ActiveSession {
     last_position: f64,
     was_playing: bool,
     completion_eligible: bool,
+    history_known: bool,
+    started_position: f64,
+    media_duration: f64,
     saved_seconds: f64,
 }
 
@@ -70,6 +74,7 @@ pub(super) struct JournalTracker {
     active: Option<ActiveSession>,
     // Previously persisted records are loaded once per activation, not per tick.
     loaded: bool,
+    retry_at: Option<Instant>,
     rows: BTreeMap<String, ViewingSession>,
     error: bool,
 }
@@ -197,15 +202,78 @@ fn rewatch_state<'a>(
 
 impl JournalTracker {
     fn ensure_loaded(&mut self, owner: &profiles::ProfileStore) {
-        if !self.loaded {
-            self.loaded = true;
-            match load(owner) {
-                Ok((rows, unreadable)) => {
-                    self.rows = rows;
-                    self.error = unreadable;
+        let recovering_active = self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.history_known);
+        self.try_load(Instant::now(), || load(owner));
+        if recovering_active
+            && let Some(active) = self
+                .active
+                .as_ref()
+                .filter(|active| active.history_known && active.row.watched_seconds > 0.0)
+        {
+            // Persist the corrected classification even when recovery happened
+            // while paused, before another watched-time checkpoint is due.
+            persist(active.owner.clone(), active.row.clone());
+        }
+    }
+
+    fn try_load(
+        &mut self,
+        now: Instant,
+        read: impl FnOnce() -> Result<(BTreeMap<String, ViewingSession>, bool), ()>,
+    ) {
+        if self.loaded || self.retry_at.is_some_and(|retry| now < retry) {
+            return;
+        }
+        match read() {
+            Ok((rows, unreadable)) => {
+                // Playback may already have created/checkpointed new sessions
+                // while a transient storage read was failing. Their in-memory
+                // facts are newer than any persisted copy of the same ID.
+                for (id, row) in rows {
+                    self.rows.entry(id).or_insert(row);
                 }
-                Err(()) => self.error = true,
+                self.loaded = true;
+                self.retry_at = None;
+                self.error = unreadable;
+                self.reconcile_active_history();
             }
+            Err(()) => {
+                self.error = true;
+                self.retry_at = Some(now + LOAD_RETRY_DELAY);
+            }
+        }
+    }
+
+    fn reconcile_active_history(&mut self) {
+        let Some(active) = self
+            .active
+            .as_ref()
+            .filter(|active| self.loaded && !active.history_known)
+        else {
+            return;
+        };
+        let media = nova_playback_api::MediaIdentity {
+            media_type: active.row.media_type.clone(),
+            title_id: active.row.title_id.clone(),
+            episode_id: active.row.episode_id.clone(),
+            title: active.row.title.clone(),
+            episode: active.row.episode.clone(),
+        };
+        let (rewatch, eligible) = rewatch_state(
+            self.rows.values().filter(|row| row.id != active.row.id),
+            &media,
+            active.started_position,
+            active.media_duration,
+        );
+        let active = self.active.as_mut().unwrap();
+        active.row.rewatch = rewatch;
+        active.completion_eligible = eligible;
+        active.history_known = true;
+        if active.row.watched_seconds > 0.0 {
+            self.rows.insert(active.row.id.clone(), active.row.clone());
         }
     }
 
@@ -269,11 +337,18 @@ impl JournalTracker {
                 last_tick: tick,
                 last_position: position,
                 was_playing: playing,
-                completion_eligible,
+                completion_eligible: self.loaded && completion_eligible,
+                history_known: self.loaded,
+                started_position: position,
+                media_duration,
                 saved_seconds: -CHECKPOINT_SECONDS,
             });
             return false;
         }
+        if media_duration.is_finite() && media_duration > 0.0 {
+            self.active.as_mut().unwrap().media_duration = media_duration;
+        }
+        self.reconcile_active_history();
         let active = self.active.as_mut().unwrap();
         let watched = watched_interval(
             tick.duration_since(active.last_tick).as_secs_f64(),
@@ -285,7 +360,11 @@ impl JournalTracker {
         active.last_tick = tick;
         active.last_position = position;
         active.was_playing = playing;
-        if !active.completion_eligible && media_duration > 0.0 && position <= media_duration * 0.2 {
+        if active.history_known
+            && !active.completion_eligible
+            && media_duration > 0.0
+            && (position <= media_duration * 0.2 || active.started_position <= media_duration * 0.2)
+        {
             active.row.rewatch = true;
             active.completion_eligible = true;
         }
@@ -396,6 +475,9 @@ impl Bridge {
         journal.set_current_year(now_year);
         let mut state = self.shared.lock().unwrap();
         let tracker = &mut state.viewing_journal;
+        // Opening the journal explicitly retries a failed initial scan; normal
+        // playback ticks retain the backoff instead of hammering storage.
+        tracker.retry_at = None;
         tracker.ensure_loaded(&profiles::ProfileStore::capture());
         let oldest = tracker
             .rows
@@ -654,6 +736,91 @@ mod tests {
             completed_at: completed.then_some(at),
             title_completed_at: completed.then_some(at),
             rewatch,
+        }
+    }
+
+    #[test]
+    fn failed_initial_scan_retries_and_merges_history_with_sessions_observed_during_failure() {
+        let now = Instant::now();
+        let mut tracker = JournalTracker::default();
+        tracker.try_load(now, || Err(()));
+        assert!(!tracker.loaded);
+        assert!(tracker.error);
+        let mut observed = session("new", "Show", 20, 45.0, false, false);
+        observed.ended_at = None;
+        tracker.rows.insert(observed.id.clone(), observed.clone());
+        tracker.try_load(now + Duration::from_secs(1), || {
+            panic!("failed reads must back off between playback ticks")
+        });
+        let old = session("old", "Show", 10, 600.0, true, false);
+        let stale_checkpoint = session("new", "Show", 20, 15.0, false, false);
+        tracker.try_load(now + LOAD_RETRY_DELAY, || {
+            Ok((
+                BTreeMap::from([
+                    (old.id.clone(), old),
+                    (stale_checkpoint.id.clone(), stale_checkpoint),
+                ]),
+                false,
+            ))
+        });
+        assert!(tracker.loaded);
+        assert!(!tracker.error);
+        assert_eq!(tracker.rows.len(), 2);
+        assert_eq!(tracker.rows["new"].watched_seconds, 45.0);
+        assert!(tracker.rows["new"].ended_at.is_none());
+        assert!(tracker.rows["old"].completed_at.is_some());
+        let media = nova_playback_api::MediaIdentity {
+            media_type: "series".into(),
+            title_id: "Show".into(),
+            episode_id: "episode".into(),
+            title: "Show".into(),
+            episode: "Episode 1".into(),
+        };
+        assert_eq!(
+            rewatch_state(tracker.rows.values(), &media, 0.0, 600.0),
+            (true, true)
+        );
+        tracker.try_load(now + LOAD_RETRY_DELAY, || {
+            panic!("successful scans stay loaded")
+        });
+    }
+
+    #[test]
+    fn recovered_history_immediately_reclassifies_active_session_from_original_start_position() {
+        let now = Instant::now();
+        for (started_position, expected_rewatch) in [(0.0, true), (590.0, false)] {
+            let mut tracker = JournalTracker::default();
+            tracker.try_load(now, || Err(()));
+            let mut observed = session("new", "Show", 20, 45.0, false, false);
+            observed.ended_at = None;
+            tracker.rows.insert(observed.id.clone(), observed.clone());
+            tracker.active = Some(ActiveSession {
+                row: observed,
+                owner: profiles::ProfileStore::capture(),
+                last_tick: now,
+                // Playback has moved beyond the restart threshold by recovery.
+                last_position: 300.0,
+                was_playing: false,
+                completion_eligible: false,
+                history_known: false,
+                started_position,
+                media_duration: 600.0,
+                saved_seconds: 30.0,
+            });
+            let old = session("old", "Show", 10, 600.0, true, false);
+            tracker.try_load(now + LOAD_RETRY_DELAY, || {
+                Ok((BTreeMap::from([(old.id.clone(), old)]), false))
+            });
+            let active = tracker.active.as_ref().unwrap();
+            assert!(active.history_known);
+            assert_eq!(active.row.rewatch, expected_rewatch);
+            assert_eq!(active.completion_eligible, expected_rewatch);
+            assert_eq!(active.row.watched_seconds, 45.0);
+            assert_eq!(active.last_position, 300.0);
+            assert_eq!(active.saved_seconds, 30.0);
+            assert_eq!(tracker.rows["new"].rewatch, expected_rewatch);
+            assert_eq!(tracker.rows["new"].watched_seconds, 45.0);
+            assert!(tracker.rows["old"].completed_at.is_some());
         }
     }
 

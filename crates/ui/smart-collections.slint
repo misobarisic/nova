@@ -1,0 +1,197 @@
+import { SmartCollectionsBridge, SettingsSync, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { LibraryFilterChip } from "filter-chip.slint";
+import { SettingsInput, PillButton } from "settings-controls.slint";
+import { SettingSyncBadge } from "settings-sync.slint";
+import { SettingSyncModal } from "settings-sync-modal.slint";
+import { ScrollView } from "scrollview.slint";
+import { PageHeader } from "page-header.slint";
+
+// A separate rail composes with categories instead of taking their identifiers
+// or changing manual category membership. The page owns focus between rails.
+export component SmartCollectionsRail inherits Rectangle {
+    in property <bool> touch_menus;
+    in-out property <int> choice: 0;
+    callback exit(int);
+    public function focus_shell() { scope.focus(); }
+    private property <length> row-height: InterfaceStyle.tv ? 56px : 44px;
+    height: SmartCollectionsBridge.rows.length > 0 ? root.row-height * 2 + 10px : root.row-height;
+    function reveal(left: length, w: length) {
+        let minimum = Math.min(0px, rail.width - rail.content-width);
+        if left < -rail.content-x { rail.content-x = -left; }
+        else if left + w > rail.width - rail.content-x { rail.content-x = Math.max(minimum, rail.width - left - w); }
+    }
+    function activate() {
+        if root.choice == 0 { SmartCollectionsBridge.edit(""); }
+        else if root.choice == 1 && SmartCollectionsBridge.selected_id != "" { SmartCollectionsBridge.edit(SmartCollectionsBridge.selected_id); }
+        else if root.choice == 2 { SmartCollectionsBridge.selected(""); }
+        else if root.choice >= 3 && root.choice - 3 < SmartCollectionsBridge.rows.length { SmartCollectionsBridge.selected(SmartCollectionsBridge.rows[root.choice - 3].id); }
+    }
+    scope := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.UpArrow || e.text == Key.DownArrow { root.exit(e.text == Key.UpArrow ? -1 : 1); accept }
+            else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                root.choice = Math.max(0, Math.min(SmartCollectionsBridge.rows.length > 0 ? SmartCollectionsBridge.rows.length + 2 : 0, root.choice + (e.text == Key.LeftArrow ? -1 : 1)));
+                if root.choice == 1 && SmartCollectionsBridge.selected_id == "" { root.choice = e.text == Key.LeftArrow ? 0 : 2; }
+                accept
+            } else if e.text == Key.Return || e.text == " " { if !e.repeat { root.activate(); } accept }
+            else { reject }
+        }
+    }
+    rail_header := Rectangle {
+        x: 0px; y: 0px; width: 100%; height: root.row-height;
+        HorizontalLayout {
+            x: 0px; y: 0px; width: 100%; height: 100%; spacing: 8px;
+            rail_title := Text { text: @tr("Smart collections"); color: Theme.current.text_secondary; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+            if SmartCollectionsBridge.selected_id != "": PillButton { label: @tr("Edit"); compact: true; focused: scope.has-focus && root.choice == 1; clicked => { SmartCollectionsBridge.edit(SmartCollectionsBridge.selected_id); } }
+            PillButton { label: @tr("Create"); compact: true; focused: scope.has-focus && root.choice == 0; clicked => { SmartCollectionsBridge.edit(""); } }
+        }
+    }
+    rail := Flickable {
+        visible: SmartCollectionsBridge.rows.length > 0;
+        y: root.row-height + 10px; width: 100%; height: root.row-height;
+        content-width: chips.preferred-width; content-height: self.height;
+        changed width => { self.content-x = Math.max(Math.min(0px, self.width - self.content-width), Math.min(0px, self.content-x)); }
+        interactive: true;
+        chips := HorizontalLayout {
+            spacing: 8px; alignment: start;
+            LibraryFilterChip { label: @tr("All titles"); selected: SmartCollectionsBridge.selected_id == ""; touch_feedback: root.touch_menus; border-width: scope.has-focus && root.choice == 2 ? 2px : 1px; border-color: scope.has-focus && root.choice == 2 ? Theme.current.focus_ring : Theme.current.border_strong; picked => { SmartCollectionsBridge.selected(""); } reveal(left, w) => { root.reveal(left, w); } }
+            for rule[index] in SmartCollectionsBridge.rows: LibraryFilterChip {
+                label: rule.name; selected: SmartCollectionsBridge.selected_id == rule.id; touch_feedback: root.touch_menus;
+                border-width: scope.has-focus && root.choice == index + 3 ? 2px : 1px;
+                border-color: scope.has-focus && root.choice == index + 3 ? Theme.current.focus_ring : Theme.current.border_strong;
+                private property <length> viewport_width: rail.width;
+                changed viewport_width => { if self.selected { root.reveal(self.x, self.width); } }
+                property <bool> keyboard_selected: scope.has-focus && root.choice == index + 3;
+                changed keyboard_selected => { if self.keyboard_selected { root.reveal(self.x, self.width); } }
+                picked => { SmartCollectionsBridge.selected(rule.id); }
+                reveal(left, w) => { root.reveal(left, w); }
+            }
+        }
+    }
+}
+
+// Full-page editor: portrait phones scroll one form; desktop gets a measured
+// reading column. No overlay animation or modal sheet traps the keyboard/IME.
+export component SmartCollectionsEditor inherits Rectangle {
+    in property <bool> active;
+    in property <bool> narrow;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback closed();
+    property <int> choice: 0;
+    property <bool> confirming_delete: false;
+    property <int> delete_choice: 1;
+    private property <length> content_width: Math.max(1px, Math.min(760px, root.width - root.safe-left - root.safe-right - 36px));
+    background: Theme.current.artwork_canvas;
+    public function focus_shell() { if root.active { root.focus_choice(); } }
+    function close() { if SettingsSync.open { SettingsSync.open = false; root.focus_shell(); return; } SmartCollectionsBridge.editor_open = false; root.closed(); }
+    function focus_choice() {
+        if root.choice == 0 { name_input.focus(); root.reveal(name_input.absolute-position.y, name_input.height); }
+        else if root.choice == 3 { genre_input.focus(); root.reveal(genre_input.absolute-position.y, genre_input.height); }
+        else if root.choice == 4 { runtime_input.focus(); root.reveal(runtime_input.absolute-position.y, runtime_input.height); }
+        else {
+            page_scope.focus();
+            if root.choice >= 5 { editor_scroll.content-y = Math.min(0px, editor_scroll.visible-height - editor_scroll.content-height); }
+            else { root.reveal(form.absolute-position.y + (root.choice == 1 ? 120px : 210px), 44px); }
+        }
+    }
+    function reveal(y: length, h: length) {
+        let top = y - editor_scroll.absolute-position.y;
+        if top < 0px { editor_scroll.content-y -= top; }
+        else if top + h > editor_scroll.visible-height { editor_scroll.content-y -= top + h - editor_scroll.visible-height; }
+    }
+    function save() {
+        SmartCollectionsBridge.name = name_input.full-text;
+        SmartCollectionsBridge.genre = genre_input.full-text;
+        SmartCollectionsBridge.max_runtime = runtime_input.full-text;
+        SmartCollectionsBridge.save();
+        if !SmartCollectionsBridge.editor_open { root.closed(); }
+    }
+    function start_delete() { root.confirming_delete = true; root.delete_choice = 1; page_scope.focus(); }
+    function delete_collection() { SmartCollectionsBridge.remove(SmartCollectionsBridge.editing_id); if !SmartCollectionsBridge.editor_open { root.closed(); } }
+    function activate() {
+        if root.confirming_delete { if root.delete_choice == 0 { root.delete_collection(); } else { root.confirming_delete = false; } return; }
+        if root.choice == 1 { SmartCollectionsBridge.media_type = Math.mod(SmartCollectionsBridge.media_type + 1, 3); }
+        else if root.choice == 2 { SmartCollectionsBridge.watch_state = Math.mod(SmartCollectionsBridge.watch_state + 1, 3); }
+        else if root.choice == 5 { root.save(); }
+        else if root.choice == 6 { root.close(); }
+        else if root.choice == 7 && SmartCollectionsBridge.editing_id != "" { root.start_delete(); }
+        else { root.focus_choice(); }
+    }
+    changed active => {
+        if root.active { root.confirming_delete = false; root.choice = 0; editor_scroll.content-y = 0px; focus_timer.start(); }
+    }
+    focus_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.active { root.focus_shell(); } } }
+    page_scope := FocusScope {
+        enabled: root.active && !SettingsSync.open; width: 100%; height: 100%;
+        capture-key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || (e.text == Key.Backspace && self.has-focus) {
+                if !e.repeat { if root.confirming_delete { root.confirming_delete = false; } else { root.close(); } } accept
+            } else if root.confirming_delete && (e.text == Key.Tab || e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow) { root.delete_choice = 1 - root.delete_choice; page_scope.focus(); accept
+            } else if !root.confirming_delete && (e.text == Key.Tab || e.text == Key.DownArrow || e.text == Key.UpArrow) {
+                SettingsStyle.keyboard-mode = true;
+                root.choice = Math.mod(root.choice + (e.text == Key.UpArrow || (e.text == Key.Tab && e.modifiers.shift) ? -1 : 1) + (SmartCollectionsBridge.editing_id == "" ? 7 : 8), SmartCollectionsBridge.editing_id == "" ? 7 : 8);
+                root.focus_choice(); accept
+            } else { reject }
+        }
+        key-pressed(e) => { if self.has-focus && (e.text == Key.Return || e.text == " ") { if !e.repeat { root.activate(); } accept } else { reject } }
+        editor_scroll := ScrollView {
+            x: root.safe-left + (root.width - root.safe-left - root.safe-right - root.content_width) / 2;
+            y: root.safe-top + 18px;
+            width: root.content_width;
+            height: Math.max(1px, root.height - root.safe-top - root.safe-bottom - 36px);
+            mouse-drag-pan-enabled: true;
+            content-width: self.visible-width;
+            VerticalLayout {
+                width: 100%; spacing: 18px; alignment: start;
+                PageHeader { title: SmartCollectionsBridge.editing_id == "" ? @tr("New smart collection") : @tr("Edit smart collection"); subtitle: @tr("Save a rule. Your library keeps the collection up to date as you watch and add titles."); narrow: root.narrow; show-back: true; back => { root.close(); } }
+                SettingSyncBadge { setting_key: "smart_collections"; setting_title: @tr("Smart collections"); max-width: parent.width; }
+                form := Rectangle {
+                    background: Theme.current.card; border-radius: Theme.card_corner_radius; border-width: 1px; border-color: Theme.current.border_card;
+                    height: form_body.preferred-height + 32px;
+                    form_body := VerticalLayout {
+                        x: 16px; y: 16px; width: parent.width - 32px; height: parent.height - 32px; spacing: 12px;
+                        Text { text: @tr("Collection name"); color: Theme.current.text_primary; font-weight: 600; }
+                        name_input := SettingsInput { focus_changed(f) => { if f { root.choice = 0; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.name; placeholder-text: @tr("Name your collection"); accepted(_) => { root.choice = 1; page_scope.focus(); } }
+                        Text { text: @tr("Media type"); color: Theme.current.text_primary; font-weight: 600; }
+                        PillButton { label: SmartCollectionsBridge.media_type == 1 ? @tr("Movies") : SmartCollectionsBridge.media_type == 2 ? @tr("Series") : @tr("Any media type"); focused: page_scope.has-focus && root.choice == 1; clicked => { root.choice = 1; root.activate(); } }
+                        Text { text: @tr("Watch state"); color: Theme.current.text_primary; font-weight: 600; }
+                        PillButton { label: SmartCollectionsBridge.watch_state == 1 ? @tr("Unwatched") : SmartCollectionsBridge.watch_state == 2 ? @tr("Watched") : @tr("Any watch state"); focused: page_scope.has-focus && root.choice == 2; clicked => { root.choice = 2; root.activate(); } }
+                        Text { text: @tr("Genre"); color: Theme.current.text_primary; font-weight: 600; }
+                        genre_input := SettingsInput { focus_changed(f) => { if f { root.choice = 3; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.genre; placeholder-text: @tr("Any genre, or enter one like Sci-Fi"); accepted(_) => { root.choice = 4; root.focus_choice(); } }
+                        Text { text: @tr("Runtime under (minutes)"); color: Theme.current.text_primary; font-weight: 600; wrap: word-wrap; }
+                        runtime_input := SettingsInput { focus_changed(f) => { if f { root.choice = 4; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.max_runtime; placeholder-text: @tr("No limit, or enter minutes"); input-type: number; accepted(_) => { root.choice = 5; page_scope.focus(); } }
+                        Text { text: @tr("For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                    }
+                }
+                if SmartCollectionsBridge.error != "": Text { text: SmartCollectionsBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; }
+                if !root.confirming_delete: HorizontalLayout {
+                    spacing: 10px; alignment: start;
+                    PillButton { label: @tr("Save collection"); primary: true; compact: root.narrow; focused: page_scope.has-focus && root.choice == 5; clicked => { root.save(); } }
+                    PillButton { label: @tr("Cancel"); compact: root.narrow; focused: page_scope.has-focus && root.choice == 6; clicked => { root.close(); } }
+                }
+                if SmartCollectionsBridge.editing_id != "" && !root.confirming_delete: PillButton { label: @tr("Delete collection"); destructive: true; focused: page_scope.has-focus && root.choice == 7; clicked => { root.start_delete(); } }
+                if root.confirming_delete: VerticalLayout {
+                    spacing: 10px;
+                    Text { text: @tr("Delete this collection? Your saved titles and manual categories will stay in your library."); color: Theme.current.text_primary; wrap: word-wrap; }
+                    HorizontalLayout { spacing: 10px; alignment: start;
+                        PillButton { label: @tr("Delete"); destructive: true; focused: page_scope.has-focus && root.delete_choice == 0; clicked => { root.delete_collection(); } }
+                        PillButton { label: @tr("Keep collection"); focused: page_scope.has-focus && root.delete_choice == 1; clicked => { root.confirming_delete = false; page_scope.focus(); } }
+                    }
+                }
+                Text { text: @tr("Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                Rectangle { height: 12px; }
+            }
+        }
+    }
+    if root.active: SettingSyncModal {
+        narrow: root.narrow; safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+        safe-left: root.safe-left; safe-right: root.safe-right;
+        closed => { root.focus_shell(); }
+    }
+    forward-focus: page_scope;
+}

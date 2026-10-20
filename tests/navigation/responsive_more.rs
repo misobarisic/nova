@@ -256,7 +256,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     app.set_more_choice(0);
     app.set_more_focus_zone(1);
     // Keyboard selection belongs to the More page.
-    for _ in 0..7 {
+    for _ in 0..10 {
         key(&app, slint::platform::Key::DownArrow);
     }
     key(&app, slint::platform::Key::Return);
@@ -311,8 +311,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        8,
-        "wide More includes journal and queue alongside the existing destinations"
+        9,
+        "wide More includes journal, queue and bookmarks alongside the existing destinations"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
@@ -325,13 +325,29 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     let party_y = button(&app, "Watch party").absolute_position().y;
     let profiles_y = button(&app, "Profiles").absolute_position().y;
     let sync_y = button(&app, "Sync").absolute_position().y;
+    let journal_y = button(&app, "Stats").absolute_position().y;
+    let queue_y = button(&app, "Watch queue").absolute_position().y;
+    let bookmarks_y = button(&app, "Bookmarks").absolute_position().y;
     assert!(
         profiles_y < sync_y
             && sync_y < devices_y
             && devices_y < party_y
-            && party_y < settings_y
+            && party_y < journal_y
+            && journal_y < queue_y
+            && queue_y < bookmarks_y
+            && bookmarks_y < settings_y
             && settings_y < about_y
     );
+    app.set_more_focus_zone(1);
+    app.set_more_choice(5);
+    for choice in [8, 9, 10, 6, 7] {
+        key(&app, slint::platform::Key::DownArrow);
+        assert_eq!(app.get_more_choice(), choice);
+    }
+    for choice in [6, 10, 9, 8, 5] {
+        key(&app, slint::platform::Key::UpArrow);
+        assert_eq!(app.get_more_choice(), choice);
+    }
     click(&app, button(&app, "Profiles"));
     assert!(app.get_more_open() && app.get_profiles_open());
     key(&app, slint::platform::Key::Back);

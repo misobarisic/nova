@@ -4,6 +4,7 @@ import { IcMusic, IcCaptions, IcPlay, IcSettingsGear, IcCheck, IcChevronRight } 
 // Shared category/track row: measured title, optional secondary text, and a
 // soft selected surface. Only categories get a chevron; tracks are direct picks.
 export component MenuRow inherits Rectangle {
+    in property <image> icon;
     in property <int> icon_kind: 0; // 0 none, 1 audio, 2 captions, 3 speed, 4 decoder
     in property <string> label;
     in property <string> value;
@@ -27,7 +28,7 @@ export component MenuRow inherits Rectangle {
     }
 
     opacity: root.enabled ? 1 : 0.45;
-    property <length> label_x: root.icon_kind == 0 ? 14px : 50px;
+    property <length> label_x: root.icon.width == 0 && root.icon_kind == 0 ? 14px : 50px;
     property <length> label_h: Math.min(InterfaceStyle.tv ? 60px : 40px, row_label.preferred-height);
     property <length> text_h: root.label_h + (root.value != "" ? (InterfaceStyle.tv ? 28px : 20px) : 0px);
     height: Math.max(60px, root.text_h + 20px);
@@ -39,19 +40,23 @@ export component MenuRow inherits Rectangle {
 
     icon_host := Rectangle {
         x: 14px; width: 24px; height: 100%;
-        if root.icon_kind == 1: IcMusic {
+        if root.icon.width > 0: Image {
+            width: 24px; height: 24px; y: (parent.height - self.height) / 2;
+            source: root.icon; image-fit: contain; colorize: Theme.current.accent_soft;
+        }
+        if root.icon.width == 0 && root.icon_kind == 1: IcMusic {
             width: 22px; height: 22px; y: (parent.height - self.height) / 2;
             fill: Theme.current.accent_soft;
         }
-        if root.icon_kind == 2: IcCaptions {
+        if root.icon.width == 0 && root.icon_kind == 2: IcCaptions {
             width: 22px; height: 22px; y: (parent.height - self.height) / 2;
             fill: Theme.current.accent_soft;
         }
-        if root.icon_kind == 3: IcPlay {
+        if root.icon.width == 0 && root.icon_kind == 3: IcPlay {
             width: 22px; height: 22px; y: (parent.height - self.height) / 2;
             fill: Theme.current.accent_soft;
         }
-        if root.icon_kind == 4: IcSettingsGear {
+        if root.icon.width == 0 && root.icon_kind == 4: IcSettingsGear {
             width: 22px; height: 22px; y: (parent.height - self.height) / 2;
             fill: Theme.current.accent_soft;
         }

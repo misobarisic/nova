@@ -127,6 +127,7 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
         back(&app);
         settle().await;
         assert!(!app.get_settings_detail_open());
+        // Sync is a standalone destination in More, outside Settings search.
         let destinations = vec![
             "home",
             "display",
@@ -135,7 +136,6 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
             "player",
             "addons",
             "categories",
-            "sync",
             "tracking",
             "image-cache",
             "downloads",

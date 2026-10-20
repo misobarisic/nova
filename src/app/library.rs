@@ -15,6 +15,12 @@ impl Bridge {
     fn current_library_entry(&self, index: usize) -> Option<LibraryEntry> {
         let candidates = self.current_library_candidates();
         let candidate = candidates.get(index)?;
+        // Cached metadata can change a smart collection between painting and
+        // activation. An old row index must never open/remove its new neighbour.
+        let displayed = self.app()?.get_library().row_data(index)?;
+        if candidate.id != displayed.id.as_str() {
+            return None;
+        }
         let state = self.shared.lock().unwrap();
         selected_library_entry(&state.entries, candidate)
     }
@@ -32,6 +38,13 @@ impl Bridge {
                 )
             })
             .unwrap_or_default();
+        let smart_collection = self.selected_smart_collection();
+        let smart_watched = smart_collection
+            .as_ref()
+            .is_some_and(|rule| rule.watch_state != nova_config::SmartWatchState::Any);
+        let smart_metadata = smart_collection.as_ref().is_some_and(|rule| {
+            !rule.genre.trim().is_empty() || rule.max_runtime_minutes.is_some()
+        });
         let identities = {
             let state = self.shared.lock().unwrap();
             state
@@ -53,15 +66,32 @@ impl Bridge {
         };
         let mut candidates = Vec::new();
         for identity in identities {
-            let episodes =
-                (dynamic_filter && identity.watch_status == WatchStatus::Auto).then(|| {
+            let episodes = ((dynamic_filter && identity.watch_status == WatchStatus::Auto)
+                || (smart_watched && identity.type_ != "movie"))
+                .then(|| {
                     read_episodes_cache_for(&identity.type_, &identity.id).unwrap_or_default()
                 });
+            // All metadata I/O precedes Shared. Rules use existing cache facts;
+            // selecting a collection never launches metadata requests.
+            let header = smart_metadata
+                .then(|| read_meta_header_for(&identity.type_, &identity.id))
+                .flatten();
             let state = self.shared.lock().unwrap();
             let Some(entry) = state.entries.get(identity.index) else {
                 continue;
             };
             if !identity.matches(entry) {
+                continue;
+            }
+            if smart_collection.as_ref().is_some_and(|rule| {
+                !smart_collections::matches_library_entry(
+                    rule,
+                    entry,
+                    header.as_ref(),
+                    episodes.as_deref().unwrap_or_default(),
+                    &state.progress,
+                )
+            }) {
                 continue;
             }
             if let Some(candidate) = project_library_candidate(
@@ -88,6 +118,7 @@ impl Bridge {
 
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
+        self.refresh_smart_collections();
         self.migrate_viewing_activity();
         let card_snapshots = self.library_card_snapshots();
         let poster_requests: Vec<LibraryPosterRequest> = card_snapshots

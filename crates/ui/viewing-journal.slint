@@ -9,9 +9,11 @@ component JournalStat inherits Rectangle {
     border-radius: Theme.card_corner_radius;
     background: Theme.current.card;
     border-width: 1px; border-color: Theme.current.border_card;
+    private property <length> base-size: InterfaceStyle.tv ? 30px : 25px;
+    value_measure := Text { visible: false; text: root.value; font-size: root.base-size; font-weight: 700; }
     VerticalLayout {
         padding: 16px; spacing: 8px; alignment: start;
-        Text { text: root.value; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 30px : 25px; font-weight: 700; overflow: elide; }
+        stat_value := Text { text: root.value; color: Theme.current.text_bright; font-size: root.base-size * Math.min(1, Math.max(1px, root.width - 32px) / Math.max(1px, value_measure.preferred-width)); font-weight: 700; }
         Text { text: root.label; color: Theme.current.text_secondary; font-size: 13px; wrap: word-wrap; }
     }
 }
@@ -24,7 +26,7 @@ component JournalSession inherits Rectangle {
     border-width: 1px; border-color: Theme.current.border_card;
     height: body.preferred-height + 28px;
     body := VerticalLayout {
-        x: 14px; y: 14px; width: parent.width - 28px;
+        x: 14px; y: 14px; width: parent.width - 28px; height: parent.height - 28px;
         spacing: 7px;
         HorizontalLayout {
             spacing: 10px;
@@ -48,7 +50,7 @@ component JournalTitle inherits Rectangle {
     border-width: 1px; border-color: Theme.current.border_card;
     height: body.preferred-height + 28px;
     body := VerticalLayout {
-        x: 14px; y: 14px; width: parent.width - 28px;
+        x: 14px; y: 14px; width: parent.width - 28px; height: parent.height - 28px;
         spacing: 8px;
         HorizontalLayout {
             spacing: 10px;
@@ -105,7 +107,7 @@ export component ViewingJournalPage inherits Rectangle {
             VerticalLayout {
                 spacing: 18px; alignment: start;
                 PageHeader {
-                    title: @tr("Viewing journal");
+                    title: @tr("Stats");
                     subtitle: @tr("Your viewing time, completed watches and the stories you return to.");
                     narrow: root.narrow; show-back: true;
                     back => { root.back(); }

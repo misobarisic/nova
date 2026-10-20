@@ -17,14 +17,15 @@ pub use generated::*;
 // Imported library models are not re-exported by Slint 1.18's generator.
 // Preserve Nova's public model paths while sharing the leaf's exact types.
 pub use nova_ui_shared::{
-    AddonBrowserRow, AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ChapterRow,
-    CompletionDestination, ContinueRow, DetailActionRow, DetailInfo, DownloadEpisode,
-    DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
-    JournalMonthRow, JournalSessionRow, JournalTitleRow, LicenseSource, MediaCard, PartyMemberRow,
-    PluginSettingRow, ProfileRow, RemoteDeviceRow, RemoteOfferRow, SeasonCard, SettingSyncInfo,
-    SheetItem, StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow,
-    TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow,
-    TrackingSetupRow, UpcomingRow, WatchQueueRow,
+    AddonBrowserRow, AddonRow, BookmarkSceneRow, BookmarkTitleRow, CalCell, CalendarDay,
+    CalendarRelease, CategoryRow, ChapterRow, CompletionDestination, ContinueRow, DetailActionRow,
+    DetailInfo, DownloadEpisode, DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard,
+    HomeCatalogRow, HomeCatalogSection, JournalMonthRow, JournalSessionRow, JournalTitleRow,
+    LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow, ProfileRow, RemoteDeviceRow,
+    RemoteOfferRow, SceneBookmarkRow, SeasonCard, SettingSyncInfo, SheetItem, SmartCollectionRow,
+    StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow,
+    TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+    WatchQueueRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

@@ -29,3 +29,9 @@ mod viewing_journal;
 
 #[path = "navigation/watch_queue.rs"]
 mod watch_queue;
+
+#[path = "navigation/smart_collections.rs"]
+mod smart_collections;
+
+#[path = "navigation/bookmarks.rs"]
+mod bookmarks;

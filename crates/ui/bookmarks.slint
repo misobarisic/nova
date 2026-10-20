@@ -1,0 +1,163 @@
+import { BookmarksBridge, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { PageHeader } from "page-header.slint";
+import { ScrollView } from "scrollview.slint";
+import { SearchField } from "searchfield.slint";
+import { PillButton } from "settings-controls.slint";
+import { ControlTouchArea } from "control-input.slint";
+import { IcBookmarkBorder } from "icons.slint";
+
+export component BookmarksPage inherits Rectangle {
+    in property <bool> active;
+    in property <bool> narrow;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback back();
+    private property <int> selected: 0;
+    private property <string> editing_id;
+    private property <string> draft;
+    private property <bool> detail: BookmarksBridge.title_id != "";
+    changed detail => { root.selected = 0; root.editing_id = ""; archive_scroll.content-y = 0px; }
+    changed active => { if root.active { page_focus.focus(); } else { root.editing_id = ""; } }
+    public function focus_shell() { if root.active { page_focus.focus(); } }
+    public function go_back() {
+        if root.editing_id != "" { root.editing_id = ""; page_focus.focus(); }
+        else if root.detail { BookmarksBridge.select_title(""); }
+        else { root.back(); }
+    }
+    function reveal(top: length, h: length) {
+        if top < -archive_scroll.content-y { archive_scroll.content-y = -top; }
+        else if top + h > archive_scroll.visible-height - archive_scroll.content-y {
+            archive_scroll.content-y = Math.max(Math.min(0px, archive_scroll.visible-height - archive_scroll.content-height), archive_scroll.visible-height - top - h - 8px);
+        }
+    }
+    background: Theme.current.artwork_canvas;
+    clip: true;
+    page_focus := FocusScope {
+        enabled: root.active; width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Back || e.text == Key.Escape || (e.text == Key.Backspace && root.editing_id == "") { if !e.repeat { root.go_back(); } accept }
+            else if (e.text == Key.UpArrow || e.text == Key.DownArrow) && root.editing_id == "" {
+                SettingsStyle.keyboard-mode = true;
+                root.selected = Math.max(0, Math.min((root.detail ? BookmarksBridge.scenes.length : BookmarksBridge.titles.length) - 1, root.selected + (e.text == Key.UpArrow ? -1 : 1))); accept
+            } else if (e.text == Key.Return || e.text == " ") && root.editing_id == "" {
+                if !e.repeat && root.selected >= 0 {
+                    if root.detail && root.selected < BookmarksBridge.scenes.length { BookmarksBridge.play(BookmarksBridge.scenes[root.selected].id); }
+                    else if !root.detail && root.selected < BookmarksBridge.titles.length { BookmarksBridge.select_title(BookmarksBridge.titles[root.selected].id); }
+                } accept
+            } else if e.text == Key.Delete && root.detail && root.editing_id == "" {
+                if !e.repeat && root.selected < BookmarksBridge.scenes.length { BookmarksBridge.remove(BookmarksBridge.scenes[root.selected].id); } accept
+            } else { reject }
+        }
+        archive_scroll := ScrollView {
+            x: root.safe-left + 18px; y: root.safe-top + 18px;
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+            height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+            content-width: self.visible-width;
+            VerticalLayout {
+                width: 100%; spacing: 16px; alignment: start;
+                PageHeader {
+                    title: root.detail ? BookmarksBridge.title_caption : @tr("Bookmarks");
+                    subtitle: root.detail ? @tr("Choose a saved scene, update a note or remove a bookmark.") : @tr("The scenes you wanted to come back to.");
+                    narrow: root.narrow; show-back: true;
+                    back => { root.go_back(); }
+                }
+                if !root.detail: SearchField {
+                    text <=> BookmarksBridge.query;
+                    placeholder-text: @tr("Search titles, episodes and notes");
+                    roomy: true; prominent: true; min-width: 0px;
+                    keyboard-mode: SettingsStyle.keyboard-mode;
+                    edited(query) => { BookmarksBridge.query_changed(query); root.selected = 0; }
+                    accepted(query) => { BookmarksBridge.query_changed(query); root.selected = 0; }
+                }
+                if !root.detail: HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    PillButton { label: @tr("Latest added"); primary: BookmarksBridge.sort == 0; clicked => { BookmarksBridge.sort_changed(0); } }
+                    PillButton { label: @tr("Title"); primary: BookmarksBridge.sort == 1; clicked => { BookmarksBridge.sort_changed(1); } }
+                }
+                if BookmarksBridge.notice != "": Text { text: BookmarksBridge.notice; color: Theme.current.text_destructive; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                if !root.detail && BookmarksBridge.titles.length == 0: Rectangle {
+                    background: Theme.current.card; border-radius: Theme.card_corner_radius;
+                    height: empty.preferred-height + 48px;
+                    empty := VerticalLayout {
+                        padding: 24px; spacing: 12px;
+                        Rectangle { height: 44px; IcBookmarkBorder { width: 36px; height: 36px; x: (parent.width - self.width) / 2; fill: Theme.current.accent_vivid; } }
+                        Text { text: BookmarksBridge.query == "" ? @tr("Keep a moment worth revisiting") : @tr("No matching bookmarks"); color: Theme.current.text_bright; font-size: 22px; font-weight: 600; wrap: word-wrap; horizontal-alignment: center; min-width: 0px; }
+                        Text { text: @tr("Save a scene from the player's bookmark menu. Movies and shows with saved scenes will appear here."); color: Theme.current.text_secondary; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; min-width: 0px; }
+                    }
+                }
+                if !root.detail: VerticalLayout {
+                    spacing: 12px;
+                    for row[index] in BookmarksBridge.titles: Rectangle {
+                        height: root.narrow ? 134px : 156px;
+                        background: touch.feedback-active ? Theme.current.control_hover : Theme.current.card;
+                        border-radius: Theme.card_corner_radius;
+                        border-width: root.selected == index && SettingsStyle.keyboard-mode ? 2px : 1px;
+                        border-color: root.selected == index && SettingsStyle.keyboard-mode ? Theme.current.accent_vivid : Theme.current.border_card;
+                        accessible-role: button; accessible-label: row.title + " · " + row.count;
+                        private property <bool> selected: root.selected == index && SettingsStyle.keyboard-mode;
+                        changed selected => { if self.selected && root.active { root.reveal(self.y, self.height); } }
+                        HorizontalLayout {
+                            padding: 12px; spacing: 14px;
+                            Rectangle {
+                                width: root.narrow ? 70px : 86px; horizontal-stretch: 0;
+                                border-radius: 8px; clip: true; background: Theme.current.episode_placeholder;
+                                if row.has_poster: Image { width: 100%; height: 100%; source: row.poster; image-fit: cover; }
+                                if !row.has_poster: IcBookmarkBorder { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 26px; height: 26px; fill: Theme.current.text_secondary; }
+                            }
+                            VerticalLayout {
+                                min-width: 0px; spacing: 5px; alignment: center;
+                                Text { text: row.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 25px : 18px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide; min-width: 0px; }
+                                Text { text: row.context + " · " + row.count; color: Theme.current.accent_vivid; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                                Text { text: row.added; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                            }
+                        }
+                        touch := ControlTouchArea { enabled: root.active; mouse-cursor: pointer; clicked => { BookmarksBridge.select_title(row.id); page_focus.focus(); } }
+                    }
+                }
+                if root.detail: VerticalLayout {
+                    spacing: 12px;
+                    for row[index] in BookmarksBridge.scenes: Rectangle {
+                        height: scene_body.preferred-height;
+                        background: Theme.current.card; border-radius: Theme.card_corner_radius;
+                        border-width: root.selected == index && SettingsStyle.keyboard-mode ? 2px : 1px;
+                        border-color: root.selected == index && SettingsStyle.keyboard-mode ? Theme.current.accent_vivid : Theme.current.border_card;
+                        private property <bool> selected: root.selected == index && SettingsStyle.keyboard-mode;
+                        changed selected => { if self.selected && root.active { root.reveal(self.y, self.height); } }
+                        scene_body := VerticalLayout {
+                            padding: 16px; spacing: 10px;
+                            Text { text: row.title + " · " + row.position; color: Theme.current.text_bright; font-size: 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                            Text { text: row.added; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                            if root.editing_id != row.id: Text { text: row.note == "" ? @tr("No note") : row.note; color: row.note == "" ? Theme.current.text_muted : Theme.current.text_primary; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                            if root.editing_id != row.id: PillButton { label: @tr("Play scene"); primary: true; clicked => { BookmarksBridge.play(row.id); } }
+                            if root.editing_id != row.id: HorizontalLayout {
+                                spacing: 8px; alignment: start;
+                                PillButton { label: @tr("Edit note"); clicked => { root.editing_id = row.id; root.draft = row.note; root.selected = index; } }
+                                PillButton { label: @tr("Delete"); destructive: true; clicked => { BookmarksBridge.remove(row.id); root.selected = Math.min(root.selected, BookmarksBridge.scenes.length - 1); page_focus.focus(); } }
+                            }
+                            if root.editing_id == row.id: VerticalLayout {
+                                spacing: 10px;
+                                if BookmarksBridge.notice != "": Text {
+                                    text: BookmarksBridge.notice; color: Theme.current.text_destructive;
+                                    font-size: 13px; wrap: word-wrap; min-width: 0px;
+                                }
+                                note := SearchField {
+                                    text <=> root.draft; placeholder-text: @tr("Bookmark note"); roomy: true; min-width: 0px;
+                                    keyboard-mode: SettingsStyle.keyboard-mode;
+                                    init => { self.focus_at_end(); }
+                                    accepted(value) => { if BookmarksBridge.edit(row.id, value) { root.editing_id = ""; page_focus.focus(); } }
+                                }
+                                PillButton { label: @tr("Save note"); primary: true; clicked => { if BookmarksBridge.edit(row.id, note.full-text) { root.editing_id = ""; page_focus.focus(); } } }
+                                PillButton { label: @tr("Clear note"); clicked => { if BookmarksBridge.edit(row.id, "") { root.editing_id = ""; page_focus.focus(); } } }
+                                PillButton { label: @tr("Cancel"); clicked => { root.editing_id = ""; page_focus.focus(); } }
+                            }
+                        }
+                    }
+                }
+                Text { text: @tr("Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+            }
+        }
+    }
+    forward-focus: page_focus;
+}

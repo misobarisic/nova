@@ -1,8 +1,9 @@
-import { JournalBridge, QueueBridge, PartyBridge, RemoteBridge, InterfaceStyle, Theme, Anim, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { BookmarksBridge, JournalBridge, QueueBridge, PartyBridge, RemoteBridge, InterfaceStyle, Theme, Anim, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
 
 import { ProfilesPage } from "profiles.slint";
 import { ViewingJournalPage } from "viewing-journal.slint";
 import { WatchQueuePage } from "watch-queue.slint";
+import { BookmarksPage } from "bookmarks.slint";
 
 import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
@@ -13,16 +14,21 @@ import { SettingsLink, SettingsCard } from "settings-controls.slint";
 // A root page, like Settings landing, rather than a sheet over another page.
 export component MorePage inherits Rectangle {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { if root.active { if JournalBridge.open { journal_page.focus_shell(); } else if QueueBridge.open { queue_page.focus_shell(); } else if root.profiles_open { profiles_page.focus_shell(); } else { nav_scope.focus(); } } }
+    public function focus_shell() { if root.active { if BookmarksBridge.open { bookmarks_page.focus_shell(); } else if JournalBridge.open { journal_page.focus_shell(); } else if QueueBridge.open { queue_page.focus_shell(); } else if root.profiles_open { profiles_page.focus_shell(); } else { nav_scope.focus(); } } }
 
+    private property <bool> bookmarks_open: BookmarksBridge.open;
+    changed bookmarks_open => {
+        if root.bookmarks_open { JournalBridge.open = false; QueueBridge.open = false; BookmarksBridge.opened(); }
+        entry_focus.start();
+    }
     private property <bool> journal_open: JournalBridge.open;
     private property <bool> queue_open: QueueBridge.open;
     changed journal_open => {
-        if root.journal_open { QueueBridge.open = false; JournalBridge.opened(); }
+        if root.journal_open { BookmarksBridge.open = false; QueueBridge.open = false; JournalBridge.opened(); }
         entry_focus.start();
     }
     changed queue_open => {
-        if root.queue_open { JournalBridge.open = false; QueueBridge.opened(); }
+        if root.queue_open { BookmarksBridge.open = false; JournalBridge.open = false; QueueBridge.opened(); }
         entry_focus.start();
     }
     in-out property <bool> profiles_open;
@@ -34,7 +40,7 @@ export component MorePage inherits Rectangle {
     animate profile-slide { duration: root.profile-motion ? Anim.transition_slide : 0ms; easing: ease-out; }
     private property <float> profile-alpha: 0.0;
     animate profile-alpha { duration: root.profile-motion ? Anim.transition_fade : 0ms; }
-    private property <bool> landing-active: root.active && !root.profiles_open && !root.journal_open && !root.queue_open
+    private property <bool> landing-active: root.active && !root.profiles_open && !root.journal_open && !root.queue_open && !root.bookmarks_open
         && (!root.profile-motion || (root.profile-slide <= 0.0 && root.profile-alpha <= 0.0));
     changed landing-active => { if root.landing-active { entry_focus.start(); } }
     // Write endpoints while their current duration is in force. A hidden,
@@ -79,28 +85,34 @@ export component MorePage inherits Rectangle {
     changed system_back_request => {
         if (root.active && root.last_back != root.system_back_request) {
             root.last_back = root.system_back_request;
-            if JournalBridge.open { JournalBridge.open = false; } else if QueueBridge.open { QueueBridge.open = false; } else if root.profiles_open { profiles_page.go_back(); } else { root.home_picked(); }
+            if BookmarksBridge.open { bookmarks_page.go_back(); } else if JournalBridge.open { JournalBridge.open = false; } else if QueueBridge.open { QueueBridge.open = false; } else if root.profiles_open { profiles_page.go_back(); } else { root.home_picked(); }
         }
     }
     restore_scroll := Timer { interval: 1ms; running: false; triggered => { self.stop(); more_scroll.content-y = root.scroll_y; root.restore_pending = false; } }
     changed narrow => {
         root.kb_nav = Math.min(root.kb_nav, root.narrow ? 3 : 5);
-        root.choice = Math.max(root.first_choice, Math.min(9, root.choice));
+        root.choice = Math.max(root.first_choice, Math.min(10, root.choice));
         // Removed shortcut cards can own native focus during a resize.
         if (root.active) { entry_focus.start(); }
     }
     function reveal_choice() {
         if !root.kb_active || root.kb_zone != 1 || !root.landing-active { return; }
         if root.choice < 2 { more_scroll.content-y = 0px; return; }
-        let top = root.choice == 2 ? profiles_card.y : root.choice == 3 ? sync_card.y : root.choice == 4 ? devices_card.y : root.choice == 5 ? party_card.y : root.choice == 6 ? settings_card.y : root.choice == 7 ? about_card.y : root.choice == 8 ? journal_card.y : queue_card.y;
-        let h = root.choice == 2 ? profiles_card.height : root.choice == 3 ? sync_card.height : root.choice == 4 ? devices_card.height : root.choice == 5 ? party_card.height : root.choice == 6 ? settings_card.height : root.choice == 7 ? about_card.height : root.choice == 8 ? journal_card.height : queue_card.height;
+        let top = root.choice == 2 ? profiles_card.y : root.choice == 3 ? sync_card.y : root.choice == 4 ? devices_card.y : root.choice == 5 ? party_card.y : root.choice == 6 ? settings_card.y : root.choice == 7 ? about_card.y : root.choice == 8 ? journal_card.y : root.choice == 9 ? queue_card.y : bookmarks_card.y;
+        let h = root.choice == 2 ? profiles_card.height : root.choice == 3 ? sync_card.height : root.choice == 4 ? devices_card.height : root.choice == 5 ? party_card.height : root.choice == 6 ? settings_card.height : root.choice == 7 ? about_card.height : root.choice == 8 ? journal_card.height : root.choice == 9 ? queue_card.height : bookmarks_card.height;
         let vh = more_scroll.visible-height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
         if top < -more_scroll.content-y { more_scroll.content-y = -top; }
         else if top + h > vh - more_scroll.content-y { more_scroll.content-y = Math.max(Math.min(0px, more_scroll.visible-height - more_scroll.content-height), vh - top - h); }
     }
+    // Keep destination IDs stable while Settings and About finish the visual list.
+    function move_choice(delta: int) {
+        let index = root.choice <= 5 ? root.choice : root.choice == 6 ? 9 : root.choice == 7 ? 10 : root.choice - 2;
+        let next = Math.max(root.first_choice, Math.min(10, index + delta));
+        root.choice = next <= 5 ? next : next <= 8 ? next + 2 : next == 9 ? 6 : 7;
+    }
     changed choice => {
-        if (root.choice < root.first_choice || root.choice > 9) {
-            root.choice = Math.max(root.first_choice, Math.min(9, root.choice));
+        if (root.choice < root.first_choice || root.choice > 10) {
+            root.choice = Math.max(root.first_choice, Math.min(10, root.choice));
         }
         root.reveal_choice();
     }
@@ -112,19 +124,19 @@ export component MorePage inherits Rectangle {
     nav_scope := FocusScope {
         enabled: root.landing-active;
         width: 100%; height: 100%;
-        init => { root.choice = Math.max(root.first_choice, Math.min(9, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
+        init => { root.choice = Math.max(root.first_choice, Math.min(10, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
             if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
                 if (!e.repeat) { root.home_picked(); }
                 accept
             } else if (e.text == Key.UpArrow) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 9; }
-                else { root.choice = Math.max(root.first_choice, root.choice - 1); }
+                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 7; }
+                else { root.move_choice(-1); }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 1 && root.choice < 9) { root.choice += 1; }
+                if (root.kb_zone == 1 && root.choice != 7) { root.move_choice(1); }
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
@@ -135,7 +147,7 @@ export component MorePage inherits Rectangle {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (!e.repeat) {
                     if (root.kb_zone == 1) {
-                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.profiles_open = true; } else if root.choice == 3 { root.sync_picked(); } else if root.choice == 4 { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); } else if root.choice == 5 { PartyBridge.page_open = true; } else if root.choice == 6 { root.settings_picked(); } else if root.choice == 7 { root.about_picked(); } else if root.choice == 8 { JournalBridge.open = true; } else { QueueBridge.open = true; }
+                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.profiles_open = true; } else if root.choice == 3 { root.sync_picked(); } else if root.choice == 4 { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); } else if root.choice == 5 { PartyBridge.page_open = true; } else if root.choice == 6 { root.settings_picked(); } else if root.choice == 7 { root.about_picked(); } else if root.choice == 8 { JournalBridge.open = true; } else if root.choice == 9 { QueueBridge.open = true; } else { BookmarksBridge.open = true; }
                     } else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
@@ -149,7 +161,7 @@ export component MorePage inherits Rectangle {
     // Preserve the landing scroller and its native layout while the local
     // Profiles subpage owns input, just as More's other children retain it.
     landing := Rectangle {
-        visible: !root.profiles_require_selection && !root.journal_open && !root.queue_open && (!root.profiles_open || (root.profile-motion && (root.profile-slide < 1.0 || root.profile-alpha < 1.0)));
+        visible: !root.profiles_require_selection && !root.journal_open && !root.queue_open && !root.bookmarks_open && (!root.profiles_open || (root.profile-motion && (root.profile-slide < 1.0 || root.profile-alpha < 1.0)));
         x: root.profile-motion ? -0.28 * root.width * root.profile-slide : 0px;
         opacity: root.profile-motion ? 1.0 - root.profile-alpha : 1.0;
         width: 100%; height: 100%;
@@ -196,6 +208,27 @@ export component MorePage inherits Rectangle {
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 5;
                     picked => { if InterfaceStyle.tv { root.choice = 5; root.kb_zone = 1; } PartyBridge.page_open = true; }
                 } }
+                journal_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:journal";
+                    icon: @image-url("../../assets/icons/menus/journal.svg");
+                    title: @tr("Stats"); subtitle: @tr("Dated sessions, rewatches and your year in stories");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 8;
+                    picked => { root.choice = 8; root.kb_zone = 1; JournalBridge.open = true; }
+                } }
+                queue_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:queue";
+                    icon: @image-url("../../assets/icons/menus/queue.svg");
+                    title: @tr("Watch queue"); subtitle: @tr("Line up tonight's movies and episodes");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 9;
+                    picked => { root.choice = 9; root.kb_zone = 1; QueueBridge.open = true; }
+                } }
+                bookmarks_card := SettingsCard { SettingsLink {
+                    interactive: root.landing-active; destination-id: "more:bookmarks";
+                    icon: @image-url("../../assets/icons/menus/bookmarks.svg");
+                    title: @tr("Bookmarks"); subtitle: @tr("Return to saved scenes and notes");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 10;
+                    picked => { root.choice = 10; root.kb_zone = 1; BookmarksBridge.open = true; }
+                } }
                 settings_card := SettingsCard { SettingsLink {
                     interactive: root.landing-active; destination-id: "more:settings";
                     icon: @image-url("../../assets/icons/menus/settings.svg");
@@ -209,20 +242,6 @@ export component MorePage inherits Rectangle {
                     title: @tr("About"); subtitle: @tr("Information about Nova");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 7;
                     picked => { if InterfaceStyle.tv { root.choice = 7; root.kb_zone = 1; } root.about_picked(); }
-                } }
-                journal_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:journal";
-                    icon: @image-url("../../assets/icons/menus/calendar.svg");
-                    title: @tr("Viewing journal"); subtitle: @tr("Dated sessions, rewatches and your year in stories");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 8;
-                    picked => { root.choice = 8; root.kb_zone = 1; JournalBridge.open = true; }
-                } }
-                queue_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:queue";
-                    icon: @image-url("../../assets/icons/menus/download.svg");
-                    title: @tr("Watch queue"); subtitle: @tr("Line up tonight's movies and episodes");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 9;
-                    picked => { root.choice = 9; root.kb_zone = 1; QueueBridge.open = true; }
                 } }
                 Rectangle { vertical-stretch: 1; }
             }
@@ -269,6 +288,16 @@ export component MorePage inherits Rectangle {
         safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
         safe-right: root.safe-right;
         back => { QueueBridge.open = false; entry_focus.start(); }
+    }
+    bookmarks_page := BookmarksPage {
+        visible: BookmarksBridge.open && !root.profiles_require_selection;
+        active: root.active && BookmarksBridge.open && !root.profiles_require_selection;
+        width: 100%; height: 100%; narrow: root.narrow;
+        safe-top: root.safe-top;
+        safe-bottom: root.safe-bottom + (root.external_navigation && root.narrow ? 68px : 0px);
+        safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
+        safe-right: root.safe-right;
+        back => { BookmarksBridge.open = false; entry_focus.start(); }
     }
     if !root.narrow && !root.external_navigation && !root.profiles_require_selection: SideNav {
         viewport-width: root.nav-viewport-width;

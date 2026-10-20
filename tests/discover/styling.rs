@@ -28,6 +28,18 @@ fn settle(app: &nova::AppWindow) {
 /// independent of native Flickable momentum.
 fn drag_up(app: &nova::AppWindow, from: LogicalPosition, dy: f32) {
     use slint::platform::{PointerEventButton, WindowEvent};
+    // Transparent navigation reserves zero layout height while its real 68px
+    // tap targets overlay the scroll viewport. Begin above that tap bar so
+    // these gestures exercise scrolling rather than navigation hit testing.
+    let window = app.window().size();
+    let from = LogicalPosition::new(
+        from.x,
+        if window.width < 700 {
+            from.y.min(window.height as f32 - 68.0 - 30.0)
+        } else {
+            from.y
+        },
+    );
     app.window().dispatch_event(WindowEvent::PointerPressed {
         position: from,
         button: PointerEventButton::Left,
@@ -121,7 +133,11 @@ fn discover_hero_collapses_while_search_and_filters_stay_pinned() {
                 280.0,
             );
             settle(&app);
-            assert!((app.get_discover_scroll_y() + 280.0).abs() < 2.0);
+            assert!(
+                (app.get_discover_scroll_y() + 280.0).abs() < 2.0,
+                "initial pointer drag preserves distance: width={width}, scroll_page={scroll_page}, offset={}, viewport={pos:?} {size:?}",
+                app.get_discover_scroll_y()
+            );
             assert!(
                 hero.absolute_position().y + hero.size().height <= pos.y + 0.5,
                 "hero must scroll away at {width}px, mode={scroll_page}"

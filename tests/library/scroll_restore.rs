@@ -28,6 +28,18 @@ fn settle(app: &nova::AppWindow) {
 /// independent of native Flickable momentum.
 fn drag_up(app: &nova::AppWindow, from: LogicalPosition, dy: f32) {
     use slint::platform::{PointerEventButton, WindowEvent};
+    // Transparent navigation reserves zero layout height while its real 68px
+    // tap targets overlay the scroll viewport. Begin above that tap bar so
+    // these gestures exercise scrolling rather than navigation hit testing.
+    let window = app.window().size();
+    let from = LogicalPosition::new(
+        from.x,
+        if window.width < 700 {
+            from.y.min(window.height as f32 - 68.0 - 30.0)
+        } else {
+            from.y
+        },
+    );
     app.window().dispatch_event(WindowEvent::PointerPressed {
         position: from,
         button: PointerEventButton::Left,
@@ -105,7 +117,10 @@ fn detail_return_then_pointer_scroll_survives_root_tab_recreation() {
             );
             settle(&app);
             let detail_offset = app.get_library_scroll_y();
-            assert!(detail_offset < -100.0);
+            assert!(
+                detail_offset < -100.0,
+                "initial pointer drag must scroll: width={width}, list={list}, offset={detail_offset}, viewport={position:?} {size:?}"
+            );
             // Opening Detail leaves its card as the keyboard return target.
             app.set_modal_visible(true);
             settle(&app);
@@ -128,7 +143,10 @@ fn detail_return_then_pointer_scroll_survives_root_tab_recreation() {
             );
             settle(&app);
             let latest = app.get_library_scroll_y();
-            assert!(latest < -600.0);
+            assert!(
+                latest < -600.0,
+                "follow-up pointer drag must scroll: width={width}, list={list}, offset={latest}, initial={detail_offset}, viewport={position:?} {size:?}"
+            );
             app.set_library_kb_zone(0);
             app.set_kb_active(false);
             // Pointer activation records a return target before opening the

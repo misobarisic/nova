@@ -2710,6 +2710,27 @@ impl Bridge {
         if !active_torrent_settings().enabled {
             filtered.retain(|stream| !matches!(stream.source, StreamSource::Torrent { .. }));
         }
+        let rules = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .stream_filters
+            .clone()
+            .normalized();
+        let hidden = stream_filters::apply_stream_rules(&mut filtered, &rules);
+        if let Some(app) = self.app() {
+            app.global::<crate::StreamFiltersBridge>()
+                .set_hidden_count(hidden.min(i32::MAX as usize) as i32);
+        }
+        if hidden > 0 {
+            if filtered.is_empty() && pending_count == 0 {
+                hint = text::tr("No addon streams match your rules.").to_owned();
+            } else {
+                hint.push('\n');
+                hint.push_str(&text::stream_rules_hidden(hidden));
+            }
+        }
         let mut displayed: Vec<StreamUi> = self
             .downloads
             .jobs_for_request(&request_id)
@@ -2773,6 +2794,9 @@ impl Bridge {
                 .filter(|_| has_exact)
                 .or(recommended_id.as_deref()),
         );
+        // Explicit language priority wins over a remembered release family;
+        // stable ties keep its established recommendation at the front.
+        stream_filters::rank_stream_rules(&mut displayed, &rules);
         let last_used_index = last_used.as_deref().and_then(|id| {
             displayed.iter().position(|row| {
                 stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id)
@@ -3038,6 +3062,20 @@ impl Bridge {
             Some(s) => s,
             None => return,
         };
+        if !matches!(stream.source, StreamSource::Downloaded { .. })
+            && !self
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .stream_filters
+                .accepts(&stream.card.filter_facts)
+        {
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "This source no longer matches your stream rules.",
+            )));
+            return;
+        }
         if !self
             .shared
             .lock()
@@ -3047,6 +3085,9 @@ impl Bridge {
         {
             return;
         }
+        // Capture the chosen source before last-used promotion can reorder
+        // pointer rows or later addon replies move the keyboard cursor.
+        self.note_selected_playback_stream(&stream);
         if let Some(app) = self.app() {
             app.set_detail_kb_s(index as i32);
         }
@@ -4097,6 +4138,9 @@ pub(crate) fn read_meta_header_for(type_: &str, id: &str) -> Option<MetaHeader> 
 }
 pub(crate) fn write_meta_header_for(type_: &str, id: &str, header: &MetaHeader) {
     write_json(&meta_header_key(type_, id), header);
+    if let Some(bridge) = super::bridge::with_global_bridge(Clone::clone) {
+        bridge.smart_collection_metadata_changed();
+    }
 }
 /// Build a header snapshot from a fetched meta item (empty when the addon
 /// sent nothing usable).
@@ -5707,6 +5751,9 @@ mod series_open_tests {
                 imported_tracking_status: None,
                 added_at_secs: 0,
             });
+            // Row actions validate against the painted Library snapshot so
+            // metadata-driven collection changes cannot redirect a stale index.
+            bridge.apply_library_to_ui();
             bridge.open_library_item(0);
         } else {
             bridge.open_preview(
@@ -5722,6 +5769,10 @@ mod series_open_tests {
                 false,
             );
         }
+        assert!(
+            bridge.shared.lock().unwrap().modal_item.is_some(),
+            "the selected series must open before its metadata can load"
+        );
         let started = std::time::Instant::now();
         let picked = Rc::new(std::cell::Cell::new(false));
         let selected = picked.clone();

@@ -4,8 +4,8 @@
 // input focus here. Exercise the compiled UI shipped on Android instead.
 #![cfg(not(feature = "live-preview"))]
 
-use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use slint::{ComponentHandle, VecModel};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
+use slint::{ComponentHandle, Model, VecModel};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -88,13 +88,103 @@ async fn open_tracking(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -
     false
 }
 
-async fn focus_return_input(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -> bool {
-    let Some(input) = ElementHandle::find_by_accessible_label(app, "Full return URL")
-        .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput))
-    else {
-        failures
-            .borrow_mut()
-            .push("missing sign-in return URL text-input control".to_string());
+// The real backend republishes tracking accounts when Settings is loaded.
+// Page teardown releases its one-way model, so every fixture mount must do the
+// same with a fresh model rather than relying on the discarded shared payload.
+fn publish_signing_in_accounts(app: &nova::AppWindow) {
+    app.set_tracking_accounts(
+        Rc::new(VecModel::from(vec![nova::TrackingAccountRow {
+            service: 0,
+            name: "MyAnimeList account".into(),
+            client_id: "public-client".into(),
+            redirect_uri: "http://127.0.0.1:53926/callback".into(),
+            signing_in: true,
+            ..Default::default()
+        }]))
+        .into(),
+    );
+}
+
+async fn focus_return_input(
+    app: &nova::AppWindow,
+    failures: &RefCell<Vec<String>>,
+    stage: &str,
+) -> bool {
+    let mut input = None;
+    for _ in 0..4 {
+        // The headless backend has no renderer to measure nested account
+        // layouts. A previous visit also retains its scroll offset, which may
+        // leave the first account above the viewport after returning to it.
+        for element in ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(195.0, 450.0),
+                delta_x: 0.0,
+                delta_y: 650.0,
+            });
+        settle().await;
+        for element in ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
+        input = ElementHandle::find_by_accessible_label(app, "Full return URL")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput));
+        if input.is_some() {
+            break;
+        }
+        settle().await;
+    }
+    let Some(input) = input else {
+        let visible_inputs = ElementHandle::find_by_element_type_name(app, "SettingsInput")
+            .map(|element| {
+                format!(
+                    "label={:?}, position={:?}, size={:?}",
+                    element.accessible_label(),
+                    element.absolute_position(),
+                    element.size()
+                )
+            })
+            .collect::<Vec<_>>();
+        let accounts = app
+            .get_tracking_accounts()
+            .iter()
+            .map(|row| (row.service, row.signing_in))
+            .collect::<Vec<_>>();
+        let bridged_accounts = app
+            .global::<nova::SettingsBridge>()
+            .get_tracking_accounts()
+            .iter()
+            .map(|row| (row.service, row.signing_in))
+            .collect::<Vec<_>>();
+        let headers = ElementHandle::find_by_accessible_label(app, "MyAnimeList")
+            .map(|element| {
+                format!(
+                    "role={:?}, position={:?}, size={:?}",
+                    element.accessible_role(),
+                    element.absolute_position(),
+                    element.size()
+                )
+            })
+            .collect::<Vec<_>>();
+        let cards = ElementHandle::find_by_element_type_name(app, "TrackingAccountCard")
+            .map(|element| {
+                format!(
+                    "position={:?}, size={:?}",
+                    element.absolute_position(),
+                    element.size()
+                )
+            })
+            .collect::<Vec<_>>();
+        failures.borrow_mut().push(format!(
+            "{stage}: missing sign-in return URL text-input control after account layout and scroll settled; scroll_y={}; root accounts: {accounts:?}; bridged accounts: {bridged_accounts:?}; MyAnimeList headers: {headers:?}; account cards: {cards:?}; visible inputs: {visible_inputs:?}", app.get_settings_scroll_y()
+        ));
         return false;
     };
     let before = input.accessible_value();
@@ -181,17 +271,7 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
     app.window().show().unwrap();
     app.set_show_home(false);
     app.set_show_settings(true);
-    app.set_tracking_accounts(
-        Rc::new(VecModel::from(vec![nova::TrackingAccountRow {
-            service: 0,
-            name: "MyAnimeList account".into(),
-            client_id: "public-client".into(),
-            redirect_uri: "http://127.0.0.1:53926/callback".into(),
-            signing_in: true,
-            ..Default::default()
-        }]))
-        .into(),
-    );
+    publish_signing_in_accounts(&app);
 
     let home_picks = Rc::new(Cell::new(0usize));
     let recorded_home_picks = home_picks.clone();
@@ -213,7 +293,9 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         let app = weak.upgrade().unwrap();
         let failures = &recorded_failures;
         settle().await;
-        if !open_tracking(&app, failures).await || !focus_return_input(&app, failures).await {
+        if !open_tracking(&app, failures).await
+            || !focus_return_input(&app, failures, "first mount / system Back").await
+        {
             slint::quit_event_loop().unwrap();
             return;
         }
@@ -255,8 +337,11 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         // Pointer Back follows the same nearest-editor rule as system Back.
         app.set_show_home(false);
         app.set_show_settings(true);
+        publish_signing_in_accounts(&app);
         settle().await;
-        if !open_tracking(&app, failures).await || !focus_return_input(&app, failures).await {
+        if !open_tracking(&app, failures).await
+            || !focus_return_input(&app, failures, "second mount / pointer Back").await
+        {
             slint::quit_event_loop().unwrap();
             return;
         }

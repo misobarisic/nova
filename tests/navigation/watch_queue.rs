@@ -122,26 +122,35 @@ fn queue_actions_fit_small_phone_and_landscape_with_long_titles() {
             .set_size(slint::PhysicalSize::new(width, height));
         settle(&app);
         assert!(queue.get_open(), "queue stays open across window resizes");
-        let find_actions = || ElementQuery::from_root(&app)
-            .match_predicate(|item| {
-                item.accessible_role() == Some(AccessibleRole::Button)
-                    && item.accessible_label().is_some_and(|label| {
-                        ["Play ·", "Move up ·", "Move down ·", "Remove from queue ·"]
-                            .iter().any(|prefix| label.starts_with(prefix))
-                    })
-            }).find_all();
+        let find_actions = || {
+            ElementQuery::from_root(&app)
+                .match_predicate(|item| {
+                    item.accessible_role() == Some(AccessibleRole::Button)
+                        && item.accessible_label().is_some_and(|label| {
+                            ["Play ·", "Move up ·", "Move down ·", "Remove from queue ·"]
+                                .iter()
+                                .any(|prefix| label.starts_with(prefix))
+                        })
+                })
+                .find_all()
+        };
         let mut actions = find_actions();
         if actions.is_empty() {
             // Short landscape starts with the heading/hero above the rows.
             // Query real visible controls after scrolling into the plan.
-            app.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-                position: slint::LogicalPosition::new(width as f32 / 2.0, height as f32 * 0.75),
-                delta_x: 0.0, delta_y: -360.0,
-            });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(width as f32 / 2.0, height as f32 * 0.75),
+                    delta_x: 0.0,
+                    delta_y: -360.0,
+                });
             settle(&app);
             actions = find_actions();
         }
-        assert!(!actions.is_empty(), "queue actions are reachable at {width}×{height}");
+        assert!(
+            !actions.is_empty(),
+            "queue actions are reachable at {width}×{height}"
+        );
         for action in actions {
             let pos = action.absolute_position();
             let size = action.size();
@@ -151,6 +160,73 @@ fn queue_actions_fit_small_phone_and_landscape_with_long_titles() {
                 "{width}×{height}: queue action overflow at {pos:?} {size:?}"
             );
             assert_eq!(action.accessible_role(), Some(AccessibleRole::Button));
+        }
+    }
+}
+
+#[test]
+fn queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_more_open(true);
+    app.global::<nova::QueueBridge>()
+        .set_rows(Rc::new(VecModel::from(fixture())).into());
+    app.global::<nova::QueueBridge>().set_open(true);
+    app.show().unwrap();
+    for width in [320, 390, 1280, 1920] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        settle(&app);
+        let hero = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app,
+            "WatchQueuePage::queue_hero_card",
+        )
+        .next()
+        .unwrap();
+        assert!(
+            hero.size().width <= 1040.5,
+            "wide queues keep a measured reading column"
+        );
+        if width < 700 {
+            assert!(
+                (hero.size().width - (width as f32 - 36.0)).abs() < 1.0,
+                "phone keeps the approved full-width layout"
+            );
+        }
+        assert!(hero.absolute_position().x >= 17.5);
+        assert!(hero.absolute_position().x + hero.size().width <= width as f32 - 17.5);
+    }
+}
+
+// Native previews below also inspect the rendered, scrolled cards so the
+// count/rewatch footer cannot silently paint beneath the containing panel.
+fn assert_journal_text_containment(app: &nova::AppWindow) {
+    for kind in ["JournalTitle", "JournalSession"] {
+        for card in i_slint_backend_testing::ElementHandle::find_by_element_type_name(app, kind) {
+            let origin = card.absolute_position();
+            let size = card.size();
+            for text in card.query_descendants().match_type_name("Text").find_all() {
+                let position = text.absolute_position();
+                let text_size = text.size();
+                assert!(
+                    position.x >= origin.x - 0.5
+                        && position.x + text_size.width <= origin.x + size.width + 0.5,
+                    "{kind} text exceeds panel width"
+                );
+                assert!(
+                    position.y >= origin.y - 0.5
+                        && position.y + text_size.height <= origin.y + size.height + 0.5,
+                    "{kind} text exceeds panel height: {position:?} {text_size:?}, panel {origin:?} {size:?}"
+                );
+            }
         }
     }
 }
@@ -179,7 +255,7 @@ fn render_journal_and_queue_previews() {
     journal.set_current_year(2026);
     journal.set_oldest_year(2024);
     journal.set_year(2026);
-    journal.set_watched("124:36:20".into());
+    journal.set_watched("123:36:20".into());
     journal.set_title_count(32);
     journal.set_completion_count(84);
     journal.set_rewatch_count(12);
@@ -237,10 +313,19 @@ fn render_journal_and_queue_previews() {
             let names = [
                 "queue-desktop",
                 "journal-desktop",
+                "journal-desktop-scrolled",
                 "queue-phone",
                 "journal-phone",
+                "journal-phone-scrolled",
+                "journal-compact-clock",
+                "more-desktop",
+                "more-phone-top",
+                "more-phone",
             ];
             let pixels = app.window().take_snapshot().unwrap();
+            if app.global::<nova::JournalBridge>().get_open() {
+                assert_journal_text_containment(&app);
+            }
             if let Some(dir) = std::env::var_os("NOVA_FEATURE_PREVIEW_DIR") {
                 std::fs::create_dir_all(&dir).unwrap();
                 image::save_buffer(
@@ -254,14 +339,60 @@ fn render_journal_and_queue_previews() {
             }
             step.set(step.get() + 1);
             match step.get() {
-                1 | 3 => {
+                1 | 4 => {
                     app.global::<nova::QueueBridge>().set_open(false);
                     app.global::<nova::JournalBridge>().set_open(true);
+                    let text: slint::SharedString = slint::platform::Key::Home.into();
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                            text: text.clone(),
+                        });
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
                 }
-                2 => {
+                2 | 5 => {
+                    let size = app.window().size();
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(
+                                size.width as f32 / 2.0,
+                                size.height as f32 / 2.0,
+                            ),
+                            delta_x: 0.0,
+                            delta_y: if step.get() == 2 { -460.0 } else { -700.0 },
+                        });
+                }
+                3 => {
                     app.window().set_size(slint::PhysicalSize::new(390, 844));
                     app.global::<nova::JournalBridge>().set_open(false);
                     app.global::<nova::QueueBridge>().set_open(true);
+                }
+                6 => {
+                    app.global::<nova::JournalBridge>()
+                        .set_watched("123456:36:20".into());
+                    app.window().set_size(slint::PhysicalSize::new(320, 844));
+                    let text: slint::SharedString = slint::platform::Key::Home.into();
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                            text: text.clone(),
+                        });
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+                }
+                7 => {
+                    app.global::<nova::JournalBridge>().set_open(false);
+                    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+                }
+                8 => {
+                    app.window().set_size(slint::PhysicalSize::new(390, 844));
+                }
+                9 => {
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(195.0, 400.0),
+                            delta_x: 0.0,
+                            delta_y: -1000.0,
+                        });
                 }
                 _ => {
                     slint::quit_event_loop().unwrap();

@@ -77,8 +77,11 @@ export component WatchQueuePage inherits Rectangle {
             else if e.text == Key.Delete { if !e.repeat && root.selected < QueueBridge.rows.length { QueueBridge.remove(QueueBridge.rows[root.selected].id); } accept }
             else { reject }
         }
-        VerticalLayout {
-            padding-left: 18px + root.safe-left; padding-right: 18px + root.safe-right;
+        queue_column := VerticalLayout {
+            x: root.safe-left + Math.max(0px, (root.width - root.safe-left - root.safe-right - 1076px) / 2);
+            width: Math.min(1076px, root.width - root.safe-left - root.safe-right);
+            height: 100%;
+            padding-left: 18px; padding-right: 18px;
             padding-top: 18px + root.safe-top; padding-bottom: 18px + root.safe-bottom;
             spacing: 18px;
             PageHeader { title: @tr("Watch queue"); subtitle: @tr("Your evening, in order."); narrow: root.narrow; show-back: true; back => { root.back(); } }
@@ -86,7 +89,7 @@ export component WatchQueuePage inherits Rectangle {
                 vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
                 VerticalLayout {
                     width: 100%; spacing: 12px; alignment: start; padding-bottom: 12px;
-                    Rectangle {
+                    queue_hero_card := Rectangle {
                         height: queue_hero.preferred-height; border-radius: Theme.card_corner_radius;
                         background: Theme.current.selection_wash; border-width: 1px; border-color: Theme.current.border_medium;
                         queue_hero := VerticalLayout {

@@ -1643,8 +1643,8 @@ msgstr "Stvaranje i upravljanje kategorijama"
 msgid "Streaming and cache"
 msgstr "Reprodukcija i predmemorija"
 
-msgid "Enablement"
-msgstr "Omogućivanje"
+msgid "Cross-device sync"
+msgstr "Sinkronizacija između uređaja"
 
 msgid "Cleanup and downloaded episodes"
 msgstr "Čišćenje i preuzete epizode"
@@ -3676,8 +3676,8 @@ msgstr "Dovršeno: {}"
 msgid "Caught up: {}"
 msgstr "Pogledano do kraja: {}"
 
-msgid "Viewing journal"
-msgstr "Dnevnik gledanja"
+msgid "Stats"
+msgstr "Statistika"
 
 msgid "Your viewing time, completed watches and the stories you return to."
 msgstr "Vrijeme gledanja, dovršena gledanja i priče kojima se vraćate."
@@ -3960,3 +3960,271 @@ msgid_plural "{n} rewatches"
 msgstr[0] "{n} ponovno gledanje"
 msgstr[1] "{n} ponovna gledanja"
 msgstr[2] "{n} ponovnih gledanja"
+
+
+# Shared rules, collections and bookmark management.
+msgid "Smart collections"
+msgstr "Pametne zbirke"
+
+msgid "Create"
+msgstr "Stvorite"
+
+msgid "All titles"
+msgstr "Svi naslovi"
+
+msgid "New smart collection"
+msgstr "Nova pametna zbirka"
+
+msgid "Edit smart collection"
+msgstr "Uredite pametnu zbirku"
+
+msgid "Save a rule. Your library keeps the collection up to date as you watch and add titles."
+msgstr "Spremite pravilo. Zbirka se ažurira dok gledate i dodajete naslove u zbirku."
+
+msgid "Collection name"
+msgstr "Naziv zbirke"
+
+msgid "Name your collection"
+msgstr "Imenujte zbirku"
+
+msgid "Media type"
+msgstr "Vrsta sadržaja"
+
+msgid "Movies"
+msgstr "Filmovi"
+
+msgid "Series"
+msgstr "Serije"
+
+msgid "Any media type"
+msgstr "Sve vrste sadržaja"
+
+msgid "Watch state"
+msgstr "Status gledanja"
+
+msgid "Any watch state"
+msgstr "Svi statusi gledanja"
+
+msgid "Any genre, or enter one like Sci-Fi"
+msgstr "Svi žanrovi ili unesite npr. Sci-Fi"
+
+msgid "Runtime under (minutes)"
+msgstr "Trajanje kraće od (minute)"
+
+msgid "No limit, or enter minutes"
+msgstr "Bez ograničenja ili unesite minute"
+
+msgid "For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."
+msgstr "Za nepogledane znanstvenofantastične filmove kraće od dva sata odaberite Filmovi + Nije pogledano + Sci-Fi + 120. Naslovi nepoznatog trajanja izostaju iz zbirki s ograničenjem trajanja."
+
+msgid "Save collection"
+msgstr "Spremite zbirku"
+
+msgid "Delete collection"
+msgstr "Izbrišite zbirku"
+
+msgid "Delete this collection? Your saved titles and manual categories will stay in your library."
+msgstr "Želite li izbrisati ovu zbirku? Spremljeni naslovi i ručne kategorije ostaju u vašoj zbirci."
+
+msgid "Keep collection"
+msgstr "Zadržite zbirku"
+
+msgid "Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."
+msgstr "Pravila koriste spremljene naslove, trenutačni napredak gledanja i spremljene metapodatke. Nema pretraživanja u pozadini. Filtri kategorija, pretraga i sortiranje i dalje vrijede."
+
+msgid "Universal stream filters"
+msgstr "Univerzalni filtri izvora"
+
+msgid "Universal filters"
+msgstr "Filtri izvora"
+
+msgid "STREAM PREFERENCES"
+msgstr "POSTAVKE IZVORA"
+
+msgid "These rules apply to every addon. Defaults sync between your devices."
+msgstr "Ova pravila vrijede za sve dodatke. Zadane postavke sinkroniziraju se između vaših uređaja."
+
+msgid "Use stream rules"
+msgstr "Primijenite pravila izvora"
+
+msgid "Maximum resolution"
+msgstr "Najveća rezolucija"
+
+msgid "Any resolution"
+msgstr "Sve rezolucije"
+
+msgid "Maximum size"
+msgstr "Najveća veličina"
+
+msgid "Any size"
+msgstr "Sve veličine"
+
+msgid "Allowed video codecs"
+msgstr "Dopušteni videokodeci"
+
+msgid "All codecs when none selected"
+msgstr "Svi kodeci ako nijedan nije odabran"
+
+msgid "Other video codecs"
+msgstr "Ostali videokodeci"
+
+msgid "Audio language codes"
+msgstr "Jezični kodovi zvuka"
+
+msgid "Use language codes such as en, ja, hr."
+msgstr "Koristite jezične kodove poput en, ja, hr."
+
+msgid "Apply languages"
+msgstr "Primijenite jezike"
+
+msgid "Require one of these audio languages"
+msgstr "Zahtijevajte jedan od ovih jezika zvuka"
+
+msgid "Languages are preferred in the order listed. Enable the requirement to hide other advertised audio languages."
+msgstr "Jezici imaju prednost prema navedenom redoslijedu. Uključite uvjet kako biste sakrili izvore koji oglašavaju druge jezike zvuka."
+
+msgid "Keep streams with unknown details"
+msgstr "Zadržite izvore s nepoznatim pojedinostima"
+
+msgid "Reset rules"
+msgstr "Poništite pravila"
+
+msgid "Automatic placement avoids known primary text positions. Use Top or Bottom if captions overlap."
+msgstr "Automatski položaj izbjegava poznate položaje glavnih titlova. Ako se preklapaju, odaberite Vrh ili Dno."
+
+msgid "Second subtitle position"
+msgstr "Položaj drugih titlova"
+
+msgid "Automatic (best effort)"
+msgstr "Automatski (procjena)"
+
+msgid "Top"
+msgstr "Vrh"
+
+msgid "Bottom"
+msgstr "Dno"
+
+msgid "No saved titles match this smart collection yet. It updates automatically as your library, watch progress and cached metadata change."
+msgstr "Još nema spremljenih naslova koji odgovaraju ovoj pametnoj zbirci. Ažurira se automatski s promjenama zbirke, napretka gledanja i spremljenih metapodataka."
+
+msgid "Edit collection"
+msgstr "Uredite zbirku"
+
+msgid "Clear collection filter"
+msgstr "Uklonite filtar zbirke"
+
+msgid "Bookmarks"
+msgstr "Oznake"
+
+msgid "Choose a saved scene, update a note or remove a bookmark."
+msgstr "Odaberite spremljenu scenu, uredite bilješku ili uklonite oznaku."
+
+msgid "The scenes you wanted to come back to."
+msgstr "Scene kojima ste se željeli vratiti."
+
+msgid "Search titles, episodes and notes"
+msgstr "Pretražite naslove, epizode i bilješke"
+
+msgid "Latest added"
+msgstr "Posljednje dodano"
+
+msgid "Keep a moment worth revisiting"
+msgstr "Sačuvajte trenutak kojem se vrijedi vratiti"
+
+msgid "No matching bookmarks"
+msgstr "Nema odgovarajućih oznaka"
+
+msgid "Save a scene from the player's bookmark menu. Movies and shows with saved scenes will appear here."
+msgstr "Spremite scenu u izborniku oznaka u reproduktoru. Ovdje će se pojaviti filmovi i serije sa spremljenim scenama."
+
+msgid "No note"
+msgstr "Bez bilješke"
+
+msgid "Play scene"
+msgstr "Pokrenite scenu"
+
+msgid "Edit note"
+msgstr "Uredite bilješku"
+
+msgid "Bookmark note"
+msgstr "Bilješka oznake"
+
+msgid "Save note"
+msgstr "Spremite bilješku"
+
+msgid "Clear note"
+msgstr "Izbrišite bilješku"
+
+msgid "Editing saved bookmark"
+msgstr "Uređivanje spremljene oznake"
+
+msgid "Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."
+msgstr "Spremljeno na ovom uređaju za ovaj profil. Datumi označavaju dodavanje oznaka i koriste UTC. Starije oznake možda nemaju zabilježen datum dodavanja."
+
+msgid "Return to saved scenes and notes"
+msgstr "Vratite se spremljenim scenama i bilješkama"
+
+msgid "Added date unknown"
+msgstr "Datum dodavanja nije poznat"
+
+msgid "Untitled saved title"
+msgstr "Spremljeni naslov bez naziva"
+
+msgid "Bookmarks could not be loaded. Saved data has been preserved."
+msgstr "Oznake nije moguće učitati. Spremljeni podaci su sačuvani."
+
+msgid "Bookmarks could not be saved. Please try again."
+msgstr "Oznake nije moguće spremiti. Pokušajte ponovno."
+
+msgid "Enter a runtime from 1 to 1440 minutes, or leave it empty."
+msgstr "Unesite trajanje od 1 do 1440 minuta ili ostavite prazno."
+
+msgid "Choose a collection name of up to 80 characters and a genre of up to 80 characters."
+msgstr "Odaberite naziv zbirke i žanr, svaki do 80 znakova."
+
+msgid "This collection was removed. Close the editor and create a new collection."
+msgstr "Ova je zbirka uklonjena. Zatvorite uređivač i stvorite novu zbirku."
+
+msgid "You can save up to 32 smart collections."
+msgstr "Možete spremiti do 32 pametne zbirke."
+
+msgid "This source no longer matches your stream rules."
+msgstr "Ovaj izvor više ne odgovara vašim pravilima izvora."
+
+msgid "Selected sources no longer match your stream rules. Choose streams again."
+msgstr "Odabrani izvori više ne odgovaraju vašim pravilima. Ponovno odaberite izvore."
+
+msgid "No addon streams match your rules."
+msgstr "Nijedan izvor dodatka ne odgovara vašim pravilima."
+
+msgid "No streams match your rules."
+msgstr "Nijedan izvor ne odgovara vašim pravilima."
+
+msgid "Clear stream rules"
+msgstr "Uklonite pravila izvora"
+
+msgid "No smart collections"
+msgstr "Nema pametnih zbirki"
+
+msgid "Required audio"
+msgstr "Obavezan zvuk"
+
+msgid "Preferred audio"
+msgstr "Željeni zvuk"
+
+msgid "Unknown details kept"
+msgstr "Nepoznate pojedinosti zadržane"
+
+msgid "Unknown details hidden"
+msgstr "Nepoznate pojedinosti skrivene"
+
+
+# Shared rules, collections and bookmark management.
+msgid "Could not read your scene bookmarks. Your saved data has been kept."
+msgstr "Oznake scena nije moguće pročitati. Spremljeni podaci su sačuvani."
+
+msgid "Could not save your scene bookmark. Your note has been kept."
+msgstr "Oznaku scene nije moguće spremiti. Vaša je bilješka sačuvana."
+
+msgid "On"
+msgstr "Uključeno"

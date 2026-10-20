@@ -5,6 +5,8 @@ use super::*;
 struct PlaybackContext {
     intro_download: Option<crate::download::DownloadJob>,
     retry_preferences: Option<nova_config::playback_preferences::SessionPreferences>,
+    bookmark_resume: bool,
+    selected_stream: Option<SelectedStream>,
     subtitle_hints: Vec<(String, String)>,
     title: String,
     episode_label: String,
@@ -49,6 +51,47 @@ pub(super) struct PlaybackIntent {
     detached: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct SelectedStream {
+    choice: Option<String>,
+    row: String,
+    owner: String,
+}
+impl SelectedStream {
+    fn from_row(row: &StreamUi) -> Self {
+        Self {
+            choice: row.choice_id.clone(),
+            row: row.id.clone(),
+            owner: row.owner_url.clone(),
+        }
+    }
+    fn matches(&self, row: &StreamUi) -> bool {
+        self.choice.as_ref().map_or_else(
+            || self.row == row.id && self.owner == row.owner_url,
+            |choice| row.choice_id.as_ref() == Some(choice),
+        )
+    }
+}
+fn alternate_stream_index(rows: &[StreamUi], selected: &SelectedStream) -> Option<usize> {
+    let start = rows
+        .iter()
+        .position(|row| selected.matches(row))
+        .map_or(0, |index| (index + 1) % rows.len());
+    (0..rows.len())
+        .map(|offset| (start + offset) % rows.len())
+        .find(|index| {
+            let row = &rows[*index];
+            !selected.matches(row)
+                && matches!(
+                    row.source,
+                    StreamSource::Url(_)
+                        | StreamSource::UrlWithOptions { .. }
+                        | StreamSource::Resolver { .. }
+                        | StreamSource::Torrent { .. }
+                )
+        })
+}
+
 // A failed resolver has no worker authority. Keep only a display/source-selection
 // snapshot, scoped to the exact detail opening that supplied its stream list.
 #[derive(Clone)]
@@ -56,6 +99,20 @@ pub(super) struct RetryContext {
     context: PlaybackContext,
     modal_token: Arc<()>,
 }
+pub(super) struct BookmarkResume {
+    identity: nova_playback_api::MediaIdentity,
+    position: f64,
+    modal_token: Arc<()>,
+}
+impl BookmarkResume {
+    fn matches(&self, modal: &ModalItem) -> bool {
+        Arc::ptr_eq(&self.modal_token, &modal.open_token)
+            && self.identity.media_type == modal.type_
+            && self.identity.title_id == modal.id
+            && self.identity.episode_id == modal.request_id
+    }
+}
+
 impl RetryContext {
     fn matches(&self, modal: &ModalItem) -> bool {
         Arc::ptr_eq(&self.modal_token, &modal.open_token)
@@ -214,17 +271,45 @@ impl Bridge {
             rejected.cancel();
             return rejected;
         }
-        let retry = {
+        let (retry, bookmark, selected_stream) = {
             let mut state = self.shared.lock().unwrap();
-            let retry = state.playback_tools.pending_retry.take();
-            retry
+            let retry = state
+                .playback_tools
+                .pending_retry
+                .take()
+                .or_else(|| state.playback_tools.failed_retry.clone())
+                .or_else(|| {
+                    state
+                        .playback_intent
+                        .as_ref()
+                        .filter(|intent| intent.context.bookmark_resume)
+                        .and_then(|intent| {
+                            Some(RetryContext {
+                                context: intent.context.clone(),
+                                modal_token: intent.modal_token.clone()?,
+                            })
+                        })
+                });
+            let retry = retry
                 .filter(|retry| {
                     state
                         .modal_item
                         .as_ref()
                         .is_some_and(|modal| retry.matches(modal))
                 })
-                .map(|retry| retry.context)
+                .map(|retry| retry.context);
+            let bookmark = state
+                .playback_tools
+                .bookmark_resume
+                .take()
+                .filter(|bookmark| {
+                    state
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|modal| bookmark.matches(modal))
+                });
+            let selected_stream = state.playback_tools.pending_stream_selection.take();
+            (retry, bookmark, selected_stream)
         };
         self.persist_outgoing_playback();
         self.finish_playback_request();
@@ -412,10 +497,67 @@ impl Bridge {
         if let Some(retry) = retry {
             context = retry;
         }
+        if let Some(bookmark) = bookmark {
+            context.history_resume = Some(bookmark.position);
+            context.bookmark_resume = true;
+        }
+        context.selected_stream = selected_stream;
+
         state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
         self.publish_player_context(&context);
         token
+    }
+
+    pub(super) fn arm_bookmark_resume(
+        &self,
+        identity: nova_playback_api::MediaIdentity,
+        position: f64,
+    ) {
+        if !position.is_finite() || position < 0.0 {
+            return;
+        }
+        let mut state = self.shared.lock().unwrap();
+        let Some(modal) = state
+            .modal_item
+            .as_ref()
+            .filter(|modal| modal.id == identity.title_id && modal.type_ == identity.media_type)
+        else {
+            return;
+        };
+        let modal_token = modal.open_token.clone();
+        state.playback_tools.bookmark_resume = Some(BookmarkResume {
+            identity,
+            position,
+            modal_token,
+        });
+    }
+
+    /// Consume only a saved scene belonging to the exact selector opening and
+    /// media whose receiver-side offers are being picked. Never leave it armed
+    /// for a later local selection after handing ownership to the controller.
+    pub(super) fn take_remote_bookmark_resume(
+        &self,
+        media: &nova_playback_api::MediaIdentity,
+    ) -> Option<f64> {
+        let mut state = self.shared.lock().unwrap();
+        let bookmark = state.playback_tools.bookmark_resume.take()?;
+        (state
+            .modal_item
+            .as_ref()
+            .is_some_and(|modal| bookmark.matches(modal))
+            && bookmark.identity.media_type == media.media_type
+            && bookmark.identity.title_id == media.title_id
+            && bookmark.identity.episode_id == media.episode_id)
+            .then_some(bookmark.position)
+    }
+
+    pub(super) fn note_selected_playback_stream(&self, stream: &StreamUi) {
+        self.shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .pending_stream_selection = Some(SelectedStream::from_row(stream));
     }
 
     pub(super) fn alternate_stream_index(&self) -> Option<usize> {
@@ -447,21 +589,18 @@ impl Bridge {
         if !active && !failed {
             return None;
         }
-        let selected = usize::try_from(app.get_detail_kb_s()).ok()?;
-        let current = state.streams.get(selected)?;
-        (1..state.streams.len())
-            .map(|offset| (selected + offset) % state.streams.len())
-            .find(|index| {
-                let candidate = &state.streams[*index];
-                (current.choice_id.is_none() || candidate.choice_id != current.choice_id)
-                    && matches!(
-                        candidate.source,
-                        StreamSource::Url(_)
-                            | StreamSource::UrlWithOptions { .. }
-                            | StreamSource::Resolver { .. }
-                            | StreamSource::Torrent { .. }
-                    )
-            })
+        let selected = state
+            .playback_intent
+            .as_ref()
+            .and_then(|intent| intent.context.selected_stream.as_ref())
+            .or_else(|| {
+                state
+                    .playback_tools
+                    .failed_retry
+                    .as_ref()
+                    .and_then(|retry| retry.context.selected_stream.as_ref())
+            })?;
+        alternate_stream_index(&state.streams, selected)
     }
 
     pub(super) fn try_another_stream(&self) {
@@ -539,6 +678,8 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.playback_tools.failed_retry = None;
             state.playback_tools.pending_retry = None;
+            state.playback_tools.bookmark_resume = None;
+            state.playback_tools.pending_stream_selection = None;
             if let Some(intent) = state.playback_intent.take() {
                 intent.token.cancel();
             }
@@ -1020,10 +1161,25 @@ impl Bridge {
                 && target.series_id == job.media_id
                 && target.episode_id == job.request_id
         });
+        let explicit_context = state
+            .playback_intent
+            .as_ref()
+            .map(|intent| intent.context.clone())
+            .filter(|context| {
+                context.media_type == job.media_type
+                    && context.media_id == job.media_id
+                    && context.request_id == job.request_id
+            })
+            .unwrap_or_default();
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
                 intro_download: Some(job.clone()),
-                history_resume: force_start_over.then_some(0.0),
+                history_resume: explicit_context
+                    .history_resume
+                    .or_else(|| force_start_over.then_some(0.0)),
+                bookmark_resume: explicit_context.bookmark_resume,
+                retry_preferences: explicit_context.retry_preferences,
+                selected_stream: explicit_context.selected_stream,
                 title: job.title.clone(),
                 episode_label: episode
                     .as_ref()
@@ -1484,18 +1640,22 @@ impl Bridge {
                 .playback_intent
                 .as_ref()
                 .is_some_and(|intent| intent.private_playback);
-        match self.player.play_with_preferences_and_policy(
+        let queued = self.player.play_with_preferences_and_policy(
             &url,
             start_at,
             &headers,
             &subtitles,
             preferences,
             allow_external,
-        ) {
+        );
+        self.complete_player_queue(&context, queued)
+    }
+
+    /// Queue acceptance establishes the in-app intent, while the first-frame
+    /// progress notification owns disarming its recovery preferences.
+    fn complete_player_queue(&self, context: &PlaybackContext, queued: Result<(), String>) -> bool {
+        match queued {
             Ok(()) => {
-                if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
-                    intent.context.retry_preferences = None;
-                }
                 self.mark_playback_opened(true);
                 self.prepare_secondary_subtitles();
                 self.start_addon_subtitles(
@@ -1583,6 +1743,13 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        if app.get_player_open()
+            && app.get_playback_started()
+            && let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut()
+        {
+            intent.context.bookmark_resume = false;
+            intent.context.retry_preferences = None;
+        }
         self.note_viewing_journal();
         self.refresh_next_episode_prompt();
         if self.player.take_external_handoff() {
@@ -3108,5 +3275,202 @@ mod retry_tests {
         modal.open_token = token;
         modal.id = "other-show".into();
         assert!(!retry.matches(&modal));
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod retry_regressions {
+    use super::*;
+    use nova_config::playback_preferences::{
+        SessionPreferences, TrackChoice, TrackDescriptor, TrackKind,
+    };
+
+    fn row(id: &str) -> StreamUi {
+        let url = format!("https://example.invalid/{id}");
+        StreamUi {
+            id: id.into(),
+            choice_id: Some(stream_choice_identity(
+                "owner",
+                "movie",
+                "movie",
+                &addons::Stream {
+                    url: Some(url.clone()),
+                    ..Default::default()
+                },
+            )),
+            owner_url: "owner".into(),
+            display: id.into(),
+            card: Default::default(),
+            source: StreamSource::UrlWithOptions {
+                url,
+                headers: Vec::new(),
+                subtitles: Vec::new(),
+            },
+            addon: "test".into(),
+            download: None,
+        }
+    }
+
+    #[test]
+    fn pointer_selected_second_offer_and_semantic_retry_survive_promotion_and_failed_startup() {
+        const ROOT: &str = "NOVA_RETRY_SOURCE_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-retry-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root)
+                .args(["--exact", "app::playback::retry_regressions::pointer_selected_second_offer_and_semantic_retry_survive_promotion_and_failed_startup", "--nocapture"]).output().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let token = Arc::new(());
+        let prefs = SessionPreferences::from_settings(
+            &CacheSettings::default(),
+            nova_config::playback_preferences::TitlePreferences {
+                audio: Some(TrackChoice::Track(TrackDescriptor {
+                    language: Some("ja".into()),
+                    kind: Some(TrackKind::Normal),
+                    title: None,
+                })),
+                subtitles: Some(TrackChoice::Off),
+                ..Default::default()
+            },
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.modal_item = Some(ModalItem {
+                details: Default::default(),
+                open_token: token.clone(),
+                pending_watch_now: None,
+                episodes_loading: false,
+                id: "movie".into(),
+                type_: "movie".into(),
+                request_id: "movie".into(),
+                videos: Vec::new(),
+                season_backdrops: HashMap::new(),
+                seasons: Vec::new(),
+                season_index: 0,
+                episode_page: 0,
+                name: "Test".into(),
+                year: String::new(),
+                poster_url: String::new(),
+                background_url: String::new(),
+                logo_url: String::new(),
+                description: String::new(),
+                genres: Vec::new(),
+            });
+            state.stream_all = vec![row("A"), row("B")];
+            state.streams = state.stream_all.clone();
+            // This is the semantic snapshot from A's untouched Automatic audio
+            // and disabled subtitles. No title preference is persisted.
+            state.playback_tools.pending_retry = Some(RetryContext {
+                modal_token: token,
+                context: PlaybackContext {
+                    media_type: "movie".into(),
+                    media_id: "movie".into(),
+                    request_id: "movie".into(),
+                    is_movie: true,
+                    history_resume: Some(123.75),
+                    retry_preferences: Some(prefs.clone()),
+                    ..Default::default()
+                },
+            });
+        }
+        app.set_kb_active(false);
+        bridge.stream_picked(1); // Pointer B, then last-used promotion moves B to 0.
+        // The testing backend cannot install mpv's GL rendering notifier.
+        // Model the native queue's accepted completion at the same app boundary
+        // used in production; no source is loaded and no external app is opened.
+        let context = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .unwrap()
+            .context
+            .clone();
+        assert!(bridge.player.wait_for_source("Loading stream…"));
+        assert!(bridge.complete_player_queue(&context, Ok(())));
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.streams[0].id, "B");
+            assert_eq!(
+                state
+                    .playback_intent
+                    .as_ref()
+                    .unwrap()
+                    .context
+                    .selected_stream
+                    .as_ref()
+                    .unwrap()
+                    .row,
+                "B"
+            );
+            assert!(
+                state
+                    .playback_intent
+                    .as_ref()
+                    .unwrap()
+                    .context
+                    .retry_preferences
+                    .is_some(),
+                "queue acceptance is not a first frame"
+            );
+        }
+        assert_eq!(bridge.alternate_stream_index(), Some(1));
+        app.set_playback_started(false); // Decoder B fails before producing a frame.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.streams = vec![row("C"), row("B"), row("A")]; // Late reorder.
+            state.stream_all = state.streams.clone();
+        }
+        assert_eq!(bridge.alternate_stream_index(), Some(2));
+        bridge.shared.lock().unwrap().streams = vec![row("C")]; // B removed by a fresh snapshot.
+        bridge.shared.lock().unwrap().stream_all = vec![row("C")];
+        assert_eq!(bridge.alternate_stream_index(), Some(0));
+        bridge.try_another_stream();
+        let state = bridge.shared.lock().unwrap();
+        let context = &state.playback_intent.as_ref().unwrap().context;
+        assert_eq!(context.selected_stream.as_ref().unwrap().row, "C");
+        let retained = context
+            .retry_preferences
+            .as_ref()
+            .expect("retry snapshot survives B startup failure");
+        assert_eq!(retained.title.audio, prefs.title.audio);
+        assert_eq!(retained.title.subtitles, Some(TrackChoice::Off));
+        assert_eq!(context.history_resume, Some(123.75));
+        drop(state);
+        assert!(
+            read_json::<HashMap<String, nova_config::playback_preferences::PreferenceValue>>(
+                playback_preferences::PREFERENCES_KEY
+            )
+            .unwrap_or_default()
+            .is_empty()
+        );
+        bridge.player.close();
+        bridge.finish_playback_request();
     }
 }

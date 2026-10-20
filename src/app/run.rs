@@ -388,7 +388,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.wire_completion_prompts();
     bridge.setup_viewing_journal();
     bridge.setup_watch_queue();
+    bridge.setup_bookmarks();
     bridge.setup_sync_inspector();
+    bridge.setup_smart_collections();
+    bridge.wire_stream_filters();
 
     bridge
         .last_stream
@@ -1297,9 +1300,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_add_scene_bookmark(move |note| b.add_scene_bookmark(&note));
     let b = bridge.clone();
-    app.on_delete_scene_bookmark(move |index| b.delete_scene_bookmark(index));
+    app.on_delete_scene_bookmark(move |id| b.delete_scene_bookmark(id.as_str()));
+    let b = bridge.clone();
+    app.on_edit_scene_bookmark(move |id, note| b.edit_scene_bookmark(id.as_str(), note.as_str()));
     let b = bridge.clone();
     app.on_try_another_stream(move || b.try_another_stream());
+    let b = bridge.clone();
+    app.on_secondary_subtitle_position_changed(move |index| {
+        b.change_secondary_subtitle_position(index)
+    });
 
     // Transient rate preview (press-and-hold 2×): session only, never stored.
     let b = bridge.clone();

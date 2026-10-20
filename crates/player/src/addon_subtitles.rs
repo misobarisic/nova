@@ -455,6 +455,20 @@ mod tests {
             mpv.get_property::<bool>("secondary-sub-visibility")
                 .unwrap()
         );
+        let main_position = mpv.get_property::<f64>("sub-pos").unwrap();
+        let main_override = mpv.get_property::<String>("sub-ass-override").unwrap();
+        let mut placement = secondary_subtitle_position::Placement::default();
+        placement.set_mode(2);
+        placement.apply(&mpv);
+        assert_eq!(mpv.get_property::<f64>("secondary-sub-pos").unwrap(), 100.0);
+        placement.set_mode(1);
+        placement.apply(&mpv);
+        assert_eq!(mpv.get_property::<f64>("secondary-sub-pos").unwrap(), 0.0);
+        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), main_position);
+        assert_eq!(
+            mpv.get_property::<String>("sub-ass-override").unwrap(),
+            main_override
+        );
         loaded.clear();
         assert!(loaded.tracks.is_empty());
         assert!(!loaded.restore(&mpv, &mut sync).unwrap());

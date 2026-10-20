@@ -1,0 +1,33 @@
+export struct BookmarkTitleRow {
+    id: string,
+    title: string,
+    context: string,
+    added: string,
+    count: string,
+    poster: image,
+    has_poster: bool,
+}
+export struct BookmarkSceneRow {
+    id: string,
+    title: string,
+    position: string,
+    note: string,
+    added: string,
+}
+export global BookmarksBridge {
+    in-out property <bool> open;
+    in-out property <string> query;
+    in-out property <int> sort;
+    in-out property <string> title_id;
+    in-out property <string> title_caption;
+    in-out property <[BookmarkTitleRow]> titles;
+    in-out property <[BookmarkSceneRow]> scenes;
+    in-out property <string> notice;
+    callback opened();
+    callback query_changed(string);
+    callback sort_changed(int);
+    callback select_title(string);
+    callback play(string);
+    callback edit(string, string) -> bool;
+    callback remove(string);
+}

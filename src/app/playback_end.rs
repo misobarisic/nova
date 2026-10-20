@@ -79,12 +79,13 @@ fn automatic_successor(videos: &[Video], current: &str) -> Option<Video> {
     (episode_has_air_date(next) && episode_is_out(next, today_days())).then(|| next.clone())
 }
 
-fn automatic_choice(
+fn automatic_choice_with_rules(
     rows: &[StreamUi],
     preference: Option<&StreamPreference>,
     torrents: bool,
+    rules: &nova_config::stream_filters::StreamFilterRules,
 ) -> Option<StreamUi> {
-    let rows: Vec<_> = rows
+    let mut rows: Vec<_> = rows
         .iter()
         .filter(|row| {
             stream_recommendation_usable(row)
@@ -92,10 +93,21 @@ fn automatic_choice(
         })
         .cloned()
         .collect();
+    stream_filters::apply_stream_rules(&mut rows, rules);
+    let rows = stream_filters::preferred_stream_rules(&rows, rules);
     let index = preference
-        .and_then(|p| recommended_stream(&rows, None, p))
+        .and_then(|p| recommended_stream(rows, None, p))
         .or_else(|| (!rows.is_empty()).then_some(0))?;
     Some(rows[index].clone())
+}
+
+#[cfg(test)]
+fn automatic_choice(
+    rows: &[StreamUi],
+    preference: Option<&StreamPreference>,
+    torrents: bool,
+) -> Option<StreamUi> {
+    automatic_choice_with_rules(rows, preference, torrents, &Default::default())
 }
 
 struct Context {
@@ -289,10 +301,11 @@ impl Bridge {
             return false;
         }
         if automatic.candidate.as_ref().is_some_and(|row| {
-            automatic_choice(
+            automatic_choice_with_rules(
                 std::slice::from_ref(row),
                 None,
                 active_torrent_settings().enabled,
+                &self.shared.lock().unwrap().cache_settings.stream_filters,
             )
             .is_none()
         }) {
@@ -387,10 +400,11 @@ impl Bridge {
                     self.last_stream
                         .series_preference(&id, nova_config::now_secs())
                 });
-            automatic_value.candidate = automatic_choice(
+            automatic_value.candidate = automatic_choice_with_rules(
                 &rows,
                 preference.as_ref(),
                 active_torrent_settings().enabled,
+                &self.shared.lock().unwrap().cache_settings.stream_filters,
             );
             if automatic_value.candidate.is_some() {
                 automatic_value.since = Some(now);
@@ -549,10 +563,11 @@ impl Bridge {
         let Some(row) = automatic.candidate else {
             return;
         };
-        if automatic_choice(
+        if automatic_choice_with_rules(
             std::slice::from_ref(&row),
             None,
             active_torrent_settings().enabled,
+            &self.shared.lock().unwrap().cache_settings.stream_filters,
         )
         .is_none()
         {

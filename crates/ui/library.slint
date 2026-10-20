@@ -1,5 +1,7 @@
-import { InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
+import { SmartCollectionsBridge, SettingsSync, InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
+import { SmartCollectionsRail, SmartCollectionsEditor } from "smart-collections.slint";
+import { PillButton } from "settings-controls.slint";
 
 import { KbMark } from "kbnav.slint";
 import { Dropdown } from "dropdown.slint";
@@ -16,7 +18,7 @@ export { LibraryFilterChip }
 
 export component LibraryPage {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { search_focus_t.stop(); if (!InterfaceStyle.tv && root.kb_zone == 3) { root.kb_zone = 2; } nav_scope.focus(); }
+    public function focus_shell() { if SmartCollectionsBridge.editor_open { smart_editor.focus_shell(); return; } if root.kb_zone == 4 { smart_rail.focus_shell(); return; } search_focus_t.stop(); if (!InterfaceStyle.tv && root.kb_zone == 3) { root.kb_zone = 2; } nav_scope.focus(); }
 
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
@@ -123,7 +125,11 @@ export component LibraryPage {
         if (InterfaceStyle.tv) { nav_scope.focus(); }
     }
     function system_back() {
-        if (root.menu_open) {
+        if SmartCollectionsBridge.editor_open && SettingsSync.open {
+            SettingsSync.open = false; smart_editor.focus_shell();
+        } else if SmartCollectionsBridge.editor_open {
+            SmartCollectionsBridge.editor_open = false; nav_scope.focus();
+        } else if (root.menu_open) {
             root.close_menu();
         } else if (root.search_open) {
             root.search_open = false;
@@ -227,6 +233,7 @@ export component LibraryPage {
     }
 
     function kb_up() {
+        if root.kb_zone == 1 { root.kb_zone = 4; smart_rail.focus_shell(); return; }
         if (InterfaceStyle.tv && root.kb_zone == 3) { root.kb_zone = root.kb_filter_on() ? 1 : 0; return; }
         if (root.kb_zone == 2) {
             if (root.kb_idx >= root.cols) {
@@ -240,6 +247,7 @@ export component LibraryPage {
     }
 
     function kb_down() {
+        if root.kb_zone == 0 { root.kb_zone = 4; smart_rail.focus_shell(); return; }
         if (InterfaceStyle.tv && root.kb_zone == 0 && !root.kb_filter_on()) { root.kb_zone = 3; return; }
         if (InterfaceStyle.tv && root.kb_zone == 1) { root.kb_zone = 3; return; }
         if (InterfaceStyle.tv && root.kb_zone == 3) {
@@ -414,6 +422,7 @@ export component LibraryPage {
 
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
+            enabled: !SmartCollectionsBridge.editor_open;
             width: 100%;
             height: 100%;
             init => {
@@ -465,7 +474,7 @@ export component LibraryPage {
                     root.kb_active = true;
                     root.kb_enter();
                     accept
-                } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                } else if (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape) {
                     root.kb_active = true;
                     root.system_back();
                     accept
@@ -910,6 +919,13 @@ export component LibraryPage {
                                 width: 100%;
                                 height: self.preferred-height;
                                 spacing: 14px;
+                                smart_rail := SmartCollectionsRail {
+                                    touch_menus: root.touch_menus;
+                                    exit(direction) => {
+                                        root.kb_zone = direction < 0 ? 0 : (root.kb_filter_on() ? 1 : (InterfaceStyle.tv ? 3 : 2));
+                                        nav_scope.focus();
+                                    }
+                                }
                                 // All automatic and custom categories remain reachable on a fresh
                                 // install. A horizontal rail keeps every pill at its natural size.
                                 filter_rail := Flickable {
@@ -1052,13 +1068,18 @@ export component LibraryPage {
                 }
 
                 Text {
-                    text: root.query != "" ? @tr("No matching titles in your library.") : root.library_empty_hint;
+                    text: root.query != "" ? @tr("No matching titles in your library.") : SmartCollectionsBridge.selected_id != "" ? @tr("No saved titles match this smart collection yet. It updates automatically as your library, watch progress and cached metadata change.") : root.library_empty_hint;
                     font-size: InterfaceStyle.tv ? 18px : 14px;
-                    color: #8a8a9a;
+                    color: Theme.current.text_muted;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                     min-width: 0px;
                     max-width: 560px;
+                }
+                if SmartCollectionsBridge.selected_id != "": VerticalLayout {
+                    spacing: 8px; alignment: center;
+                    PillButton { label: @tr("Edit collection"); clicked => { SmartCollectionsBridge.edit(SmartCollectionsBridge.selected_id); } }
+                    PillButton { label: @tr("Clear collection filter"); clicked => { SmartCollectionsBridge.selected(""); } }
                 }
             }
 
@@ -1150,6 +1171,14 @@ export component LibraryPage {
                 root.close_menu();
             }
             closed => { root.close_menu(); }
+        }
+        smart_editor := SmartCollectionsEditor {
+            visible: SmartCollectionsBridge.editor_open;
+            active: SmartCollectionsBridge.editor_open;
+            width: 100%; height: 100%; narrow: root.narrow;
+            safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left; safe-right: root.safe-right;
+            closed => { root.kb_zone = 4; smart_rail.focus_shell(); }
         }
     }
 }

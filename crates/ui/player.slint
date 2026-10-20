@@ -1,4 +1,4 @@
-import { InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, SceneBookmarkRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -215,13 +215,27 @@ component SettingsMenu inherits Rectangle {
     in property <[TrackRow]> audio_tracks;
     in property <[TrackRow]> secondary_sub_tracks;
     in property <string> secondary_sub_track_label;
-    in property <[ChapterRow]> scene_bookmarks;
+    in property <int> secondary_subtitle_position_index;
+    callback secondary_subtitle_position_changed(int);
+    in property <[SceneBookmarkRow]> scene_bookmarks;
     in property <bool> scene_bookmarks_available;
+    in property <string> scene_bookmark_notice;
     in-out property <int> bookmark_note_focus_request: 0;
+    in-out property <string> bookmark_edit_id;
+    in-out property <string> bookmark_note_draft;
     in property <bool> try_another_stream_available;
     callback pick_secondary_sub_track(int);
-    callback add_scene_bookmark(string);
-    callback delete_scene_bookmark(int);
+    callback add_scene_bookmark(string) -> bool;
+    callback delete_scene_bookmark(string) -> bool;
+    callback edit_scene_bookmark(string, string) -> bool;
+    function save_bookmark_note(note: string) {
+        let saved = root.bookmark_edit_id != "" ? root.edit_scene_bookmark(root.bookmark_edit_id, note) : root.add_scene_bookmark(note);
+        if saved { root.bookmark_edit_id = ""; root.bookmark_note_draft = ""; }
+    }
+    function edit_bookmark_note(id: string, note: string) {
+        root.bookmark_edit_id = id; root.bookmark_note_draft = note;
+        root.bookmark_note_focus_request += 1;
+    }
     callback try_another_stream();
     in property <[ChapterRow]> player_chapters;
     in property <float> chapter_position;
@@ -423,6 +437,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
+                            icon: @image-url("../../assets/icons/player/captions.svg");
                             label: @tr("Subtitles");
                             value: root.sub_label;
                             focused: root.focused_idx == 0;
@@ -431,6 +446,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 1; submenu: true;
+                            icon: @image-url("../../assets/icons/player/eighth-note.svg");
                             label: @tr("Audio");
                             value: root.audio_label;
                             focused: root.focused_idx == 1;
@@ -439,6 +455,7 @@ component SettingsMenu inherits Rectangle {
                         if root.decoder_available: MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 4; submenu: true;
+                            icon: @image-url("../../assets/icons/player/cpu.svg");
                             label: @tr("Hardware decoding");
                             value: root.hwdec_label != "" ? root.hwdec_label : "…";
                             focused: root.focused_idx == 2;
@@ -448,6 +465,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 3; submenu: true;
+                            icon: @image-url("../../assets/icons/player/gauge.svg");
                             label: @tr("Playback speed");
                             enabled: !(PartyBridge.active || PartyBridge.busy);
                             value: (PartyBridge.active || PartyBridge.busy) ? @tr("Watch parties use normal speed.") : PlaybackSpeed.label(root.playback_speed);
@@ -457,6 +475,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
+                            icon: @image-url("../../assets/icons/player/captions.svg");
                             label: @tr("Subtitle appearance and timing");
                             focused: root.focused_idx == (root.decoder_available ? 4 : 3);
                             activate => { root.page = 5; }
@@ -464,6 +483,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 3; submenu: true;
+                            icon: @image-url("../../assets/icons/player/skip-forward.svg");
                             label: @tr("Intro skipping");
                             value: root.intro_skip_override_index < 0 ? @tr("Use global default")
                                 : root.intro_skip_override_index == 0 ? @tr("Off")
@@ -481,6 +501,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
+                            icon: @image-url("../../assets/icons/player/languages.svg");
                             label: @tr("Second subtitles");
                             value: root.secondary_sub_track_label == "" ? @tr("Off") : root.secondary_sub_track_label;
                             focused: root.focused_idx == (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0);
@@ -489,12 +510,14 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             submenu: true;
+                            icon: @image-url("../../assets/icons/player/bookmark.svg");
                             label: @tr("Scene bookmarks");
                             focused: root.focused_idx == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
                             activate => { root.page = 9; }
                         }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
+                            icon: @image-url("../../assets/icons/player/refresh-cw.svg");
                             label: @tr("Try another stream");
                             value: @tr("Keep position and track preferences");
                             enabled: root.try_another_stream_available;
@@ -507,7 +530,7 @@ component SettingsMenu inherits Rectangle {
                         spacing: 4px;
                         if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
                         Text {
-                            text: @tr("A second language appears at the top of the video.");
+                            text: @tr("Automatic placement avoids known primary text positions. Use Top or Bottom if captions overlap.");
                             wrap: word-wrap; color: Theme.current.text_player_muted;
                             font-size: InterfaceStyle.tv ? 20px : 13px;
                         }
@@ -525,12 +548,32 @@ component SettingsMenu inherits Rectangle {
                             focused: root.focused_idx == i + 1;
                             activate => { root.pick_secondary_sub_track(track.index); }
                         }
+                        Text { text: @tr("Second subtitle position"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : 14px; font-weight: 600; }
+                        MenuRow {
+                            label: @tr("Automatic (best effort)"); selected: root.secondary_subtitle_position_index == 0;
+                            focused: root.focused_idx == root.secondary_sub_tracks.length + 1;
+                            activate => { root.secondary_subtitle_position_changed(0); }
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                        }
+                        MenuRow {
+                            label: @tr("Top"); selected: root.secondary_subtitle_position_index == 1;
+                            focused: root.focused_idx == root.secondary_sub_tracks.length + 2;
+                            activate => { root.secondary_subtitle_position_changed(1); }
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                        }
+                        MenuRow {
+                            label: @tr("Bottom"); selected: root.secondary_subtitle_position_index == 2;
+                            focused: root.focused_idx == root.secondary_sub_tracks.length + 3;
+                            activate => { root.secondary_subtitle_position_changed(2); }
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                        }
                     }
 
                     if root.page == 9: VerticalLayout {
                         spacing: 6px;
                         note := SearchField {
                             roomy: true;
+                            text <=> root.bookmark_note_draft;
                             placeholder-text: @tr("Optional note");
                             keyboard-mode: root.focused_idx == 0;
                             border-width: root.focused_idx == 0 ? 2px : 1px;
@@ -538,15 +581,19 @@ component SettingsMenu inherits Rectangle {
                             property <int> focus-request: root.bookmark_note_focus_request;
                             changed focus-request => { if self.enabled { self.focus_at_end(); } }
                             enabled: root.scene_bookmarks_available;
-                            accepted(value) => { root.add_scene_bookmark(value); self.text = ""; }
+                            accepted(value) => { root.save_bookmark_note(value); }
                         }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
-                            label: @tr("Bookmark this scene");
-                            value: root.format_time(root.chapter_position);
+                            label: root.bookmark_edit_id != "" ? @tr("Save note") : @tr("Bookmark this scene");
+                            value: root.bookmark_edit_id != "" ? @tr("Editing saved bookmark") : root.format_time(root.chapter_position);
                             enabled: root.scene_bookmarks_available;
                             focused: root.focused_idx == 1;
-                            activate => { root.add_scene_bookmark(note.full-text); note.text = ""; }
+                            activate => { root.save_bookmark_note(note.full-text); }
+                        }
+                        if root.scene_bookmark_notice != "": Text {
+                            text: root.scene_bookmark_notice; color: Theme.current.text_destructive;
+                            wrap: word-wrap; font-size: InterfaceStyle.tv ? 20px : 13px;
                         }
                         if root.scene_bookmarks.length == 0: Text {
                             text: @tr("Save a moment to return to it later.");
@@ -557,17 +604,26 @@ component SettingsMenu inherits Rectangle {
                             spacing: 0px;
                             MenuRow {
                                 reveal(y, h) => { root.reveal_row(y, h); }
-                                label: bookmark.title == "" ? @tr("Scene bookmark") : bookmark.title;
+                                label: bookmark.note == "" ? @tr("Scene bookmark") : bookmark.note;
                                 value: root.format_time(bookmark.position);
                                 enabled: root.chapter_seek_allowed;
-                                focused: root.focused_idx == 2 + i * 2;
+                                focused: root.focused_idx == 2 + i * 4;
                                 activate => { root.pick_chapter(bookmark.position); }
                             }
                             MenuRow {
                                 reveal(y, h) => { root.reveal_row(y, h); }
-                                label: @tr("Delete bookmark");
-                                focused: root.focused_idx == 3 + i * 2;
-                                activate => { root.delete_scene_bookmark(i); }
+                                label: @tr("Edit note"); focused: root.focused_idx == 3 + i * 4;
+                                activate => { root.edit_bookmark_note(bookmark.id, bookmark.note); settings_scroll.content-y = 0px; }
+                            }
+                            MenuRow {
+                                reveal(y, h) => { root.reveal_row(y, h); }
+                                label: @tr("Clear note"); focused: root.focused_idx == 4 + i * 4;
+                                activate => { root.edit_scene_bookmark(bookmark.id, ""); }
+                            }
+                            MenuRow {
+                                reveal(y, h) => { root.reveal_row(y, h); }
+                                label: @tr("Delete bookmark"); focused: root.focused_idx == 5 + i * 4;
+                                activate => { if root.delete_scene_bookmark(bookmark.id) && root.bookmark_edit_id == bookmark.id { root.bookmark_edit_id = ""; root.bookmark_note_draft = ""; } }
                             }
                         }
                     }
@@ -875,13 +931,27 @@ export component PlayerOverlay {
     in property <float> buffered_until: 0.0;
     in property <[TrackRow]> secondary_sub_tracks;
     in property <string> secondary_sub_track_label;
-    in property <[ChapterRow]> scene_bookmarks;
+    in property <int> secondary_subtitle_position_index;
+    callback secondary_subtitle_position_changed(int);
+    in property <[SceneBookmarkRow]> scene_bookmarks;
     in property <bool> scene_bookmarks_available;
+    in property <string> scene_bookmark_notice;
     in-out property <int> bookmark_note_focus_request: 0;
+    in-out property <string> bookmark_edit_id;
+    in-out property <string> bookmark_note_draft;
     in property <bool> try_another_stream_available;
     callback pick_secondary_sub_track(int);
-    callback add_scene_bookmark(string);
-    callback delete_scene_bookmark(int);
+    callback add_scene_bookmark(string) -> bool;
+    callback delete_scene_bookmark(string) -> bool;
+    callback edit_scene_bookmark(string, string) -> bool;
+    function save_bookmark_note(note: string) {
+        let saved = root.bookmark_edit_id != "" ? root.edit_scene_bookmark(root.bookmark_edit_id, note) : root.add_scene_bookmark(note);
+        if saved { root.bookmark_edit_id = ""; root.bookmark_note_draft = ""; }
+    }
+    function edit_bookmark_note(id: string, note: string) {
+        root.bookmark_edit_id = id; root.bookmark_note_draft = note;
+        root.bookmark_note_focus_request += 1;
+    }
     callback try_another_stream();
     in property <[ChapterRow]> player_chapters;
     in-out property <string> time_text: "00:00 / 00:00";
@@ -1188,8 +1258,8 @@ export component PlayerOverlay {
             if root.settings_page == 5 { return 8; }
             if root.settings_page == 6 { return 4; }
             if root.settings_page == 7 { return root.player_chapters.length; }
-            if root.settings_page == 8 { return root.secondary_sub_tracks.length + 1; }
-            if root.settings_page == 9 { return root.scene_bookmarks.length * 2 + 2; }
+            if root.settings_page == 8 { return root.secondary_sub_tracks.length + 4; }
+            if root.settings_page == 9 { return root.scene_bookmarks.length * 4 + 2; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1421,16 +1491,22 @@ export component PlayerOverlay {
                 if root.kb_menu == 0 { root.pick_secondary_sub_track(-1); }
                 else if root.kb_menu - 1 < root.secondary_sub_tracks.length {
                     root.pick_secondary_sub_track(root.secondary_sub_tracks[root.kb_menu - 1].index);
-                }
+                } else { root.secondary_subtitle_position_changed(root.kb_menu - root.secondary_sub_tracks.length - 1); }
             } else if root.settings_page == 9 {
                 if root.kb_menu == 0 && root.scene_bookmarks_available { root.bookmark_note_focus_request += 1; }
-                else if root.kb_menu == 1 && root.scene_bookmarks_available { root.add_scene_bookmark(""); }
-                else if root.kb_menu > 1 && Math.floor((root.kb_menu - 2) / 2) < root.scene_bookmarks.length {
-                    let bookmark_index = Math.floor((root.kb_menu - 2) / 2);
-                    if Math.mod(root.kb_menu - 2, 2) == 0 && root.tv_can_seek() {
-                        root.seek(root.scene_bookmarks[bookmark_index].position); root.open_popup = 0;
-                    } else if Math.mod(root.kb_menu - 2, 2) == 1 {
-                        root.delete_scene_bookmark(bookmark_index); root.kb_menu = Math.min(root.kb_menu, root.kb_menu_n() - 1);
+                else if root.kb_menu == 1 && root.scene_bookmarks_available { root.save_bookmark_note(root.bookmark_note_draft); }
+                else if root.kb_menu > 1 && Math.floor((root.kb_menu - 2) / 4) < root.scene_bookmarks.length {
+                    let bookmark_index = Math.floor((root.kb_menu - 2) / 4);
+                    let action = Math.mod(root.kb_menu - 2, 4);
+                    let bookmark = root.scene_bookmarks[bookmark_index];
+                    if action == 0 && root.tv_can_seek() { root.seek(bookmark.position); root.open_popup = 0; }
+                    else if action == 1 { root.edit_bookmark_note(bookmark.id, bookmark.note); }
+                    else if action == 2 { root.edit_scene_bookmark(bookmark.id, ""); }
+                    else if action == 3 {
+                        if root.delete_scene_bookmark(bookmark.id) {
+                            root.kb_menu = Math.min(root.kb_menu, root.kb_menu_n() - 1);
+                            if root.bookmark_edit_id == bookmark.id { root.bookmark_edit_id = ""; root.bookmark_note_draft = ""; }
+                        }
                     }
                 }
             } else if root.settings_page == 7 {
@@ -1574,6 +1650,14 @@ export component PlayerOverlay {
     private property <length> utility_width: root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px;
     private property <length> caption_height: show_heading.height + episode_heading.height
         + badge_lane.height + summary_heading.height + 12px;
+    // Shared deterministic geometry keeps offer avoidance aligned with the
+    // conditional Android transport without reaching through its Slint scope.
+    private property <length> center_transport_width: 252px;
+    private property <length> center_transport_height: 72px;
+    private property <length> center_transport_x: (root.width - root.center_transport_width) / 2;
+    private property <length> center_transport_y: Math.max(root.safe-top + 64px,
+        Math.min((root.height - root.center_transport_height) / 2,
+            player_header.y - root.center_transport_height - 12px));
     changed header_bottom => { root.header_geometry_changed(root.header_bottom); }
 
     // Re-arm the OSD wake whenever a popup opens or closes: while browsing
@@ -2244,10 +2328,10 @@ export component PlayerOverlay {
         // keyboard indices (play 1, rewind 3, forward 4); on-screen they read
         // 3, 1, 4 left to right.
         if root.is_android && !InterfaceStyle.tv: center_transport := Rectangle {
-            width: 252px;
-            height: 72px;
-            x: (parent.width - self.width) / 2;
-            y: Math.max(root.safe-top + 64px, Math.min((parent.height - self.height) / 2, player_header.y - self.height - 12px));
+            width: root.center_transport_width;
+            height: root.center_transport_height;
+            x: root.center_transport_x;
+            y: root.center_transport_y;
             opacity: (root.controls_active && root.playback_started) ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fade; }
 
@@ -3025,8 +3109,20 @@ export component PlayerOverlay {
             width: Math.max(0px, Math.min(InterfaceStyle.tv ? 540px : 360px,
                 root.width - root.safe-left - root.safe-right - 32px));
             x: root.width - root.safe-right - self.width - 16px;
-            y: Math.max(root.safe-top + 16px,
+            property <length> footer_y: Math.max(root.safe-top + 16px,
                 root.height - self.height - (root.controls_active ? (root.height - player_header.y + 12px) : 16px));
+            // On short Android windows, the measured footer lane can meet the
+            // centered transport. Move the offer only when their rectangles
+            // actually intersect; ordinary layouts retain bottom-right placement.
+            property <bool> overlaps_transport: root.is_android && !InterfaceStyle.tv
+                && root.controls_active && root.playback_started
+                && self.x < root.center_transport_x + root.center_transport_width
+                && self.x + self.width > root.center_transport_x
+                && self.footer_y < root.center_transport_y + root.center_transport_height
+                && self.footer_y + self.height > root.center_transport_y;
+            y: self.overlaps_transport
+                ? Math.max(root.safe-top + 16px, root.center_transport_y - self.height - 12px)
+                : self.footer_y;
             title: root.next_episode_title;
             context: root.next_episode_context;
             focused_action: root.kb_active ? (root.kb_idx == 10 ? 1 : root.kb_idx == 11 ? 2 : 0) : 0;
@@ -3097,13 +3193,19 @@ export component PlayerOverlay {
             audio_tracks: root.audio_tracks;
             secondary_sub_tracks: root.secondary_sub_tracks;
             secondary_sub_track_label: root.secondary_sub_track_label;
+            secondary_subtitle_position_index: root.secondary_subtitle_position_index;
+            secondary_subtitle_position_changed(index) => { root.secondary_subtitle_position_changed(index); }
             scene_bookmarks: root.scene_bookmarks;
             scene_bookmarks_available: root.scene_bookmarks_available;
-            bookmark_note_focus_request: root.bookmark_note_focus_request;
+            scene_bookmark_notice: root.scene_bookmark_notice;
+            bookmark_note_focus_request <=> root.bookmark_note_focus_request;
+            bookmark_edit_id <=> root.bookmark_edit_id;
+            bookmark_note_draft <=> root.bookmark_note_draft;
             try_another_stream_available: root.try_another_stream_available;
             pick_secondary_sub_track(i) => { root.pick_secondary_sub_track(i); }
-            add_scene_bookmark(note) => { root.add_scene_bookmark(note); }
-            delete_scene_bookmark(i) => { root.delete_scene_bookmark(i); }
+            add_scene_bookmark(note) => { root.add_scene_bookmark(note) }
+            delete_scene_bookmark(id) => { root.delete_scene_bookmark(id) }
+            edit_scene_bookmark(id,note) => { root.edit_scene_bookmark(id,note) }
             try_another_stream() => { root.try_another_stream(); }
             player_chapters: root.player_chapters;
             chapter_position: root.displayed_position;

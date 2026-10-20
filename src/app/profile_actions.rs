@@ -400,6 +400,7 @@ impl Bridge {
         self.shared.lock().unwrap().restoring_models = false;
         self.apply_library_to_ui();
         self.refresh_watch_queue();
+        self.refresh_bookmarks();
         self.refresh_viewing_journal();
         self.refresh_playback_tools();
         self.profile_loaded_epoch
@@ -416,6 +417,15 @@ impl Bridge {
             self.retry_profile_services();
         }
         if let Some(app) = self.app() {
+            app.global::<crate::StreamFiltersBridge>().set_open(false);
+            app.global::<crate::SettingsSync>().set_open(false);
+            app.global::<crate::JournalBridge>().set_open(false);
+            app.global::<crate::QueueBridge>().set_open(false);
+            let bookmarks = app.global::<crate::BookmarksBridge>();
+            bookmarks.set_open(false);
+            bookmarks.set_title_id("".into());
+            bookmarks.set_title_caption("".into());
+            bookmarks.set_query("".into());
             let from_picker = app.get_profiles_open();
             app.set_profiles_require_selection(require_selection);
             app.set_profiles_open(require_selection);

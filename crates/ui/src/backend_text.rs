@@ -85,6 +85,47 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Could not read your scene bookmarks. Your saved data has been kept." => {
+            "Oznake scena nije moguće pročitati. Spremljeni podaci su sačuvani."
+        }
+        "Could not save your scene bookmark. Your note has been kept." => {
+            "Oznaku scene nije moguće spremiti. Vaša je bilješka sačuvana."
+        }
+
+        "Other video codecs" => "Ostali videokodeci",
+        "Use language codes such as en, ja, hr." => "Koristite jezične kodove poput en, ja, hr.",
+        "Added date unknown" => "Datum dodavanja nije poznat",
+        "Untitled saved title" => "Spremljeni naslov bez naziva",
+        "Bookmarks could not be loaded. Saved data has been preserved." => {
+            "Oznake nije moguće učitati. Spremljeni podaci su sačuvani."
+        }
+        "Bookmarks could not be saved. Please try again." => {
+            "Oznake nije moguće spremiti. Pokušajte ponovno."
+        }
+        "Enter a runtime from 1 to 1440 minutes, or leave it empty." => {
+            "Unesite trajanje od 1 do 1440 minuta ili ostavite prazno."
+        }
+        "Choose a collection name of up to 80 characters and a genre of up to 80 characters." => {
+            "Odaberite naziv zbirke i žanr, svaki do 80 znakova."
+        }
+        "This collection was removed. Close the editor and create a new collection." => {
+            "Ova je zbirka uklonjena. Zatvorite uređivač i stvorite novu zbirku."
+        }
+        "You can save up to 32 smart collections." => "Možete spremiti do 32 pametne zbirke.",
+        "This source no longer matches your stream rules." => {
+            "Ovaj izvor više ne odgovara vašim pravilima izvora."
+        }
+        "Selected sources no longer match your stream rules. Choose streams again." => {
+            "Odabrani izvori više ne odgovaraju vašim pravilima. Ponovno odaberite izvore."
+        }
+        "No addon streams match your rules." => {
+            "Nijedan izvor dodatka ne odgovara vašim pravilima."
+        }
+        "No smart collections" => "Nema pametnih zbirki",
+        "Required audio" => "Obavezan zvuk",
+        "Preferred audio" => "Željeni zvuk",
+        "Unknown details kept" => "Nepoznate pojedinosti zadržane",
+        "Unknown details hidden" => "Nepoznate pojedinosti skrivene",
         "Watched" => "Pogledano",
         "Watch history and progress" => "Povijest gledanja i napredak",
         "Playback preferences" => "Postavke reprodukcije",
@@ -1735,6 +1776,30 @@ pub fn watch_action(episode: &str, continuing: bool) -> String {
 
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    if field == "stream_filters" {
+        return serde_json::from_value::<nova_config::StreamFilterRules>(value.clone())
+            .map(|rules| stream_filter_summary(&rules))
+            .unwrap_or_else(|_| tr("Unsupported value").into());
+    }
+    if field == "smart_collections" {
+        return serde_json::from_value::<Vec<nova_config::SmartCollection>>(value.clone())
+            .map(|rules| {
+                if rules.is_empty() {
+                    return tr("No smart collections").into();
+                }
+                let names = rules
+                    .iter()
+                    .map(|rule| rule.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if croatian() {
+                    format!("{} zbirki · {names}", rules.len())
+                } else {
+                    format!("{} collections · {names}", rules.len())
+                }
+            })
+            .unwrap_or_else(|_| tr("Unsupported value").into());
+    }
     // The sync comparison must preserve the key editor's password masking.
     if field == "tmdb_api_key" {
         return tr(if value.as_str().is_none_or(|key| key.trim().is_empty()) {
@@ -2464,6 +2529,94 @@ pub fn sync_inspector_inventory(live: usize, deleted: usize, pending: bool) -> S
         });
     }
     value
+}
+
+pub fn stream_rules_hidden(count: usize) -> String {
+    if croatian() {
+        format!(
+            "{count} {}",
+            plural(
+                count as u64,
+                "izvor skriven vašim pravilima",
+                "izvora skrivena vašim pravilima",
+                "izvora skrivenih vašim pravilima"
+            )
+        )
+    } else {
+        format!(
+            "{count} {} hidden by your rules",
+            if count == 1 { "stream" } else { "streams" }
+        )
+    }
+}
+
+pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
+    use nova_config::stream_filters::VideoCodec;
+    if !rules.enabled {
+        return tr("Disabled").into();
+    }
+    let mut parts = Vec::new();
+    if let Some(height) = rules.max_height {
+        parts.push(format!("≤ {height}p"));
+    }
+    if let Some(bytes) = rules.max_bytes {
+        parts.push(format!("≤ {}", stream_size(bytes)));
+    }
+    if !rules.video_codecs.is_empty() {
+        parts.push(
+            rules
+                .video_codecs
+                .iter()
+                .map(|codec| match codec {
+                    VideoCodec::Avc => "H.264",
+                    VideoCodec::Hevc => "HEVC",
+                    VideoCodec::Av1 => "AV1",
+                    VideoCodec::Vp9 => "VP9",
+                    VideoCodec::Other => tr("Other video codecs"),
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    if !rules.audio_languages.is_empty() {
+        let names = rules
+            .audio_languages
+            .iter()
+            .map(|code| nova_config::playback_preferences::language_label(code))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!(
+            "{}: {names}",
+            tr(if rules.require_audio_language {
+                "Required audio"
+            } else {
+                "Preferred audio"
+            })
+        ));
+    }
+    parts.push(
+        tr(if rules.retain_unknown {
+            "Unknown details kept"
+        } else {
+            "Unknown details hidden"
+        })
+        .into(),
+    );
+    parts.join(" · ")
+}
+
+pub fn bookmarks_count(count: usize) -> String {
+    if croatian() {
+        format!(
+            "{count} {}",
+            plural(count as u64, "oznaka", "oznake", "oznaka")
+        )
+    } else {
+        format!(
+            "{count} {}",
+            if count == 1 { "bookmark" } else { "bookmarks" }
+        )
+    }
 }
 
 /// Journal dates are explicitly UTC, matching the recap's calendar boundaries.
