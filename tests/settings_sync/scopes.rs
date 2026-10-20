@@ -863,7 +863,7 @@ fn tmdb_disclosure_fits_and_keeps_key_editing_and_back_local() {
         assert!(p.x >= 0.0 && p.x + size.width <= width as f32 + 0.5);
         assert!(
             size.height >= 96.0 && size.height <= 130.0,
-            "wide wordmark must keep a compact disclosure header"
+            "TMDB icon must keep a compact disclosure header"
         );
         header().mock_single_click(slint::platform::PointerEventButton::Left);
         settle(&app);

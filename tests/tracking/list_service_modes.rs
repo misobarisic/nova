@@ -31,13 +31,21 @@ fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
         if let Some(target) = control(app, label) {
             let position = target.absolute_position();
             let size = target.size();
-            if position.y >= 160.0 && position.y + size.height <= 650.0 {
+            // The sticky Settings header covers 68px, and the phone's
+            // bottom navigation covers 68px. Do not require the old fixed
+            // 160..650 lane: a short desktop document cannot always scroll a
+            // perfectly visible control into that arbitrary interval.
+            let top = 80.0;
+            let bottom = app.window().size().height as f32 - 90.0;
+            if position.y >= top && position.y + size.height <= bottom {
                 assert!(size.height >= 44.0);
                 assert!(position.x >= 0.0);
                 assert!(position.x + size.width <= app.window().size().width as f32 + 0.5);
                 return target;
             }
-            app.set_settings_scroll_y((app.get_settings_scroll_y() + 300.0 - position.y).min(0.0));
+            app.set_settings_scroll_y(
+                (app.get_settings_scroll_y() + (top + bottom) / 2.0 - position.y).min(0.0),
+            );
         } else {
             app.set_settings_scroll_y(if attempt == 0 {
                 0.0
@@ -47,12 +55,44 @@ fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
         }
         settle(app);
     }
-    panic!("cannot reveal list-service control {label}");
+    let cards = ElementHandle::find_by_element_type_name(app, "ListServiceSettings")
+        .map(|card| {
+            format!(
+                "position={:?},size={:?}",
+                card.absolute_position(),
+                card.size()
+            )
+        })
+        .collect::<Vec<_>>();
+    panic!(
+        "cannot reveal list-service control {label}; width={},scroll_y={},visible_cards={cards:?}",
+        app.window().size().width,
+        app.get_settings_scroll_y()
+    );
 }
 
 fn click(app: &nova::AppWindow, label: &str) {
     reveal(app, label).mock_single_click(slint::platform::PointerEventButton::Left);
     settle(app);
+}
+
+fn open_service(app: &nova::AppWindow, name: &str, mode_label: &str) {
+    let header = reveal(app, name);
+    let header_position = header.absolute_position();
+    let header_size = header.size();
+    // Disclosure state may survive a resize or language change. Use its real
+    // geometry instead of blindly toggling an already open account closed.
+    let card = ElementHandle::find_by_element_type_name(app, "ListServiceSettings")
+        .find(|card| {
+            let p = card.absolute_position();
+            (p.x - header_position.x).abs() < 1.0 && (p.y - header_position.y).abs() < 1.0
+        })
+        .expect("list-service card owns its visible header");
+    if card.size().height <= header_size.height + 1.0 {
+        header.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(app);
+    }
+    reveal(app, mode_label);
 }
 
 fn choose(app: &nova::AppWindow, mode_label: &str, index: usize) {
@@ -144,8 +184,7 @@ fn list_service_modes_require_explicit_start_and_reset_pending_consent() {
             for (service, name) in [(0, "Simkl"), (1, "MDBList")] {
                 let mode_label = format!("{name} · {mode}");
                 let before = events.borrow().len();
-                click(&app, name);
-                reveal(&app, &mode_label);
+                open_service(&app, name, &mode_label);
                 assert_eq!(events.borrow().len(), before, "viewing mode is not consent");
 
                 choose(&app, &mode_label, 0);
@@ -264,6 +303,12 @@ fn integrations_keeps_empty_notices_compact_and_hosts_the_synced_tmdb_editor() {
             gap < 100.0,
             "empty notices must not reserve a line above the sync control: {width}: {gap}"
         );
+        // Enrichment now sits beside the other service disclosures. Open it
+        // explicitly before exercising its retained masked settings editor.
+        control(&app, "TMDB")
+            .expect("TMDB service disclosure")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
         let key = ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
             .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
             .expect("TMDB key field under Integrations");
@@ -281,6 +326,10 @@ fn integrations_keeps_empty_notices_compact_and_hosts_the_synced_tmdb_editor() {
             edited.borrow().last().map(String::as_str),
             Some("tmdb_api_key")
         );
+        control(&app, "TMDB")
+            .expect("TMDB service disclosure")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
         header.mock_single_click(slint::platform::PointerEventButton::Left);
         settle(&app);
     }

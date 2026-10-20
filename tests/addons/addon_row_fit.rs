@@ -94,6 +94,11 @@ fn check(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>
         return;
     }
     for (name, r) in &controls {
+        if name.starts_with("AddonIconButton") && (r.2 < 44.0 || r.3 < 44.0) {
+            failures.borrow_mut().push(format!(
+                "{label}: {name} must retain a 44px touch target, got {r:?}"
+            ));
+        }
         let Some(row) = row_of(app, *r) else { continue };
         if !inside(*r, row) {
             failures.borrow_mut().push(format!(
@@ -224,4 +229,131 @@ fn addon_row_controls_fit_their_row() {
         "addon row fit failures:\n  {}",
         failures.join("\n  ")
     );
+}
+
+// Optional visual inspection uses the compiled app and ordinary window events;
+// no testing backend or simulated clock runs inside the native timer.
+#[test]
+#[cfg(feature = "desktop")]
+#[ignore = "requires a display; optional native addon card icon previews"]
+fn render_addon_card_icon_previews() {
+    if !crate::isolation::run(concat!(module_path!(), "::render_addon_card_icon_previews")) {
+        return;
+    }
+    let Some(dir) = std::env::var_os("NOVA_FEATURE_PREVIEW_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_cinemeta_installed(true);
+    app.set_addon_rows(
+        Rc::new(VecModel::from(vec![
+            nova::AddonRow {
+                label: s("Cinemeta"),
+                initial: s("C"),
+                capabilities: s("Movies · Series · Catalogs"),
+                url: s("https://v3-cinemeta.strem.io/manifest.json"),
+                enabled: true,
+                config_url: s("https://v3-cinemeta.strem.io/configure"),
+                ..Default::default()
+            },
+            nova::AddonRow {
+                label: s("Community subtitles"),
+                initial: s("S"),
+                capabilities: s("Subtitles"),
+                url: s("https://example.invalid/subtitles/manifest.json"),
+                enabled: false,
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    let timer = slint::Timer::default();
+    let weak = app.as_weak();
+    let mut phase = 0;
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(500),
+        move || {
+            let app = weak.upgrade().unwrap();
+            match phase {
+                0 => {
+                    app.set_settings_search_query("Addons".into());
+                }
+                1 => {
+                    let addons = destinations::find(&app, "settings:addons")
+                        .next()
+                        .expect("Addons settings destination");
+                    let (x, y, width, height) = rect(&addons);
+                    let position = slint::LogicalPosition::new(x + width / 2.0, y + height / 2.0);
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                            position,
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                            position,
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                }
+                2 | 4 => {
+                    let card = ElementHandle::find_by_element_type_name(&app, "AddonRowCard")
+                        .find(|card| card.size().width > 0.0)
+                        .expect("rendered addon card");
+                    // Keep the card's actions in view on the portrait capture,
+                    // independently of the installation form above the list.
+                    let y = card.absolute_position().y;
+                    app.set_settings_scroll_y(app.get_settings_scroll_y() + 160.0 - y);
+                }
+                3 | 5 => {
+                    let expected = if phase == 3 { (390, 844) } else { (1280, 800) };
+                    let image = app.window().take_snapshot().unwrap();
+                    assert_eq!((image.width(), image.height()), expected);
+                    for label in ["Configure", "Refresh", "Move up", "Move down"] {
+                        let button =
+                            ElementHandle::find_by_element_type_name(&app, "AddonIconButton")
+                                .find(|button| button.accessible_label().as_deref() == Some(label))
+                                .unwrap_or_else(|| panic!("missing addon action {label}"));
+                        let (_, y, width, height) = rect(&button);
+                        assert!(width >= 44.0 && height >= 44.0);
+                        assert!(y >= 0.0 && y + height <= expected.1 as f32);
+                    }
+                    let bytes = image
+                        .as_slice()
+                        .iter()
+                        .flat_map(|pixel| [pixel.r, pixel.g, pixel.b, pixel.a])
+                        .collect::<Vec<_>>();
+                    let name = if phase == 3 { "phone" } else { "desktop" };
+                    image::save_buffer(
+                        dir.join(format!("addon-cards-{name}.png")),
+                        &bytes,
+                        image.width(),
+                        image.height(),
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
+                    if phase == 3 {
+                        app.window().set_size(slint::PhysicalSize::new(1280, 800));
+                    } else {
+                        slint::quit_event_loop().unwrap();
+                    }
+                }
+                _ => unreachable!(),
+            }
+            phase += 1;
+        },
+    );
+    slint::run_event_loop().unwrap();
 }

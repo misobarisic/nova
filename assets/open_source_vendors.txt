@@ -46,11 +46,12 @@ is included below.
 
 TMDB BRAND ASSET
 assets/tmdb-logo.svg is TMDB's unmodified official blue long logo.
-assets/tmdb-logo-short.svg is TMDB's unmodified official blue short logo,
-as served by the official developer documentation at
-https://developer.themoviedb.org/docs/faq from
-https://files.readme.io/29c6fee-blue_short.svg
-SHA-256: 4698ff4b3cf7244ae04c08866c59bf86602cbe21bffe7ac72a4ddfe44552fcb9
+assets/tmdb-logo-square.svg is TMDB's unmodified official blue square logo.
+Author: Travis Bell / TMDB. Original approved asset:
+https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg
+Retrieved from the byte-identical mirror at
+https://upload.wikimedia.org/wikipedia/commons/8/89/Tmdb.new.logo.svg
+SHA-256: d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b
 Branding terms: https://www.themoviedb.org/about/logos-attribution
 Use follows TMDB's API attribution and branding requirements; it is not
 covered by Nova's project-code license.

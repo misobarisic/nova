@@ -201,7 +201,7 @@ fn generate_license_catalog() {
     catalog.push_str(include_str!("assets/fonts/LICENSE.txt"));
     catalog.push_str("\n\n===== Noto Color Emoji font license: OFL-1.1 =====\n\n");
     catalog.push_str(include_str!("assets/fonts/NotoColorEmoji-LICENSE.txt"));
-    catalog.push_str("\n\n===== Lucide player icons: ISC and Feather notices =====\n\n");
+    catalog.push_str("\n\n===== Lucide UI icons: ISC and Feather notices =====\n\n");
     catalog.push_str(include_str!("assets/icons/player/LICENSE"));
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));

@@ -58,8 +58,7 @@ export component SettingsTrackingModule inherits Window {
             tmdb_card := TrackingAccountCard {
                 title: "TMDB";
                 status: SettingsBridge.tmdb_api_key == "" ? @tr("Not configured") : @tr("Configured");
-                logo: @image-url("../../assets/tmdb-logo-short.svg");
-                logo_width: 88px;
+                logo: @image-url("../../assets/tmdb-logo-square.svg");
                 show_watermark: false;
                 brand_color: #174558;
                 brand_dark: #102b3b;

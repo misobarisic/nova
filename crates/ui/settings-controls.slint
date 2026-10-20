@@ -156,7 +156,7 @@ export component ToggleSwitch inherits Rectangle {
 }
 
 // Square icon button for the narrow addon rows (configure / refresh /
-// remove / move): a 22px glyph on the pill fill, same hover and keyboard
+// remove / move): a centered glyph on the pill fill, same hover and keyboard
 // ring language as PillButton. Labels stay on the accessibility tree via
 // `name`, so icon-only buttons keep their translated names.
 export component AddonIconButton inherits Rectangle {
@@ -265,22 +265,42 @@ export component AddonRowCard inherits Rectangle {
             if root.has_config: AddonIconButton {
                 name: @tr("Configure"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 1;
                 clicked => { root.configure(); }
-                IcSettingsGear { x:11px; y:11px; width:22px; height:22px; fill:Theme.current.text_settings; }
+                Image {
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    width: 24px; height: 24px; image-fit: contain;
+                    source: @image-url("../../assets/icons/addons/settings.svg");
+                    colorize: Theme.current.text_settings;
+                }
             }
             AddonIconButton {
                 name: @tr("Refresh"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
                 clicked => { root.refresh(); }
-                IcSync { x:11px; y:11px; width:22px; height:22px; fill:Theme.current.text_settings; }
+                Image {
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    width: 24px; height: 24px; image-fit: contain;
+                    source: @image-url("../../assets/icons/addons/refresh-cw.svg");
+                    colorize: Theme.current.text_settings;
+                }
             }
             AddonIconButton {
                 name: @tr("Move up"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 5;
                 clicked => { root.move_up(); }
-                Text { text: "↑"; font-size:18px; color:Theme.current.text_settings; horizontal-alignment:center; vertical-alignment:center; }
+                Image {
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    width: 24px; height: 24px; image-fit: contain;
+                    source: @image-url("../../assets/icons/addons/arrow-up.svg");
+                    colorize: Theme.current.text_settings;
+                }
             }
             AddonIconButton {
                 name: @tr("Move down"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 6;
                 clicked => { root.move_down(); }
-                Text { text: "↓"; font-size:18px; color:Theme.current.text_settings; horizontal-alignment:center; vertical-alignment:center; }
+                Image {
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    width: 24px; height: 24px; image-fit: contain;
+                    source: @image-url("../../assets/icons/addons/arrow-down.svg");
+                    colorize: Theme.current.text_settings;
+                }
             }
         }
         HorizontalLayout {
