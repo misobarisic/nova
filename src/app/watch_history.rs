@@ -489,3 +489,73 @@ mod tests {
         );
     }
 }
+
+/// History joins share the worker's typed metadata snapshot. Publication can
+/// then rebuild catalog models without reopening any episode/header cache.
+pub(super) fn prepare_progress_history(
+    state: &mut Shared,
+    metadata: &super::progress_projection::Metadata<'_>,
+    hidden: &HashMap<String, u64>,
+) {
+    let visible = if state
+        .cache_settings
+        .home_row_enabled(&HomeRowSource::ContinueWatching)
+    {
+        state
+            .continue_list
+            .iter()
+            .map(|c| (c.type_.clone(), c.series_id.clone()))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let empty = HashSet::new();
+    let prepare = |resume_only| {
+        let mut rows = if resume_only
+            && !state
+                .cache_settings
+                .home_row_enabled(&HomeRowSource::WatchHistory)
+        {
+            Vec::new()
+        } else {
+            project_history(
+                &state.progress,
+                &state.entries,
+                if resume_only { &visible } else { &empty },
+                resume_only,
+            )
+        };
+        rows.retain(|row| {
+            hidden
+                .get(&title_key(&row.type_, &row.series_id))
+                .is_none_or(|at| row.played_at_secs > *at)
+        });
+        rows.truncate(WATCH_HISTORY_MAX);
+        for row in &mut rows {
+            let cached = metadata.title(&row.type_, &row.series_id);
+            if let Some(header) = &cached.header
+                && !header.poster_url.trim().is_empty()
+            {
+                row.poster_url.clone_from(&header.poster_url);
+            }
+            if row.type_ != "movie"
+                && row.episode_label.is_empty()
+                && let Some(video) = cached
+                    .episodes
+                    .as_deref()
+                    .into_iter()
+                    .flatten()
+                    .find(|v| v.id == row.episode_id)
+            {
+                row.episode_label = episode_context_label(video);
+                row.season = row.season.or(video.season);
+                row.episode = row.episode.or(video.episode_number());
+            }
+        }
+        rows
+    };
+    let entries = prepare(true);
+    let archive = prepare(false);
+    state.home_history_list = entries;
+    state.home_history_archive = archive;
+}

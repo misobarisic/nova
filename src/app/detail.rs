@@ -1594,6 +1594,138 @@ impl Bridge {
         }
     }
 
+    /// Repaint a manual progress edit without rebuilding delegates, reading
+    /// offscreen metadata or queuing artwork. Visible rows are bounded by the
+    /// episode pager; season fractions need only one pass through modal videos.
+    pub(super) fn refresh_detail_progress_ui(&self) {
+        let Some(app) = self.app() else { return };
+        let episodes = app.get_episode_rows();
+        let seasons = app.get_season_cards();
+        let (episode_updates, season_updates, completed) = {
+            let state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            let videos: HashMap<_, _> = modal
+                .videos
+                .iter()
+                .map(|video| (video.id.as_str(), video))
+                .collect();
+            let mut episode_updates = Vec::new();
+            for (index, mut row) in episodes.iter().enumerate() {
+                let Some(video) = videos.get(row.id.as_str()) else {
+                    continue;
+                };
+                let old = row.clone();
+                let (watched, progress, suffix) =
+                    Self::episode_watch_state(&state.progress, &modal.id, &video.id);
+                row.watched = watched;
+                row.progress = progress;
+                row.details = Self::episode_details(video.overview.as_deref(), &suffix).into();
+                row.lines = (Self::estimate_stream_lines(&row.text)
+                    + if row.details.is_empty() {
+                        0
+                    } else {
+                        Self::estimate_stream_lines(&row.details)
+                    })
+                .max(1);
+                let visible = Self::episode_thumb_visible(
+                    state.cache_settings.show_unwatched_thumbs,
+                    watched,
+                    progress,
+                );
+                row.artwork_identity = detail_artwork_identity(
+                    modal,
+                    "episode",
+                    &video.id,
+                    visible.then_some(video.thumbnail.as_deref()).flatten(),
+                )
+                .into();
+                if !visible || row.artwork_identity.is_empty() {
+                    row.thumb = Image::default();
+                    row.has_thumb = false;
+                    row.displayed_artwork_identity = SharedString::default();
+                } else if !row.has_thumb || row.displayed_artwork_identity != row.artwork_identity {
+                    // Only the decoded memory LRU is consulted. A newly visible
+                    // uncached thumbnail remains the existing placeholder.
+                    let pixels = video.thumbnail.as_deref().and_then(|url| {
+                        decoded_cache_get(&image_cache_key(url, ImageUse::EpisodeThumbnail))
+                    });
+                    row.has_thumb = pixels.is_some();
+                    row.thumb = pixels.map(Image::from_rgba8).unwrap_or_default();
+                    row.displayed_artwork_identity = if row.has_thumb {
+                        row.artwork_identity.clone()
+                    } else {
+                        SharedString::default()
+                    };
+                }
+                if old.watched != row.watched
+                    || old.progress != row.progress
+                    || old.details != row.details
+                    || old.lines != row.lines
+                    || old.artwork_identity != row.artwork_identity
+                    || old.displayed_artwork_identity != row.displayed_artwork_identity
+                    || old.has_thumb != row.has_thumb
+                    || old.thumb != row.thumb
+                {
+                    episode_updates.push((index, row));
+                }
+            }
+            let mut fractions: HashMap<u32, (usize, usize)> = HashMap::new();
+            for video in &modal.videos {
+                let Some(season) = video.season else { continue };
+                let tally = fractions.entry(season).or_default();
+                tally.0 += 1;
+                tally.1 += usize::from(
+                    state
+                        .progress
+                        .get(&progress_map_key(&modal.id, &video.id))
+                        .is_some_and(|progress| progress.watched),
+                );
+            }
+            let mut season_updates = Vec::new();
+            for (index, mut row) in seasons.iter().enumerate() {
+                let (total, watched) = row
+                    .id
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(|season| fractions.get(&season).copied())
+                    .unwrap_or_default();
+                let complete = total > 0 && watched == total;
+                let fraction = if total > 0 {
+                    watched as f32 / total as f32
+                } else {
+                    0.0
+                };
+                if row.watched != complete || row.progress != fraction {
+                    row.watched = complete;
+                    row.progress = fraction;
+                    season_updates.push((index, row));
+                }
+            }
+            let completed = library_title_completed(
+                &modal.type_,
+                &modal.id,
+                &modal.videos,
+                &state.progress,
+                today_days(),
+            );
+            (episode_updates, season_updates, completed)
+        };
+        // Model notifications may evaluate bindings; release Shared first.
+        for (index, row) in episode_updates {
+            episodes.set_row_data(index, row);
+        }
+        for (index, row) in season_updates {
+            seasons.set_row_data(index, row);
+        }
+        app.set_detail_library_watched(completed);
+        // Activity metadata is prepared off-thread. Hide the stale Wait/Resume
+        // action until the current projection publishes its replacement.
+        app.set_detail_library_activity_action(0);
+        self.refresh_watch_action_label();
+    }
+
     /// Main thread: the Episodes tab pager moved to `page` (absolute; clamped
     /// here). Rebuilds the page's rows and queues its thumbnails.
     pub(super) fn episode_page_picked(&self, page: i32) {
@@ -2429,6 +2561,12 @@ impl Bridge {
     /// independent of the selected season, text filter or episode page.
     pub(super) fn refresh_watch_action(&self) {
         self.refresh_watch_queue();
+        self.refresh_watch_action_label();
+    }
+
+    // Manual episode edits only need this modal-local label. Rebuilding the
+    // offscreen queue/Home surface belongs to the background projection path.
+    fn refresh_watch_action_label(&self) {
         let label = {
             let state = self.shared.lock().unwrap();
             let Some(modal) = state.modal_item.as_ref() else {
@@ -3701,6 +3839,337 @@ mod source_lookup_tests {
             description: String::new(),
             genres: Vec::new(),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn detail_progress_repaint_retains_models_artwork_and_thumbnail_policy() {
+        const ROOT: &str = "NOVA_DETAIL_PROGRESS_REPAINT_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-detail-progress-repaint-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root).env("XDG_CACHE_HOME", root.join("cache"))
+                .args(["--exact", "app::detail::source_lookup_tests::detail_progress_repaint_retains_models_artwork_and_thumbnail_policy", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let mut selected = modal();
+        selected.videos.truncate(2);
+        selected.seasons = vec![1];
+        selected.season_index = 0;
+        for (index, video) in selected.videos.iter_mut().enumerate() {
+            video.thumbnail = Some(format!("https://example.test/thumb-{index}"));
+        }
+        let series = selected.id.clone();
+        let ids = selected
+            .videos
+            .iter()
+            .map(|video| video.id.clone())
+            .collect::<Vec<_>>();
+        let urls = selected
+            .videos
+            .iter()
+            .map(|video| video.thumbnail.clone().unwrap())
+            .collect::<Vec<_>>();
+        let pixels = SharedPixelBuffer::<Rgba8Pixel>::new(64, 36);
+        for url in &urls {
+            nova_media::cache::decoded_cache_insert(
+                &image_cache_key(url, ImageUse::EpisodeThumbnail),
+                pixels.clone(),
+            );
+        }
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.show_unwatched_thumbs = false;
+            state.modal_item = Some(selected);
+            state.progress.insert(
+                progress_map_key(&series, &ids[0]),
+                EpisodeProgress {
+                    series_id: series.clone(),
+                    episode_id: ids[0].clone(),
+                    position_secs: 300.0,
+                    duration_secs: 1200.0,
+                    ..Default::default()
+                },
+            );
+        }
+        app.set_episode_rows(Rc::new(VecModel::from(bridge.current_episode_page().2)).into());
+        app.set_season_cards(Rc::new(VecModel::from(bridge.current_season_cards())).into());
+        let episode_model = app.get_episode_rows();
+        let season_model = app.get_season_cards();
+        let first_image = episode_model.row_data(0).unwrap().thumb;
+        assert!(episode_model.row_data(0).unwrap().has_thumb);
+        assert!(!episode_model.row_data(1).unwrap().has_thumb);
+        // A displayed image survives LRU eviction; the newly revealed second
+        // image is found only in memory, without scheduling a thumbnail fetch.
+        nova_media::cache::decoded_cache_clear();
+        nova_media::cache::decoded_cache_insert(
+            &image_cache_key(&urls[1], ImageUse::EpisodeThumbnail),
+            pixels,
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            for id in &ids {
+                Bridge::set_episode_watched_locked(&mut state.progress, &series, id, true);
+            }
+        }
+        bridge.refresh_detail_progress_ui();
+        assert!(app.get_episode_rows() == episode_model);
+        assert!(app.get_season_cards() == season_model);
+        assert!(episode_model.iter().all(|row| row.watched && row.has_thumb));
+        assert_eq!(episode_model.row_data(0).unwrap().thumb, first_image);
+        assert!(
+            !episode_model
+                .row_data(0)
+                .unwrap()
+                .details
+                .contains("Resume")
+        );
+        assert_eq!(season_model.row_data(0).unwrap().progress, 1.0);
+        assert!(season_model.row_data(0).unwrap().watched);
+        nova_media::cache::decoded_cache_clear();
+        bridge.refresh_detail_progress_ui();
+        assert!(
+            episode_model.iter().all(|row| row.has_thumb),
+            "displayed pixels survive eviction"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            for id in &ids {
+                Bridge::set_episode_watched_locked(&mut state.progress, &series, id, false);
+            }
+        }
+        bridge.refresh_detail_progress_ui();
+        assert!(
+            episode_model
+                .iter()
+                .all(|row| !row.watched && !row.has_thumb && row.artwork_identity.is_empty())
+        );
+        assert_eq!(season_model.row_data(0).unwrap().progress, 0.0);
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .progress
+            .get_mut(&progress_map_key(&series, &ids[0]))
+            .unwrap()
+            .position_secs = 300.0;
+        bridge.refresh_detail_progress_ui();
+        let resumed = episode_model.row_data(0).unwrap();
+        assert!(
+            !resumed.has_thumb,
+            "uncached newly visible images stay placeholders"
+        );
+        assert!(!resumed.artwork_identity.is_empty());
+        assert!(resumed.details.contains("Resume"));
+        assert!(app.get_episode_rows() == episode_model);
+        assert!(
+            EPISODE_QUEUE.lock().unwrap().is_empty(),
+            "progress repaint does not queue artwork"
+        );
+    }
+
+    /// Measure the real manual action rather than rendering/readback time.
+    /// The fixture includes cached offscreen series and a real ordered writer;
+    /// timings are informational and do not impose machine-specific budgets.
+    #[test]
+    #[cfg(feature = "desktop")]
+    #[ignore = "informational full season-action callback timings"]
+    fn measure_season_watch_action_callback_cost() {
+        const ROOT: &str = "NOVA_SEASON_ACTION_TIMING_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-season-action-timing-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .args([
+                    "--exact",
+                    "app::detail::source_lookup_tests::measure_season_watch_action_callback_cost",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let mut entries = Vec::new();
+        let mut progress = HashMap::new();
+        let mut selected = modal();
+        selected.seasons = vec![1, 2, 3, 4, 5];
+        selected.season_index = 0;
+        selected.episode_page = 0;
+        for series in 0..60 {
+            let id = format!("timing-series-{series}");
+            let videos = (1..=100)
+                .map(|number| {
+                    let season = (number - 1) / 20 + 1;
+                    let episode = (number - 1) % 20 + 1;
+                    let video = Video {
+                        id: format!("{id}:{season}:{episode}"),
+                        name: format!("Episode {episode}"),
+                        season: Some(season),
+                        episode: Some(episode),
+                        released: Some(
+                            if season == 1 && episode == 20 {
+                                "2999-01-01"
+                            } else {
+                                "2020-01-01"
+                            }
+                            .into(),
+                        ),
+                        overview: Some(
+                            "A cached episode synopsis for the season action fixture.".into(),
+                        ),
+                        ..Default::default()
+                    };
+                    progress.insert(
+                        progress_map_key(&id, &video.id),
+                        EpisodeProgress {
+                            series_id: id.clone(),
+                            episode_id: video.id.clone(),
+                            position_secs: if number == 1 { 300.0 } else { 0.0 },
+                            duration_secs: 1200.0,
+                            updated_at_secs: 1,
+                            ..Default::default()
+                        },
+                    );
+                    video
+                })
+                .collect::<Vec<_>>();
+            write_episodes_cache_for("series", &id, &videos);
+            entries.push(
+                serde_json::from_value::<LibraryEntry>(serde_json::json!({
+                    "id": id, "type_": "series", "name": format!("Timing series {series}")
+                }))
+                .unwrap(),
+            );
+            if series == 0 {
+                selected.id = id.clone();
+                selected.request_id = videos[0].id.clone();
+                selected.videos = videos;
+            }
+        }
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = entries;
+            state.progress = progress;
+            state.modal_item = Some(selected);
+        }
+        let _writer = persistence::start().expect("fixture persistence writer");
+        bridge.persist_library();
+        bridge.migrate_viewing_activity();
+        bridge.apply_library_to_ui();
+        bridge.apply_episode_rows();
+        bridge.apply_season_cards();
+        persistence::flush().unwrap();
+        app.set_show_home(false);
+        app.set_modal_visible(true);
+        app.set_detail_tab(3);
+        for round in 0..6 {
+            let watched = round % 2 == 0;
+            let episodes_before = app.get_episode_rows();
+            let seasons_before = app.get_season_cards();
+            let started = std::time::Instant::now();
+            bridge.season_watch_action(0, if watched { 1 } else { 2 });
+            let elapsed = started.elapsed();
+            assert_eq!(app.get_episode_rows().row_data(0).unwrap().watched, watched);
+            assert!(
+                !app.get_episode_rows().row_data(19).unwrap().watched,
+                "future episode is untouched"
+            );
+            assert_eq!(
+                app.get_season_cards().row_data(0).unwrap().progress,
+                if watched { 19.0 / 20.0 } else { 0.0 }
+            );
+            let episodes_retained =
+                std::ptr::eq(episodes_before.as_any(), app.get_episode_rows().as_any());
+            let seasons_retained =
+                std::ptr::eq(seasons_before.as_any(), app.get_season_cards().as_any());
+            println!(
+                "SEASON_ACTION_CALLBACK series=60 episodes=6000 round={round} watched={watched} elapsed_us={} episode_model_retained={episodes_retained} season_model_retained={seasons_retained}",
+                elapsed.as_micros()
+            );
+            persistence::flush().unwrap();
+        }
+        // Include the final prepared UI publication, not just the fast manual
+        // callback. System time lets real workers and the event loop complete.
+        let before = progress_projection::publication_count();
+        let requested = std::time::Instant::now();
+        bridge.season_watch_action(0, 1);
+        let timer = slint::Timer::default();
+        let published = Rc::new(std::cell::Cell::new(false));
+        let completed = published.clone();
+        let weak = app.as_weak();
+        let final_bridge = bridge.clone();
+        timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(5), move || {
+            assert!(requested.elapsed() < std::time::Duration::from_secs(30), "prepared progress publication timed out");
+            if progress_projection::publication_count() <= before { return; }
+            let app = weak.upgrade().unwrap();
+            let card = app.get_library().iter().find(|card| card.id == "timing-series-0").expect("published target Library card");
+            assert_eq!(card.watched_count, 19);
+            assert!(app.get_home_continue().iter().any(|row| row.id == "timing-series-0"), "accepted publication includes current Home continuation");
+            assert!(!app.get_episode_rows().row_data(19).unwrap().watched);
+            let state = final_bridge.shared.lock().unwrap();
+            let continuing = state.continue_list.iter().find(|row| row.series_id == "timing-series-0").expect("prepared continuation installed");
+            assert!(!state.progress.get(&progress_map_key("timing-series-0", &continuing.episode_id)).is_some_and(|progress| progress.watched));
+            println!("SEASON_ACTION_PUBLICATION series=60 episodes=6000 callback_us={} ready_after_us={}", progress_projection::last_publication_micros(), requested.elapsed().as_micros());
+            completed.set(true);
+            slint::quit_event_loop().unwrap();
+        });
+        slint::run_event_loop().unwrap();
+        assert!(published.get());
+        persistence::flush().unwrap();
     }
 
     #[test]

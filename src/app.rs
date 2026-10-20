@@ -274,6 +274,7 @@ struct Shared {
     viewing_journal: viewing_journal::JournalTracker,
     watch_queue: watch_queue::State,
     playback_tools: playback_tools::PlaybackToolsState,
+    progress_projection: progress_projection::State,
     similar_cache: Arc<Mutex<similar::Cache>>,
     recommendations: recommendations::State,
     addon_subtitles: subtitles::State,
@@ -340,6 +341,7 @@ struct Shared {
     downloads_page_filter: i32,
     downloads_page_sort_recent: bool,
     downloads_page_collapsed: HashSet<String>,
+    downloads_page_refresh: downloads_page::RefreshState,
     page_artwork: page_artwork::PageArtworkState,
     /// Modal target, if open.
     modal_item: Option<ModalItem>,
@@ -804,6 +806,7 @@ mod profile_actions_tests;
 mod profile_net;
 mod profile_session;
 mod profiles;
+mod progress_projection;
 mod recommendations;
 pub(crate) mod remote_playback;
 mod run;

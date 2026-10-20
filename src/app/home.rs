@@ -701,7 +701,17 @@ impl Bridge {
         self.install_home_catalog_rows(home_catalog_row_groups(&cached, &sources, &installed));
     }
 
-    pub(super) fn install_home_catalog_rows(&self, mut groups: Vec<HomeCatalogGroup>) {
+    pub(super) fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
+        if self.app().is_none() {
+            return;
+        }
+        self.rebuild_watch_history_list();
+        self.install_prepared_home_catalog_rows(groups);
+    }
+
+    /// Progress workers already joined history against metadata. Keep this
+    /// publication path free of the cache reads in rebuild_watch_history_list.
+    pub(super) fn install_prepared_home_catalog_rows(&self, mut groups: Vec<HomeCatalogGroup>) {
         let Some(app) = self.app() else { return };
         let view = app.get_home_view();
         let history_was_open = view >= 3
@@ -716,7 +726,6 @@ impl Bridge {
         } else {
             None
         };
-        self.rebuild_watch_history_list();
         // Recommendation results are independent of addon catalog refreshes;
         // always inject the current profile's filtered projection.
         groups.retain(|group| group.source != HomeRowSource::BecauseYouWatched);
@@ -4955,5 +4964,396 @@ mod tests {
             (merged[10].id.as_str(), merged[10].type_.as_str()),
             ("a", "movie")
         );
+    }
+}
+
+/// Plain row drafts cross the worker boundary; Slint images stay on the UI.
+pub(super) struct PreparedProgressHome {
+    continuing: Vec<ContinueRowDraft>,
+    new: Vec<ContinueRowDraft>,
+    upcoming: Vec<UpcomingRowDraft>,
+    featured: Option<((String, String), String)>,
+}
+
+pub(super) fn prepare_progress_home(
+    state: &mut Shared,
+    metadata: &super::progress_projection::Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+    new_hidden: &HashMap<String, Vec<String>>,
+) -> PreparedProgressHome {
+    const MAX: usize = 20;
+    let today = today_days();
+    let mut latest: HashMap<&str, &EpisodeProgress> = HashMap::new();
+    for p in state.progress.values() {
+        if latest
+            .get(p.series_id.as_str())
+            .is_none_or(|old| continue_playback_order(p) > continue_playback_order(old))
+        {
+            latest.insert(&p.series_id, p);
+        }
+    }
+    let mut continuing = Vec::new();
+    let mut new = Vec::new();
+    let mut upcoming = Vec::new();
+    let mut aliases = HashMap::new();
+    for e in state
+        .entries
+        .iter()
+        .filter(|e| e.watch_status == WatchStatus::Auto)
+    {
+        let cached = metadata.episode_data(&e.type_, &e.id);
+        let videos = cached.as_deref().map(Vec::as_slice).unwrap_or_default();
+        let watched = |v: &Video| {
+            state
+                .progress
+                .get(&progress_map_key(&e.id, &v.id))
+                .is_some_and(|p| p.watched)
+        };
+        if e.type_ != "movie"
+            && let Some((index, air_days)) = next_upcoming_episode(videos, watched, today)
+        {
+            upcoming.push(UpcomingEntry {
+                series_id: e.id.clone(),
+                type_: e.type_.clone(),
+                episode_id: videos[index].id.clone(),
+                air_days,
+            });
+        }
+        let Some(p) = latest.get(e.id.as_str()) else {
+            continue;
+        };
+        let bucket = activity_bucket(&e.id, videos, &state.progress, activity.get(&e.id), today);
+        if bucket == "Completed" {
+            continue;
+        }
+        let returning =
+            e.type_ != "movie" && bucket == "New episodes" && !genuine_partial_rewatch(p);
+        let episode = if returning {
+            next_episode_to_watch(&e.id, videos, &state.progress).map(|v| v.id.clone())
+        } else {
+            continue_resume_id(
+                &e.type_,
+                &e.id,
+                p,
+                cached.as_deref().map(Vec::as_slice),
+                &state.progress,
+            )
+        };
+        let Some(episode_id) = episode else { continue };
+        if returning {
+            let available = new_episode_ids(&e.id, videos, &state.progress);
+            if new_hidden
+                .get(&e.id)
+                .is_some_and(|hidden| available.iter().all(|id| hidden.contains(id)))
+            {
+                continue;
+            }
+        } else if state
+            .continue_hidden
+            .get(&e.id)
+            .is_some_and(|at| *at >= p.updated_at_secs)
+        {
+            continue;
+        }
+        aliases.insert(
+            (e.type_.clone(), e.id.clone(), episode_id.clone()),
+            home_episode_identity(&e.type_, &episode_id, videos),
+        );
+        let card = ContinueEntry {
+            series_id: e.id.clone(),
+            type_: e.type_.clone(),
+            episode_id,
+            updated_at_secs: p.updated_at_secs,
+        };
+        if returning {
+            let newest = videos
+                .iter()
+                .filter(|v| episode_has_air_date(v) && episode_is_out(v, today) && !watched(v))
+                .filter_map(|v| v.released.as_deref().and_then(iso_days))
+                .max()
+                .unwrap_or(0);
+            new.push((newest, card));
+        } else {
+            continuing.push(card);
+        }
+    }
+    new.sort_by_key(|(newest, e)| (std::cmp::Reverse(*newest), e.series_id.clone()));
+    continuing.sort_by_key(|e| std::cmp::Reverse(e.updated_at_secs));
+    let mut seen = HashSet::new();
+    continuing.retain(|e| retain_home_episode(e, &aliases, &mut seen));
+    new.retain(|(_, e)| retain_home_episode(e, &aliases, &mut seen));
+    continuing.truncate(MAX);
+    new.truncate(MAX);
+    upcoming.sort_by_key(|e| e.air_days);
+    upcoming.truncate(MAX);
+    state.continue_list = continuing;
+    state.new_episodes_list = new.into_iter().map(|(_, e)| e).collect();
+    state.upcoming_list = upcoming;
+    let episode_rows = |list: &[ContinueEntry], new: bool| {
+        if !state.cache_settings.home_row_enabled(if new {
+            &HomeRowSource::NewEpisodes
+        } else {
+            &HomeRowSource::ContinueWatching
+        }) {
+            return Vec::new();
+        }
+        list.iter()
+            .filter_map(|c| {
+                let e = state
+                    .entries
+                    .iter()
+                    .find(|e| e.id == c.series_id && e.type_ == c.type_)?;
+                let cached = metadata.episodes(&c.type_, &c.series_id);
+                let videos = cached.as_slice();
+                let video = videos.iter().find(|v| v.id == c.episode_id);
+                let record = state
+                    .progress
+                    .get(&progress_map_key(&c.series_id, &c.episode_id));
+                let started = record.is_some_and(|p| {
+                    (!p.watched && p.position_secs > 0.0) || genuine_partial_rewatch(p)
+                });
+                let badge = continue_badge(started, &c.episode_id, videos, |v| {
+                    state
+                        .progress
+                        .get(&progress_map_key(&c.series_id, &v.id))
+                        .is_some_and(|p| p.watched)
+                });
+                Some(ContinueRowDraft {
+                    id: c.series_id.clone(),
+                    title: e.name.clone(),
+                    subtitle: video
+                        .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
+                        .unwrap_or_else(|| text::tr("Resume").into()),
+                    episode_title: video.map(episode_row_label).unwrap_or_default(),
+                    ep_no: video.map(episode_badge).unwrap_or_default(),
+                    remaining: if new {
+                        text::new_episodes(
+                            new_episode_ids(&c.series_id, videos, &state.progress).len(),
+                        )
+                    } else {
+                        continue_remaining(record)
+                    },
+                    art_url: home_card_art_url(
+                        &e.poster_url,
+                        video,
+                        state.cache_settings.home_episode_artwork,
+                    ),
+                    poster_url: e.poster_url.clone(),
+                    progress: if new {
+                        0.0
+                    } else {
+                        record
+                            .map(|p| progress_fraction(p.position_secs, p.duration_secs))
+                            .unwrap_or_default()
+                    },
+                    badge: if new {
+                        2
+                    } else if badge == 2 {
+                        1
+                    } else {
+                        badge
+                    },
+                })
+            })
+            .collect()
+    };
+    let upcoming = if state
+        .cache_settings
+        .home_row_enabled(&HomeRowSource::Upcoming)
+    {
+        state
+            .upcoming_list
+            .iter()
+            .enumerate()
+            .filter_map(|(index, u)| {
+                let e = state
+                    .entries
+                    .iter()
+                    .find(|e| e.id == u.series_id && e.type_ == u.type_)?;
+                let cached = metadata.episodes(&u.type_, &u.series_id);
+                let video = cached.iter().find(|v| v.id == u.episode_id)?;
+                Some(UpcomingRowDraft {
+                    id: u.series_id.clone(),
+                    title: e.name.clone(),
+                    subtitle: format!("{} · {}", episode_badge(video), episode_row_label(video)),
+                    date: video
+                        .released
+                        .as_deref()
+                        .and_then(|date| {
+                            Bridge::format_human_date(date, state.cache_settings.date_relative)
+                        })
+                        .unwrap_or_default(),
+                    episode_title: episode_row_label(video),
+                    ep_no: episode_badge(video),
+                    art_url: home_card_art_url(
+                        &e.poster_url,
+                        Some(video),
+                        state.cache_settings.home_episode_artwork,
+                    ),
+                    poster_url: e.poster_url.clone(),
+                    index,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let featured = state.home_showcase_displayed.as_ref().map(|p| {
+        let episodes = (p.type_ != "movie")
+            .then(|| metadata.episode_data(&p.type_, &p.id))
+            .flatten();
+        (
+            (p.type_.clone(), p.id.clone()),
+            watch_action_label(
+                &p.id,
+                episodes.as_deref().map(Vec::as_slice),
+                &state.progress,
+            ),
+        )
+    });
+    PreparedProgressHome {
+        continuing: episode_rows(&state.continue_list, false),
+        new: episode_rows(&state.new_episodes_list, true),
+        upcoming,
+        featured,
+    }
+}
+
+impl Bridge {
+    pub(super) fn publish_progress_home(&self, prepared: PreparedProgressHome) {
+        let Some(app) = self.app() else { return };
+        let old_continue = app.get_home_continue();
+        let old_new = app.get_home_new_episodes();
+        let old_upcoming = app.get_home_upcoming();
+        let continuation_rows = |drafts: Vec<ContinueRowDraft>,
+                                 old: slint::ModelRc<ContinueRow>| {
+            drafts
+                .into_iter()
+                .map(|d| {
+                    let old = old.iter().find(|row| {
+                        row.id.as_str() == d.id
+                            && row.art_url.as_str() == d.art_url
+                            && row.is_loaded
+                    });
+                    let (poster, is_loaded) = old
+                        .map(|row| (row.poster, true))
+                        .unwrap_or_else(|| home_card_image(&d.art_url, &d.poster_url));
+                    ContinueRow {
+                        id: d.id.into(),
+                        title: d.title.into(),
+                        subtitle: d.subtitle.into(),
+                        episode_title: d.episode_title.into(),
+                        ep_no: d.ep_no.into(),
+                        remaining: d.remaining.into(),
+                        art_url: d.art_url.into(),
+                        poster,
+                        is_loaded,
+                        progress: d.progress,
+                        badge: d.badge,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        app.set_home_continue(
+            Rc::new(VecModel::from(continuation_rows(
+                prepared.continuing,
+                old_continue,
+            )))
+            .into(),
+        );
+        app.set_home_new_episodes(
+            Rc::new(VecModel::from(continuation_rows(prepared.new, old_new))).into(),
+        );
+        let upcoming = prepared
+            .upcoming
+            .into_iter()
+            .map(|d| {
+                let old = old_upcoming.iter().find(|row| {
+                    row.id.as_str() == d.id && row.art_url.as_str() == d.art_url && row.is_loaded
+                });
+                let (poster, is_loaded) = old
+                    .map(|row| (row.poster, true))
+                    .unwrap_or_else(|| home_card_image(&d.art_url, &d.poster_url));
+                UpcomingRow {
+                    id: d.id.into(),
+                    title: d.title.into(),
+                    subtitle: d.subtitle.into(),
+                    date: d.date.into(),
+                    episode_title: d.episode_title.into(),
+                    ep_no: d.ep_no.into(),
+                    art_url: d.art_url.into(),
+                    poster,
+                    is_loaded,
+                    index: d.index as i32,
+                }
+            })
+            .collect::<Vec<_>>();
+        app.set_home_upcoming(Rc::new(VecModel::from(upcoming.clone())).into());
+        // Heal current UI-only calendar selection, rather than replaying the
+        // selection that was current when the worker started.
+        let (cal, cells) = {
+            let mut state = self.shared.lock().unwrap();
+            heal_upcoming_cal(&mut state);
+            let cal = state.upcoming_cal.clone();
+            let mut counts = HashMap::new();
+            for u in &state.upcoming_list {
+                *counts.entry(u.air_days).or_insert(0) += 1;
+            }
+            let cells = cal_cells(cal.first, &counts, cal.day, today_days());
+            (cal, cells)
+        };
+        let days = self
+            .shared
+            .lock()
+            .unwrap()
+            .upcoming_list
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| Some(u.air_days) == cal.day)
+            .map(|(i, _)| i as i32)
+            .collect::<HashSet<_>>();
+        app.set_home_cal_day(
+            Rc::new(VecModel::from(
+                upcoming
+                    .into_iter()
+                    .filter(|row| days.contains(&row.index))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        app.set_home_cal_cells(Rc::new(VecModel::from(cells)).into());
+        let (year, month, _) = civil_from_days(cal.first);
+        app.set_home_cal_title(text::cal_month_title(month, year).into());
+        app.set_home_cal_epoch(cal.day.unwrap_or(-1) as i32);
+        app.set_home_cal_open(cal.open);
+        if let Some((identity, label)) = prepared.featured
+            && self
+                .shared
+                .lock()
+                .unwrap()
+                .home_showcase_displayed
+                .as_ref()
+                .is_some_and(|p| p.type_ == identity.0 && p.id == identity.1)
+        {
+            app.set_home_featured_watch_label(label.into());
+        }
+        let (groups, settings) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.home_catalog_row_groups.clone(),
+                state.cache_settings.clone(),
+            )
+        };
+        if (app.get_home_view() == 1
+            && !settings.home_row_enabled(&HomeRowSource::ContinueWatching))
+            || (app.get_home_view() == 2 && !settings.home_row_enabled(&HomeRowSource::Upcoming))
+            || (app.get_home_view() == -3
+                && !settings.home_row_enabled(&HomeRowSource::NewEpisodes))
+        {
+            app.set_home_view(0);
+        }
+        self.install_prepared_home_catalog_rows(groups);
+        self.dispatch_continue_posters();
+        self.dispatch_upcoming_posters();
     }
 }

@@ -111,7 +111,46 @@ fn move_entry(entries: &mut [Entry], key: &str, direction: i32) {
     }
 }
 
+fn patch_watched_rows(rows: &slint::ModelRc<WatchQueueRow>, watched: &HashMap<String, bool>) {
+    for (index, mut row) in rows.iter().enumerate() {
+        if let Some(&value) = watched.get(row.id.as_str())
+            && row.watched != value
+        {
+            row.watched = value;
+            rows.set_row_data(index, row);
+        }
+    }
+}
+
 impl Bridge {
+    /// A watch edit only changes flags in an already loaded queue. Keep its
+    /// artwork and rows intact without loading storage or cloning all history.
+    pub(super) fn refresh_watch_queue_progress(&self) {
+        let Some(app) = self.app() else { return };
+        let rows = app.global::<QueueBridge>().get_rows();
+        if rows.row_count() == 0 {
+            return;
+        }
+        let watched = {
+            let state = self.shared.lock().unwrap();
+            let Some(entries) = state.watch_queue.entries.as_ref() else {
+                return;
+            };
+            entries
+                .iter()
+                .map(|entry| {
+                    let value = state
+                        .progress
+                        .get(&progress_map_key(&entry.series_id, &entry.episode_id))
+                        .is_some_and(|progress| progress.watched);
+                    (entry.key(), value)
+                })
+                .collect()
+        };
+        // Model notifications can evaluate bindings; Shared is released first.
+        patch_watched_rows(&rows, &watched);
+    }
+
     pub(super) fn setup_watch_queue(&self) {
         let Some(app) = self.app() else { return };
         let queue = app.global::<QueueBridge>();
@@ -542,6 +581,44 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_edits_keep_queue_artwork_context_and_other_episodes() {
+        let first = entry("series", "e1");
+        let second = entry("series", "e2");
+        let poster = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(2, 3));
+        let rows: slint::ModelRc<WatchQueueRow> = Rc::new(VecModel::from(vec![
+            WatchQueueRow {
+                id: first.key().into(),
+                title: "Tonight".into(),
+                context: "S1 E1 · Opening".into(),
+                poster: poster.clone(),
+                has_poster: true,
+                ..Default::default()
+            },
+            WatchQueueRow {
+                id: second.key().into(),
+                context: "S1 E2 · Next".into(),
+                ..Default::default()
+            },
+        ]))
+        .into();
+
+        patch_watched_rows(&rows, &HashMap::from([(first.key(), true)]));
+        let row = rows.row_data(0).unwrap();
+        assert!(row.watched);
+        assert_eq!(row.poster, poster);
+        assert!(row.has_poster);
+        assert_eq!(row.title, "Tonight");
+        assert_eq!(row.context, "S1 E1 · Opening");
+        assert!(!rows.row_data(1).unwrap().watched);
+        assert_eq!(rows.row_data(1).unwrap().context, "S1 E2 · Next");
+
+        patch_watched_rows(&rows, &HashMap::from([(first.key(), false)]));
+        assert!(!rows.row_data(0).unwrap().watched);
+        assert_eq!(rows.row_data(0).unwrap().poster, poster);
+    }
+
     fn entry(id: &str, episode: &str) -> Entry {
         Entry {
             type_: "series".into(),

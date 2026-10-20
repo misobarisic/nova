@@ -786,11 +786,13 @@ impl Bridge {
 
     /// Persist active progress and refresh the dependent library rows.
     pub(super) fn persist_and_refresh_progress(&self) {
+        // The gesture's visible feedback precedes map snapshots, persistence
+        // enqueueing and the offscreen Library/Home metadata joins.
+        self.refresh_detail_progress_ui();
+        self.refresh_watch_queue_progress();
         let map = self.shared.lock().unwrap().progress.clone();
         write_progress_map(&map);
-        self.apply_episode_rows();
-        self.apply_season_cards();
-        self.refresh_library_progress_ui();
+        self.request_progress_projection();
     }
 
     /// Repaint progress-derived surfaces outside the detail page: library
@@ -799,6 +801,9 @@ impl Bridge {
     /// may reveal new released episodes without starting a viewing run).
     /// Lightweight: no thumbnail re-queue.
     pub(super) fn refresh_library_progress_ui(&self) {
+        // Legacy synchronous callers may rebuild after a metadata/settings
+        // change while an earlier watched-action worker is still preparing.
+        super::progress_projection::invalidate();
         self.migrate_viewing_activity();
         self.update_library_badges();
         self.refresh_detail_library_watched();

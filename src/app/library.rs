@@ -1227,7 +1227,7 @@ struct LibraryViewOptions<'a> {
     sort: i32,
 }
 
-struct LibraryCardSnapshot {
+pub(super) struct LibraryCardSnapshot {
     id: String,
     type_: String,
     title: String,
@@ -1240,6 +1240,137 @@ struct LibraryCardSnapshot {
     watched_count: i32,
     episode_count: i32,
     watched: bool,
+}
+
+/// Cache-only worker projection. No Slint models or shared-state locks are
+/// touched while resolving automatic filters and smart collection rules.
+pub(super) fn prepare_progress_cards(
+    state: &Shared,
+    view: &super::progress_projection::View,
+    metadata: &super::progress_projection::Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+) -> Vec<LibraryCardSnapshot> {
+    let options = LibraryViewOptions {
+        filter: &view.filter,
+        needle: view.query.trim().to_lowercase(),
+        sort: view.sort,
+    };
+    let candidates = state
+        .entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let cached = metadata.title(&entry.type_, &entry.id);
+            let episodes = cached
+                .episodes
+                .as_deref()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if view.smart.as_ref().is_some_and(|rule| {
+                !smart_collections::matches_library_entry(
+                    rule,
+                    entry,
+                    cached.header.as_deref(),
+                    episodes,
+                    &state.progress,
+                )
+            }) {
+                return None;
+            }
+            project_library_candidate(
+                entry,
+                index,
+                Some(episodes),
+                &state.progress,
+                activity,
+                &options,
+            )
+        })
+        .collect();
+    order_library_candidates(candidates, options.sort)
+        .iter()
+        .filter_map(|candidate| {
+            project_library_card(
+                &state.entries[candidate.entry_index],
+                candidate,
+                metadata
+                    .episodes(&candidate.type_, &candidate.id)
+                    .as_slice(),
+                &state.progress,
+                activity,
+            )
+        })
+        .collect()
+}
+
+impl Bridge {
+    /// Publish prepared values in place whenever the visible identities remain
+    /// the same. A newly matching automatic filter retains artwork by URL.
+    pub(super) fn publish_progress_cards(&self, cards: Vec<LibraryCardSnapshot>) {
+        let Some(app) = self.app() else { return };
+        let model = app.get_library();
+        if model.row_count() == cards.len()
+            && cards.iter().enumerate().all(|(index, snapshot)| {
+                model.row_data(index).is_some_and(|card| {
+                    card.id.as_str() == snapshot.id
+                        && card.poster_path.as_str() == snapshot.poster_url
+                        && card.title.as_str() == snapshot.title
+                        && card.year.as_str() == snapshot.year
+                })
+            })
+        {
+            for (index, snapshot) in cards.into_iter().enumerate() {
+                if let Some(mut card) = model.row_data(index)
+                    && update_library_card_progress(&mut card, &snapshot)
+                {
+                    model.set_row_data(index, card);
+                }
+            }
+            return;
+        }
+        let artwork: HashMap<_, _> = model
+            .iter()
+            .filter(|card| card.is_loaded)
+            .map(|card| {
+                (
+                    (card.id.to_string(), card.poster_path.to_string()),
+                    card.poster,
+                )
+            })
+            .collect();
+        let requests = cards
+            .iter()
+            .map(|snapshot| LibraryPosterRequest {
+                id: snapshot.id.clone(),
+                type_: snapshot.type_.clone(),
+                poster_url: snapshot.poster_url.clone(),
+            })
+            .collect::<Vec<_>>();
+        let rows = cards
+            .into_iter()
+            .map(|snapshot| {
+                let poster = artwork.get(&(snapshot.id.clone(), snapshot.poster_url.clone()));
+                MediaCard {
+                    id: snapshot.id.into(),
+                    title: snapshot.title.into(),
+                    year: snapshot.year.into(),
+                    poster_path: snapshot.poster_url.into(),
+                    poster: poster.cloned().unwrap_or_default(),
+                    is_loaded: poster.is_some(),
+                    badge: snapshot.badge.into(),
+                    status: text::tr(snapshot.status).into(),
+                    status_key: snapshot.status.into(),
+                    activity_action: snapshot.activity_action,
+                    media_type: text::tr(if snapshot.is_movie { "Movie" } else { "TV" }).into(),
+                    watched_count: snapshot.watched_count,
+                    episode_count: snapshot.episode_count,
+                    watched: snapshot.watched,
+                }
+            })
+            .collect::<Vec<_>>();
+        app.set_library(Rc::new(VecModel::from(rows)).into());
+        self.dispatch_library_posters(&requests);
+    }
 }
 
 impl LibraryIdentitySnapshot {

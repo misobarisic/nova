@@ -81,6 +81,11 @@ pub(super) struct NewDownload {
     source: JobSource,
 }
 
+struct PendingRemoval {
+    jobs: Vec<DownloadJob>,
+    transfer_engine: Option<(String, Arc<crate::torrent::TorrentEngine>)>,
+}
+
 struct DownloadInner {
     root: PathBuf,
     state: Mutex<DownloadState>,
@@ -155,6 +160,20 @@ impl DownloadCoordinator {
         }
         let manifest = load_manifest(&root);
         log_corrupt_manifest_backups();
+        // A removed row can still own asynchronous file/torrent cleanup after
+        // leaving the manifest. Continue above every restored generated ID so
+        // a new job never takes that cleanup's identity or artifact directory.
+        let next_id = manifest
+            .jobs
+            .iter()
+            .filter_map(|job| {
+                job.id
+                    .strip_prefix("download-")
+                    .filter(|suffix| suffix.len() == 16)
+                    .and_then(|suffix| u64::from_str_radix(suffix, 16).ok())
+            })
+            .max()
+            .map_or(1, |id| id.saturating_add(1));
         let coordinator = Self {
             inner: Arc::new(DownloadInner {
                 root,
@@ -164,7 +183,7 @@ impl DownloadCoordinator {
                     last_persist: Instant::now(),
                     resolvers: HashMap::new(),
                 }),
-                next_id: AtomicU64::new(1),
+                next_id: AtomicU64::new(next_id),
                 revision: AtomicU64::new(0),
             }),
         };
@@ -516,101 +535,166 @@ impl DownloadCoordinator {
     }
 
     pub(crate) fn remove(&self, id: &str) {
-        let (removed, transfer_engine) = {
-            let mut state = self.inner.state();
-            let Some(index) = state.manifest.jobs.iter().position(|job| job.id == id) else {
-                return;
-            };
-            let mut job = state.manifest.jobs.remove(index);
-            // Removal also drops metadata if filesystem cleanup must restore
-            // the row with an error. A late lookup cannot reattach it.
-            job.intro_request = None;
-            job.intro_timings = None;
-            state.resolvers.remove(id);
-            if let Some(active) = state.active.as_ref().filter(|active| active.id == id) {
+        self.remove_many(&HashSet::from([id.to_owned()]));
+    }
+
+    /// Separate the short in-memory authority claim from persistence/file IO.
+    fn claim_removals(
+        &self,
+        state: &mut DownloadState,
+        ids: &HashSet<String>,
+    ) -> Option<PendingRemoval> {
+        if ids.is_empty() {
+            return None;
+        }
+        let mut removed = Vec::new();
+        let jobs = std::mem::take(&mut state.manifest.jobs);
+        for mut job in jobs {
+            if ids.contains(&job.id) {
+                job.intro_request = None;
+                job.intro_timings = None;
+                state.resolvers.remove(&job.id);
+                removed.push(job);
+            } else {
+                state.manifest.jobs.push(job);
+            }
+        }
+        if removed.is_empty() {
+            return None;
+        }
+        let transfer_engine = state
+            .active
+            .as_ref()
+            .filter(|active| ids.contains(&active.id))
+            .and_then(|active| {
                 active.remove.store(true, Ordering::Release);
                 active.cancel.cancel();
                 active.torrent_cancel.store(true, Ordering::Release);
-            }
-            persist_manifest(&state.manifest);
-            self.bump_revision();
-            let engine = state
+                active
+                    .torrent_engine
+                    .clone()
+                    .map(|engine| (active.id.clone(), engine))
+            });
+        self.bump_revision();
+        Some(PendingRemoval {
+            jobs: removed,
+            transfer_engine,
+        })
+    }
+
+    fn remove_many(&self, ids: &HashSet<String>) -> bool {
+        let pending = {
+            let mut state = self.inner.state();
+            self.claim_removals(&mut state, ids)
+        };
+        let Some(pending) = pending else { return false };
+        self.finish_removals(pending);
+        true
+    }
+
+    fn finish_removals(&self, pending: PendingRemoval) {
+        // Serialize the CURRENT manifest under its normal lock. A stale
+        // captured snapshot could otherwise overwrite a newer enqueue/progress.
+        self.persist();
+        let PendingRemoval {
+            jobs: removed,
+            transfer_engine,
+        } = pending;
+        for removed in removed {
+            if matches!(removed.source, JobSource::Torrent { .. }) {
+                let remaining = self.torrent_owners();
+                let engine = transfer_engine
+                    .as_ref()
+                    .filter(|(id, _)| *id == removed.id)
+                    .map(|(_, engine)| engine.clone())
+                    .or_else(crate::torrent::engine);
+                let result = if let Some(engine) = engine {
+                    for owner in &remaining {
+                        engine.retain_download(owner.clone());
+                    }
+                    engine.remove_retained(&removed.id).map(|_| ())
+                } else if let Some(owner) = torrent_owner(&removed, &self.inner.root) {
+                    crate::torrent::remove_download_files(&owner, &remaining)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = result {
+                    let mut state = self.inner.state();
+                    let mut restored = removed;
+                    restored.error = Some(error);
+                    if !matches!(restored.phase, DownloadPhase::Completed) {
+                        restored.phase = DownloadPhase::Failed;
+                    }
+                    state.manifest.jobs.push(restored);
+                    persist_manifest(&state.manifest);
+                    self.bump_revision();
+                }
+            } else if !self
+                .inner
+                .state()
                 .active
                 .as_ref()
-                .filter(|active| active.id == job.id)
-                .and_then(|active| active.torrent_engine.clone());
-            (job, engine)
-        };
-        if matches!(removed.source, JobSource::Torrent { .. }) {
-            let remaining = self.torrent_owners();
-            let result = if let Some(engine) = transfer_engine.or_else(crate::torrent::engine) {
-                for owner in &remaining {
-                    engine.retain_download(owner.clone());
-                }
-                engine.remove_retained(&removed.id).map(|_| ())
-            } else if let Some(owner) = torrent_owner(&removed, &self.inner.root) {
-                crate::torrent::remove_download_files(&owner, &remaining)
-            } else {
-                Ok(())
-            };
-            if let Err(error) = result {
-                let mut state = self.inner.state();
-                let mut restored = removed;
-                restored.error = Some(error);
-                if !matches!(restored.phase, DownloadPhase::Completed) {
-                    restored.phase = DownloadPhase::Failed;
-                }
-                state.manifest.jobs.push(restored);
-                persist_manifest(&state.manifest);
-                self.bump_revision();
-                return;
+                .is_some_and(|active| active.id == removed.id)
+            {
+                // A live HTTP worker owns deferred cleanup after cancellation.
+                self.remove_artifacts(&removed);
             }
-            self.schedule_next();
-            return;
-        }
-        if !self
-            .inner
-            .state()
-            .active
-            .as_ref()
-            .is_some_and(|active| active.id == removed.id)
-        {
-            self.remove_artifacts(&removed);
         }
         self.schedule_next();
     }
 
-    pub(crate) fn remove_for_watched_episode(
+    /// Run only on the UI authority thread. Both locks are nonblocking; no
+    /// watched/playback/profile action can interleave between check and claim,
+    /// and an IO-owning coordinator worker can never stall the UI here.
+    fn try_claim_watched_removals(
+        &self,
+        shared: &profile_session::SessionState,
+        series_id: &str,
+        episode_ids: &[String],
+    ) -> Result<Option<PendingRemoval>, ()> {
+        let mut downloads = match self.inner.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Err(()),
+        };
+        // Resolve the captured UI profile at the operation boundary, including
+        // its epoch/session identity; never retain a raw old Shared allocation.
+        let state = shared.try_lock().map_err(|_| ())?;
+        let (episodes, playing) = watched_download_cleanup_targets(&state, series_id, episode_ids);
+        let ids =
+            watched_download_removal_ids(&downloads, series_id, &episodes, playing.as_deref());
+        Ok(self.claim_removals(&mut downloads, &ids))
+    }
+
+    #[cfg(test)]
+    fn remove_for_watched_episode(
         &self,
         series_id: &str,
         episode_id: &str,
         playing_episode: bool,
     ) -> bool {
-        let ids = {
-            self.inner
-                .state()
-                .manifest
-                .jobs
-                .iter()
-                .filter(|job| job.media_id == series_id && job.request_id == episode_id)
-                // Unlike a single open MP4, the HLS demuxer opens more files
-                // as playback advances. Keep its bundle until player-close
-                // finalization calls automatic cleanup again.
-                .filter(|job| {
-                    !playing_episode
-                        || !job.artifact_path.as_ref().is_some_and(|path| {
-                            path.extension()
-                                .is_some_and(|extension| extension == "m3u8")
-                        })
-                })
-                .map(|job| job.id.clone())
-                .collect::<Vec<_>>()
+        self.remove_for_watched_episodes(
+            series_id,
+            &HashSet::from([episode_id.to_owned()]),
+            playing_episode.then_some(episode_id),
+        )
+    }
+
+    #[cfg(test)]
+    fn remove_for_watched_episodes(
+        &self,
+        series_id: &str,
+        episode_ids: &HashSet<String>,
+        playing_episode: Option<&str>,
+    ) -> bool {
+        let pending = {
+            let mut state = self.inner.state();
+            let ids = watched_download_removal_ids(&state, series_id, episode_ids, playing_episode);
+            self.claim_removals(&mut state, &ids)
         };
-        let removed = !ids.is_empty();
-        for id in ids {
-            self.remove(&id);
-        }
-        removed
+        let Some(pending) = pending else { return false };
+        self.finish_removals(pending);
+        true
     }
 
     fn schedule_next(&self) {
@@ -2067,39 +2151,10 @@ impl Bridge {
     /// manifest. Completed episode jobs only; movies and partial transfers
     /// are not listed here.
     pub(super) fn downloads_list_to_ui(&self) {
-        let rows: Vec<DownloadRow> = self
-            .downloads
-            .completed_episode_jobs()
-            .into_iter()
-            .map(|job| {
-                // Prefer the real episode label from the cached episode list;
-                // fall back to parsing the request id's season/episode tail.
-                let label = read_episodes_cache_for(&job.media_type, &job.media_id)
-                    .and_then(|videos| episode_context_label_for(&job.request_id, &videos))
-                    .unwrap_or_else(|| fallback_episode_label(&job.request_id));
-                let display = if job.display.trim().is_empty() {
-                    String::new()
-                } else {
-                    first_line(&job.display)
-                };
-                let subtitle = if display.is_empty() {
-                    label
-                } else {
-                    format!("{label} · {display}")
-                };
-                let size = format_bytes(job.total_bytes.unwrap_or(job.bytes_downloaded));
-                let details = match job.file_name.as_deref() {
-                    Some(name) if !name.is_empty() => format!("{name} · {size}"),
-                    _ => size,
-                };
-                DownloadRow {
-                    id: SharedString::from(&job.id),
-                    title: SharedString::from(&job.title),
-                    subtitle: SharedString::from(&subtitle),
-                    details: SharedString::from(&details),
-                }
-            })
-            .collect();
+        let rows = completed_episode_download_rows(
+            self.downloads.completed_episode_jobs(),
+            read_episodes_cache_for,
+        );
         if let Some(app) = self.app() {
             app.set_downloads_rows(Rc::new(VecModel::from(rows)).into());
         }
@@ -2125,30 +2180,62 @@ impl Bridge {
     }
 
     pub(super) fn auto_delete_watched_downloads(&self, series_id: &str, episode_ids: &[String]) {
-        let (enabled, playing_episode) = {
-            let state = self.shared.lock().unwrap();
-            (
-                state.download_settings.auto_delete_watched,
-                state
-                    .playback
-                    .as_ref()
-                    .filter(|target| target.series_id == series_id)
-                    .map(|target| target.episode_id.clone()),
-            )
-        };
-        if !enabled {
+        if episode_ids.is_empty()
+            || !self
+                .shared
+                .lock()
+                .unwrap()
+                .download_settings
+                .auto_delete_watched
+        {
             return;
         }
-        let mut removed = false;
-        for episode_id in episode_ids {
-            removed |= self.downloads.remove_for_watched_episode(
-                series_id,
-                episode_id,
-                playing_episode.as_ref() == Some(episode_id),
-            );
+        let bridge = self.clone();
+        let owner = profiles::capture();
+        let series_id = series_id.to_owned();
+        let episode_ids = episode_ids.to_vec();
+        let _ = profiles::invoke_from_event_loop(move || {
+            bridge.claim_watched_download_cleanup(owner, series_id, episode_ids);
+        });
+    }
+
+    fn claim_watched_download_cleanup(
+        &self,
+        owner: profiles::Context,
+        series_id: String,
+        episode_ids: Vec<String>,
+    ) {
+        if !profiles::is_current(&owner) {
+            return;
         }
-        if removed {
-            self.apply_stream_filter();
+        match self
+            .downloads
+            .try_claim_watched_removals(&self.shared, &series_id, &episode_ids)
+        {
+            Err(()) => {
+                let bridge = self.clone();
+                slint::Timer::single_shot(Duration::from_millis(10), move || {
+                    if profiles::is_current(&owner) {
+                        profiles::with_context(owner.clone(), || {
+                            bridge.claim_watched_download_cleanup(owner, series_id, episode_ids)
+                        });
+                    }
+                });
+            }
+            Ok(None) => {}
+            Ok(Some(pending)) => {
+                let bridge = self.clone();
+                profiles::thread::Builder::new()
+                    .name("watched-download-cleanup".into())
+                    .spawn(move || {
+                        // The deletion was authorized atomically on UI; no Shared
+                        // lock is held while manifest/torrent/filesystem IO runs.
+                        bridge.downloads.finish_removals(pending);
+                        let _ =
+                            profiles::invoke_from_event_loop(move || bridge.apply_stream_filter());
+                    })
+                    .expect("spawn watched download cleanup");
+            }
         }
     }
 
@@ -2188,6 +2275,109 @@ impl Bridge {
     }
 }
 
+// Keep title metadata transient and typed. Hundreds of downloaded episodes
+// from one show share one cache read/parse per publication; missing metadata is
+// memoized too, and the next publication observes refreshed cache contents.
+fn completed_episode_download_rows(
+    jobs: Vec<DownloadJob>,
+    mut read_episodes: impl FnMut(&str, &str) -> Option<Vec<Video>>,
+) -> Vec<DownloadRow> {
+    let mut labels: HashMap<(String, String), HashMap<String, String>> = HashMap::new();
+    jobs.into_iter()
+        .map(|job| {
+            // Prefer the real episode label from the cached episode list;
+            // fall back to parsing the request id's season/episode tail.
+            let title_labels = labels
+                .entry((job.media_type.clone(), job.media_id.clone()))
+                .or_insert_with(|| {
+                    let mut by_id = HashMap::new();
+                    for video in read_episodes(&job.media_type, &job.media_id).unwrap_or_default() {
+                        // Match the previous first-matching-video behavior.
+                        by_id
+                            .entry(video.id.clone())
+                            .or_insert_with(|| episode_context_label(&video));
+                    }
+                    by_id
+                });
+            let label = title_labels
+                .get(&job.request_id)
+                .cloned()
+                .unwrap_or_else(|| fallback_episode_label(&job.request_id));
+            let display = if job.display.trim().is_empty() {
+                String::new()
+            } else {
+                first_line(&job.display)
+            };
+            let subtitle = if display.is_empty() {
+                label
+            } else {
+                format!("{label} · {display}")
+            };
+            let size = format_bytes(job.total_bytes.unwrap_or(job.bytes_downloaded));
+            let details = match job.file_name.as_deref() {
+                Some(name) if !name.is_empty() => format!("{name} · {size}"),
+                _ => size,
+            };
+            DownloadRow {
+                id: SharedString::from(&job.id),
+                title: SharedString::from(&job.title),
+                subtitle: SharedString::from(&subtitle),
+                details: SharedString::from(&details),
+            }
+        })
+        .collect()
+}
+
+fn watched_download_removal_ids(
+    state: &DownloadState,
+    series_id: &str,
+    episode_ids: &HashSet<String>,
+    playing_episode: Option<&str>,
+) -> HashSet<String> {
+    state
+        .manifest
+        .jobs
+        .iter()
+        .filter(|job| job.media_id == series_id && episode_ids.contains(&job.request_id))
+        // HLS opens later segments throughout playback, so its playing bundle
+        // must survive until player-close cleanup authorizes another claim.
+        .filter(|job| {
+            playing_episode != Some(job.request_id.as_str())
+                || !job.artifact_path.as_ref().is_some_and(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "m3u8")
+                })
+        })
+        .map(|job| job.id.clone())
+        .collect()
+}
+
+fn watched_download_cleanup_targets(
+    state: &Shared,
+    series_id: &str,
+    episode_ids: &[String],
+) -> (HashSet<String>, Option<String>) {
+    if !state.download_settings.auto_delete_watched {
+        return (HashSet::new(), None);
+    }
+    let episodes = episode_ids
+        .iter()
+        .filter(|episode_id| {
+            state
+                .progress
+                .get(&progress_map_key(series_id, episode_id))
+                .is_some_and(|progress| progress.watched)
+        })
+        .cloned()
+        .collect();
+    let playing = state
+        .playback
+        .as_ref()
+        .filter(|target| target.series_id == series_id)
+        .map(|target| target.episode_id.clone());
+    (episodes, playing)
+}
+
 fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -2219,6 +2409,334 @@ fn fallback_episode_label(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_episode_labels_read_each_typed_title_once_per_publication() {
+        let jobs = (0..500)
+            .map(|index| {
+                let mut job = DownloadJob::new(
+                    format!("label-{index}"),
+                    JobSource::http("https://example.test/video"),
+                );
+                job.media_id = if index < 498 { "same-id" } else { "missing" }.into();
+                job.media_type = if index == 497 { "anime" } else { "series" }.into();
+                job.request_id = "episode".into();
+                job
+            })
+            .collect::<Vec<_>>();
+        let mut calls = HashMap::new();
+        let rows = completed_episode_download_rows(jobs.clone(), |kind, id| {
+            *calls.entry((kind.to_owned(), id.to_owned())).or_insert(0) += 1;
+            (id != "missing").then(|| {
+                vec![Video {
+                    id: "episode".into(),
+                    name: format!("{kind} cached title"),
+                    ..Default::default()
+                }]
+            })
+        });
+        assert_eq!(calls.len(), 3);
+        assert!(calls.values().all(|count| *count == 1));
+        assert_eq!(rows[0].subtitle.as_str(), "series cached title");
+        assert_eq!(rows[497].subtitle.as_str(), "anime cached title");
+        let refreshed = completed_episode_download_rows(jobs, |_, _| {
+            Some(vec![Video {
+                id: "episode".into(),
+                name: "New metadata".into(),
+                ..Default::default()
+            }])
+        });
+        assert_eq!(
+            refreshed[0].subtitle.as_str(),
+            "New metadata",
+            "memoization must end with each publication"
+        );
+    }
+
+    #[test]
+    fn delayed_cleanup_cannot_reuse_a_restored_download_identity() {
+        const ROOT: &str = "NOVA_REMOVAL_IDENTITY_TEST_ROOT";
+        let Some(data_root) = std::env::var_os(ROOT) else {
+            let root = temp_root("removal-identity");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args([
+                    "--exact",
+                    "app::downloads::tests::delayed_cleanup_cannot_reuse_a_restored_download_identity",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let data_root = PathBuf::from(data_root);
+        crate::storage::init_at(&data_root.join("store"));
+        let root = data_root.join("downloads");
+        let id = "download-0000000000000001";
+        let path = root.join("http").join(id).join("old.mkv");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"old completed episode").unwrap();
+        let mut restored = DownloadJob::new(id, JobSource::http("https://example.test/old"));
+        restored.phase = DownloadPhase::Completed;
+        restored.artifact_path = Some(path.clone());
+        crate::storage::try_set_str(
+            DOWNLOADS_KEY,
+            &DownloadManifest::new(vec![restored]).to_json().unwrap(),
+        )
+        .unwrap();
+        let coordinator = DownloadCoordinator::new(root);
+        let pending = {
+            let mut state = coordinator.inner.state();
+            coordinator
+                .claim_removals(&mut state, &HashSet::from([id.to_owned()]))
+                .unwrap()
+        };
+        assert!(coordinator.job(id).is_none());
+        assert!(path.is_file(), "claim leaves filesystem cleanup pending");
+
+        // Occupy the worker slot so this real enqueue stays entirely local.
+        install_active(&coordinator, "blocking", DownloadPhase::Downloading, false);
+        let replacement_id = coordinator.enqueue(NewDownload {
+            media_type: "series".into(),
+            media_id: "replacement".into(),
+            request_id: "replacement-episode".into(),
+            title: "Replacement".into(),
+            year: String::new(),
+            display: String::new(),
+            addon: String::new(),
+            source: JobSource::http("https://example.test/new"),
+        });
+        assert_ne!(replacement_id, id, "pending cleanup still owns the old ID");
+        let replacement_path = coordinator
+            .job(&replacement_id)
+            .unwrap()
+            .artifact_path
+            .unwrap();
+        fs::create_dir_all(replacement_path.parent().unwrap()).unwrap();
+        fs::write(&replacement_path, b"new completed episode").unwrap();
+        coordinator
+            .inner
+            .state()
+            .manifest
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == replacement_id)
+            .unwrap()
+            .phase = DownloadPhase::Completed;
+
+        // Old cleanup now runs after the replacement owns completed bytes.
+        coordinator.finish_removals(pending);
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read(&replacement_path).unwrap(),
+            b"new completed episode"
+        );
+        assert_eq!(
+            coordinator.job(&replacement_id).unwrap().phase,
+            DownloadPhase::Completed
+        );
+        let persisted = DownloadManifest::from_json(
+            &crate::storage::try_get_str(DOWNLOADS_KEY).unwrap().unwrap(),
+        )
+        .unwrap();
+        assert!(persisted.jobs.iter().any(|job| job.id == replacement_id));
+        assert!(!persisted.jobs.iter().any(|job| job.id == id));
+    }
+
+    #[test]
+    fn queued_watched_cleanup_uses_latest_progress_setting_and_playing_target() {
+        let mut state = Shared::default();
+        state.download_settings.auto_delete_watched = true;
+        for episode in ["a", "b"] {
+            Bridge::set_episode_watched_locked(&mut state.progress, "series", episode, true);
+        }
+        let requested = vec!["a".into(), "b".into(), "unknown".into()];
+        // The user reversed one action while cleanup waited for its worker.
+        Bridge::set_episode_watched_locked(&mut state.progress, "series", "a", false);
+        state.playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "b".into(),
+            ..Default::default()
+        });
+        let (episodes, playing) = watched_download_cleanup_targets(&state, "series", &requested);
+        assert_eq!(episodes, HashSet::from(["b".into()]));
+        assert_eq!(playing.as_deref(), Some("b"));
+        state.download_settings.auto_delete_watched = false;
+        assert!(
+            watched_download_cleanup_targets(&state, "series", &requested)
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn watched_cleanup_claim_retries_nonblocking_and_observes_new_playback_or_unwatch() {
+        const ROOT: &str = "NOVA_ATOMIC_WATCHED_CLAIM_ROOT";
+        let Some(data_root) = std::env::var_os(ROOT) else {
+            let root = temp_root("atomic-watched-claim-storage");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::downloads::tests::watched_cleanup_claim_retries_nonblocking_and_observes_new_playback_or_unwatch", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let data_root = PathBuf::from(data_root);
+        storage::init_at(&data_root);
+        let root = data_root.join("downloads");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        let path = root.join("http/hls/episode.m3u8");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"playlist").unwrap();
+        let mut job = DownloadJob::new("hls", JobSource::http("https://example.test/video"));
+        job.media_id = "series".into();
+        job.request_id = "episode".into();
+        job.phase = DownloadPhase::Completed;
+        job.artifact_path = Some(path.clone());
+        coordinator.inner.state().manifest.jobs.push(job);
+        let mut state = Shared::default();
+        state.download_settings.auto_delete_watched = true;
+        Bridge::set_episode_watched_locked(&mut state.progress, "series", "episode", true);
+        let shared = profile_session::SessionState(profile_session::SessionDirectory::new());
+        *shared.lock().unwrap() = state;
+        let requested = vec!["episode".into()];
+        // The IO-owning coordinator is busy: no Shared wait and no claim.
+        let busy = coordinator.inner.state();
+        assert!(
+            coordinator
+                .try_claim_watched_removals(&shared, "series", &requested)
+                .is_err()
+        );
+        // Playback began before a retried claim; the playlist must survive.
+        shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode".into(),
+            ..Default::default()
+        });
+        drop(busy);
+        let busy_profile = shared.lock().unwrap();
+        assert!(
+            coordinator
+                .try_claim_watched_removals(&shared, "series", &requested)
+                .is_err(),
+            "a busy profile must also retry without waiting"
+        );
+        drop(busy_profile);
+        assert!(
+            coordinator
+                .try_claim_watched_removals(&shared, "series", &requested)
+                .unwrap()
+                .is_none()
+        );
+        assert!(coordinator.job("hls").is_some());
+        assert!(path.is_file());
+        {
+            let mut state = shared.lock().unwrap();
+            state.playback = None;
+            Bridge::set_episode_watched_locked(&mut state.progress, "series", "episode", false);
+        }
+        assert!(
+            coordinator
+                .try_claim_watched_removals(&shared, "series", &requested)
+                .unwrap()
+                .is_none()
+        );
+        Bridge::set_episode_watched_locked(
+            &mut shared.lock().unwrap().progress,
+            "series",
+            "episode",
+            true,
+        );
+        let pending = coordinator
+            .try_claim_watched_removals(&shared, "series", &requested)
+            .unwrap()
+            .unwrap();
+        assert!(
+            coordinator.job("hls").is_none(),
+            "claim removes playback authority atomically"
+        );
+        assert!(path.is_file(), "claim performs no file cleanup");
+        assert!(shared.try_lock().is_ok());
+        // Execution must persist the current manifest, including newer jobs.
+        let mut later = DownloadJob::new("later", JobSource::http("https://example.test/later"));
+        later.phase = DownloadPhase::Completed;
+        coordinator.inner.state().manifest.jobs.push(later);
+        coordinator.finish_removals(pending);
+        assert!(!path.exists());
+        let persisted =
+            DownloadManifest::from_json(&crate::storage::get_str(DOWNLOADS_KEY).unwrap()).unwrap();
+        assert_eq!(
+            persisted
+                .jobs
+                .iter()
+                .map(|job| job.id.as_str())
+                .collect::<Vec<_>>(),
+            ["later"]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bulk_watched_cleanup_batches_manifest_and_preserves_playing_hls_and_other_titles() {
+        let root = temp_root("bulk-watched-cleanup");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        for (id, episode, series, extension) in [
+            ("a", "a", "series", "mkv"),
+            ("b", "b", "series", "mkv"),
+            ("c", "c", "series", "m3u8"),
+            ("other", "a", "other-series", "mkv"),
+        ] {
+            let path = root
+                .join("http")
+                .join(id)
+                .join(format!("episode.{extension}"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"episode artifact").unwrap();
+            let mut job = DownloadJob::new(id, JobSource::http("https://example.test/video"));
+            job.media_id = series.into();
+            job.request_id = episode.into();
+            job.phase = DownloadPhase::Completed;
+            job.artifact_path = Some(path);
+            coordinator.inner.state().manifest.jobs.push(job);
+        }
+        let revision = coordinator.revision();
+        assert!(coordinator.remove_for_watched_episodes(
+            "series",
+            &HashSet::from(["a".into(), "b".into(), "c".into()]),
+            Some("c")
+        ));
+        assert_eq!(
+            coordinator.revision(),
+            revision + 1,
+            "one bulk manifest mutation"
+        );
+        assert_eq!(
+            coordinator
+                .jobs()
+                .iter()
+                .map(|job| job.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "other"]
+        );
+        assert!(!root.join("http/a").exists());
+        assert!(!root.join("http/b").exists());
+        assert!(root.join("http/c/episode.m3u8").is_file());
+        assert!(root.join("http/other/episode.mkv").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
 
     fn completed_intro_fixture(
         name: &str,

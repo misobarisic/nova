@@ -5,6 +5,40 @@ use crate::download::{DownloadPhase, format_bytes};
 use crate::{DownloadEpisode, DownloadGroup};
 use std::collections::BTreeMap;
 
+/// Remember the inputs that produced the retained page models. Artwork has
+/// its own direct deliveries and retry scheduler, independent of this cache.
+#[derive(Default)]
+pub(super) struct RefreshState {
+    last: Option<RefreshSignature>,
+    #[cfg(test)]
+    projections: usize,
+}
+
+impl RefreshState {
+    pub(super) fn invalidate(&mut self) {
+        self.last = None;
+    }
+}
+
+#[derive(PartialEq)]
+struct RefreshRevisions {
+    projection: u64,
+    downloads: u64,
+    images: u64,
+    profile: (String, u64),
+    language: Language,
+    day: i64,
+    artwork_allowed: bool,
+}
+
+struct RefreshSignature {
+    revisions: RefreshRevisions,
+    query: String,
+    filter: i32,
+    recent: bool,
+    collapsed: HashSet<String>,
+}
+
 fn episode_numbers(request: &str) -> Option<(u32, u32)> {
     let mut parts = request.rsplit(':');
     let episode = parts.next()?.parse().ok()?;
@@ -168,11 +202,56 @@ impl Bridge {
     pub(super) fn refresh_downloads_page(&self) {
         let Some(app) = self.app() else { return };
         if !app.get_show_downloads() {
+            self.shared
+                .lock()
+                .unwrap()
+                .downloads_page_refresh
+                .invalidate();
             return;
         }
-        let jobs = self.downloads.jobs();
         let (query, filter, recent, collapsed, progress, entries) = {
-            let state = self.shared.lock().unwrap();
+            let context = profiles::capture();
+            let mut state = self.shared.lock().unwrap();
+            let revisions = RefreshRevisions {
+                projection: super::progress_projection::revision(),
+                downloads: self.downloads.revision(),
+                images: image_settings_revision(),
+                // Retaining the session Arc here would make its Shared state
+                // own itself. Identity and activation epoch are sufficient.
+                profile: (context.id, context.epoch),
+                language: state.cache_settings.language,
+                day: today_days(),
+                artwork_allowed: app.get_page_artwork_allowed(),
+            };
+            if state
+                .downloads_page_refresh
+                .last
+                .as_ref()
+                .is_some_and(|last| {
+                    last.revisions == revisions
+                        && last.query == state.downloads_page_query
+                        && last.filter == state.downloads_page_filter
+                        && last.recent == state.downloads_page_sort_recent
+                        && last.collapsed == state.downloads_page_collapsed
+                })
+            {
+                drop(state);
+                // Failed/cancelled image requests still need their normal
+                // cooldown retry even when no display data has changed.
+                self.schedule_page_artwork(super::page_artwork::Page::Downloads);
+                return;
+            }
+            state.downloads_page_refresh.last = Some(RefreshSignature {
+                revisions,
+                query: state.downloads_page_query.clone(),
+                filter: state.downloads_page_filter,
+                recent: state.downloads_page_sort_recent,
+                collapsed: state.downloads_page_collapsed.clone(),
+            });
+            #[cfg(test)]
+            {
+                state.downloads_page_refresh.projections += 1;
+            }
             (
                 state.downloads_page_query.clone(),
                 state.downloads_page_filter,
@@ -182,6 +261,7 @@ impl Bridge {
                 state.entries.clone(),
             )
         };
+        let jobs = self.downloads.jobs();
         let mut metadata = HashMap::new();
         for job in &jobs {
             metadata
@@ -461,6 +541,218 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_page_skips_projection_and_refreshes_after_data_or_navigation_changes() {
+        // Slint and storage are process globals. Keep this fixture independent
+        // of other tests' profiles, DB initialization and event loops.
+        const TEST_DIR: &str = "NOVA_DOWNLOADS_IDLE_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-downloads-idle-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args([
+                    "--exact",
+                    "app::downloads_page::tests::idle_page_skips_projection_and_refreshes_after_data_or_navigation_changes",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root.join("store"));
+        let artifact = root.join("downloads/http/completed/episode.mkv");
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        fs::write(&artifact, b"offline episode").unwrap();
+        let job = DownloadJob {
+            id: "completed".into(),
+            media_type: "series".into(),
+            media_id: "show".into(),
+            request_id: "opaque-episode".into(),
+            title: "Saved show".into(),
+            phase: DownloadPhase::Completed,
+            artifact_path: Some(artifact),
+            ..Default::default()
+        };
+        storage::try_set_str(
+            "downloads:v1",
+            &crate::download::DownloadManifest::new(vec![job])
+                .to_json()
+                .unwrap(),
+        )
+        .unwrap();
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        let app = AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(390, 844));
+        app.show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        let mut videos = vec![Video {
+            id: "opaque-episode".into(),
+            name: "Original episode".into(),
+            season: Some(1),
+            episode: Some(1),
+            ..Default::default()
+        }];
+        write_episodes_cache_for("series", "show", &videos);
+        bridge.show_downloads_page();
+        let projections = || {
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .downloads_page_refresh
+                .projections
+        };
+        let episode = || {
+            app.get_downloads_page_groups()
+                .row_data(0)
+                .unwrap()
+                .episodes
+                .row_data(0)
+                .unwrap()
+        };
+        assert_eq!(episode().title, "Original episode");
+        let initial = projections();
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            bridge.refresh_downloads_page();
+        }
+        eprintln!("100 idle Downloads refreshes: {:?}", started.elapsed());
+        assert_eq!(projections(), initial, "idle ticks must not rebuild data");
+
+        // Metadata changes do not bump the device-local download revision.
+        // Exercise the real cache writer and its shared invalidation hook.
+        let download_revision = bridge.downloads.revision();
+        videos[0].name = "Refreshed episode".into();
+        write_episodes_cache_for("series", "show", &videos);
+        bridge.refresh_downloads_page();
+        assert_eq!(bridge.downloads.revision(), download_revision);
+        assert_eq!(episode().title, "Refreshed episode");
+        assert_eq!(projections(), initial + 1);
+
+        let english_subtitle = app
+            .get_downloads_page_groups()
+            .row_data(0)
+            .unwrap()
+            .subtitle;
+        let settings = {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.language = Language::Croatian;
+            state.cache_settings.clone()
+        };
+        text::with_language(Language::Croatian, || {
+            write_json("settings", &settings);
+            bridge.refresh_downloads_page();
+            let subtitle = app
+                .get_downloads_page_groups()
+                .row_data(0)
+                .unwrap()
+                .subtitle;
+            assert_ne!(subtitle, english_subtitle);
+            assert!(subtitle.starts_with(text::tr("Season")));
+        });
+        let settings = {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.language = Language::English;
+            state.cache_settings.clone()
+        };
+        write_json("settings", &settings);
+        bridge.refresh_downloads_page();
+        assert_eq!(
+            app.get_downloads_page_groups()
+                .row_data(0)
+                .unwrap()
+                .subtitle,
+            english_subtitle
+        );
+
+        // Remote application retains its ordinary write path and must also
+        // invalidate the page when the download itself has not changed.
+        {
+            let _applying = sync::ApplyingGuard::new();
+            let mut state = bridge.shared.lock().unwrap();
+            state.progress.insert(
+                progress_map_key("show", "opaque-episode"),
+                EpisodeProgress {
+                    series_id: "show".into(),
+                    episode_id: "opaque-episode".into(),
+                    watched: true,
+                    ..Default::default()
+                },
+            );
+            let progress = state.progress.clone();
+            drop(state);
+            write_progress_map(&progress);
+        }
+        bridge.refresh_downloads_page();
+        assert_eq!(episode().state, 2);
+        bridge.downloads_page_filter_changed(3);
+        assert_eq!(app.get_downloads_page_groups().row_count(), 1);
+        bridge.downloads_page_query_changed("no matching download");
+        assert_eq!(app.get_downloads_page_groups().row_count(), 0);
+        bridge.downloads_page_query_changed("");
+        let group = app.get_downloads_page_groups().row_data(0).unwrap();
+        bridge.downloads_page_group_toggled(&group.id);
+        assert!(
+            app.get_downloads_page_groups()
+                .row_data(0)
+                .unwrap()
+                .collapsed
+        );
+
+        let before_reopen = projections();
+        app.set_show_downloads(false);
+        bridge.show_downloads_page();
+        assert_eq!(projections(), before_reopen + 1);
+        bridge.refresh_downloads_page();
+        assert_eq!(projections(), before_reopen + 1);
+        let before_context = projections();
+        profiles::with_context(profiles::activation_context("another"), || {
+            bridge.refresh_downloads_page();
+            assert_eq!(projections(), before_context + 1);
+            bridge.refresh_downloads_page();
+            assert_eq!(projections(), before_context + 1);
+        });
+        bridge.refresh_downloads_page();
+        assert_eq!(projections(), before_context + 2);
+
+        bridge.downloads.remove("completed");
+        bridge.refresh_downloads_page();
+        assert_eq!(app.get_downloads_page_groups().row_count(), 0);
+    }
+
     #[test]
     fn timer_updates_retain_episode_model_identity() {
         let first = DownloadEpisode {

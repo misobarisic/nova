@@ -175,6 +175,17 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
 type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
 
 pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    let result = persist_sync_snapshot_inner(key, raw, seed);
+    // Owner-scoped snapshot writes, including remote projections and metadata
+    // cache updates, pass here. Reject derived UI work that read older data
+    // only after the replacement has actually committed.
+    if result.is_ok() && progress_projection::invalidation_key(key) {
+        progress_projection::invalidate();
+    }
+    result
+}
+
+fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
     if profiles::scoped_key(key) && !profiles::writable(&profiles::current_id()) {
         return Err(
             storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),

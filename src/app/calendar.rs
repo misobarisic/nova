@@ -8,6 +8,11 @@ use crate::{CalendarDay, CalendarRelease};
 
 impl Bridge {
     pub(super) fn show_downloads_page(&self) {
+        self.shared
+            .lock()
+            .unwrap()
+            .downloads_page_refresh
+            .invalidate();
         if let Some(app) = self.app() {
             app.set_show_home(false);
             app.set_show_library(false);

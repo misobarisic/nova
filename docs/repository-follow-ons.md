@@ -51,6 +51,43 @@ Ordinary remote addon stream URLs remain memory-only unless a safe refresh
 contract is introduced. Expiring playback URLs, authorization headers and API
 keys must never enter persisted stream caches.
 
+## UI thread audit
+
+Reviewed on 2026-10-20. Explicit episode/season/series watched edits now patch
+visible Detail and loaded queue rows immediately, with coalesced Library/Home
+derivation on a profile-owned worker. Downloads skips unchanged timer
+projections, shares typed episode metadata across labels, and claims automatic
+watched removals before doing persistence and file cleanup on a worker.
+
+The local debug `measure_season_watch_action_callback_cost` fixture in
+`src/app/detail.rs` contains 60 shows and 6,000 progress records. Six callback
+samples fell from 203–206ms to 6.3–9.4ms; the later UI publication took 2.7ms
+and was ready after about 1.19s of background preparation.
+These are fixture timings, not Android frame-rate or device measurements.
+
+Remaining candidates need profiling and their own changes:
+
+- `calendar.rs::apply_calendar_to_ui` scans matching Library episode caches on
+  date/search/navigation changes, then visible `home.rs::upcoming_row` calls
+  reread title metadata. Start with per-publication typed metadata reuse and
+  retain a revision-checked, display-ready schedule before moving the join off
+  the UI thread.
+- `viewing_journal.rs::JournalTracker::observe` can load the full session archive
+  on its first playback sample. Finalization also reads/serializes/writes while
+  holding Shared and the journal writer lock. Preload and prepare checkpoints
+  off-thread, preserving ordered durability and explicit stop/pause/shutdown
+  flush barriers; replacing the final write with an unguarded spawn would lose
+  that guarantee.
+- `sync_inspector.rs` joins episode aliases and progress and sorts the results
+  before truncating the active inspector to 80 rows, including search and its
+  two-second refresh. Prepare this from a bounded worker snapshot with profile,
+  query and data-revision guards, keeping sync Store lock holds short.
+
+Legacy startup/navigation Library/Home refreshes retain their synchronous path;
+the new worker specifically handles explicit watched gestures. See
+`src/app/progress_projection.rs` and the responsiveness quick reference in
+`docs/project-structure.md`.
+
 ## Stored-data compression audit
 
 Status: measured on 2026-10-14. Library/history snapshots and their baselines now

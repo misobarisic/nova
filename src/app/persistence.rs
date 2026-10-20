@@ -394,11 +394,15 @@ fn enqueue(snapshot: Snapshot) -> bool {
     }
 }
 pub(super) fn write_library(entries: &[LibraryEntry]) {
+    // In-memory edits precede the ordered write. Do not let an older worker
+    // projection publish while the new snapshot is still waiting to save.
+    progress_projection::invalidate();
     if !enqueue(Snapshot::Library(entries.to_vec())) {
         write_json("library", entries);
     }
 }
 pub(super) fn write_progress(map: &HashMap<String, EpisodeProgress>) {
+    progress_projection::invalidate();
     if !enqueue(Snapshot::Progress(
         map.clone(),
         nova_sync::is_playback_checkpoint(),
