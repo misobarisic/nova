@@ -56,6 +56,10 @@ fn queue_keyboard_reorder_keeps_the_selected_identity_and_back_returns_to_more()
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
     app.set_anim_transitions(false);
+    // Standalone UI fixtures have no settings.rs bridge to mirror these
+    // backend preferences into the shared animation globals.
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::Anim>().set_transitions(false);
     app.set_show_home(false);
     app.set_more_open(true);
     let rows = Rc::new(VecModel::from(fixture()));
@@ -109,6 +113,10 @@ fn queue_actions_fit_small_phone_and_landscape_with_long_titles() {
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
     app.set_anim_transitions(false);
+    // Standalone UI fixtures have no settings.rs bridge to mirror these
+    // backend preferences into the shared animation globals.
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::Anim>().set_transitions(false);
     app.set_show_home(false);
     app.set_more_open(true);
     let queue = app.global::<nova::QueueBridge>();
@@ -165,10 +173,10 @@ fn queue_actions_fit_small_phone_and_landscape_with_long_titles() {
 }
 
 #[test]
-fn queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width() {
+fn queue_uses_available_desktop_content_width_and_keeps_phone_gutters() {
     if !crate::isolation::run(concat!(
         module_path!(),
-        "::queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width"
+        "::queue_uses_available_desktop_content_width_and_keeps_phone_gutters"
     )) {
         return;
     }
@@ -176,6 +184,10 @@ fn queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width() {
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
     app.set_anim_transitions(false);
+    // Standalone UI fixtures have no settings.rs bridge to mirror these
+    // backend preferences into the shared animation globals.
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::Anim>().set_transitions(false);
     app.set_show_home(false);
     app.set_more_open(true);
     app.global::<nova::QueueBridge>()
@@ -184,6 +196,12 @@ fn queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width() {
     app.show().unwrap();
     for width in [320, 390, 1280, 1920] {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
+        // The desktop window minimum is 360px. Drive the same logical resize
+        // event used by compact fixtures so 320px is genuinely exercised.
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, 900.0),
+            });
         settle(&app);
         let hero = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app,
@@ -191,18 +209,44 @@ fn queue_desktop_reading_column_is_bounded_and_phone_keeps_its_full_width() {
         )
         .next()
         .unwrap();
+        let page = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app,
+            "WatchQueuePage",
+        )
+        .next()
+        .unwrap();
         assert!(
-            hero.size().width <= 1040.5,
-            "wide queues keep a measured reading column"
+            (hero.size().width - (page.size().width - 36.0)).abs() < 1.0,
+            "{width}px: queue fills the actual content viewport with 18px gutters, page {:?}, hero {:?}",
+            page.size(),
+            hero.size()
         );
-        if width < 700 {
+        assert!((hero.absolute_position().x - page.absolute_position().x - 18.0).abs() < 1.0);
+        if width >= 1920 {
             assert!(
-                (hero.size().width - (width as f32 - 36.0)).abs() < 1.0,
-                "phone keeps the approved full-width layout"
+                hero.size().width > 1040.5,
+                "desktop no longer retains the old 1076px column cap"
             );
         }
+        assert!(
+            (page.absolute_position().x + page.size().width - width as f32).abs() < 1.0,
+            "requested {width}px: content edge must match viewport; window {:?}, page {:?}/{:?}, hero {:?}/{:?}",
+            app.window().size(),
+            page.absolute_position(),
+            page.size(),
+            hero.absolute_position(),
+            hero.size()
+        );
         assert!(hero.absolute_position().x >= 17.5);
-        assert!(hero.absolute_position().x + hero.size().width <= width as f32 - 17.5);
+        assert!(
+            hero.absolute_position().x + hero.size().width <= width as f32 - 17.5,
+            "requested {width}px: right gutter overflow; window {:?}, page {:?}/{:?}, hero {:?}/{:?}",
+            app.window().size(),
+            page.absolute_position(),
+            page.size(),
+            hero.absolute_position(),
+            hero.size()
+        );
     }
 }
 
@@ -245,6 +289,10 @@ fn render_journal_and_queue_previews() {
     nova_ui::apply_theme(&app, false);
     app.set_animations(false);
     app.set_anim_transitions(false);
+    // Standalone UI fixtures have no settings.rs bridge to mirror these
+    // backend preferences into the shared animation globals.
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::Anim>().set_transitions(false);
     app.set_show_home(false);
     app.set_more_open(true);
     let queue = app.global::<nova::QueueBridge>();

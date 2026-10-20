@@ -184,4 +184,11 @@ export component ViewingJournalPage inherits Rectangle {
         }
     }
     forward-focus: focus;
+    // More retains the outgoing pixels during pop motion, while input already
+    // belongs to the logical destination. Never activate an exiting action.
+    if !root.active: TouchArea {
+        width: 100%; height: 100%;
+        clicked => { }
+        scroll-event(e) => { accept }
+    }
 }

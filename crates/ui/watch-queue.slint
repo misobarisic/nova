@@ -78,8 +78,8 @@ export component WatchQueuePage inherits Rectangle {
             else { reject }
         }
         queue_column := VerticalLayout {
-            x: root.safe-left + Math.max(0px, (root.width - root.safe-left - root.safe-right - 1076px) / 2);
-            width: Math.min(1076px, root.width - root.safe-left - root.safe-right);
+            x: root.safe-left;
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right);
             height: 100%;
             padding-left: 18px; padding-right: 18px;
             padding-top: 18px + root.safe-top; padding-bottom: 18px + root.safe-bottom;
@@ -156,5 +156,12 @@ export component WatchQueuePage inherits Rectangle {
                 }
             }
         }
+    }
+    // More retains the outgoing pixels during pop motion, while input already
+    // belongs to the logical destination. Never activate an exiting action.
+    if !root.active: TouchArea {
+        width: 100%; height: 100%;
+        clicked => { }
+        scroll-event(e) => { accept }
     }
 }

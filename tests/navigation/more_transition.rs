@@ -903,3 +903,171 @@ fn pending_return_blocks_scroll_and_editor_input() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert!(app.get_show_library() && !app.get_more_open());
 }
+
+fn tick_local_pages(app: &nova::AppWindow, milliseconds: u64) {
+    for _ in 0..milliseconds.div_ceil(10) {
+        for item in i_slint_backend_testing::ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (
+                item.size(),
+                item.absolute_position(),
+                item.computed_opacity(),
+            );
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    }
+}
+
+fn local_page_open(app: &nova::AppWindow, component: &str, open: bool) {
+    match component {
+        "ViewingJournalPage" => app.global::<nova::JournalBridge>().set_open(open),
+        "WatchQueuePage" => app.global::<nova::QueueBridge>().set_open(open),
+        "BookmarksPage" => app.global::<nova::BookmarksBridge>().set_open(open),
+        _ => unreachable!(),
+    }
+}
+
+fn local_page_back(app: &nova::AppWindow) {
+    for event in [
+        WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
+}
+
+#[test]
+fn new_more_pages_animate_both_directions_reverse_reopen_and_respect_motion_off() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::new_more_pages_animate_both_directions_reverse_reopen_and_respect_motion_off"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
+        for width in [390, 1280] {
+            for (label, component) in [
+                ("Stats", "ViewingJournalPage"),
+                ("Watch queue", "WatchQueuePage"),
+                ("Bookmarks", "BookmarksPage"),
+            ] {
+                let app = nova::AppWindow::new().unwrap();
+                app.set_is_android(true);
+                app.set_show_home(false);
+                app.set_more_open(true);
+                app.global::<nova::Anim>().set_enabled(enabled);
+                app.global::<nova::Anim>().set_transitions(transitions);
+                app.window().set_size(slint::PhysicalSize::new(width, 900));
+                let weak = app.as_weak();
+                app.global::<nova::BookmarksBridge>()
+                    .on_select_title(move |id| {
+                        weak.upgrade()
+                            .unwrap()
+                            .global::<nova::BookmarksBridge>()
+                            .set_title_id(id)
+                    });
+                app.show().unwrap();
+                tick_local_pages(&app, 30);
+                let origin = page(&app, "MorePage").absolute_position().x;
+                let landing = ElementHandle::find_by_element_id(&app, "MorePage::landing")
+                    .next()
+                    .unwrap();
+                tap(&app, button(&app, label));
+                let child = page(&app, component);
+                let start_x = child.absolute_position().x - origin;
+                if enabled && transitions {
+                    assert!(
+                        start_x > 0.0 && child.computed_opacity() < 0.01,
+                        "{component}/{width}: entry starts offscreen and transparent"
+                    );
+                    tick_local_pages(&app, 70);
+                    let entering_x = child.absolute_position().x - origin;
+                    assert!(entering_x > 0.0 && entering_x < start_x);
+                    assert!(child.computed_opacity() > 0.01 && child.computed_opacity() < 0.99);
+                    local_page_back(&app);
+                    tick_local_pages(&app, 30);
+                    let retiring_x = child.absolute_position().x;
+                    let retiring_alpha = child.computed_opacity();
+                    assert!(retiring_x > origin + entering_x);
+                    assert!(app.get_more_open() && !app.get_show_home());
+                    // Reopening an incomplete pop reverses its current pixels,
+                    // without unmounting the page or snapping to a new start.
+                    local_page_open(&app, component, true);
+                    assert!((child.absolute_position().x - retiring_x).abs() < 1.0);
+                    assert!((child.computed_opacity() - retiring_alpha).abs() < 0.02);
+                } else {
+                    assert!(start_x.abs() < 0.5 && child.computed_opacity() > 0.99);
+                }
+                tick_local_pages(&app, 400);
+                assert!((child.absolute_position().x - origin).abs() < 0.5);
+                assert!(child.computed_opacity() > 0.99);
+                if component == "BookmarksPage" {
+                    app.global::<nova::BookmarksBridge>()
+                        .set_title_id("example-title".into());
+                    tick_local_pages(&app, 20);
+                    local_page_back(&app);
+                    assert!(
+                        app.global::<nova::BookmarksBridge>()
+                            .get_title_id()
+                            .is_empty()
+                    );
+                    assert!(
+                        app.global::<nova::BookmarksBridge>().get_open(),
+                        "Back leaves the title before the archive"
+                    );
+                    assert!((child.absolute_position().x - origin).abs() < 0.5);
+                }
+                local_page_back(&app);
+                assert!(app.get_more_open() && !app.get_show_home());
+                if enabled && transitions {
+                    tick_local_pages(&app, 90);
+                    assert!(child.absolute_position().x > origin + 0.1);
+                    assert!(child.computed_opacity() > 0.01 && child.computed_opacity() < 0.99);
+                    assert!(landing.computed_opacity() > 0.01 && landing.computed_opacity() < 0.99);
+                    local_page_back(&app);
+                    assert!(
+                        app.get_more_open() && !app.get_show_home(),
+                        "Back during the pop stays within More"
+                    );
+                    app.global::<nova::Anim>().set_transitions(false);
+                    assert!(landing.computed_opacity() > 0.99);
+                    assert!((landing.absolute_position().x - origin).abs() < 0.5);
+                    assert!(
+                        ElementHandle::find_by_element_type_name(&app, component)
+                            .next()
+                            .is_none()
+                    );
+                    // Slint delivers changed handlers on the next event-loop
+                    // turn. Let the disabled duration commit its endpoints
+                    // before simulating a separate input that reenables motion.
+                    tick_local_pages(&app, 10);
+                    app.global::<nova::Anim>().set_transitions(true);
+                    tick_local_pages(&app, 40);
+                }
+                assert!(
+                    landing.computed_opacity() > 0.99,
+                    "{component}/{width} motion {enabled}/{transitions}: final landing alpha {}, x {}, journal {}, queue {}, bookmarks {}, More {}",
+                    landing.computed_opacity(),
+                    landing.absolute_position().x,
+                    app.global::<nova::JournalBridge>().get_open(),
+                    app.global::<nova::QueueBridge>().get_open(),
+                    app.global::<nova::BookmarksBridge>().get_open(),
+                    app.get_more_open()
+                );
+                assert!(
+                    (landing.absolute_position().x - origin).abs() < 0.5,
+                    "{component}/{width} motion {enabled}/{transitions}: final landing x {}, origin {origin}",
+                    landing.absolute_position().x
+                );
+                assert!(app.get_more_open() && !app.get_show_home());
+            }
+        }
+    }
+}
