@@ -30,6 +30,7 @@ pub(crate) fn writable_key(key: &str) -> bool {
 pub(crate) fn metadata_cache_key(key: &str) -> bool {
     key.starts_with("episodes:")
         || key.starts_with("meta_header:")
+        || key.starts_with("similar_titles:")
         || key.starts_with("manifest:")
         || matches!(
             key,
@@ -169,6 +170,7 @@ mod cache_policy_tests {
         for key in [
             "episodes:series\u{1}tt123",
             "meta_header:anime\u{1}kitsu:1",
+            "similar_titles:v1:series\u{1}tt1910272",
             "manifest:https://addon",
             "provider_metadata_cache:v1",
             "home:showcase:v1",

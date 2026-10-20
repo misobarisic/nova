@@ -188,6 +188,7 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "home:catalog-rows:v1"
             | "plugin_settings"
     ) || key.starts_with("tracking:")
+        || key.starts_with("similar_titles:")
         || key.starts_with("stremio:")
         || key.starts_with("list_services:")
 }
@@ -621,6 +622,7 @@ mod tests {
         assert!(scoped_key("list_services:boundary:v1:account"));
         assert!(scoped_key("list_services:simkl_cache:v1:account"));
         assert!(scoped_key("plugin_settings"));
+        assert!(scoped_key("similar_titles:v1:series\u{1}tt1910272"));
         for key in [
             "downloads:v1",
             "download_settings",
