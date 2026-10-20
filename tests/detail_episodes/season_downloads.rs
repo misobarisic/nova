@@ -2,7 +2,84 @@
 //! phones, short landscape and desktop, including native Android Back.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{ComponentHandle, VecModel};
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
+
+#[test]
+fn season_card_menu_downloads_the_clicked_season() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::season_card_menu_downloads_the_clicked_season"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(400, 900));
+    app.set_touch_menus(true);
+    app.set_modal_visible(true);
+    app.set_modal_episodes(true);
+    app.set_detail_tab(3);
+    app.set_season_combo_idx(0);
+    app.set_season_cards(
+        Rc::new(VecModel::from(vec![
+            nova::SeasonCard {
+                name: "Season 1".into(),
+                ..Default::default()
+            },
+            nova::SeasonCard {
+                name: "Season 2".into(),
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    let starts = Rc::new(RefCell::new(Vec::new()));
+    let captured = starts.clone();
+    app.on_season_download_start(move |index, unwatched| {
+        captured.borrow_mut().push((index, unwatched))
+    });
+    app.show().unwrap();
+    settle(&app);
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "PillButton")
+            .all(|item| item.accessible_label().as_deref() != Some("Download season")),
+        "no standalone download-season button above the season rail"
+    );
+
+    for (choice, expected) in [("All episodes", false), ("Unwatched episodes", true)] {
+        ElementHandle::find_by_accessible_label(&app, "Season 2")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Right);
+        settle(&app);
+        ElementHandle::find_by_accessible_label(&app, "Download season")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(
+            app.global::<nova::DetailBridge>()
+                .get_season_download_menu(),
+            1
+        );
+        ElementHandle::find_by_accessible_label(&app, choice)
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(starts.borrow().last(), Some(&(1, expected)));
+        assert_eq!(
+            app.get_season_combo_idx(),
+            0,
+            "menu target does not change selection"
+        );
+    }
+}
 
 fn settle(app: &nova::AppWindow) {
     for _ in 0..10 {

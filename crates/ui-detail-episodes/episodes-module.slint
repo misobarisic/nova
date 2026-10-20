@@ -1,4 +1,3 @@
-import { PillButton } from "../ui/settings-controls.slint";
 import { InterfaceStyle, Theme, Anim, DetailBridge, DetailContent } from "@NovaUiShared";
 import { EpisodePager } from "../ui/episode-pager.slint";
 import { SearchField } from "../ui/searchfield.slint";
@@ -51,11 +50,6 @@ export component DetailEpisodesModule inherits Window {
         spacing: 10px;
         alignment: start;
 
-        PillButton {
-            visible: DetailBridge.modal_episodes && DetailBridge.season_combo_idx >= 0;
-            label: @tr("Download season");
-            clicked => { DetailBridge.season_download_menu = DetailBridge.season_combo_idx; }
-        }
         if !DetailBridge.season_download_active && DetailBridge.season_download_status != "": Text {
             text: DetailBridge.season_download_status;
             color: Theme.current.text_secondary;
