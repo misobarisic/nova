@@ -21,6 +21,8 @@ pub(super) fn supported_identity(type_: &str, id: &str) -> bool {
 const LIMIT: usize = 24;
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(15 * 60);
+const EMPTY_TTL: Duration = Duration::from_secs(5 * 60);
+const TMDB_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 const STALE_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[derive(Serialize, Deserialize)]
@@ -77,9 +79,102 @@ fn read_saved(
         .filter(|saved| saved.usable(authority, now_secs()))
 }
 
+type Completion = Box<dyn FnOnce(Vec<MetaPreview>) + Send>;
+
 #[derive(Default)]
 pub(super) struct Cache {
     entries: HashMap<String, (Instant, Vec<MetaPreview>)>,
+    pending: HashMap<String, Vec<Completion>>,
+    tmdb_retry_after: Option<(u64, Instant)>,
+}
+
+impl Cache {
+    fn get(&self, key: &str, now: Instant) -> Option<Vec<MetaPreview>> {
+        self.entries
+            .get(key)
+            .filter(|(at, rows)| {
+                now.saturating_duration_since(*at) < if rows.is_empty() { EMPTY_TTL } else { TTL }
+            })
+            .map(|(_, rows)| rows.clone())
+    }
+
+    fn tmdb_allowed(&self, key: u64, now: Instant) -> bool {
+        !self
+            .tmdb_retry_after
+            .is_some_and(|(failed_key, until)| failed_key == key && now < until)
+    }
+}
+
+// Detail and Home can ask for the same title together. Share its worker and
+// release every subscriber on cancellation too, without holding the cache lock
+// while callbacks schedule UI work.
+struct Lookup {
+    cache: Arc<Mutex<Cache>>,
+    key: Option<String>,
+}
+
+impl Lookup {
+    fn subscribe(cache: &Arc<Mutex<Cache>>, key: String, then: Completion) -> Option<Self> {
+        let mut state = cache.lock().unwrap();
+        let subscribers = state.pending.entry(key.clone()).or_default();
+        subscribers.push(then);
+        (subscribers.len() == 1).then(|| Self {
+            cache: cache.clone(),
+            key: Some(key),
+        })
+    }
+
+    fn finish(mut self, rows: Vec<MetaPreview>) {
+        let key = self.key.take().unwrap();
+        let subscribers = self
+            .cache
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&key)
+            .unwrap_or_default();
+        for then in subscribers {
+            then(rows.clone());
+        }
+    }
+}
+
+impl Drop for Lookup {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else {
+            return;
+        };
+        let subscribers = self
+            .cache
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&key)
+            .unwrap_or_default();
+        for then in subscribers {
+            then(Vec::new());
+        }
+    }
+}
+
+// Stop the rest of a recommendation batch after any TMDB transport/API error,
+// including HTTP 429. Installed metadata sources remain usable during cooldown.
+fn guarded_fetch(
+    cache: &Mutex<Cache>,
+    tmdb_key: u64,
+    url: &str,
+    now: Instant,
+    fetch: impl FnOnce() -> Result<Vec<u8>, nova_providers::ProviderHostError>,
+) -> Option<Vec<u8>> {
+    let is_tmdb = url.starts_with("https://api.themoviedb.org/3/");
+    if is_tmdb && !cache.lock().unwrap().tmdb_allowed(tmdb_key, now) {
+        return None;
+    }
+    let result = fetch();
+    if is_tmdb && result.is_err() {
+        cache.lock().unwrap().tmdb_retry_after = Some((tmdb_key, now + TMDB_FAILURE_COOLDOWN));
+    }
+    result.ok()
 }
 
 fn inventory_key(installed: &[Installed], tmdb: &tmdb::Settings) -> String {
@@ -144,11 +239,14 @@ impl Bridge {
         };
         let authority = inventory_key(&installed, &tmdb);
         let key = memory_key(&authority, settings_generation, &type_, &id);
+        let Some(lookup) = Lookup::subscribe(&cache, key.clone(), Box::new(then)) else {
+            return;
+        };
         let shared = self.shared.clone();
         profiles::thread::spawn(move || {
             profiles::with_context(context.clone(), || {
                 let Some(inventory) = inventory else {
-                    then(Vec::new());
+                    lookup.finish(Vec::new());
                     return;
                 };
                 inventory.with(|| {
@@ -170,18 +268,12 @@ impl Bridge {
                                 }
                         };
                         if !current() {
-                            then(Vec::new());
+                            lookup.finish(Vec::new());
                             return;
                         }
-                        let cached = cache
-                            .lock()
-                            .unwrap()
-                            .entries
-                            .get(&key)
-                            .filter(|(at, _)| at.elapsed() < TTL)
-                            .map(|(_, rows)| rows.clone());
+                        let cached = cache.lock().unwrap().get(&key, Instant::now());
                         if let Some(rows) = cached {
-                            then(rows);
+                            lookup.finish(rows);
                             return;
                         }
                         let save_authority = saved_authority(&installed, &tmdb);
@@ -189,7 +281,7 @@ impl Bridge {
                         if let Some(saved) = &saved
                             && now_secs().saturating_sub(saved.fetched_at) < TTL.as_secs()
                         {
-                            then(saved.rows.clone());
+                            lookup.finish(saved.rows.clone());
                             return;
                         }
                         let started = Instant::now();
@@ -202,16 +294,17 @@ impl Bridge {
                                 return None;
                             }
                             remaining_requests -= 1;
-                            net::fetch_metadata_bytes(
-                                url,
-                                remaining.min(Duration::from_secs(4)),
-                                RESPONSE_LIMIT,
-                            )
-                            .ok()
+                            guarded_fetch(&cache, tmdb.authority().0, url, Instant::now(), || {
+                                net::fetch_metadata_bytes(
+                                    url,
+                                    remaining.min(Duration::from_secs(4)),
+                                    RESPONSE_LIMIT,
+                                )
+                            })
                         };
                         let mut rows = retrieve(&installed, &type_, &id, &tmdb, &mut fetch);
                         if !current() {
-                            then(Vec::new());
+                            lookup.finish(Vec::new());
                             return;
                         }
                         if rows.is_empty() {
@@ -229,7 +322,9 @@ impl Bridge {
                             );
                         }
                         let mut cache = cache.lock().unwrap();
-                        cache.entries.retain(|_, (at, _)| at.elapsed() < TTL);
+                        cache.entries.retain(|_, (at, rows)| {
+                            at.elapsed() < if rows.is_empty() { EMPTY_TTL } else { TTL }
+                        });
                         if cache.entries.len() >= 64
                             && let Some(oldest) = cache
                                 .entries
@@ -239,11 +334,9 @@ impl Bridge {
                         {
                             cache.entries.remove(&oldest);
                         }
-                        if !rows.is_empty() {
-                            cache.entries.insert(key, (Instant::now(), rows.clone()));
-                        }
+                        cache.entries.insert(key, (Instant::now(), rows.clone()));
                         drop(cache);
-                        then(rows);
+                        lookup.finish(rows);
                     });
                 });
             });
@@ -251,12 +344,8 @@ impl Bridge {
     }
 
     pub(super) fn load_detail_similar(&self) {
-        if !self
-            .app()
-            .is_some_and(|app| app.get_detail_tab() == 0 && !app.get_stream_selector_open())
-        {
-            return;
-        }
+        // Fetch for the opened title, including Episodes and direct streams.
+        // Catalog/episode prefetch never calls this detail entry point.
         let prefer_tmdb =
             tmdb::Settings::from_settings(&self.shared.lock().unwrap().cache_settings).configured();
         let Some((type_, id, token, original_rows)) = self
@@ -298,10 +387,11 @@ impl Bridge {
             let memory = cache
                 .lock()
                 .unwrap()
-                .entries
-                .get(&memory_key(&authority, generation, &type_, &id))
-                .filter(|(at, _)| at.elapsed() < TTL)
-                .map(|(_, rows)| rows.clone());
+                .get(
+                    &memory_key(&authority, generation, &type_, &id),
+                    Instant::now(),
+                )
+                .filter(|rows| !rows.is_empty());
             memory.or_else(|| read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows))
         };
         if let Some(rows) = &cached_rows {
@@ -805,6 +895,129 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn concurrent_recommendation_requests_share_results_and_release_cancelled_waiters() {
+        let cache = Arc::new(Mutex::new(Cache::default()));
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let subscribe = || {
+            let received = received.clone();
+            let unlocked = cache.clone();
+            Lookup::subscribe(
+                &cache,
+                "series:one".into(),
+                Box::new(move |rows| {
+                    assert!(
+                        unlocked.try_lock().is_ok(),
+                        "callbacks run outside the cache lock"
+                    );
+                    received.lock().unwrap().push(rows);
+                }),
+            )
+        };
+        let first = subscribe().unwrap();
+        assert!(subscribe().is_none(), "Detail and Home share one fetch");
+        first.finish(vec![MetaPreview {
+            id: "tt1".into(),
+            ..Default::default()
+        }]);
+        let rows = received.lock().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], rows[1]);
+        assert_eq!(rows[0][0].id, "tt1");
+        drop(rows);
+        drop(subscribe().unwrap());
+        assert!(received.lock().unwrap().last().unwrap().is_empty());
+        assert!(
+            subscribe().is_some(),
+            "cancelled work does not block later attempts"
+        );
+    }
+
+    #[test]
+    fn completed_lookup_does_not_cancel_a_reentrant_replacement() {
+        let cache = Arc::new(Mutex::new(Cache::default()));
+        let replacement = Arc::new(Mutex::new(None));
+        let next_cache = cache.clone();
+        let next = replacement.clone();
+        let lookup = Lookup::subscribe(
+            &cache,
+            "one".into(),
+            Box::new(move |_| {
+                *next.lock().unwrap() =
+                    Lookup::subscribe(&next_cache, "one".into(), Box::new(|_| {}));
+            }),
+        )
+        .unwrap();
+        lookup.finish(Vec::new());
+        assert!(cache.lock().unwrap().pending.contains_key("one"));
+        drop(replacement.lock().unwrap().take());
+        assert!(cache.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn empty_results_back_off_without_hiding_successful_cached_titles() {
+        let now = Instant::now();
+        let mut cache = Cache::default();
+        cache.entries.insert("empty".into(), (now, Vec::new()));
+        cache.entries.insert(
+            "ready".into(),
+            (
+                now,
+                vec![MetaPreview {
+                    id: "tt1".into(),
+                    ..Default::default()
+                }],
+            ),
+        );
+        assert_eq!(
+            cache.get("empty", now + EMPTY_TTL - Duration::from_secs(1)),
+            Some(Vec::new())
+        );
+        assert!(cache.get("empty", now + EMPTY_TTL).is_none());
+        assert_eq!(cache.get("ready", now + EMPTY_TTL).unwrap()[0].id, "tt1");
+        assert!(cache.get("ready", now + TTL).is_none());
+    }
+
+    #[test]
+    fn tmdb_failure_pauses_other_tmdb_endpoints_but_not_addons_or_a_new_key() {
+        let cache = Mutex::new(Cache::default());
+        let now = Instant::now();
+        assert!(
+            guarded_fetch(
+                &cache,
+                1,
+                "https://api.themoviedb.org/3/find/tt1",
+                now,
+                || Err(nova_providers::ProviderHostError("HTTP 429".into()))
+            )
+            .is_none()
+        );
+        assert!(
+            guarded_fetch(
+                &cache,
+                1,
+                "https://api.themoviedb.org/3/tv/1/recommendations",
+                now,
+                || panic!("cooldown must suppress subsequent TMDB calls")
+            )
+            .is_none()
+        );
+        for (key, url, at) in [
+            (1, "https://addon.example/meta/series/tt1.json", now),
+            (2, "https://api.themoviedb.org/3/find/tt1", now),
+            (
+                1,
+                "https://api.themoviedb.org/3/find/tt1",
+                now + TMDB_FAILURE_COOLDOWN,
+            ),
+        ] {
+            assert_eq!(
+                guarded_fetch(&cache, key, url, at, || Ok(vec![1])),
+                Some(vec![1])
+            );
+        }
+    }
+
+    #[test]
     fn anime_requires_origin_and_real_similarity_not_broad_genres() {
         let seed: MetaItem = serde_json::from_value(json!({
             "id":"tt1910272", "type":"series", "name":"Steins;Gate",
@@ -1114,7 +1327,7 @@ mod tests {
         bridge.shared.lock().unwrap().detail_snapshots.insert(
             "tt200".into(),
             DetailSnapshot {
-                tab: 0,
+                tab: 3,
                 season: None,
                 filter: String::new(),
             },
@@ -1123,6 +1336,11 @@ mod tests {
             id: "tt200".into(),
             ..entry
         });
+        assert_eq!(
+            app.get_detail_tab(),
+            3,
+            "opening Episodes still hydrates recommendations"
+        );
         assert_eq!(
             app.get_selected_details()
                 .related
