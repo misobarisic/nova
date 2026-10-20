@@ -428,10 +428,11 @@ struct Shared {
     /// In-flight per-addon metadata refreshes (base URLs). Guards the
     /// Refresh button against double-clicks racing two manifest fetches.
     refreshing: HashSet<String>,
-    /// Detail-view snapshots keyed by item id (in-memory only): backing out
-    /// of an entry and reopening it restores tab, season, focused
-    /// episode/stream and keyboard focus instead of starting fresh.
+    /// Detail-view content choices keyed by item id (in-memory only): later
+    /// visits restore the tab, season and filter without stale keyboard focus.
     detail_snapshots: HashMap<String, DetailSnapshot>,
+    /// Only related-title visits form a stack; ordinary catalog opens start fresh.
+    related_detail_history: Vec<detail_extras::RelatedDetailReturn>,
 }
 
 #[derive(Clone, Debug)]
@@ -485,6 +486,7 @@ enum WatchNowOrigin {
 }
 
 /// The item whose detail modal is currently open.
+#[derive(Clone)]
 struct ModalItem {
     details: detail_extras::DetailExtras,
     /// Identity of this opening, including reopens of the same title.

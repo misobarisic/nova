@@ -14,6 +14,8 @@ export component DetailModule inherits Window {
     public function content_open_ep_menu(idx: int, watched: bool, progress: float) { page.content_open_ep_menu(idx, watched, progress); }
     public function content_open_season_menu(idx: int, watched: bool) { page.content_open_season_menu(idx, watched); }
     public function content_scroll_list_to_top(y: length) { page.content_scroll_list_to_top(y); }
+    public pure function content_scroll_y() -> length { return page.content_scroll_y(); }
+    public function content_restore_scroll_y(y: length) { page.content_restore_scroll_y(y); }
     public function content_request_stream_action(id: string) { page.content_request_stream_action(id); }
     page := DetailPage {
         width: 100%; height: 100%;

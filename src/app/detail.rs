@@ -71,6 +71,26 @@ impl Bridge {
         discover_index: Option<usize>,
         watch_now: bool,
     ) {
+        self.shared.lock().unwrap().related_detail_history.clear();
+        self.open_preview_inner(
+            preview,
+            generation,
+            searching,
+            discover_index,
+            watch_now,
+            true,
+        );
+    }
+
+    pub(super) fn open_preview_inner(
+        &self,
+        preview: MetaPreview,
+        generation: u64,
+        searching: bool,
+        discover_index: Option<usize>,
+        watch_now: bool,
+        record_source: bool,
+    ) {
         self.cancel_season_download();
         let _ = (generation, searching);
         let app = match self.app() {
@@ -78,7 +98,19 @@ impl Bridge {
             None => return,
         };
 
-        tracking::remember_source(&preview);
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        content.set_restoring_navigation(!record_source);
+        if record_source {
+            content.set_synopsis_expanded(false);
+            content.set_hero_expanded(false);
+            content.set_trailers_expanded(false);
+        }
+
+        // A Back restoration reconstructs presentation fields, not a fresh
+        // provider identity observation. Retain its existing tracker evidence.
+        if record_source {
+            tracking::remember_source(&preview);
+        }
         if app.get_tracking_open() {
             self.tracking_close();
         }
@@ -4340,6 +4372,7 @@ mod tests {
             MetaPreview {
                 id: "movie".into(),
                 type_: "movie".into(),
+                extra: HashMap::from([("_malId".into(), serde_json::json!(123))]),
                 ..preview
             },
             0,
@@ -4348,6 +4381,97 @@ mod tests {
             false,
         );
         assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
+        // Related-title Back is a nested detail return, not a catalog close.
+        // Mount the real host before replacing its viewport callbacks below.
+        app.show().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        let source_ids = tracking::current_source_ids("movie", "movie");
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        let offset = Rc::new(std::cell::Cell::new(-840.0_f32));
+        let value = offset.clone();
+        content.on_scroll_y(move || value.get());
+        let value = offset.clone();
+        content.on_restore_scroll_y(move |y| value.set(y));
+        content.set_synopsis_expanded(true);
+        content.set_trailers_expanded(true);
+        let related = MetaPreview {
+            id: "child".into(),
+            type_: "series".into(),
+            name: "Child".into(),
+            ..Default::default()
+        };
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .details
+            .related = vec![related];
+        bridge.detail_extra_picked(2, &serde_json::to_string(&("series", "child")).unwrap());
+        assert_eq!(app.get_selected_title(), "Child");
+        assert_eq!(app.get_detail_tab(), 0);
+        assert!(!content.get_synopsis_expanded());
+        offset.set(-420.0);
+        let related = MetaPreview {
+            id: "grandchild".into(),
+            type_: "movie".into(),
+            name: "Grandchild".into(),
+            ..Default::default()
+        };
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .details
+            .related = vec![related];
+        bridge.detail_extra_picked(2, &serde_json::to_string(&("movie", "grandchild")).unwrap());
+        assert_eq!(app.get_selected_title(), "Grandchild");
+        assert!(bridge.related_detail_back());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        assert_eq!(app.get_selected_title(), "Child");
+        assert_eq!(offset.get(), -420.0);
+        assert!(bridge.related_detail_back());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        assert_eq!(offset.get(), -840.0);
+        assert_eq!(app.get_selected_title(), "Featured entry");
+        assert_eq!(tracking::current_source_ids("movie", "movie"), source_ids);
+        assert!(content.get_synopsis_expanded());
+        assert!(content.get_trailers_expanded());
+        assert!(app.get_modal_visible());
+        assert!(!bridge.related_detail_back());
+        // Ordinary catalog opens cannot inherit a related-title stack.
+        bridge.detail_extra_picked(2, &serde_json::to_string(&("series", "child")).unwrap());
+        assert!(bridge.related_detail_back());
+        bridge.detail_extra_picked(2, &serde_json::to_string(&("series", "child")).unwrap());
+        assert_eq!(
+            bridge.shared.lock().unwrap().related_detail_history.len(),
+            1
+        );
+        bridge.open_preview(
+            MetaPreview {
+                id: "unrelated".into(),
+                type_: "movie".into(),
+                name: "Unrelated".into(),
+                ..Default::default()
+            },
+            0,
+            false,
+            None,
+            false,
+        );
+        offset.set(-77.0);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        assert_eq!(
+            offset.get(),
+            -77.0,
+            "a delayed restoration must not scroll a different title"
+        );
+        assert!(!bridge.related_detail_back());
     }
 
     #[test]

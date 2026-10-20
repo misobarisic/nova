@@ -183,8 +183,8 @@ export component DetailPage {
     in property <DetailInfo> selected_details;
     callback detail_extra_picked(int,string);
     in-out property <string> selected_description: "";
-    property <bool> synopsis_expanded: false;
-    property <bool> hero_description_expanded: false;
+    property <bool> synopsis_expanded <=> DetailContent.synopsis_expanded;
+    property <bool> hero_description_expanded <=> DetailContent.hero_expanded;
     property <length> overview_width: root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right;
     property <length> synopsis_width: root.narrow ? root.overview_width : (root.overview_width - 24px) * 0.56;
     property <length> hero_text_width: root.narrow ? root.overview_width : Math.min(650px, root.overview_width * 0.55);
@@ -546,6 +546,10 @@ export component DetailPage {
     public function content_open_ep_menu(idx: int, watched: bool, progress: float) { root.open_ep_menu(idx, watched, progress); }
     public function content_open_season_menu(idx: int, watched: bool) { root.open_season_menu(idx, watched); }
     public function content_scroll_list_to_top(y: length) { root.scroll_list_to_top(y); }
+    public pure function content_scroll_y() -> length { return det_scroll.content-y; }
+    public function content_restore_scroll_y(y: length) {
+        det_scroll.content-y = Math.max(Math.min(0px, det_scroll.height - det_scroll.content-height), Math.min(0px, y));
+    }
 
     // ---- Page pan lock (horizontal rails) ----------------------------
     // The narrow season rail sits inside the vertical detail scroller.
@@ -1072,7 +1076,7 @@ export component DetailPage {
                                     // and animated viewport, using the hero's own width.
                                     height: root.hero_description_expanded ? hero_description_measure.preferred-height + 1px : Math.min(hero_description_measure.preferred-height + 1px, root.narrow ? 66px : 84px);
                                     animate height {
-                                        duration: Anim.transition_slide;
+                                        duration: DetailContent.restoring_navigation ? 0ms : Anim.transition_slide;
                                         easing: ease-in-out;
                                     }
                                     clip: true;
@@ -1285,7 +1289,7 @@ export component DetailPage {
                                             // and elide whole lines instead of clipping glyphs.
                                             height: root.synopsis_expanded ? synopsis_measure.preferred-height + 1px : Math.min(synopsis_measure.preferred-height + 1px, root.narrow ? 80px : 84px);
                                             animate height {
-                                                duration: Anim.transition_slide;
+                                                duration: DetailContent.restoring_navigation ? 0ms : Anim.transition_slide;
                                                 easing: ease-in-out;
                                             }
                                             clip: true;

@@ -1,4 +1,4 @@
-import { DetailInfo, DetailActionRow, Theme, InterfaceStyle, Anim } from "@NovaUiShared";
+import { DetailInfo, DetailActionRow, DetailContent, Theme, InterfaceStyle, Anim } from "@NovaUiShared";
 import { PillButton } from "settings-controls.slint";
 import { IcPlay, IcChevronRight } from "icons.slint";
 
@@ -136,10 +136,9 @@ export component DetailExtrasPanel inherits Rectangle {
     in property <length> available-width;
     property <int> related_columns: root.narrow ? 2 : (InterfaceStyle.tv ? 4 : 5);
     callback picked(int,string);
-    property <bool> trailers_expanded: false;
-    changed info => { root.trailers_expanded = false; }
+    property <bool> trailers_expanded <=> DetailContent.trailers_expanded;
     property <float> trailer_reveal: root.trailers_expanded ? 1.0 : 0.0;
-    animate trailer_reveal { duration: Anim.transition_slide; easing: ease-in-out; }
+    animate trailer_reveal { duration: DetailContent.restoring_navigation ? 0ms : Anim.transition_slide; easing: ease-in-out; }
     // Resolve immediately if motion is disabled during a reveal.
     property <float> trailer_progress: Anim.enabled && Anim.transitions ? root.trailer_reveal : (root.trailers_expanded ? 1.0 : 0.0);
     height: body.preferred-height;

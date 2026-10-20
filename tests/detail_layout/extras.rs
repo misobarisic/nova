@@ -154,6 +154,15 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
         .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
         .unwrap();
         let related_size = related.size();
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        let offset = content.invoke_scroll_y();
+        assert!(offset < 0.0);
+        content.invoke_scroll_list_to_top(-100_000.0);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert!(content.invoke_scroll_y().abs() < 1.0);
+        content.invoke_restore_scroll_y(offset);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert!((content.invoke_scroll_y() - offset).abs() < 1.0);
         assert!(
             related_size.width < width as f32 / 1.8,
             "related poster button {:?} at viewport {width}: {related_size:?}",
@@ -222,5 +231,17 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
         ElementHandle::find_by_accessible_label(&app, "Official trailer")
             .next()
             .is_none()
+    );
+    app.on_related_detail_back(|| true);
+    app.invoke_detail_bridge_back();
+    assert!(
+        app.get_modal_visible(),
+        "a nested detail return retains the shell"
+    );
+    app.on_related_detail_back(|| false);
+    app.invoke_detail_bridge_back();
+    assert!(
+        !app.get_modal_visible(),
+        "the final Back returns to the catalog"
     );
 }

@@ -746,6 +746,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_modal_closed(move || b.modal_closed());
+    let b = bridge.clone();
+    app.on_related_detail_back(move || b.related_detail_back());
 
     // Library callbacks.
     let b = bridge.clone();

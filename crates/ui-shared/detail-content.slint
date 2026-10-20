@@ -27,6 +27,10 @@ export global DetailContent {
     in-out property <int> episode_focus_request;
     in-out property <bool> filter_focused;
     in-out property <bool> kb_edit;
+    in-out property <bool> synopsis_expanded;
+    in-out property <bool> hero_expanded;
+    in-out property <bool> trailers_expanded;
+    in-out property <bool> restoring_navigation;
     in-out property <int> tracking_back_request;
     in-out property <int> tracking_focus_request;
     pure callback entry_index(string) -> int;
@@ -42,6 +46,8 @@ export global DetailContent {
     callback open_ep_menu(int, bool, float);
     callback open_season_menu(int, bool);
     callback scroll_list_to_top(length);
+    pure callback scroll_y() -> length;
+    callback restore_scroll_y(length);
     callback request_stream_action(string);
     callback recover_entry_focus();
 }

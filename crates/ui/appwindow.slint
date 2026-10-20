@@ -1656,6 +1656,7 @@ export component AppWindow inherits Window {
     callback episode_filter_changed(string);
     callback watch_now();
     callback modal_closed();
+    callback related_detail_back() -> bool;
     callback load_more();
     // Preload fetch windows (visible ±2 rows) for poster loading/unloading
     // (Discover / Library).
@@ -2031,11 +2032,13 @@ export component AppWindow inherits Window {
     public function detail_bridge_tracking_edit(a0: string, a1: string, a2: int, a3: string, a4: bool, a5: string, a6: bool, a7: string) {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
     public function detail_bridge_tracking_action(a0: string, a1: int) {root.tracking_action(a0,a1);}
     public function detail_bridge_back() {
+        if !root.related_detail_back() {
             root.library_duplicates_open = false;
             root.categories_modal = false;
             root.modal_visible = false;
             root.modal_closed();
         }
+    }
     public function detail_bridge_episodes_back() { root.episodes_back(); }
     public function detail_bridge_add_to_library() { root.add_to_library(); }
     public function detail_bridge_library_action(a: int) { root.detail_library_action(a); }

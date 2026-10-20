@@ -700,6 +700,13 @@ impl Bridge {
     }
 
     pub(super) fn open_library_entry(&self, e: LibraryEntry) {
+        if let Some(app) = self.app() {
+            let content = (*app).global::<nova_ui_shared::DetailContent>();
+            content.set_restoring_navigation(false);
+            content.set_synopsis_expanded(false);
+            content.set_hero_expanded(false);
+            content.set_trailers_expanded(false);
+        }
         let index = self
             .current_library_candidates()
             .iter()
@@ -712,6 +719,7 @@ impl Bridge {
 
         {
             let mut state = self.shared.lock().unwrap();
+            state.related_detail_history.clear();
             state.modal_item = Some(ModalItem {
                 details: Default::default(),
                 open_token: Arc::new(()),

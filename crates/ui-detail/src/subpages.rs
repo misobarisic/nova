@@ -27,6 +27,10 @@ pub fn prepare_subpages(shared: &std::rc::Rc<NovaUiSharedSharedGlobals>) {
     content.set_episode_search_open(false);
     content.set_filter_focused(false);
     content.set_kb_edit(false);
+    content.set_synopsis_expanded(false);
+    content.set_hero_expanded(false);
+    content.set_trailers_expanded(false);
+    content.set_restoring_navigation(false);
     content.set_tracking_back_request(0);
     content.set_tracking_focus_request(0);
 }
@@ -79,6 +83,17 @@ pub fn install_subpages(app: &DetailModule) {
     content.on_scroll_list_to_top(move |y| {
         if let Some(app) = weak.upgrade() {
             app.invoke_content_scroll_list_to_top(y);
+        }
+    });
+    let weak = app.as_weak();
+    content.on_scroll_y(move || {
+        weak.upgrade()
+            .map_or(0.0, |app| app.invoke_content_scroll_y())
+    });
+    let weak = app.as_weak();
+    content.on_restore_scroll_y(move |y| {
+        if let Some(app) = weak.upgrade() {
+            app.invoke_content_restore_scroll_y(y);
         }
     });
     let weak = app.as_weak();

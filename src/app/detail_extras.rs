@@ -22,6 +22,14 @@ pub(super) struct DetailLink {
     pub url: String,
 }
 
+pub(super) struct RelatedDetailReturn {
+    modal: ModalItem,
+    scroll_y: f32,
+    selected_index: i32,
+    child_token: Arc<()>,
+    expanded: [bool; 3],
+}
+
 fn clean(value: &str) -> String {
     value
         .chars()
@@ -206,6 +214,100 @@ impl DetailExtras {
 }
 
 impl Bridge {
+    pub(super) fn related_detail_back(&self) -> bool {
+        let Some(app) = self.app() else { return false };
+        let previous = {
+            let mut state = self.shared.lock().unwrap();
+            if !state.related_detail_history.last().is_some_and(|entry| {
+                state
+                    .modal_item
+                    .as_ref()
+                    .is_some_and(|modal| Arc::ptr_eq(&modal.open_token, &entry.child_token))
+            }) {
+                state.related_detail_history.clear();
+                return false;
+            }
+            state.related_detail_history.pop().unwrap()
+        };
+        self.save_detail_snapshot();
+        let preview = MetaPreview {
+            id: previous.modal.id.clone(),
+            type_: previous.modal.type_.clone(),
+            name: previous.modal.name.clone(),
+            poster: Some(previous.modal.poster_url.clone()),
+            background: Some(previous.modal.background_url.clone()),
+            logo: Some(previous.modal.logo_url.clone()),
+            description: Some(previous.modal.description.clone()),
+            genres: previous.modal.genres.clone(),
+            release_info: Some(previous.modal.year.clone().into()),
+            ..Default::default()
+        };
+        self.open_preview_inner(
+            preview,
+            0,
+            false,
+            usize::try_from(previous.selected_index).ok(),
+            false,
+            false,
+        );
+        let token = {
+            let mut state = self.shared.lock().unwrap();
+            let token = state.modal_item.as_ref().unwrap().open_token.clone();
+            let episodes_loading = state.modal_item.as_ref().unwrap().episodes_loading;
+            let mut modal = previous.modal;
+            modal.open_token = token.clone();
+            modal.pending_watch_now = None;
+            modal.episodes_loading = episodes_loading;
+            state.modal_item = Some(modal);
+            if let Some(parent) = state.related_detail_history.last_mut() {
+                parent.child_token = token.clone();
+            }
+            token
+        };
+        let episodes = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|modal| !modal.videos.is_empty())
+            .map(|modal| (modal.id.clone(), modal.videos.clone()));
+        if let Some((id, videos)) = episodes {
+            self.show_episode_picker(id, videos);
+        }
+        self.refresh_watch_action();
+        self.publish_detail_extras();
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        content.set_synopsis_expanded(previous.expanded[0]);
+        content.set_hero_expanded(previous.expanded[1]);
+        content.set_trailers_expanded(previous.expanded[2]);
+        // Similar cards live in Overview; preserve its mounted body until
+        // layout has consumed the restored models before restoring the offset.
+        app.set_detail_tab(0);
+        let bridge = self.clone();
+        let context = profiles::capture();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            if profiles::is_current(&context)
+                && bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .is_some_and(|modal| Arc::ptr_eq(&modal.open_token, &token))
+                && let Some(app) = bridge.app()
+            {
+                (*app)
+                    .global::<nova_ui_shared::DetailContent>()
+                    .invoke_restore_scroll_y(previous.scroll_y);
+                (*app)
+                    .global::<nova_ui_shared::DetailContent>()
+                    .set_restoring_navigation(false);
+            }
+        });
+        true
+    }
+
     pub(super) fn publish_detail_extras(&self) {
         let Some(app) = self.app() else {
             return;
@@ -396,7 +498,33 @@ impl Bridge {
                     .cloned()
                 {
                     self.save_detail_snapshot();
-                    self.open_preview(preview, 0, false, None, false);
+                    let previous = self.shared.lock().unwrap().modal_item.clone();
+                    let scroll_y = (*app)
+                        .global::<nova_ui_shared::DetailContent>()
+                        .invoke_scroll_y();
+                    let content = (*app).global::<nova_ui_shared::DetailContent>();
+                    let expanded = [
+                        content.get_synopsis_expanded(),
+                        content.get_hero_expanded(),
+                        content.get_trailers_expanded(),
+                    ];
+                    let selected_index = app.get_selected_index();
+                    self.open_preview_inner(preview, 0, false, None, false, true);
+                    app.set_detail_tab(0);
+                    if let Some(modal) = previous {
+                        let mut state = self.shared.lock().unwrap();
+                        let child_token = state.modal_item.as_ref().unwrap().open_token.clone();
+                        if state.related_detail_history.len() >= 32 {
+                            state.related_detail_history.remove(0);
+                        }
+                        state.related_detail_history.push(RelatedDetailReturn {
+                            modal,
+                            scroll_y,
+                            selected_index,
+                            child_token,
+                            expanded,
+                        });
+                    }
                     // Related picks reuse the mounted Detail shell. Return to
                     // its header instead of leaving the new title at the old
                     // recommendation row's scroll position.

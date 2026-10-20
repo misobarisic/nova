@@ -1162,6 +1162,7 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = None;
+            state.related_detail_history.clear();
             state.streams.clear();
             state.stream_all.clear();
             state.stream_addons.clear();
@@ -1170,6 +1171,9 @@ impl Bridge {
             state.stream_filter = 0;
         }
         if let Some(app) = self.app() {
+            (*app)
+                .global::<nova_ui_shared::DetailContent>()
+                .set_restoring_navigation(false);
             app.set_modal_episodes(false);
             app.set_stream_selector_open(false);
             app.set_detail_episode_reveal_request(0);
