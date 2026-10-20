@@ -105,13 +105,15 @@ fn publish_signing_in_accounts(app: &nova::AppWindow) {
     );
 }
 
-async fn focus_return_input(
+async fn focus_tracking_input(
     app: &nova::AppWindow,
     failures: &RefCell<Vec<String>>,
     stage: &str,
+    label: &str,
 ) -> bool {
     let mut input = None;
-    for _ in 0..4 {
+    let mut tmdb_expanded = false;
+    for _ in 0..8 {
         // The headless backend has no renderer to measure nested account
         // layouts. A previous visit also retains its scroll offset, which may
         // leave the first account above the viewport after returning to it.
@@ -121,11 +123,39 @@ async fn focus_return_input(
         {
             let _ = (element.size(), element.absolute_position());
         }
+        if label == "TMDB API key (v3)" {
+            // TMDB is now a normal collapsed service disclosure. Reach and
+            // expand its actual header before focusing its masked editor.
+            if !tmdb_expanded
+                && let Some(header) =
+                    ElementHandle::find_by_accessible_label(app, "TMDB").find(|element| {
+                        let y = element.absolute_position().y;
+                        element.accessible_role() == Some(AccessibleRole::Button)
+                            && y >= 50.0
+                            && y + element.size().height <= app.window().size().height as f32 - 50.0
+                    })
+            {
+                header
+                    .single_click(slint::platform::PointerEventButton::Left)
+                    .await;
+                tmdb_expanded = true;
+                settle().await;
+            }
+            input = ElementHandle::find_by_accessible_label(app, label)
+                .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput));
+            if input.is_some() {
+                break;
+            }
+        }
         app.window()
             .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
                 position: slint::LogicalPosition::new(195.0, 450.0),
                 delta_x: 0.0,
-                delta_y: 650.0,
+                delta_y: if label == "TMDB API key (v3)" {
+                    -450.0
+                } else {
+                    650.0
+                },
             });
         settle().await;
         for element in ElementQuery::from_root(app)
@@ -134,7 +164,7 @@ async fn focus_return_input(
         {
             let _ = (element.size(), element.absolute_position());
         }
-        input = ElementHandle::find_by_accessible_label(app, "Full return URL")
+        input = ElementHandle::find_by_accessible_label(app, label)
             .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput));
         if input.is_some() {
             break;
@@ -183,7 +213,7 @@ async fn focus_return_input(
             })
             .collect::<Vec<_>>();
         failures.borrow_mut().push(format!(
-            "{stage}: missing sign-in return URL text-input control after account layout and scroll settled; scroll_y={}; root accounts: {accounts:?}; bridged accounts: {bridged_accounts:?}; MyAnimeList headers: {headers:?}; account cards: {cards:?}; visible inputs: {visible_inputs:?}", app.get_settings_scroll_y()
+            "{stage}: missing {label} text-input control after account layout and scroll settled; scroll_y={}; root accounts: {accounts:?}; bridged accounts: {bridged_accounts:?}; MyAnimeList headers: {headers:?}; account cards: {cards:?}; visible inputs: {visible_inputs:?}", app.get_settings_scroll_y()
         ));
         return false;
     };
@@ -193,7 +223,7 @@ async fn focus_return_input(
         .await;
     settle().await;
     // A text key must reach the editor; this guards against accidentally
-    // clicking the nearby caption rather than the LineEdit itself.
+    // clicking the nearby caption rather than the input itself.
     let typed = app
         .window()
         .dispatch_event_with_result(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
@@ -208,7 +238,7 @@ async fn focus_return_input(
         && after.as_ref().is_some_and(|value| value.contains('x'));
     if !focused {
         failures.borrow_mut().push(format!(
-            "sign-in return URL must accept typed text before Back: result={typed:?}, before={before:?}, after={after:?}, position={:?}, size={:?}",
+            "{label} must accept typed text before Back: result={typed:?}, before={before:?}, after={after:?}, position={:?}, size={:?}",
             input.absolute_position(),
             input.size(),
         ));
@@ -294,7 +324,13 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         let failures = &recorded_failures;
         settle().await;
         if !open_tracking(&app, failures).await
-            || !focus_return_input(&app, failures, "first mount / system Back").await
+            || !focus_tracking_input(
+                &app,
+                failures,
+                "first mount / system Back",
+                "Full return URL",
+            )
+            .await
         {
             slint::quit_event_loop().unwrap();
             return;
@@ -340,7 +376,13 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         publish_signing_in_accounts(&app);
         settle().await;
         if !open_tracking(&app, failures).await
-            || !focus_return_input(&app, failures, "second mount / pointer Back").await
+            || !focus_tracking_input(
+                &app,
+                failures,
+                "second mount / pointer Back",
+                "TMDB API key (v3)",
+            )
+            .await
         {
             slint::quit_event_loop().unwrap();
             return;

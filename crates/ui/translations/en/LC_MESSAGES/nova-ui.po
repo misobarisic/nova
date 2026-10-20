@@ -1010,3 +1010,6 @@ msgstr "On"
 
 msgid "Cross-device sync"
 msgstr "Cross-device sync"
+
+msgid "Powered by TMDB"
+msgstr "Powered by TMDB"

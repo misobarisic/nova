@@ -151,7 +151,7 @@ impl DetailExtras {
                     .or_else(|| value.get("metas").and_then(serde_json::Value::as_array))
                     .or_else(|| value.get("parts").and_then(serde_json::Value::as_array));
                 for value in rows.into_iter().flatten().take(24) {
-                    if let Ok(preview) = serde_json::from_value::<MetaPreview>(value.clone())
+                    if let Ok(mut preview) = serde_json::from_value::<MetaPreview>(value.clone())
                         && !preview.id.is_empty()
                         && preview.id.len() <= 512
                         && !preview.id.chars().any(char::is_control)
@@ -165,6 +165,7 @@ impl DetailExtras {
                             .any(|p| p.id == preview.id && p.type_ == preview.type_)
                         && result.related.len() < 24
                     {
+                        preview.extra.remove(similar::RECOMMENDATION_SOURCE);
                         result.related.push(preview);
                     }
                 }
@@ -326,6 +327,7 @@ impl Bridge {
             .into()
         };
         app.set_selected_details(crate::DetailInfo {
+            related_tmdb: similar::tmdb_attribution(&extras.related),
             facts: Rc::new(VecModel::from(
                 [
                     ("IMDb rating", &extras.rating),
@@ -553,7 +555,7 @@ mod tests {
             "country":["US","UK"], "language":"English", "status":"released",
             "trailerStreams":[{"ytId":"abc-123_X","name":"Official trailer"}],
             "trailers":[{"source":"abc-123_X"},{"source":"second","name":"Teaser"}],
-            "recommendations":[{"id":"tt2","type":"movie","name":"Related"}, {"id":"tt1","type":"movie","name":"Self"}, {"name":"Broken"}]
+            "recommendations":[{"id":"tt2","type":"movie","name":"Related", "novaRecommendationSource":"tmdb"}, {"id":"tt1","type":"movie","name":"Self"}, {"name":"Broken"}]
         })).unwrap();
         let details = DetailExtras::from_item(&item);
         assert_eq!(details.cast, ["Alice", "Bob"]);
@@ -563,6 +565,10 @@ mod tests {
         assert_eq!(details.trailers[0].title, "Official trailer");
         assert_eq!(details.related.len(), 1);
         assert_eq!(details.related[0].id, "tt2");
+        assert!(
+            !similar::tmdb_attribution(&details.related),
+            "an addon cannot claim app-owned TMDB provenance"
+        );
         let mut restored: DetailExtras =
             serde_json::from_str(&serde_json::to_string(&details).unwrap()).unwrap();
         assert!(!restored.merge(&DetailExtras::default()));

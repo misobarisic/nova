@@ -357,3 +357,172 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
         "the final Back returns to the catalog"
     );
 }
+
+fn attribution_settle(app: &nova::AppWindow) {
+    for _ in 0..10 {
+        for element in i_slint_backend_testing::ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.absolute_position(), element.size());
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        slint::platform::update_timers_and_animations();
+    }
+}
+fn recommendation_info(credit: bool, count: usize) -> nova::DetailInfo {
+    let titles = ["Arrival", "Moon", "Contact", "Solaris", "Interstellar"];
+    nova::DetailInfo {
+        related_tmdb: credit,
+        related: Rc::new(VecModel::from(
+            titles
+                .into_iter()
+                .take(count)
+                .map(|title| nova::DetailActionRow {
+                    title: title.into(),
+                    subtitle: "Movie".into(),
+                    target: title.into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn tmdb_credit_follows_nonempty_related_cards_and_stays_below_them() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tmdb_credit_follows_nonempty_related_cards_and_stays_below_them"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_detail_tab(0);
+    app.set_detail_is_movie(true);
+    app.set_selected_title("Arrival".into());
+    app.show().unwrap();
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 2400));
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, 2400.0),
+            });
+        for (language, label) in [("en", "Powered by TMDB"), ("hr", "Podaci: TMDB")] {
+            slint::select_bundled_translation(language).unwrap();
+            for (credit, count) in [(true, 2), (false, 2), (true, 0)] {
+                app.set_selected_details(recommendation_info(credit, count));
+                attribution_settle(&app);
+                let footer = ElementHandle::find_by_accessible_label(&app, label).next();
+                if !credit || count == 0 {
+                    assert!(
+                        footer.is_none(),
+                        "fallback/empty detail must not claim TMDB credit"
+                    );
+                    continue;
+                }
+                let footer = footer.expect("trusted nonempty related titles get attribution");
+                let p = footer.absolute_position();
+                let size = footer.size();
+                let panel = ElementHandle::find_by_element_id(&app, "DetailPage::extras_content")
+                    .next()
+                    .unwrap();
+                let origin = panel.absolute_position();
+                let bounds = panel.size();
+                assert!(
+                    p.x >= origin.x - 0.5 && p.x + size.width <= origin.x + bounds.width + 0.5,
+                    "{width}px attribution stays inside its detail section"
+                );
+                let bottom = ElementHandle::find_by_element_type_name(&app, "DetailRelatedPoster")
+                    .map(|card| card.absolute_position().y + card.size().height)
+                    .fold(0.0, f32::max);
+                assert!(
+                    p.y >= bottom + 10.0,
+                    "{width}px credit must sit below all related cards"
+                );
+                assert!(p.y + size.height <= origin.y + bounds.height + 0.5);
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}
+
+#[test]
+#[cfg(feature = "desktop")]
+#[ignore = "requires a display; optional native recommendation attribution preview"]
+fn render_tmdb_detail_footer_previews() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::render_tmdb_detail_footer_previews"
+    )) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_detail_tab(0);
+    app.set_detail_is_movie(true);
+    app.set_selected_title("Science fiction discoveries".into());
+    app.set_selected_details(recommendation_info(true, 2));
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    let stage = Rc::new(std::cell::Cell::new(0));
+    let phase = stage.clone();
+    let weak = app.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(650),
+        move || {
+            let app = weak.upgrade().unwrap();
+            if matches!(phase.get(), 0 | 2) {
+                (*app)
+                    .global::<nova_ui_shared::DetailContent>()
+                    .invoke_scroll_list_to_top(100_000.0);
+                phase.set(phase.get() + 1);
+                return;
+            }
+            let (width, height, name) = if phase.get() == 1 {
+                (390, 844, "tmdb-detail-footer-phone")
+            } else {
+                (1280, 800, "tmdb-detail-footer-desktop")
+            };
+            let footer = ElementHandle::find_by_accessible_label(&app, "Powered by TMDB")
+                .next()
+                .expect("visible recommendation attribution");
+            let pos = footer.absolute_position();
+            assert!(pos.x >= 0.0 && pos.x + footer.size().width <= width as f32 + 0.5);
+            assert!(pos.y >= 0.0 && pos.y + footer.size().height <= height as f32 + 0.5);
+            let pixels = app.window().take_snapshot().unwrap();
+            assert_eq!((pixels.width(), pixels.height()), (width, height));
+            if let Some(dir) = std::env::var_os("NOVA_FEATURE_PREVIEW_DIR") {
+                std::fs::create_dir_all(&dir).unwrap();
+                image::save_buffer(
+                    std::path::PathBuf::from(dir).join(format!("{name}.png")),
+                    pixels.as_bytes(),
+                    pixels.width(),
+                    pixels.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            if phase.get() == 1 {
+                app.window().set_size(slint::PhysicalSize::new(1280, 800));
+                app.set_selected_details(recommendation_info(true, 5));
+                phase.set(2);
+            } else {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    app.run().unwrap();
+}

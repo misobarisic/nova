@@ -236,6 +236,11 @@ export component DetailExtrasPanel inherits Rectangle {
                     picked => { root.picked(2, title.target); }
                 }
             }
+            if root.info.related_tmdb: Text {
+                width: 100%;
+                text: @tr("Powered by TMDB"); font-size: root.narrow ? 11px : 12px;
+                color: Theme.current.text_muted; horizontal-alignment: right;
+            }
         }
     }
 }

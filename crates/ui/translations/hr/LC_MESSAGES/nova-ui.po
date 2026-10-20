@@ -4228,3 +4228,6 @@ msgstr "Oznaku scene nije moguće spremiti. Vaša je bilješka sačuvana."
 
 msgid "On"
 msgstr "Uključeno"
+
+msgid "Powered by TMDB"
+msgstr "Podaci: TMDB"

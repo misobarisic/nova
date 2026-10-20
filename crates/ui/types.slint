@@ -17,6 +17,7 @@ export struct DetailInfo {
     facts: [DetailActionRow],
     cast: [string], directors: [string], writers: [string],
     trailers: [DetailActionRow], related: [DetailActionRow],
+    related_tmdb: bool,
 }
 
 export struct ProfileRow {
@@ -166,6 +167,7 @@ export struct HomeCatalogRow {
 /// One non-empty catalog rail on the Home landing page.
 export struct HomeCatalogSection {
     title: string,
+    tmdb_attribution: bool,
     first_card: int,
     card_count: int,
     is_history: bool,

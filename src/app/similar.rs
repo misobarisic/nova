@@ -18,6 +18,19 @@ pub(super) fn supported_identity(type_: &str, id: &str) -> bool {
             }))
 }
 
+/// App-owned provenance survives our recommendation caches. Addon payloads
+/// cannot assert it merely by including a similarly named extension field.
+pub(super) const RECOMMENDATION_SOURCE: &str = "novaRecommendationSource";
+pub(super) fn tmdb_attribution(rows: &[MetaPreview]) -> bool {
+    rows.iter().any(|preview| {
+        preview
+            .extra
+            .get(RECOMMENDATION_SOURCE)
+            .and_then(serde_json::Value::as_str)
+            == Some("tmdb")
+    })
+}
+
 const LIMIT: usize = 24;
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(15 * 60);
@@ -613,6 +626,7 @@ fn retrieve(
                 rows.into_iter()
                     .take(100)
                     .map(|mut preview| {
+                        preview.extra.remove(RECOMMENDATION_SOURCE);
                         preview
                             .extra
                             .insert("novaSourceUrl".into(), owner.clone().into());
@@ -660,6 +674,7 @@ fn retrieve(
             {
                 item.preview.extra.extend(item.extra);
                 candidate.extra.extend(item.preview.extra);
+                candidate.extra.remove(RECOMMENDATION_SOURCE);
                 candidate
                     .extra
                     .insert("novaSourceUrl".into(), addon.url.clone().into());
@@ -1398,6 +1413,30 @@ mod tests {
     }
 
     #[test]
+    fn trusted_tmdb_provenance_survives_memory_and_saved_cache() {
+        let rows = vec![MetaPreview {
+            id: "tt2".into(),
+            type_: "movie".into(),
+            name: "Actual TMDB recommendation".into(),
+            extra: HashMap::from([(RECOMMENDATION_SOURCE.into(), serde_json::json!("tmdb"))]),
+            ..Default::default()
+        }];
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        cache.entries.insert("title".into(), (now, rows.clone()));
+        assert!(tmdb_attribution(&cache.get("title", now).unwrap()));
+        let saved = SavedTitles {
+            authority: 1,
+            fetched_at: now_secs(),
+            rows,
+        };
+        let restored: SavedTitles =
+            serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert!(tmdb_attribution(&restored.rows));
+        assert!(!tmdb_attribution(&[]));
+    }
+
+    #[test]
     fn installed_authority_exact_identity_and_explicit_related_win() {
         let mut addon = Installed {
             url: "https://installed.example".into(), label: "Installed".into(), enabled: true,
@@ -1423,11 +1462,15 @@ mod tests {
             &mut |url| {
                 calls += 1;
                 assert!(url.starts_with("https://installed.example/meta/series/tt100.json"));
-                Some(serde_json::to_vec(&json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "related":[{"id":"related","type":"series","name":"Actual relation", "novaSourceUrl":"https://forged.example"}]}})).unwrap())
+                Some(serde_json::to_vec(&json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "related":[{"id":"related","type":"series","name":"Actual relation", "novaSourceUrl":"https://forged.example", "novaRecommendationSource":"tmdb"}]}})).unwrap())
             },
         );
         assert_eq!(calls, 1);
         assert_eq!(explicit[0].id, "related");
+        assert!(
+            !tmdb_attribution(&explicit),
+            "explicit addon relations cannot forge TMDB credit"
+        );
         assert_eq!(
             explicit[0].extra["novaSourceUrl"],
             "https://installed.example"
@@ -1479,7 +1522,7 @@ mod tests {
                 json!({"meta":{"id":"tt100", "type":"series", "name":"Seed", "genres":["Not advertised", "Action & Adventure", "Crime", "Mystery", "Drama"], "description":"An investigator uncovers a criminal conspiracy behind mysterious disappearances."}})
             } else {
                 json!({"metas":[
-                    {"id":"related", "type":"series", "name":"Related", "genres":["Crime", "Mystery"], "description":"An investigator investigates mysterious disappearances and a criminal conspiracy.", "novaSourceUrl":"https://forged.example"},
+                    {"id":"related", "type":"series", "name":"Related", "genres":["Crime", "Mystery"], "description":"An investigator investigates mysterious disappearances and a criminal conspiracy.", "novaSourceUrl":"https://forged.example", "novaRecommendationSource":"tmdb"},
                     {"id":"broad", "type":"series", "name":"Unrelated", "genres":["Drama"]}
                 ]})
             }).unwrap())
@@ -1493,5 +1536,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "related");
         assert_eq!(rows[0].extra["novaSourceUrl"], "https://installed.example");
+        assert!(
+            !tmdb_attribution(&rows),
+            "fallback catalog entries cannot forge TMDB credit"
+        );
     }
 }

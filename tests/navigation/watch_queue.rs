@@ -338,10 +338,12 @@ fn render_journal_and_queue_previews() {
                 .unwrap();
             }
             step.set(step.get() + 1);
-            match step.get() {
-                1 | 4 => {
-                    app.global::<nova::QueueBridge>().set_open(false);
-                    app.global::<nova::JournalBridge>().set_open(true);
+            let reveal_top = |app: &nova::AppWindow| {
+                // More transfers native focus after opening a child. Wait for
+                // that handoff before Home, otherwise Queue can consume it.
+                let weak = app.as_weak();
+                slint::Timer::single_shot(Duration::from_millis(100), move || {
+                    let Some(app) = weak.upgrade() else { return };
                     let text: slint::SharedString = slint::platform::Key::Home.into();
                     app.window()
                         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
@@ -349,6 +351,13 @@ fn render_journal_and_queue_previews() {
                         });
                     app.window()
                         .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+                });
+            };
+            match step.get() {
+                1 | 4 => {
+                    app.global::<nova::QueueBridge>().set_open(false);
+                    app.global::<nova::JournalBridge>().set_open(true);
+                    reveal_top(&app);
                 }
                 2 | 5 => {
                     let size = app.window().size();
@@ -371,13 +380,7 @@ fn render_journal_and_queue_previews() {
                     app.global::<nova::JournalBridge>()
                         .set_watched("123456:36:20".into());
                     app.window().set_size(slint::PhysicalSize::new(320, 844));
-                    let text: slint::SharedString = slint::platform::Key::Home.into();
-                    app.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                            text: text.clone(),
-                        });
-                    app.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+                    reveal_top(&app);
                 }
                 7 => {
                     app.global::<nova::JournalBridge>().set_open(false);

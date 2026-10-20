@@ -8,6 +8,10 @@ export component TrackingAccountCard inherits Rectangle {
     in property <string> title;
     in property <string> status;
     in property <image> logo;
+    // Wide approved wordmarks retain their aspect ratio without changing the
+    // familiar compact icon geometry of the other service cards.
+    in property <length> logo_width: 40px;
+    in property <bool> show_watermark: true;
     in property <color> brand_color: #2e51a2;
     in property <color> brand_dark: #172b55;
     in-out property <bool> expanded: false;
@@ -45,7 +49,7 @@ export component TrackingAccountCard inherits Rectangle {
             accessible-label: root.title;
             forward-focus: header_focus;
 
-            Image {
+            if root.show_watermark: Image {
                 x: parent.width - 158px;
                 y: (parent.height - self.height) / 2;
                 width: 120px; height: 120px;
@@ -55,13 +59,13 @@ export component TrackingAccountCard inherits Rectangle {
             }
             Image {
                 x: 16px; y: (parent.height - self.height) / 2;
-                width: 40px; height: 40px;
+                width: root.logo_width; height: 40px;
                 source: root.logo;
                 image-fit: contain;
             }
             labels := VerticalLayout {
-                x: 72px; y: (parent.height - self.height) / 2;
-                width: Math.max(1px, parent.width - 124px);
+                x: 32px + root.logo_width; y: (parent.height - self.height) / 2;
+                width: Math.max(1px, parent.width - root.logo_width - 84px);
                 height: self.preferred-height;
                 spacing: 4px;
                 alignment: start;

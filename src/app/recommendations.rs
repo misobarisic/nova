@@ -253,6 +253,139 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "desktop")]
+    fn tmdb_attribution_uses_displayed_projection_after_exclusions_and_limit() {
+        const ROOT: &str = "NOVA_RECOMMENDATION_CREDIT_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-credit-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root).args(["--exact", "app::recommendations::tests::tmdb_attribution_uses_displayed_projection_after_exclusions_and_limit", "--nocapture"])
+                .output().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let row = |id: &str, tmdb: bool| MetaPreview {
+            id: id.into(),
+            type_: "movie".into(),
+            name: id.into(),
+            extra: if tmdb {
+                HashMap::from([(
+                    similar::RECOMMENDATION_SOURCE.into(),
+                    serde_json::json!("tmdb"),
+                )])
+            } else {
+                HashMap::new()
+            },
+            ..Default::default()
+        };
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.tmdb_api_key = "0123456789abcdef0123456789abcdef".into();
+            state
+                .cache_settings
+                .home_recommendations_hidden
+                .insert(watch_history::title_key("movie", "hidden-tmdb"));
+            state.entries.push(
+                serde_json::from_value(
+                    serde_json::json!({"id":"saved-tmdb", "type_":"movie", "name":"Saved"}),
+                )
+                .unwrap(),
+            );
+            state.recommendations.candidates =
+                vec![row("hidden-tmdb", true), row("saved-tmdb", true)];
+            state
+                .recommendations
+                .candidates
+                .extend((0..MAX_CARDS).map(|i| row(&format!("addon-{i}"), false)));
+            state
+                .recommendations
+                .candidates
+                .push(row("tail-tmdb", true));
+        }
+        bridge.install_home_catalog_rows(Vec::new());
+        let section = || {
+            app.get_home_catalog_sections()
+                .row_data(0)
+                .expect("nonempty recommendations")
+        };
+        assert_eq!(section().card_count, MAX_CARDS as i32);
+        assert!(
+            !section().tmdb_attribution,
+            "configured key and excluded/limited TMDB rows never earn a footer"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .home_recommendations_hidden
+            .insert(watch_history::title_key("movie", "addon-0"));
+        bridge.refresh_home_history_models();
+        assert!(
+            section().tmdb_attribution,
+            "the TMDB result now enters the final20"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .home_recommendations_hidden
+            .insert(watch_history::title_key("movie", "tail-tmdb"));
+        bridge.refresh_home_history_models();
+        assert!(
+            !section().tmdb_attribution,
+            "hiding the last displayed TMDB result removes credit immediately"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .recommendations
+            .candidates
+            .clear();
+        bridge.refresh_home_history_models();
+        assert_eq!(
+            app.get_home_catalog_sections().row_count(),
+            0,
+            "empty projection has no recommendation footer"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.tmdb_api_key.clear();
+            state.recommendations.candidates = vec![row("cached-tmdb", true)];
+        }
+        bridge.refresh_home_history_models();
+        assert!(
+            section().tmdb_attribution,
+            "trusted displayed cache results retain attribution independent of current key configuration"
+        );
+    }
+
+    #[test]
     fn recommendations_exclude_saved_watched_hidden_and_duplicates_by_typed_identity() {
         let mut state = Shared::default();
         let preview = |type_: &str, id: &str| MetaPreview {

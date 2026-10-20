@@ -35,6 +35,7 @@ fn home_column_preferences_only_resize_open_category_grids() {
                 title: "Previously viewed".into(),
                 first_card: 0,
                 card_count: 8,
+                tmdb_attribution: false,
                 is_history: true,
             },
             // A provider can name a catalog anything; identity controls its sizing.
@@ -42,6 +43,7 @@ fn home_column_preferences_only_resize_open_category_grids() {
                 title: "Watch history".into(),
                 first_card: 8,
                 card_count: 8,
+                tmdb_attribution: false,
                 is_history: false,
             },
         ]))
@@ -269,6 +271,7 @@ fn home_catalogs_keep_full_height_when_reordered_and_hidden() {
     app.set_home_catalog_sections(
         Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
             title: "Addon catalog".into(),
+            tmdb_attribution: false,
             is_history: false,
             first_card: 0,
             card_count: 1,
@@ -337,12 +340,14 @@ fn history_catalog_reuses_rail_grid_activation_and_keyboard_without_changing_cat
         Rc::new(VecModel::from(vec![
             nova::HomeCatalogSection {
                 title: "Watch history".into(),
+                tmdb_attribution: false,
                 is_history: true,
                 first_card: 0,
                 card_count: 2,
             },
             nova::HomeCatalogSection {
                 title: "Ordinary catalog".into(),
+                tmdb_attribution: false,
                 is_history: false,
                 first_card: 2,
                 card_count: 1,
@@ -537,4 +542,114 @@ fn tv_home_featured_actions_are_directionally_reachable() {
     assert_eq!(app.get_home_kb_zone(), 6);
     key(&app, Key::UpArrow);
     assert_eq!(app.get_home_kb_zone(), 0);
+}
+
+#[test]
+fn tmdb_credit_follows_final_home_section_on_landing_and_see_all() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tmdb_credit_follows_final_home_section_on_landing_and_see_all"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(true);
+    app.set_home_catalog_cards(
+        Rc::new(VecModel::from(
+            (0..3)
+                .map(|i| nova::HomeCatalogCard {
+                    section_index: 0,
+                    flat_index: i,
+                    id: format!("tmdb-{i}").into(),
+                    media_type: "movie".into(),
+                    title: format!("Recommendation {}", i + 1).into(),
+                    recommendation: true,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_home_catalog_order(Rc::new(VecModel::from(vec![0])).into());
+    app.set_home_catalog_positions(Rc::new(VecModel::from(vec![-1, -1, 0, -1])).into());
+    app.show().unwrap();
+    let advance = || {
+        for _ in 0..10 {
+            for element in i_slint_backend_testing::ElementQuery::from_root(&app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = (element.absolute_position(), element.size());
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+            slint::platform::update_timers_and_animations();
+        }
+    };
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 2400));
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, 2400.0),
+            });
+        for (language, label) in [("en", "Powered by TMDB"), ("hr", "Podaci: TMDB")] {
+            slint::select_bundled_translation(language).unwrap();
+            for view in [0, 3] {
+                app.set_home_view(view);
+                for (credit, count) in [(true, 3), (false, 3), (true, 0)] {
+                    app.set_home_catalog_sections(
+                        Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
+                            title: "Because you watched".into(),
+                            first_card: 0,
+                            card_count: count,
+                            tmdb_attribution: credit,
+                            is_history: false,
+                        }]))
+                        .into(),
+                    );
+                    advance();
+                    let footer = ElementHandle::find_by_accessible_label(&app, label)
+                        .find(|item| item.computed_opacity() > 0.99);
+                    if !credit || count == 0 {
+                        assert!(
+                            footer.is_none(),
+                            "fallback/empty Home section must not claim TMDB credit"
+                        );
+                        continue;
+                    }
+                    let footer = footer.expect("visible TMDB section gets attribution");
+                    let p = footer.absolute_position();
+                    let size = footer.size();
+                    let parent = ElementHandle::find_by_element_id(
+                        &app,
+                        if view == 0 {
+                            "HomePage::catalog_section"
+                        } else {
+                            "HomePage::sub_layer"
+                        },
+                    )
+                    .next()
+                    .unwrap();
+                    let origin = parent.absolute_position();
+                    let bounds = parent.size();
+                    assert!(
+                        p.x >= origin.x - 0.5 && p.x + size.width <= origin.x + bounds.width + 0.5,
+                        "{width}px Home view{view} credit stays inside its section"
+                    );
+                    let bottom =
+                        ElementHandle::find_by_element_type_name(&app, "HomeCatalogPosterCard")
+                            .filter(|card| card.computed_opacity() > 0.99)
+                            .map(|card| card.absolute_position().y + card.size().height)
+                            .fold(0.0, f32::max);
+                    assert!(
+                        p.y >= bottom + 1.0,
+                        "{width}px Home view{view} credit must sit below cards"
+                    );
+                    assert!(p.y + size.height <= origin.y + bounds.height + 0.5);
+                }
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
 }

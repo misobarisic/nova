@@ -88,6 +88,7 @@ fn history_menu_holds_right_clicks_and_routes_stable_title_actions() {
     app.set_home_catalog_sections(
         Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
             title: "Watch history".into(),
+            tmdb_attribution: false,
             is_history: true,
             first_card: 0,
             card_count: 1,
@@ -285,6 +286,7 @@ fn recommendation_menus_route_open_and_permanent_hide_on_landing_grid_and_tv() {
     app.set_home_catalog_sections(
         Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
             title: "Because you watched".into(),
+            tmdb_attribution: false,
             is_history: false,
             first_card: 0,
             card_count: 1,

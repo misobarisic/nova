@@ -477,6 +477,7 @@ fn parse_home_showcase_catalog(bytes: &[u8], type_: &str) -> Option<Vec<MetaPrev
     value.get("metas")?.as_array()?;
     let mut previews = Addon::parse_catalog(bytes).ok()?;
     for preview in &mut previews {
+        preview.extra.remove(similar::RECOMMENDATION_SOURCE);
         if preview.type_.is_empty() {
             preview.type_ = type_.into();
         }
@@ -753,6 +754,9 @@ impl Bridge {
                 title: SharedString::from(&group.title),
                 first_card: cards.len() as i32,
                 card_count: group.previews.len() as i32,
+                // The group has already passed typed exclusions and MAX_CARDS.
+                tmdb_attribution: group.source == HomeRowSource::BecauseYouWatched
+                    && similar::tmdb_attribution(&group.previews),
                 is_history: false,
             });
             for preview in &group.previews {
@@ -800,6 +804,7 @@ impl Bridge {
                 title: text::tr("Watch history").into(),
                 first_card: cards.len() as i32,
                 card_count: history.len() as i32,
+                tmdb_attribution: false,
                 is_history: true,
             });
             for (index, entry) in history.iter().enumerate() {

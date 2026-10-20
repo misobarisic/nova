@@ -1,9 +1,10 @@
 import { SettingsBridge, SettingsContent, SettingsSync, Theme } from "@NovaUiShared";
 
-import { SettingsCard, SettingsInput } from "../ui/settings-controls.slint";
+import { SettingsInput } from "../ui/settings-controls.slint";
 import { SettingSyncBadge } from "../ui/settings-sync.slint";
 
 import { TrackingSettings } from "../ui/tracking.slint";
+import { TrackingAccountCard } from "../ui/tracking-account-card.slint";
 import { StremioSettings } from "../ui/stremio.slint";
 import { ListServiceSettings } from "../ui/list-services.slint";
 
@@ -54,34 +55,46 @@ export component SettingsTrackingModule inherits Window {
             ListServiceSettings { service: 0; blur: SettingsContent.tracking_blur; changed input_focused => { root.simkl_focused = self.input_focused; } }
             ListServiceSettings { service: 1; blur: SettingsContent.tracking_blur; changed input_focused => { root.mdblist_focused = self.input_focused; } }
             ListServiceSettings { service: 2; blur: SettingsContent.tracking_blur; changed input_focused => { root.trakt_focused = self.input_focused; } }
-        }
-        SettingsCard {
-            VerticalLayout {
-                alignment: start; spacing: 12px; padding: 16px;
-                Text { text: @tr("TMDB recommendations"); font-size: 16px; font-weight: 700; color: Theme.current.text_bright; }
-                if SettingsSync.enabled: SettingSyncBadge {
-                    setting_key: "tmdb_api_key";
-                    setting_title: @tr("TMDB recommendations");
-                    max-width: Math.min(self.preferred-width, parent.width);
+            tmdb_card := TrackingAccountCard {
+                title: "TMDB";
+                status: SettingsBridge.tmdb_api_key == "" ? @tr("Not configured") : @tr("Configured");
+                logo: @image-url("../../assets/tmdb-logo-short.svg");
+                logo_width: 88px;
+                show_watermark: false;
+                brand_color: #174558;
+                brand_dark: #102b3b;
+                toggled => {
+                    if !self.expanded && root.tmdb_focused {
+                        root.tmdb_focused = false;
+                        SettingsContent.focus_shell();
+                    }
                 }
-                Text {
-                    text: @tr("Use TMDB for Similar titles and Because you watched. Leave the key empty to use installed metadata sources.");
-                    color: Theme.current.text_secondary; font-size: 14px; wrap: word-wrap;
-                }
-                tmdb_key := SettingsInput {
-                    text <=> SettingsBridge.tmdb_api_key;
-                    placeholder-text: @tr("TMDB API key (v3)");
-                    input-type: password;
-                    changed has-focus => { root.tmdb_focused = self.has-focus; }
-                    edited(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); }
-                    accepted(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); SettingsContent.focus_shell(); }
-                }
-                property <bool> blur: SettingsContent.tracking_blur;
-                changed blur => { tmdb_blur.focus(); root.tmdb_focused = false; }
-                tmdb_blur := FocusScope { width: 0px; height: 0px; }
-                Text {
-                    text: @tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
-                    color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap;
+                VerticalLayout {
+                    alignment: start; spacing: 12px;
+                    if SettingsSync.enabled: SettingSyncBadge {
+                        setting_key: "tmdb_api_key";
+                        setting_title: @tr("TMDB recommendations");
+                        max-width: Math.min(self.preferred-width, parent.width);
+                    }
+                    Text {
+                        text: @tr("Use TMDB for Similar titles and Because you watched. Leave the key empty to use installed metadata sources.");
+                        color: Theme.current.text_secondary; font-size: 14px; wrap: word-wrap;
+                    }
+                    tmdb_key := SettingsInput {
+                        text <=> SettingsBridge.tmdb_api_key;
+                        placeholder-text: @tr("TMDB API key (v3)");
+                        input-type: password;
+                        changed has-focus => { root.tmdb_focused = self.has-focus; }
+                        edited(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); }
+                        accepted(value) => { SettingsBridge.tmdb_api_key = value; SettingsBridge.settings_edited("tmdb_api_key"); SettingsContent.focus_shell(); }
+                    }
+                    property <bool> blur: SettingsContent.tracking_blur;
+                    changed blur => { tmdb_blur.focus(); root.tmdb_focused = false; }
+                    tmdb_blur := FocusScope { width: 0px; height: 0px; }
+                    Text {
+                        text: @tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
+                        color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap;
+                    }
                 }
             }
         }

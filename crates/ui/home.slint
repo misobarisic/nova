@@ -2630,6 +2630,11 @@ export component HomePage {
                                                     }
                                                 }
                                             }
+                                            if section.tmdb_attribution && section.card_count > 0: Text {
+                                                width: 100%;
+                                                text: @tr("Powered by TMDB"); font-size: InterfaceStyle.tv ? 16px : 11px;
+                                                color: Theme.current.text_hint; horizontal-alignment: right;
+                                            }
                                         }
                                     }
                                     Rectangle {
@@ -2897,6 +2902,16 @@ export component HomePage {
                                                     root.catalog_card_picked(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i].flat_index);
                                                 }
                                             }
+                                        }
+                                    }
+
+                                    if root.view >= 3 && root.catalog_sections[root.view - 3].tmdb_attribution
+                                        && root.catalog_sections[root.view - 3].card_count > 0: HorizontalLayout {
+                                        width: 100%; alignment: center;
+                                        Text {
+                                            width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
+                                            text: @tr("Powered by TMDB"); font-size: InterfaceStyle.tv ? 16px : 11px;
+                                            color: Theme.current.text_hint; horizontal-alignment: right;
                                         }
                                     }
 

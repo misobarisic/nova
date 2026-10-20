@@ -744,6 +744,23 @@ fn tmdb_badge_opens_masked_comparison_and_switches_scope() {
         });
     app.show().unwrap();
     settle(&app);
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+            .next()
+            .is_none(),
+        "TMDB starts as a collapsed service card"
+    );
+    ElementHandle::find_by_accessible_label(&app, "TMDB")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        .expect("TMDB enrichment disclosure")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+            .next()
+            .is_some(),
+        "opening TMDB reveals the masked key editor"
+    );
     assert!(!has_badge(&app, "tmdb_api_key"));
     app.set_sync_enabled(true);
     for width in [320, 390, 1280] {
@@ -805,4 +822,203 @@ fn tmdb_badge_opens_masked_comparison_and_switches_scope() {
     app.set_sync_enabled(false);
     settle(&app);
     assert!(!has_badge(&app, "tmdb_api_key"));
+}
+
+#[test]
+fn tmdb_disclosure_fits_and_keeps_key_editing_and_back_local() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tmdb_disclosure_fits_and_keeps_key_editing_and_back_local"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(12);
+    app.set_settings_detail_open(true);
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = edits.clone();
+    app.on_settings_edited(move |field| recorded.borrow_mut().push(field.to_string()));
+    app.show().unwrap();
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1600));
+        app.set_settings_scroll_y(0.0);
+        settle(&app);
+        let header = || {
+            ElementHandle::find_by_accessible_label(&app, "TMDB")
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .expect("TMDB service disclosure")
+        };
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+                .next()
+                .is_none()
+        );
+        let p = header().absolute_position();
+        let size = header().size();
+        assert!(p.x >= 0.0 && p.x + size.width <= width as f32 + 0.5);
+        assert!(
+            size.height >= 96.0 && size.height <= 130.0,
+            "wide wordmark must keep a compact disclosure header"
+        );
+        header().mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        let input = ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput))
+            .expect("expanded masked TMDB editor");
+        let p = input.absolute_position();
+        let size = input.size();
+        assert!(p.x >= 0.0 && p.x + size.width <= width as f32 + 0.5);
+        assert!(size.height >= 44.0);
+        input.set_accessible_value("samplekey");
+        settle(&app);
+        assert_eq!(app.get_tmdb_api_key(), "samplekey");
+        assert_eq!(
+            edits.borrow().last().map(String::as_str),
+            Some("tmdb_api_key")
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "samplekey")
+                .next()
+                .is_none(),
+            "configured key must not become a visible caption"
+        );
+        input.mock_single_click(slint::platform::PointerEventButton::Left);
+        let text: slint::SharedString = "x".into();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        settle(&app);
+        assert!(
+            app.get_tmdb_api_key().contains('x'),
+            "the real key input receives typed text"
+        );
+        assert!(
+            (*app)
+                .global::<nova_ui_shared::SettingsContent>()
+                .get_tracking_input_focused()
+        );
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        settle(&app);
+        assert!(
+            !(*app)
+                .global::<nova_ui_shared::SettingsContent>()
+                .get_tracking_input_focused()
+        );
+        assert!(
+            app.get_show_settings() && app.get_settings_detail_open(),
+            "Back blurs the key before leaving Integrations"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+                .next()
+                .is_some()
+        );
+        header().mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "TMDB API key (v3)")
+                .next()
+                .is_none()
+        );
+        assert!(
+            !(*app)
+                .global::<nova_ui_shared::SettingsContent>()
+                .get_tracking_input_focused()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a display; optional native TMDB integration card preview"]
+fn render_tmdb_integration_previews() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::render_tmdb_integration_previews"
+    )) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(12);
+    app.set_settings_detail_open(true);
+    app.set_tmdb_api_key("sample-preview-key".into());
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.show().unwrap();
+    let step = Rc::new(std::cell::Cell::new(0usize));
+    let phase = step.clone();
+    let weak = app.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(700),
+        move || {
+            let app = weak.upgrade().unwrap();
+            let names = [
+                "tmdb-integration-collapsed-desktop",
+                "tmdb-integration-expanded-desktop",
+                "tmdb-integration-collapsed-phone",
+                "tmdb-integration-expanded-phone",
+            ];
+            let pixels = app.window().take_snapshot().unwrap();
+            if let Some(dir) = std::env::var_os("NOVA_FEATURE_PREVIEW_DIR") {
+                std::fs::create_dir_all(&dir).unwrap();
+                image::save_buffer(
+                    std::path::PathBuf::from(dir).join(format!("{}.png", names[phase.get()])),
+                    pixels.as_bytes(),
+                    pixels.width(),
+                    pixels.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            let toggle = || {
+                let header = ElementHandle::find_by_accessible_label(&app, "TMDB")
+                    .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                    .expect("TMDB header in native preview");
+                let p = header.absolute_position();
+                let s = header.size();
+                let position =
+                    slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                        position,
+                        button: slint::platform::PointerEventButton::Left,
+                    });
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                        position,
+                        button: slint::platform::PointerEventButton::Left,
+                    });
+            };
+            match phase.get() {
+                0 => {
+                    toggle();
+                    app.set_settings_scroll_y(-400.0);
+                }
+                1 => {
+                    toggle();
+                    app.window().set_size(slint::PhysicalSize::new(390, 844));
+                    app.set_settings_scroll_y(-300.0);
+                }
+                2 => {
+                    toggle();
+                    app.set_settings_scroll_y(-500.0);
+                }
+                _ => slint::quit_event_loop().unwrap(),
+            }
+            phase.set(phase.get() + 1);
+        },
+    );
+    app.run().unwrap();
 }
