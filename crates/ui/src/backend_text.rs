@@ -916,6 +916,10 @@ pub fn tr(english: &str) -> &str {
         "Caught up" => "Sve pogledano",
         "New episodes" => "Nove epizode",
         "Watch history" => "Povijest gledanja",
+        "Because you watched" => "Zato što ste gledali",
+        "Hide recommendation" => "Sakrijte preporuku",
+        "Similar shows" => "Slične serije",
+        "Similar movies" => "Slični filmovi",
         "Rewatch" => "Ponovno gledanje",
         "Play again" => "Reproducirajte ponovno",
         "Specials" => "Specijali",
@@ -1843,7 +1847,10 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         "image_disk_cache_limit_mb" => format!("{number} MiB"),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
-        "home_catalog_sources" | "home_row_sources" | "home_rows" => {
+        "home_catalog_sources"
+        | "home_row_sources"
+        | "home_rows"
+        | "home_recommendations_hidden" => {
             let count = value.as_array().map_or(0, Vec::len);
             let word = if croatian() {
                 plural(count as u64, "katalog", "kataloga", "kataloga")
@@ -1984,11 +1991,13 @@ mod tests {
     fn watch_history_labels_follow_the_selected_language() {
         with_language(Language::English, || {
             assert_eq!(tr("Watch history"), "Watch history");
+            assert_eq!(tr("Because you watched"), "Because you watched");
             assert_eq!(tr("Resume"), "Resume");
             assert_eq!(tr("Play again"), "Play again");
         });
         with_language(Language::Croatian, || {
             assert_eq!(tr("Watch history"), "Povijest gledanja");
+            assert_eq!(tr("Because you watched"), "Zato što ste gledali");
             assert_eq!(tr("Resume"), "Nastavite");
             assert_eq!(tr("Play again"), "Reproducirajte ponovno");
         });

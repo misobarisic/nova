@@ -462,7 +462,7 @@ fn home_catalog_row_groups(
                 })
                 .collect();
             Some(HomeCatalogGroup {
-                source: source.clone(),
+                source: HomeRowSource::Addon(source.clone()),
                 title,
                 previews,
             })
@@ -700,7 +700,7 @@ impl Bridge {
         self.install_home_catalog_rows(home_catalog_row_groups(&cached, &sources, &installed));
     }
 
-    fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
+    pub(super) fn install_home_catalog_rows(&self, mut groups: Vec<HomeCatalogGroup>) {
         let Some(app) = self.app() else { return };
         let view = app.get_home_view();
         let history_was_open = view >= 3
@@ -716,6 +716,12 @@ impl Bridge {
             None
         };
         self.rebuild_watch_history_list();
+        // Recommendation results are independent of addon catalog refreshes;
+        // always inject the current profile's filtered projection.
+        groups.retain(|group| group.source != HomeRowSource::BecauseYouWatched);
+        if let Some(group) = self.recommendation_group() {
+            groups.push(group);
+        }
         // Keep live decoded images when language/progress changes republish
         // models after their original cache entries have been evicted.
         let previous_cards: HashMap<_, _> = app
@@ -766,6 +772,7 @@ impl Bridge {
                     poster_url.to_owned(),
                 ));
                 cards.push(HomeCatalogCard {
+                    recommendation: group.source == HomeRowSource::BecauseYouWatched,
                     section_index,
                     flat_index: flat_index as i32,
                     id: SharedString::from(&preview.id),
@@ -810,6 +817,7 @@ impl Bridge {
                     entry.poster_url.clone(),
                 ));
                 cards.push(HomeCatalogCard {
+                    recommendation: false,
                     section_index,
                     flat_index: (items.len() + index) as i32,
                     id: entry.series_id.clone().into(),
@@ -2046,6 +2054,7 @@ impl Bridge {
         self.apply_upcoming_cal_to_ui();
         self.refresh_home_history_models();
         self.ensure_home_catalog_rows_loaded();
+        self.ensure_recommendations_loaded();
     }
 
     /// Republish local history immediately; addon results remain cached and
@@ -2077,7 +2086,7 @@ impl Bridge {
                     HomeRowSource::WatchHistory if !state.home_history_list.is_empty() => {
                         Some(state.home_catalog_row_groups.len() as i32)
                     }
-                    HomeRowSource::Addon(source) => state
+                    source @ (HomeRowSource::Addon(_) | HomeRowSource::BecauseYouWatched) => state
                         .home_catalog_row_groups
                         .iter()
                         .position(|group| group.source == source)
@@ -4515,7 +4524,7 @@ mod tests {
         let a = showcase_source("history-a", "");
         let b = showcase_source("history-b", "");
         let group = |source: &HomeCatalogSource, id: &str| HomeCatalogGroup {
-            source: source.clone(),
+            source: HomeRowSource::Addon(source.clone()),
             title: id.into(),
             previews: vec![showcase_preview(id)],
         };

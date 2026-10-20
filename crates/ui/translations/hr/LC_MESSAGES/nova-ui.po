@@ -3610,3 +3610,15 @@ msgstr "Poglavlja"
 
 msgid "Chapter"
 msgstr "Poglavlje"
+
+msgid "Because you watched"
+msgstr "Zato što ste gledali"
+
+msgid "Hide recommendation"
+msgstr "Sakrijte preporuku"
+
+msgid "Similar shows"
+msgstr "Slične serije"
+
+msgid "Similar movies"
+msgstr "Slični filmovi"

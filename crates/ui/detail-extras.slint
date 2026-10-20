@@ -73,9 +73,68 @@ component DetailPeople inherits Rectangle {
     }
 }
 
+component DetailRelatedPoster inherits Rectangle {
+    in property <DetailActionRow> entry;
+    callback picked();
+    height: self.width * 1.5 + (InterfaceStyle.tv ? 88px : 64px);
+    min-width: 0px;
+    border-radius: Theme.card_corner_radius;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus || touch.has-hover ? Theme.current.accent_vivid : Theme.current.border_soft;
+    background: Theme.current.card;
+    clip: true;
+    art := Rectangle {
+        x: 1px; y: 1px; width: parent.width - 2px; height: parent.width * 1.5;
+        background: Theme.current.home_artwork_placeholder;
+        if root.entry.is_loaded: Image { source: root.entry.poster; width: 100%; height: 100%; image-fit: cover; }
+        if !root.entry.is_loaded: IcPlay { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 30px; height: 30px; fill: Theme.current.text_disabled; }
+    }
+    title := Text {
+        x: 10px; y: art.height + 8px; width: parent.width - 20px;
+        height: InterfaceStyle.tv ? 48px : 32px;
+        text: root.entry.title; wrap: word-wrap; overflow: elide;
+        color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 18px : 13px; font-weight: 600;
+    }
+    Text {
+        x: 10px; y: title.y + title.height + 3px; width: parent.width - 20px;
+        height: InterfaceStyle.tv ? 24px : 16px;
+        text: root.entry.subtitle; overflow: elide;
+        color: Theme.current.text_episode_metadata; font-size: InterfaceStyle.tv ? 16px : 11px;
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == "\n" || event.text == " " { root.picked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        accessible-role: button; accessible-label: root.entry.title;
+        property <bool> dragged: false;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { touch.dragged = false; }
+            if event.kind == PointerEventKind.cancel { touch.dragged = true; }
+        }
+        // A page scroll can release over the same card without the Flickable
+        // claiming it. Travel must suppress that pending click too.
+        moved => {
+            if Math.abs(touch.mouse-x - touch.pressed-x)
+                + Math.abs(touch.mouse-y - touch.pressed-y) > 12px {
+                touch.dragged = true;
+            }
+        }
+        clicked => {
+            if !touch.dragged { focus.focus(); root.picked(); }
+        }
+    }
+}
+
 export component DetailExtrasPanel inherits Rectangle {
     in property <DetailInfo> info;
     in property <bool> narrow;
+    in property <bool> is_movie;
+    in property <length> available-width;
+    property <int> related_columns: root.narrow ? 2 : (InterfaceStyle.tv ? 4 : 5);
     callback picked(int,string);
     property <bool> trailers_expanded: false;
     changed info => { root.trailers_expanded = false; }
@@ -133,8 +192,19 @@ export component DetailExtrasPanel inherits Rectangle {
         if root.info.writers.length > 0: DetailPeople { heading: @tr("Writers"); names: root.info.writers; narrow: root.narrow; picked(name) => { root.picked(0, name); } }
         if root.info.related.length > 0: VerticalLayout {
             spacing: 12px; alignment: start;
-            Text { text: @tr("More to explore"); color: Theme.current.text_bright; font-size: root.narrow ? 20px : 24px; font-weight: 700; }
-            for title in root.info.related: DetailActionTile { entry: title; picked => { root.picked(2, title.target); } }
+            Text { text: root.is_movie ? @tr("Similar movies") : @tr("Similar shows"); color: Theme.current.text_bright; font-size: root.narrow ? 20px : 24px; font-weight: 700; }
+            GridLayout {
+                spacing: 12px;
+                for title[i] in root.info.related: DetailRelatedPoster {
+                    row: Math.floor(i / root.related_columns);
+                    col: Math.mod(i, root.related_columns);
+                    min-width: Math.max(0px, (root.available-width - 12px * (root.related_columns - 1)) / root.related_columns);
+                    max-width: Math.max(0px, (root.available-width - 12px * (root.related_columns - 1)) / root.related_columns);
+                    horizontal-stretch: 0;
+                    entry: title;
+                    picked => { root.picked(2, title.target); }
+                }
+            }
         }
     }
 }

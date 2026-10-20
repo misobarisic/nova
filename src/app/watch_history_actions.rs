@@ -92,6 +92,9 @@ impl Bridge {
     /// Stable typed identities keep an open menu attached to its original title
     /// even if playback or sync reorders the Home models underneath it.
     pub(super) fn watch_history_action(&self, type_: &str, id: &str, action: i32) {
+        if self.recommendation_action(type_, id, action) {
+            return;
+        }
         let entry = {
             let state = self.shared.lock().unwrap();
             // The archive and resume row have independent 100-title limits:

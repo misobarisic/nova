@@ -266,3 +266,139 @@ fn archive_remains_reachable_with_only_completed_items_and_supports_keyboard() {
     back(&app);
     assert_eq!(app.get_home_view(), 0);
 }
+
+#[test]
+fn recommendation_menus_route_open_and_permanent_hide_on_landing_grid_and_tv() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::recommendation_menus_route_open_and_permanent_hide_on_landing_grid_and_tv"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(true);
+    app.set_touch_menus(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    app.set_home_catalog_sections(
+        Rc::new(VecModel::from(vec![nova::HomeCatalogSection {
+            title: "Because you watched".into(),
+            is_history: false,
+            first_card: 0,
+            card_count: 1,
+        }]))
+        .into(),
+    );
+    let cards = Rc::new(VecModel::from(vec![nova::HomeCatalogCard {
+        id: "recommendation-a".into(),
+        media_type: "movie".into(),
+        title: "Recommended movie".into(),
+        recommendation: true,
+        ..Default::default()
+    }]));
+    app.set_home_catalog_cards(cards.clone().into());
+    app.set_home_catalog_order(Rc::new(VecModel::from(vec![0])).into());
+    app.set_home_catalog_positions(Rc::new(VecModel::from(vec![-1, -1, 0])).into());
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let captured_actions = actions.clone();
+    app.on_home_history_action(move |type_, id, action| {
+        captured_actions
+            .borrow_mut()
+            .push((type_.to_string(), id.to_string(), action));
+    });
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let captured_picks = picks.clone();
+    app.on_home_catalog_card_picked(move |index| captured_picks.borrow_mut().push(index));
+    app.window().show().unwrap();
+    settle(300);
+
+    let position = card(&app);
+    pointer(&app, position, true, false);
+    settle(850);
+    pointer(&app, position, false, false);
+    settle(250);
+    for label in ["Open", "Hide recommendation"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, label)
+                .next()
+                .is_some(),
+            "missing recommendation action {label}"
+        );
+    }
+    for label in ["Play", "Enter series", "Remove from watch history"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, label)
+                .next()
+                .is_none(),
+            "recommendation exposed history action {label}"
+        );
+    }
+    // A background refresh cannot change the dismissal target of an open sheet.
+    let mut replacement = cards.row_data(0).unwrap();
+    replacement.id = "recommendation-b".into();
+    cards.set_row_data(0, replacement);
+    row(&app, "Hide recommendation");
+    assert_eq!(
+        actions.borrow().as_slice(),
+        [("movie".into(), "recommendation-a".into(), 3)]
+    );
+    assert!(picks.borrow().is_empty());
+
+    app.set_home_view(3);
+    settle(250);
+    let position = card(&app);
+    pointer(&app, position, true, true);
+    pointer(&app, position, false, true);
+    settle(250);
+    row(&app, "Open");
+    assert_eq!(
+        actions.borrow().last().unwrap(),
+        &("movie".into(), "recommendation-b".into(), 1)
+    );
+
+    // Remote Menu follows the focused card on both Home and its catalog grid.
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.window().set_size(slint::PhysicalSize::new(1920, 1080));
+    app.invoke_focus_mounted_page();
+    for view in [0, 3] {
+        app.set_home_view(view);
+        app.set_home_kb_zone(3);
+        app.set_home_kb_idx(0);
+        settle(250);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Menu.into(),
+            });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                text: slint::platform::Key::Menu.into(),
+            });
+        settle(250);
+        row(&app, "Hide recommendation");
+        assert_eq!(
+            actions.borrow().last().unwrap(),
+            &("movie".into(), "recommendation-b".into(), 3)
+        );
+    }
+    assert!(picks.borrow().is_empty());
+
+    // Desktop opens a native popup through the same card wrapper.
+    app.global::<nova::InterfaceStyle>().set_tv(false);
+    app.set_touch_menus(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    settle(250);
+    let before = actions.borrow().len();
+    let position = card(&app);
+    pointer(&app, position, true, true);
+    pointer(&app, position, false, true);
+    settle(250);
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "MenuSheet")
+            .next()
+            .is_none()
+    );
+    assert_eq!(actions.borrow().len(), before);
+    assert!(picks.borrow().is_empty());
+}

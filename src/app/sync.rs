@@ -625,8 +625,47 @@ const SETTINGS_GROUP_CACHE: &[&str] = &[
     "lru_cache_mb",
 ];
 
+// The migration bit describes this exact layout: a standalone false value
+// from an untouched device must never resurrect a deliberately removed row.
+const SETTINGS_GROUP_HOME_LAYOUT: &[&str] = &["home_rows", "home_recommendations_migrated"];
+const RECOMMENDATION_HIDDEN_PREFIX: &str = "home_recommendation_hidden:";
+
+fn recommendation_hidden_identity(raw: &str) -> Option<String> {
+    let (type_, id): (String, String) = serde_json::from_str(raw).ok()?;
+    (!type_.is_empty()
+        && type_.len() <= 64
+        && !type_.chars().any(char::is_control)
+        && !id.is_empty()
+        && id.len() <= 512
+        && !id.chars().any(char::is_control))
+    .then(|| watch_history::title_key(&type_, &id))
+}
+
+fn union_recommendation_hidden(settings: &mut CacheSettings, records: &[(String, String)]) {
+    for (key, raw) in records {
+        if let Some(identity) = key.strip_prefix(RECOMMENDATION_HIDDEN_PREFIX) {
+            if serde_json::from_str::<bool>(raw).ok() == Some(true)
+                && let Some(identity) = recommendation_hidden_identity(identity)
+            {
+                settings.home_recommendations_hidden.insert(identity);
+            }
+        } else if key == "home_recommendations_hidden"
+            && let Ok(legacy) = serde_json::from_str::<Vec<String>>(raw)
+        {
+            settings.home_recommendations_hidden.extend(
+                legacy
+                    .iter()
+                    .filter_map(|identity| recommendation_hidden_identity(identity)),
+            );
+        }
+    }
+}
+
 /// Settings fields synced as one whole-record blob: `(record key, field names)`.
-const SYNCED_SETTINGS_GROUPS: &[(&str, &[&str])] = &[("cache", SETTINGS_GROUP_CACHE)];
+const SYNCED_SETTINGS_GROUPS: &[(&str, &[&str])] = &[
+    ("cache", SETTINGS_GROUP_CACHE),
+    ("home_layout", SETTINGS_GROUP_HOME_LAYOUT),
+];
 
 /// The group record that carries `field`, if any.
 pub(super) fn settings_group_of(field: &str) -> Option<&'static str> {
@@ -666,8 +705,38 @@ fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
     }
     let mut out = Vec::new();
     let mut groups: HashMap<&str, serde_json::Map<String, serde_json::Value>> = HashMap::new();
+    let migrated_home = map
+        .get("home_recommendations_migrated")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
     for (name, value) in map {
         if UNSYNCED_SETTINGS_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        if name == "home_recommendations_hidden" {
+            // Independent grow-only records preserve concurrent dismissals.
+            // The profile's materialized settings remain a plain JSON set.
+            if let Some(identities) = value.as_array() {
+                for identity in identities.iter().filter_map(serde_json::Value::as_str) {
+                    if let Some(identity) = recommendation_hidden_identity(identity) {
+                        out.push((
+                            format!("{RECOMMENDATION_HIDDEN_PREFIX}{identity}"),
+                            "true".into(),
+                            0,
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+        // Until this layout is edited, retain the legacy row record rather
+        // than publishing a new migration decision for an untouched device.
+        if SETTINGS_GROUP_HOME_LAYOUT.contains(&name.as_str()) && !migrated_home {
+            if name == "home_rows"
+                && let Ok(json) = serde_json::to_string(&value)
+            {
+                out.push((name, json, 0));
+            }
             continue;
         }
         match settings_group_of(&name) {
@@ -709,6 +778,8 @@ fn preserve_settings_snapshot(old: Option<&str>, raw: &str) -> String {
 /// Only actual general-setting fields may opt out of sync.
 pub(super) fn setting_can_override(field: &str) -> bool {
     !UNSYNCED_SETTINGS_FIELDS.contains(&field)
+        && field != "home_recommendations_migrated"
+        && field != "home_recommendations_hidden"
         && serde_json::to_value(CacheSettings::default())
             .ok()
             .is_some_and(|v| v.get(field).is_some())
@@ -725,9 +796,19 @@ pub(super) fn shared_setting_value(
             .map(|black| serde_json::json!(nova_config::BackgroundStyle::from_true_black(black)));
     }
     let key = settings_group_of(field).unwrap_or(field);
-    let raw = &records.iter().find(|(name, _)| name == key)?.1;
+    let record = records.iter().find(|(name, _)| name == key);
+    // Pre-recommendation peers store Home rows independently. The new record
+    // wins when present; fallback keeps their saved layout available to the
+    // existing per-device override control during migration.
+    let raw = &record
+        .or_else(|| {
+            (key == "home_layout")
+                .then(|| records.iter().find(|(name, _)| name == field))
+                .flatten()
+        })?
+        .1;
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    if settings_group_of(field).is_some() {
+    if settings_group_of(field).is_some() && record.is_some() {
         value.get(field).cloned()
     } else {
         Some(value)
@@ -742,13 +823,47 @@ pub(super) fn account_setting_records() -> Vec<(String, String)> {
 
 fn live_settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
     let records = account_setting_records();
+    settings_fields_for_records(settings, &records)
+}
+
+fn settings_fields_for_records(
+    settings: &CacheSettings,
+    records: &[(String, String)],
+) -> Vec<(String, String, u64)> {
     let mut shared = settings.clone();
+    retain_migrated_home_layout(&mut shared, records);
+    // A full publication can precede UI projection of received records. Never
+    // interpret a stale snapshot's missing identity as an unhide operation.
+    union_recommendation_hidden(&mut shared, records);
     for (field, fallback) in &mut shared.sync_overrides {
-        if let Some(latest) = shared_setting_value(&records, field) {
+        if let Some(latest) = shared_setting_value(records, field) {
             *fallback = latest;
         }
     }
+    if shared.sync_overrides.contains_key("home_rows") {
+        // A local-only layout edit also changes its local migration bit.
+        // Publish the account layout's migration decision with its fallback.
+        shared.home_recommendations_migrated =
+            shared_setting_value(records, "home_recommendations_migrated")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+    }
     settings_fields(&shared)
+}
+
+fn retain_migrated_home_layout(settings: &mut CacheSettings, records: &[(String, String)]) {
+    if !settings.home_recommendations_migrated
+        && shared_setting_value(records, "home_recommendations_migrated")
+            .and_then(|value| value.as_bool())
+            == Some(true)
+        && let Some(rows) = shared_setting_value(records, "home_rows")
+            .and_then(|value| serde_json::from_value(value).ok())
+    {
+        // An untouched snapshot must neither overwrite nor tombstone the
+        // migrated group already received by this device's record store.
+        settings.home_rows = rows;
+        settings.home_recommendations_migrated = true;
+    }
 }
 
 /// Rebuild settings by overlaying records onto `base` (the local settings).
@@ -759,8 +874,44 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
     let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(base) else {
         return base.clone();
     };
+    let has_home_layout = fields.iter().any(|(name, _)| name == "home_layout");
     for (name, json) in fields {
         if UNSYNCED_SETTINGS_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        if name == "home_recommendations_hidden" || name.starts_with(RECOMMENDATION_HIDDEN_PREFIX) {
+            continue;
+        }
+        if has_home_layout && SETTINGS_GROUP_HOME_LAYOUT.contains(&name.as_str()) {
+            continue;
+        }
+        if name == "home_layout" {
+            if let Ok(serde_json::Value::Object(group)) = serde_json::from_str(json)
+                && SETTINGS_GROUP_HOME_LAYOUT
+                    .iter()
+                    .all(|field| group.contains_key(*field))
+            {
+                let mut trial = map.clone();
+                for field in SETTINGS_GROUP_HOME_LAYOUT {
+                    trial.insert((*field).into(), group[*field].clone());
+                }
+                if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(trial.clone()))
+                    .is_ok()
+                {
+                    map = trial;
+                    for field in SETTINGS_GROUP_HOME_LAYOUT {
+                        allow_setting_field(field);
+                    }
+                } else {
+                    for field in SETTINGS_GROUP_HOME_LAYOUT {
+                        protect_setting_field(field, group[*field].clone());
+                    }
+                    storage::report(storage::Error::new(
+                        storage::ErrorKind::Schema,
+                        "unsupported synced Home layout retained in record store",
+                    ));
+                }
+            }
             continue;
         }
         // New style records take precedence over the retired boolean, even
@@ -846,12 +997,19 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
             map.insert(field.clone(), effective.clone());
         }
     }
+    if overrides.contains_key("home_rows") {
+        map.insert(
+            "home_recommendations_migrated".into(),
+            serde_json::json!(base.home_recommendations_migrated),
+        );
+    }
     map.insert(
         "sync_overrides".into(),
         serde_json::to_value(overrides).unwrap_or_default(),
     );
     let mut merged: CacheSettings =
         serde_json::from_value(serde_json::Value::Object(map)).unwrap_or_else(|_| base.clone());
+    union_recommendation_hidden(&mut merged, fields);
     // Device-specific fields are never taken from the remote record.
     merged.android_hwdec = base.android_hwdec;
     merged.desktop_hwdec = base.desktop_hwdec;
@@ -886,21 +1044,30 @@ pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
         return;
     }
     let key = settings_group_of(field).unwrap_or(field);
-    if let Some((key, value, _)) = live_settings_fields(settings)
+    let records = live_settings_fields(settings)
         .into_iter()
-        .find(|(k, _, _)| k == key)
-    {
+        .filter(|(k, _, _)| {
+            if field == "home_recommendations_hidden" {
+                k.starts_with(RECOMMENDATION_HIDDEN_PREFIX)
+            } else {
+                k == key
+            }
+        })
+        .collect::<Vec<_>>();
+    if !records.is_empty() {
         let result = (|| -> nova_sync::Result<()> {
             let dev = nova_sync::local_device()?;
             let owner = nova_sync::local_store()?;
             let mut store = owner.lock().unwrap();
-            let value = nova_sync::preserve_unknown(
-                store
-                    .record(&profile_domain(DOMAIN_SETTINGS), &key)
-                    .and_then(|r| r.value.as_deref()),
-                &value,
-            );
-            store.set(&profile_domain(DOMAIN_SETTINGS), &key, Some(value), 0, dev);
+            for (key, value, _) in records {
+                let value = nova_sync::preserve_unknown(
+                    store
+                        .record(&profile_domain(DOMAIN_SETTINGS), &key)
+                        .and_then(|r| r.value.as_deref()),
+                    &value,
+                );
+                store.set(&profile_domain(DOMAIN_SETTINGS), &key, Some(value), 0, dev);
+            }
             store.save()
         })();
         if let Err(e) = result {
@@ -3579,6 +3746,169 @@ mod tests {
         .unwrap();
         assert_eq!(home_sources[0]["catalogId"], "trending");
         assert_eq!(home_sources[0]["genre"], "Action");
+    }
+
+    #[test]
+    fn migrated_home_layout_couples_removal_and_ignores_untouched_legacy_snapshots() {
+        let mut edited = CacheSettings::default();
+        edited.set_home_rows(Vec::new());
+        let grouped = settings_fields(&edited)
+            .into_iter()
+            .find(|(key, _, _)| key == "home_layout")
+            .map(|(key, value, _)| (key, value))
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&grouped.1).unwrap();
+        assert_eq!(value["home_rows"], serde_json::json!([]));
+        assert_eq!(value["home_recommendations_migrated"], true);
+        assert!(!setting_can_override("home_recommendations_migrated"));
+
+        let untouched = CacheSettings {
+            home_rows: Some(vec![nova_config::HomeRow {
+                source: HomeRowSource::Upcoming,
+                enabled: true,
+            }]),
+            ..Default::default()
+        };
+        let old_records: HashMap<_, _> = settings_fields(&untouched)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert!(old_records.contains_key("home_rows"));
+        assert!(!old_records.contains_key("home_layout"));
+        assert!(!old_records.contains_key("home_recommendations_migrated"));
+        let legacy = vec![
+            ("home_rows".into(), old_records["home_rows"].clone()),
+            ("home_recommendations_migrated".into(), "false".into()),
+        ];
+        assert_eq!(
+            shared_setting_value(&legacy, "home_rows"),
+            Some(serde_json::to_value(&untouched.home_rows).unwrap())
+        );
+        for records in [
+            vec![grouped.clone(), legacy[0].clone(), legacy[1].clone()],
+            vec![legacy[1].clone(), legacy[0].clone(), grouped.clone()],
+        ] {
+            let merged = merge_settings_fields(&untouched, &records);
+            assert!(merged.home_recommendations_migrated);
+            assert!(merged.effective_home_rows().is_empty());
+            assert_eq!(
+                shared_setting_value(&records, "home_rows"),
+                Some(serde_json::json!([]))
+            );
+            // A full settings publication from the second device may run
+            // before its UI projection. It must retain the received group,
+            // rather than tombstoning it or publishing the stale false bit.
+            let republished: HashMap<_, _> = settings_fields_for_records(&untouched, &records)
+                .into_iter()
+                .map(|(key, value, _)| (key, value))
+                .collect();
+            assert_eq!(republished["home_layout"], grouped.1);
+            assert!(!republished.contains_key("home_rows"));
+            assert!(!republished.contains_key("home_recommendations_migrated"));
+        }
+    }
+
+    #[test]
+    fn home_layout_override_keeps_local_migration_and_publishes_account_pair() {
+        let mut account = CacheSettings::default();
+        account.set_home_rows(Vec::new());
+        let records = settings_fields(&account)
+            .into_iter()
+            .filter(|(key, _, _)| key == "home_layout")
+            .map(|(key, value, _)| (key, value))
+            .collect::<Vec<_>>();
+        let mut local = CacheSettings::default();
+        local
+            .sync_overrides
+            .insert("home_rows".into(), serde_json::Value::Null);
+        let merged = merge_settings_fields(&local, &records);
+        assert!(!merged.home_recommendations_migrated);
+        assert!(merged.home_row_enabled(&HomeRowSource::BecauseYouWatched));
+        assert_eq!(merged.sync_overrides["home_rows"], serde_json::json!([]));
+        let published: HashMap<_, _> = settings_fields_for_records(&merged, &records)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(published["home_layout"], records[0].1);
+    }
+
+    #[test]
+    fn recommendation_dismissals_union_independent_devices_and_stale_publications() {
+        let first = watch_history::title_key("movie", "tt123");
+        let second = watch_history::title_key("series", "tmdb:456");
+        let mut device_a = CacheSettings::default();
+        device_a.home_recommendations_hidden.insert(first.clone());
+        let mut device_b = CacheSettings::default();
+        device_b.home_recommendations_hidden.insert(second.clone());
+        let dismissal_records = |settings: &CacheSettings| {
+            settings_fields(settings)
+                .into_iter()
+                .filter(|(key, _, _)| key.starts_with(RECOMMENDATION_HIDDEN_PREFIX))
+                .map(|(key, value, _)| (key, value))
+                .collect::<Vec<_>>()
+        };
+        let mut records = dismissal_records(&device_a);
+        records.extend(dismissal_records(&device_b));
+        assert_eq!(records.len(), 2);
+        assert!(!setting_can_override("home_recommendations_hidden"));
+        let expected: BTreeSet<_> = [first.clone(), second.clone()].into_iter().collect();
+        for local in [&device_a, &device_b, &CacheSettings::default()] {
+            let merged = merge_settings_fields(local, &records);
+            assert_eq!(merged.home_recommendations_hidden, expected);
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&merged).unwrap()).unwrap();
+            assert_eq!(restored.home_recommendations_hidden, expected);
+            // A fresh or stale settings snapshot cannot tombstone a received
+            // dismissal that its UI has not projected yet.
+            let published: HashMap<_, _> = settings_fields_for_records(local, &records)
+                .into_iter()
+                .map(|(key, value, _)| (key, value))
+                .collect();
+            assert!(!published.contains_key("home_recommendations_hidden"));
+            for identity in &expected {
+                assert_eq!(
+                    published[&format!("{RECOMMENDATION_HIDDEN_PREFIX}{identity}")],
+                    "true"
+                );
+            }
+        }
+
+        // Older array snapshots migrate into per-identity records and cannot
+        // clear identities even when their latest whole-array value is empty.
+        let legacy = vec![(
+            "home_recommendations_hidden".into(),
+            serde_json::to_string(&vec![second.clone()]).unwrap(),
+        )];
+        let migrated = merge_settings_fields(&device_a, &legacy);
+        assert_eq!(migrated.home_recommendations_hidden, expected);
+        assert_eq!(dismissal_records(&migrated).len(), 2);
+        let emptied = merge_settings_fields(
+            &migrated,
+            &[("home_recommendations_hidden".into(), "[]".into())],
+        );
+        assert_eq!(emptied.home_recommendations_hidden, expected);
+        let malformed = vec![
+            (
+                format!("{RECOMMENDATION_HIDDEN_PREFIX}not-json"),
+                "true".into(),
+            ),
+            (
+                format!("{RECOMMENDATION_HIDDEN_PREFIX}{first}"),
+                "false".into(),
+            ),
+            (
+                format!(
+                    "{RECOMMENDATION_HIDDEN_PREFIX}{}",
+                    watch_history::title_key("movie", "")
+                ),
+                "true".into(),
+            ),
+        ];
+        assert!(
+            merge_settings_fields(&CacheSettings::default(), &malformed)
+                .home_recommendations_hidden
+                .is_empty()
+        );
     }
 
     #[test]

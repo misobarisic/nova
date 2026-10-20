@@ -508,13 +508,22 @@ component HomeCatalogPosterCard inherits Rectangle {
     width: card-width;
     height: card-width * 3 / 2 + (root.entry.history_date != "" ? (InterfaceStyle.tv ? 116px : 72px) : (InterfaceStyle.tv ? 88px : 54px));
     history_ctx := ContextMenuArea {
-        width: root.entry.history_action != "" ? root.width : 0px;
+        width: root.entry.history_action != "" && !root.entry.recommendation ? root.width : 0px;
         height: 100%;
         Menu {
             MenuItem { title: @tr("Play"); activated => { root.action_requested(root.popup_type, root.popup_id, 0); } }
             MenuItem { title: @tr("Enter series"); activated => { root.action_requested(root.popup_type, root.popup_id, 1); } }
             MenuSeparator {}
             MenuItem { title: @tr("Remove from watch history"); activated => { root.action_requested(root.popup_type, root.popup_id, 2); } }
+        }
+    }
+    recommendation_ctx := ContextMenuArea {
+        width: root.entry.recommendation ? root.width : 0px;
+        height: 100%;
+        Menu {
+            MenuItem { title: @tr("Open"); activated => { root.action_requested(root.popup_type, root.popup_id, 1); } }
+            MenuSeparator {}
+            MenuItem { title: @tr("Hide recommendation"); activated => { root.action_requested(root.popup_type, root.popup_id, 3); } }
         }
     }
     reveal_layer := Rectangle {
@@ -650,14 +659,14 @@ component HomeCatalogPosterCard inherits Rectangle {
                     // Hold-to-open the card menu (subpage grids): the timer
                     // is cancelled as soon as the finger moves or the press
                     // ends (same 600ms convention as the library cards).
-                    if (root.touch_menus && root.entry.history_action != "") {
+                    if (root.touch_menus && (root.entry.history_action != "" || root.entry.recommendation)) {
                         history_hold_t.stop();
                         history_hold_t.start();
                     }
                 } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
                     touch.hint_stop();
                     history_hold_t.stop();
-                    if (root.entry.history_action != "" && ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                    if ((root.entry.history_action != "" || root.entry.recommendation) && ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                     // Card menu, exactly like a Library card: on touch the
                     // page-level sheet (same menu the hold opens), on desktop
                     // the native popup at the cursor (the ContextMenuArea
@@ -668,7 +677,11 @@ component HomeCatalogPosterCard inherits Rectangle {
                         } else {
                             root.popup_type = root.entry.media_type;
                             root.popup_id = root.entry.id;
-                            history_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                            if (root.entry.recommendation) {
+                                recommendation_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                            } else {
+                                history_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                            }
                         }
                     }
                 } else if (ev.kind == PointerEventKind.move) {
@@ -1563,6 +1576,7 @@ export component HomePage {
     property <bool> menu_upcoming: false;
     property <bool> menu_new: false;
     property <bool> menu_history: false;
+    property <bool> menu_recommendation: false;
     property <string> menu_history_id;
     property <string> menu_history_type;
     property <string> menu_history_title;
@@ -1571,6 +1585,7 @@ export component HomePage {
         root.menu_upcoming = false;
         root.menu_new = false;
         root.menu_history = true;
+        root.menu_recommendation = entry.recommendation;
         root.menu_history_id = entry.id;
         root.menu_history_type = entry.media_type;
         root.menu_history_title = entry.title;
@@ -1596,7 +1611,8 @@ export component HomePage {
         }
         let index = root.view >= 3 ? root.catalog_sections[root.view - 3].first_card + root.kb_idx : root.kb_idx;
         if ((root.view >= 3 || (root.view == 0 && root.kb_zone == 3))
-            && index >= 0 && index < root.catalog_cards.length && root.catalog_cards[index].history_action != "") {
+            && index >= 0 && index < root.catalog_cards.length
+            && (root.catalog_cards[index].history_action != "" || root.catalog_cards[index].recommendation)) {
             root.open_history_menu(root.catalog_cards[index]);
             return true;
         }
@@ -3144,14 +3160,17 @@ export component HomePage {
                 : root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
                 ? root.continue_rows[root.menu_idx].title
                 : @tr("Continue Watching");
-            items: root.menu_upcoming ? [ { label: @tr("Enter series"), enabled: true } ] : [
+            items: root.menu_history && root.menu_recommendation ? [
+                { label: @tr("Open"), enabled: true },
+                { label: @tr("Hide recommendation"), enabled: true },
+            ] : root.menu_upcoming ? [ { label: @tr("Enter series"), enabled: true } ] : [
                 { label: @tr("Play"), enabled: true },
                 { label: @tr("Enter series"), enabled: true },
                 { label: root.menu_history ? @tr("Remove from watch history") : root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
             ];
             picked(a) => {
                 if (root.menu_history) {
-                    root.history_action(root.menu_history_type, root.menu_history_id, a);
+                    root.history_action(root.menu_history_type, root.menu_history_id, root.menu_recommendation ? (a == 0 ? 1 : 3) : a);
                 } else if (root.menu_upcoming) {
                     root.kb_active = false;
                     root.upcoming_picked(root.menu_idx);

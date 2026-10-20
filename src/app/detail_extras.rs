@@ -237,6 +237,7 @@ impl Bridge {
                     title: text::tr(label).into(),
                     subtitle: value.clone().into(),
                     target: Default::default(),
+                    ..Default::default()
                 })
                 .collect::<Vec<_>>(),
             ))
@@ -261,6 +262,7 @@ impl Bridge {
                         },
                         subtitle: text::tr("Opens in your browser").into(),
                         target: link.url.clone().into(),
+                        ..Default::default()
                     })
                     .collect::<Vec<_>>(),
             ))
@@ -269,17 +271,81 @@ impl Bridge {
                 extras
                     .related
                     .iter()
-                    .map(|preview| crate::DetailActionRow {
-                        title: clean(&preview.title()).into(),
-                        subtitle: preview.year_str().unwrap_or_default().into(),
-                        target: serde_json::to_string(&(&preview.type_, &preview.id))
-                            .unwrap_or_default()
-                            .into(),
+                    .map(|preview| {
+                        let pixels = preview.poster.as_deref().and_then(|url| {
+                            decoded_cache_get(&sized_cache_key(url, Some(DISPLAY_POSTER_SIDE)))
+                        });
+                        crate::DetailActionRow {
+                            title: clean(&preview.title()).into(),
+                            subtitle: preview.year_str().unwrap_or_default().into(),
+                            target: serde_json::to_string(&(&preview.type_, &preview.id))
+                                .unwrap_or_default()
+                                .into(),
+                            is_loaded: pixels.is_some(),
+                            poster: pixels.map(Image::from_rgba8).unwrap_or_default(),
+                        }
                     })
                     .collect::<Vec<_>>(),
             ))
             .into(),
         });
+        let requests = extras
+            .related
+            .iter()
+            .filter_map(|preview| {
+                let url = preview.poster.as_ref().filter(|url| !url.is_empty())?;
+                (!decoded_cache_contains(&sized_cache_key(url, Some(DISPLAY_POSTER_SIDE))))
+                    .then(|| (preview.type_.clone(), preview.id.clone(), url.clone()))
+            })
+            .collect::<Vec<_>>();
+        let token = modal.open_token.clone();
+        drop(state);
+        for (type_, id, url) in requests {
+            let bridge = self.clone();
+            let token = token.clone();
+            let revision = image_settings_revision();
+            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
+                let _ = profiles::invoke_from_event_loop(move || {
+                    let current = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|modal| {
+                            Arc::ptr_eq(&modal.open_token, &token)
+                                && modal.details.related.iter().any(|preview| {
+                                    preview.type_ == type_
+                                        && preview.id == id
+                                        && preview.poster.as_deref() == Some(url.as_str())
+                                })
+                        });
+                    if !current || image_settings_revision() != revision {
+                        return;
+                    }
+                    let Some(pixels) = pixels else { return };
+                    let Some(app) = bridge.app() else { return };
+                    let info = app.get_selected_details();
+                    let Some(rows) = info
+                        .related
+                        .as_any()
+                        .downcast_ref::<VecModel<crate::DetailActionRow>>()
+                    else {
+                        return;
+                    };
+                    let target = serde_json::to_string(&(&type_, &id)).unwrap_or_default();
+                    for index in 0..rows.row_count() {
+                        if let Some(mut row) = rows.row_data(index)
+                            && row.target.as_str() == target
+                        {
+                            row.poster = Image::from_rgba8(pixels.clone());
+                            row.is_loaded = true;
+                            rows.set_row_data(index, row);
+                        }
+                    }
+                });
+            });
+        }
     }
 
     pub(super) fn detail_extra_picked(&self, kind: i32, target: &str) {

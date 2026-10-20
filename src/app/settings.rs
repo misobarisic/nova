@@ -522,6 +522,11 @@ impl Bridge {
                 home_catalog_sources: state.cache_settings.home_catalog_sources.clone(),
                 home_row_sources: state.cache_settings.home_row_sources.clone(),
                 home_rows: state.cache_settings.home_rows.clone(),
+                home_recommendations_migrated: state.cache_settings.home_recommendations_migrated,
+                home_recommendations_hidden: state
+                    .cache_settings
+                    .home_recommendations_hidden
+                    .clone(),
                 home_continue_enabled: app.get_home_continue_enabled(),
                 home_upcoming_enabled: app.get_home_upcoming_enabled(),
                 home_episode_artwork: app.get_home_episode_artwork(),
@@ -738,6 +743,7 @@ impl Bridge {
                 (HomeRowSource::WatchHistory, "Watch history"),
                 (HomeRowSource::NewEpisodes, "New episodes"),
                 (HomeRowSource::Upcoming, "Upcoming"),
+                (HomeRowSource::BecauseYouWatched, "Because you watched"),
             ] {
                 if !configured.iter().any(|row| row.source == source) {
                     candidates.push((
@@ -776,6 +782,7 @@ impl Bridge {
                     HomeRowSource::ContinueWatching
                     | HomeRowSource::WatchHistory
                     | HomeRowSource::NewEpisodes
+                    | HomeRowSource::BecauseYouWatched
                     | HomeRowSource::Upcoming => HomeCatalogRow {
                         title: text::tr(if entry.source == HomeRowSource::ContinueWatching {
                             "Continue Watching"
@@ -783,6 +790,8 @@ impl Bridge {
                             "Watch history"
                         } else if entry.source == HomeRowSource::NewEpisodes {
                             "New episodes"
+                        } else if entry.source == HomeRowSource::BecauseYouWatched {
+                            "Because you watched"
                         } else {
                             "Upcoming"
                         })
@@ -989,6 +998,7 @@ impl Bridge {
 
     fn save_home_rows(&self, rows: Vec<HomeRow>) {
         allow_setting_field("home_rows");
+        allow_setting_field("home_recommendations_migrated");
         let settings = {
             let mut state = self.shared.lock().unwrap();
             state.cache_settings.set_home_rows(rows);
@@ -1651,6 +1661,27 @@ mod tests {
         bridge.set_setting_override("quality", false);
         assert_eq!(app.get_cache_quality(), 60.0);
         assert!(!read_settings().sync_overrides.contains_key("quality"));
+        // Home's migration decision belongs to its layout. A local override
+        // may retain the older default, but restoring the account layout must
+        // not resurrect a recommendation catalog removed on another device.
+        bridge.set_setting_override("home_rows", true);
+        {
+            let mut store = owner.lock().unwrap();
+            store.apply(
+                DOMAIN_SETTINGS,
+                "home_layout",
+                nova_sync::Record {
+                    value: Some(r#"{"home_rows":[],"home_recommendations_migrated":true}"#.into()),
+                    version: nova_sync::Version::new(nova_config::now_ms(), 0, 999, false),
+                },
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        assert!(read_settings().home_row_enabled(&HomeRowSource::BecauseYouWatched));
+        bridge.set_setting_override("home_rows", false);
+        assert!(read_settings().home_recommendations_migrated);
+        assert!(read_settings().effective_home_rows().is_empty());
         let initial = read_settings();
         app.set_show_home(false);
         app.set_show_settings(true);

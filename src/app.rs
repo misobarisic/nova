@@ -263,13 +263,15 @@ struct MetadataPrefetch {
 
 #[derive(Clone)]
 struct HomeCatalogGroup {
-    source: HomeCatalogSource,
+    source: HomeRowSource,
     title: String,
     previews: Vec<MetaPreview>,
 }
 
 #[derive(Default)]
 struct Shared {
+    similar_cache: Arc<Mutex<similar::Cache>>,
+    recommendations: recommendations::State,
     addon_subtitles: subtitles::State,
     pending_subtitle_hints: Vec<(String, String)>,
     remote_playback: remote_playback::State,
@@ -794,11 +796,13 @@ mod profile_actions_tests;
 mod profile_net;
 mod profile_session;
 mod profiles;
+mod recommendations;
 pub(crate) mod remote_playback;
 mod run;
 mod season_downloads;
 mod settings;
 mod settings_sync;
+mod similar;
 mod stream_prefetch;
 mod subtitles;
 #[cfg(feature = "update-check")]

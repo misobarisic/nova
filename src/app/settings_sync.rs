@@ -42,7 +42,13 @@ impl Bridge {
         let mut rows = Vec::new();
         if let Some(fields) = values.as_object() {
             for (key, value) in fields {
-                if key == "sync_overrides" || key == "categories" {
+                if matches!(
+                    key.as_str(),
+                    "sync_overrides"
+                        | "categories"
+                        | "home_recommendations_migrated"
+                        | "home_recommendations_hidden"
+                ) {
                     continue;
                 }
                 let synced = sync::setting_can_override(key);
@@ -160,7 +166,8 @@ impl Bridge {
         self.capture_settings();
         let mut settings = self.shared.lock().unwrap().cache_settings.clone();
         let values = serde_json::to_value(&settings).unwrap_or_default();
-        let shared = sync::shared_setting_value(&sync::account_setting_records(), field);
+        let records = sync::account_setting_records();
+        let shared = sync::shared_setting_value(&records, field);
         if enabled {
             let Some(baseline) = shared.or_else(|| values.get(field).cloned()) else {
                 return;
@@ -175,6 +182,11 @@ impl Bridge {
             };
             let mut values = values;
             values[field] = shared.unwrap_or(fallback);
+            if field == "home_rows" {
+                values["home_recommendations_migrated"] =
+                    sync::shared_setting_value(&records, "home_recommendations_migrated")
+                        .unwrap_or(serde_json::Value::Bool(false));
+            }
             let Ok(mut restored) = serde_json::from_value::<CacheSettings>(values) else {
                 return;
             };

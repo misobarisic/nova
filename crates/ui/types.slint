@@ -9,7 +9,10 @@ export struct CompletionDestination {
 }
 
 // Stable IDs keep profile actions attached to their owner after sync reorders rows.
-export struct DetailActionRow { title: string, subtitle: string, target: string }
+export struct DetailActionRow {
+    title: string, subtitle: string, target: string,
+    poster: image, is_loaded: bool,
+}
 export struct DetailInfo {
     facts: [DetailActionRow],
     cast: [string], directors: [string], writers: [string],
@@ -181,6 +184,8 @@ export struct HomeCatalogCard {
     is_loaded: bool,
     /// Empty for ordinary catalogs; localized playback action for history.
     history_action: string,
+    /// Recommendation cards expose Open and permanent dismissal actions.
+    recommendation: bool,
     /// Explicit archive view only; Home cards retain their compact footer.
     history_date: string,
     progress: float,

@@ -1336,6 +1336,8 @@ export component DetailPage {
                             if root.detail_tab == 0: extras_content := DetailExtrasPanel {
                                 info: root.selected_details;
                                 narrow: root.narrow;
+                                is_movie: root.is_movie;
+                                available-width: root.episode_content_w;
                                 picked(kind,target) => { root.detail_extra_picked(kind,target); }
                             }
 

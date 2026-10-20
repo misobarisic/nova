@@ -243,6 +243,7 @@ impl Bridge {
         // Cached episodes and the primary action must also be ready before
         // constructing the incoming shell (including featured shortcuts).
         app.set_modal_visible(true);
+        self.load_detail_similar();
     }
 
     /// Movies also recheck metadata behind cached content; stream discovery
@@ -2299,6 +2300,9 @@ impl Bridge {
         };
         app.set_detail_tab(tab);
         app.set_detail_kb_tab(if tab == 3 { 3 } else { 0 });
+        if tab == 0 {
+            self.load_detail_similar();
+        }
     }
 
     /// Episode filter box: re-render the (filtered) rows + thumbnails.

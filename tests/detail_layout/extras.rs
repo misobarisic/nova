@@ -1,5 +1,5 @@
 //! Optional detail sections share the production page factory and fit phones.
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -43,6 +43,7 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
         title: title.into(),
         subtitle: subtitle.into(),
         target: target.into(),
+        ..Default::default()
     };
     app.set_selected_details(nova::DetailInfo {
         facts: Rc::new(VecModel::from(vec![
@@ -146,6 +147,25 @@ fn rich_sections_fit_resize_dispatch_and_clear_with_sparse_titles() {
             .next()
             .is_some()
         );
+        let related = ElementHandle::find_by_accessible_label(
+            &app,
+            "Related title with a long descriptive name",
+        )
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        .unwrap();
+        let related_size = related.size();
+        assert!(
+            related_size.width < width as f32 / 1.8,
+            "related poster button {:?} at viewport {width}: {related_size:?}",
+            related.type_name()
+        );
+        assert!(
+            related_size.height > related_size.width * 1.5,
+            "related poster button {:?} at viewport {width}: {related_size:?}",
+            related.type_name()
+        );
+        tap(&app, "Related title with a long descriptive name");
+        assert_eq!(*called.borrow(), Some((2, "related".into())));
     }
     app.window().set_size(slint::PhysicalSize::new(360, 5000));
     (*app)

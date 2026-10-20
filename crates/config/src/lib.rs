@@ -367,6 +367,7 @@ pub enum HomeRowSource {
     WatchHistory,
     NewEpisodes,
     Upcoming,
+    BecauseYouWatched,
     Addon(HomeCatalogSource),
 }
 
@@ -753,9 +754,17 @@ cache_settings_type! {
     #[serde(default)]
     pub home_row_sources: Vec<HomeCatalogSource>,
     /// Ordered built-in and addon catalogs. None lazily migrates legacy
-    /// selections; Some(empty) intentionally means no Home catalogs.
+    /// selections; after recommendation migration, Some(empty) means no rows.
     #[serde(default)]
     pub home_rows: Option<Vec<HomeRow>>,
+    /// Older layouts receive the recommendation catalog once. Once the user
+    /// edits the layout, absence means they intentionally removed this row.
+    #[serde(default)]
+    pub home_recommendations_migrated: bool,
+    /// Permanently dismissed recommendation identities, encoded as JSON
+    /// (media type, title id) pairs. Synced with this profile's settings.
+    #[serde(default)]
+    pub home_recommendations_hidden: std::collections::BTreeSet<String>,
     /// Show the Continue Watching row on Home. Synced with the rest of the
     /// general settings; older settings snapshots keep the existing visible
     /// behavior.
@@ -996,6 +1005,8 @@ impl Default for CacheSettings {
             home_catalog_sources: Vec::new(),
             home_row_sources: Vec::new(),
             home_rows: None,
+            home_recommendations_migrated: false,
+            home_recommendations_hidden: Default::default(),
             home_continue_enabled: true,
             home_upcoming_enabled: true,
             home_episode_artwork: false,
@@ -1050,9 +1061,9 @@ impl CacheSettings {
         cfg!(target_os = "android") && self.player_external
     }
 
-    /// Add default built-ins to legacy layouts, preserving explicit custom rows.
+    /// Add default built-ins to legacy layouts and migrate recommendations once.
     pub fn effective_home_rows(&self) -> Vec<HomeRow> {
-        let rows = self.home_rows.clone().unwrap_or_else(|| {
+        let mut rows = self.home_rows.clone().unwrap_or_else(|| {
             let mut rows = vec![
                 HomeRow {
                     source: HomeRowSource::ContinueWatching,
@@ -1077,6 +1088,16 @@ impl CacheSettings {
             }));
             rows
         });
+        if !self.home_recommendations_migrated
+            && !rows
+                .iter()
+                .any(|row| row.source == HomeRowSource::BecauseYouWatched)
+        {
+            rows.push(HomeRow {
+                source: HomeRowSource::BecauseYouWatched,
+                enabled: true,
+            });
+        }
         let mut seen = std::collections::HashSet::new();
         rows.into_iter()
             .filter(|row| seen.insert(row.source.clone()))
@@ -1091,6 +1112,9 @@ impl CacheSettings {
 
     /// Keep legacy fields as a compatibility projection for older settings.
     pub fn set_home_rows(&mut self, rows: Vec<HomeRow>) {
+        // The input is the user's complete ordered layout, so do not re-add
+        // recommendations when that edit deliberately removes the catalog.
+        self.home_recommendations_migrated = true;
         self.home_rows = Some(rows);
         let rows = self.effective_home_rows();
         self.home_continue_enabled = rows
@@ -1521,6 +1545,7 @@ mod tests {
             HomeRowSource::WatchHistory,
             HomeRowSource::NewEpisodes,
             HomeRowSource::Upcoming,
+            HomeRowSource::BecauseYouWatched,
         ]
         .into_iter()
         .map(|source| HomeRow {
@@ -1584,6 +1609,77 @@ mod tests {
         );
         assert!(!restored.home_row_enabled(&HomeRowSource::WatchHistory));
         assert!(restored.home_row_sources.is_empty());
+    }
+
+    #[test]
+    fn recommendations_append_to_existing_layout_once_and_preserve_user_edits() {
+        let custom = HomeRow {
+            source: HomeRowSource::Addon(HomeCatalogSource {
+                addon_url: "https://example.test/manifest.json".into(),
+                type_: "movie".into(),
+                catalog_id: "popular".into(),
+                genre: String::new(),
+            }),
+            enabled: false,
+        };
+        // An existing explicit layout is migrated without reordering its rows
+        // or accidentally enabling a catalog the user already disabled.
+        let mut settings = CacheSettings {
+            home_rows: Some(vec![custom.clone()]),
+            ..Default::default()
+        };
+        let migrated = settings.effective_home_rows();
+        assert_eq!(migrated[0], custom);
+        assert_eq!(migrated.len(), 2);
+        assert_eq!(migrated[1].source, HomeRowSource::BecauseYouWatched);
+        assert!(migrated[1].enabled);
+        assert_eq!(settings.effective_home_rows(), migrated);
+
+        settings.home_rows = Some(vec![HomeRow {
+            source: HomeRowSource::BecauseYouWatched,
+            enabled: false,
+        }]);
+        assert_eq!(settings.effective_home_rows().len(), 1);
+        assert!(!settings.home_row_enabled(&HomeRowSource::BecauseYouWatched));
+
+        settings.set_home_rows(vec![HomeRow {
+            source: HomeRowSource::BecauseYouWatched,
+            enabled: false,
+        }]);
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(restored.home_recommendations_migrated);
+        assert!(!restored.home_row_enabled(&HomeRowSource::BecauseYouWatched));
+        assert_eq!(restored.effective_home_rows().len(), 1);
+
+        settings.set_home_rows(vec![custom.clone()]);
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.effective_home_rows(), vec![custom]);
+        settings.set_home_rows(Vec::new());
+        assert!(settings.effective_home_rows().is_empty());
+    }
+
+    #[test]
+    fn recommendations_append_after_legacy_addons_and_hidden_identities_round_trip() {
+        let mut settings = CacheSettings::default();
+        settings.home_row_sources.push(HomeCatalogSource {
+            addon_url: "https://example.test/manifest.json".into(),
+            type_: "movie".into(),
+            catalog_id: "popular".into(),
+            genre: String::new(),
+        });
+        let rows = settings.effective_home_rows();
+        assert!(matches!(rows[4].source, HomeRowSource::Addon(_)));
+        assert_eq!(rows[5].source, HomeRowSource::BecauseYouWatched);
+        let identity = serde_json::to_string(&("series", "native:id:1")).unwrap();
+        settings
+            .home_recommendations_hidden
+            .insert(identity.clone());
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.home_recommendations_hidden.len(), 1);
+        assert!(restored.home_recommendations_hidden.contains(&identity));
     }
 
     #[test]
