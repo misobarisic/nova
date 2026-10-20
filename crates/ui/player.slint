@@ -1,4 +1,4 @@
-import { InterfaceStyle, SubtitleStyle, PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { InterfaceStyle, SubtitleStyle, PartyBridge, Theme, ChapterRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -154,7 +154,7 @@ component SettingsMenu inherits Rectangle {
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
     // Current submenu: 0 = root, 1 = hardware decoding (Android/Windows/Linux), 2 =
     // subtitles, 3 = audio, 4 = playback speed, 5 = subtitle appearance,
-    // 6 = intro skipping. Two-way bound to PlayerOverlay
+    // 6 = intro skipping, 7 = embedded chapters. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
     in property <int> intro_skip_override_index: -1;
@@ -211,6 +211,11 @@ component SettingsMenu inherits Rectangle {
     in property <[TrackRow]> sub_tracks;
     in property <int> subtitle_addon_status: 0;
     in property <[TrackRow]> audio_tracks;
+    in property <[ChapterRow]> player_chapters;
+    in property <float> chapter_position;
+    in property <bool> chapter_seek_allowed;
+    callback pick_chapter(float);
+    pure callback format_time(float) -> string;
     in property <string> sub_label: "";
     in property <string> audio_label: "";
     in property <bool> audio_preference_saved: false;
@@ -258,6 +263,7 @@ component SettingsMenu inherits Rectangle {
         }
         if root.page == 5 { return @tr("Subtitle appearance and timing"); }
         if root.page == 6 { return @tr("Intro skipping"); }
+        if root.page == 7 { return @tr("Chapters"); }
         return @tr("Playback settings");
     }
 
@@ -450,6 +456,27 @@ component SettingsMenu inherits Rectangle {
                                 : root.intro_skip_override_index == 1 ? @tr("Show skip prompt") : @tr("Auto skip");
                             focused: root.focused_idx == (root.decoder_available ? 5 : 4);
                             activate => { root.page = 6; }
+                        }
+                        if root.player_chapters.length > 0: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            submenu: true;
+                            label: @tr("Chapters");
+                            focused: root.focused_idx == (root.decoder_available ? 6 : 5);
+                            activate => { root.page = 7; }
+                        }
+                    }
+
+                    if root.page == 7: VerticalLayout {
+                        spacing: 4px;
+                        for chapter[i] in root.player_chapters: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: chapter.title;
+                            value: root.format_time(chapter.position);
+                            selected: root.chapter_position >= chapter.position
+                                && (i + 1 >= root.player_chapters.length || root.chapter_position < root.player_chapters[i + 1].position);
+                            focused: root.focused_idx == i;
+                            enabled: root.chapter_seek_allowed;
+                            activate => { root.pick_chapter(chapter.position); }
                         }
                     }
 
@@ -740,6 +767,7 @@ export component PlayerOverlay {
     in-out property <float> position: 0.0;
     in-out property <float> duration: 0.0;
     in property <float> buffered_until: 0.0;
+    in property <[ChapterRow]> player_chapters;
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
     in-out property <string> player_title: "";
@@ -758,7 +786,8 @@ export component PlayerOverlay {
     // modal's checkmark, mirrored from mpv's `hwdec-current`.
     in-out property <int> decoder_selected: -1;
     // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
-    // 3 = audio, 4 = speed, 5 = subtitle appearance, 6 = intro skipping.
+    // 3 = audio, 4 = speed, 5 = subtitle appearance, 6 = intro skipping,
+    // 7 = embedded chapters.
     // Driven by the keyboard handler.
     property <int> settings_page: 0;
     // A native menu-row/preset scope may disappear when a submenu changes.
@@ -766,6 +795,7 @@ export component PlayerOverlay {
     changed settings_page => {
         if root.settings_page == 2 { root.tracks_popup_opened(2); }
         if root.settings_page == 1 { root.kb_menu = root.hw_plus_available ? 0 : 1; }
+        if root.settings_page == 7 { root.kb_menu = 0; }
         key_scope.focus();
     }
     // Current-selection summaries shown on the settings panel's root rows.
@@ -883,6 +913,18 @@ export component PlayerOverlay {
     private property <float> displayed_position: root.pointer_scrubbing
         ? Math.clamp(root.pointer_seek_position, 0, root.duration)
         : root.tv_scrubbing ? root.tv_seek_position : root.position;
+
+    function chapter_contains(index: int, position: float) -> bool {
+        return index >= 0 && index < root.player_chapters.length
+            && position >= root.player_chapters[index].position
+            && (index + 1 >= root.player_chapters.length || position < root.player_chapters[index + 1].position);
+    }
+    changed player_chapters => {
+        if root.settings_page == 7 {
+            if root.player_chapters.length == 0 { root.settings_page = 0; root.kb_menu = 0; }
+            else { root.kb_menu = Math.clamp(root.kb_menu, 0, root.player_chapters.length - 1); }
+        }
+    }
 
     function tv_can_seek() -> bool {
         return root.timeline_control_allowed && root.playback_started && root.duration > 0;
@@ -1004,7 +1046,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return root.decoder_available ? 6 : 5;
+                return (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1017,6 +1059,7 @@ export component PlayerOverlay {
             }
             if root.settings_page == 5 { return 8; }
             if root.settings_page == 6 { return 4; }
+            if root.settings_page == 7 { return root.player_chapters.length; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1198,6 +1241,9 @@ export component PlayerOverlay {
                 } else if (root.decoder_available && root.kb_menu == 2) {
                     root.settings_page = 1;
                     root.kb_menu = root.hw_plus_available ? 0 : 1;
+                } else if root.player_chapters.length > 0 && root.kb_menu == (root.decoder_available ? 6 : 5) {
+                    root.settings_page = 7;
+                    root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 5 : 4) {
                     root.settings_page = 6;
                     root.kb_menu = 0;
@@ -1228,6 +1274,11 @@ export component PlayerOverlay {
                     root.restore_playback_default(0);
                 } else if (root.kb_menu - 1 < root.audio_tracks.length) {
                     root.pick_audio_track(root.audio_tracks[root.kb_menu - 1].index);
+                    root.open_popup = 0;
+                }
+            } else if root.settings_page == 7 {
+                if root.tv_can_seek() && root.kb_menu < root.player_chapters.length {
+                    root.seek(root.player_chapters[root.kb_menu].position);
                     root.open_popup = 0;
                 }
             } else if root.settings_page == 6 {
@@ -2203,6 +2254,8 @@ export component PlayerOverlay {
                         x: 0px;
                         width: parent.width;
                         height: 100%;
+                        property <float> tip_position: root.pointer_scrubbing || root.tv_timeline_focused
+                            ? root.displayed_position : Math.clamp(seek_touch.mouse-x / Math.max(1px, seek_touch.width), 0, 1) * root.duration;
 
                         // Dim track.
                         unbuffered_track := Rectangle {
@@ -2236,6 +2289,16 @@ export component PlayerOverlay {
                             width: root.duration > 0 ? (root.displayed_position / root.duration) * parent.width : 0;
                             background: Theme.current.player_progress_fill;
                             border-radius: 1.5px;
+                        }
+
+                        // Embedded start times split the timeline into real
+                        // chapters; ordinary media retains its continuous bar.
+                        for chapter in root.player_chapters: chapter_marker := Rectangle {
+                            visible: root.duration > 0 && chapter.position > 0 && chapter.position < root.duration;
+                            x: root.duration > 0 ? Math.clamp(chapter.position / root.duration, 0, 1) * parent.width - 1.5px : 0px;
+                            y: played_track.y - 1px;
+                            width: 3px; height: played_track.height + 2px;
+                            background: Theme.current.player_tooltip;
                         }
 
                         // Android keeps its scrub handle visible without hover.
@@ -2289,8 +2352,8 @@ export component PlayerOverlay {
                         // hover-driven (no click needed) and independent of the
                         // actual playback position.
                         if root.duration > 0: Rectangle {
-                            width: seek_tip.preferred-width + 12px;
-                            height: 20px;
+                            width: Math.min(parent.width, root.player_chapters.length > 0 ? 240px : seek_tip.preferred-width + 12px);
+                            height: root.player_chapters.length > 0 ? (InterfaceStyle.tv ? 64px : 44px) : 20px;
                             x: Math.clamp((root.tv_timeline_focused ? (root.displayed_position / root.duration) * parent.width : seek_touch.mouse-x) - self.width / 2, 0px, parent.width - self.width);
                             y: -self.height - 4px;
                             border-radius: 5px;
@@ -2299,13 +2362,22 @@ export component PlayerOverlay {
                             animate opacity { duration: Anim.player_fast; }
 
                             seek_tip := Text {
-                                text: root.format_time(root.pointer_scrubbing || root.tv_timeline_focused ? root.displayed_position : Math.clamp(seek_touch.mouse-x / seek_touch.width, 0, 1) * root.duration);
+                                text: root.format_time(track_zone.tip_position);
                                 color: Theme.current.text_bright;
                                 font-size: InterfaceStyle.tv ? 18px : 11px;
                                 width: 100%;
-                                height: 100%;
+                                height: root.player_chapters.length > 0 ? 22px : parent.height;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
+                            }
+                            for chapter[i] in root.player_chapters: seek_chapter_title := Text {
+                                visible: root.chapter_contains(i, track_zone.tip_position);
+                                text: chapter.title;
+                                x: 6px; y: InterfaceStyle.tv ? 28px : 22px;
+                                width: Math.max(0px, parent.width - 12px); height: 20px;
+                                horizontal-alignment: center; overflow: elide;
+                                font-size: InterfaceStyle.tv ? 18px : 12px;
+                                color: Theme.current.text_bright;
                             }
                         }
                     }
@@ -2316,6 +2388,12 @@ export component PlayerOverlay {
                     width: Math.max(0px, root.width - root.content_left - root.content_right); height: 20px;
                     Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.displayed_position); font-size: 12px; color: Theme.current.text_player_caption; }
                     Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.duration); font-size: 12px; color: Theme.current.text_player_caption; horizontal-alignment: right; }
+                    for chapter[i] in root.player_chapters: current_chapter_title := Text {
+                        visible: root.chapter_contains(i, root.displayed_position);
+                        x: 64px; width: Math.max(0px, parent.width - 128px); height: 100%;
+                        text: chapter.title; horizontal-alignment: center; overflow: elide;
+                        font-size: 12px; color: Theme.current.text_player_caption;
+                    }
                 }
                 // ---- Control row ----------------------------------------
                 // Android landscape aligns utilities beside metadata; desktop and
@@ -2836,6 +2914,13 @@ export component PlayerOverlay {
             sub_tracks: root.sub_tracks;
             subtitle_addon_status: root.subtitle_addon_status;
             audio_tracks: root.audio_tracks;
+            player_chapters: root.player_chapters;
+            chapter_position: root.displayed_position;
+            chapter_seek_allowed: root.tv_can_seek();
+            format_time(value) => { root.format_time(value) }
+            pick_chapter(position) => {
+                if root.tv_can_seek() { root.seek(position); root.open_popup = 0; }
+            }
             sub_label: root.sub_label;
             audio_label: root.audio_label;
             audio_preference_saved: root.audio_preference_saved;

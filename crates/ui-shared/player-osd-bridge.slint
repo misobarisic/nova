@@ -1,4 +1,4 @@
-import { TrackRow } from "../ui/types.slint";
+import { TrackRow, ChapterRow } from "../ui/types.slint";
 
 // Shared canonical data handles; this global owns no visual tree.
 export global PlayerOsdBridge {
@@ -22,6 +22,7 @@ export global PlayerOsdBridge {
     in-out property <float> position;
     in-out property <float> duration;
     in-out property <float> buffered_until;
+    in-out property <[ChapterRow]> player_chapters;
     in-out property <string> time_text;
     in-out property <string> player_status;
     in-out property <string> player_title;

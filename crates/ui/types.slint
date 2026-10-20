@@ -225,6 +225,12 @@ export struct SeasonCard {
 }
 
 /// One audio/subtitle track in the player's track picker popup.
+/// Real embedded chapter start and display title, in playback order.
+export struct ChapterRow {
+    position: float,
+    title: string,
+}
+
 export struct TrackRow {
     index: int,
     lang: string,

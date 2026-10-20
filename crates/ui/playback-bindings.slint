@@ -1,4 +1,4 @@
-import { PlayerOsdBridge, OnboardingBridge, TrackRow } from "@NovaUiShared";
+import { PlayerOsdBridge, OnboardingBridge, TrackRow, ChapterRow } from "@NovaUiShared";
 // Connect backend aliases once for the AppWindow lifetime. Conditional hosts
 // must never reconnect an already-joined backend/global property pool.
 
@@ -10,6 +10,7 @@ export component PlayerOsdBindings {
     in-out property <float> position <=> PlayerOsdBridge.position;
     in-out property <float> duration <=> PlayerOsdBridge.duration;
     in-out property <float> buffered_until <=> PlayerOsdBridge.buffered_until;
+    in-out property <[ChapterRow]> player_chapters <=> PlayerOsdBridge.player_chapters;
     in-out property <string> time_text <=> PlayerOsdBridge.time_text;
     in-out property <string> player_status <=> PlayerOsdBridge.player_status;
     in-out property <string> player_title <=> PlayerOsdBridge.player_title;

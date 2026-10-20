@@ -24,6 +24,9 @@ mod shortcuts;
 #[path = "player/buffered_progress.rs"]
 mod buffered_progress;
 
+#[path = "player/chapters.rs"]
+mod chapters;
+
 #[path = "player/subtitle_lift.rs"]
 mod subtitle_lift;
 

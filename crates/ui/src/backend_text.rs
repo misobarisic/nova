@@ -85,6 +85,7 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Chapter" => "Poglavlje",
         "Open in browser" => "Otvori u pregledniku",
         "Could not open this link in your browser." => {
             "Poveznicu nije moguće otvoriti u pregledniku."

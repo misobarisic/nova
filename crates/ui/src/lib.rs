@@ -17,7 +17,7 @@ pub use generated::*;
 // Imported library models are not re-exported by Slint 1.18's generator.
 // Preserve Nova's public model paths while sharing the leaf's exact types.
 pub use nova_ui_shared::{
-    AddonBrowserRow, AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow,
+    AddonBrowserRow, AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ChapterRow,
     CompletionDestination, ContinueRow, DetailActionRow, DetailInfo, DownloadEpisode,
     DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
     LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow, ProfileRow, RemoteDeviceRow,

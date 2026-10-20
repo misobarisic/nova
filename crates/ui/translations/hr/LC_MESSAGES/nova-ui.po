@@ -3604,3 +3604,9 @@ msgstr "Poveznicu nije moguće otvoriti u pregledniku."
 
 msgid "↑ ↓ Navigate    Enter Open    Esc Back"
 msgstr "↑ ↓ Navigacija    Enter Otvori    Esc Natrag"
+
+msgid "Chapters"
+msgstr "Poglavlja"
+
+msgid "Chapter"
+msgstr "Poglavlje"

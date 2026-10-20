@@ -33,6 +33,7 @@ pub use android_pip::note_android_pip_event;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod chapters;
 mod media_badges;
 mod media_probe;
 pub use media_probe::probe_local_duration;
@@ -1814,6 +1815,7 @@ impl Player {
             );
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
+            app.set_player_chapters(Default::default());
         }
         *self.state.preferences.lock().unwrap() = PreferenceSession {
             preferences,
@@ -2952,6 +2954,7 @@ impl Player {
 
         if let Some(app) = self.state.app.upgrade() {
             app.set_player_open(false);
+            app.set_player_chapters(Default::default());
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
             app.set_player_title(slint::SharedString::default());
@@ -3048,6 +3051,7 @@ impl Player {
             dur: f64,
             buffered_until: f32,
             media_badges: Option<Vec<slint::SharedString>>,
+            chapters: Option<Vec<chapters::Chapter>>,
             paused: bool,
             vol: f64,
             muted: bool,
@@ -3139,6 +3143,11 @@ impl Player {
                     && mpv.get_property::<String>("path").ok().as_deref()
                         == Some(buffer_source.as_str()))
                 .then(|| media_badges::read(mpv)),
+                chapters: (!pending_load
+                    && app.get_osd_visible()
+                    && mpv.get_property::<String>("path").ok().as_deref()
+                        == Some(buffer_source.as_str()))
+                .then(|| chapters::read(mpv, dur)),
                 paused,
                 // Mirror volume/mute (cheap reads; keeps UI in sync if changed
                 // via keyboard shortcuts or external controls).
@@ -3152,6 +3161,25 @@ impl Player {
                 container_fps: mpv.get_property("container-fps").unwrap_or(0.0),
             }
         };
+
+        if let Some(chapters) = snapshot.chapters {
+            let rows: Vec<nova_ui::ChapterRow> = chapters
+                .into_iter()
+                .map(|chapter| nova_ui::ChapterRow {
+                    position: chapter.position,
+                    title: chapter.title.into(),
+                })
+                .collect();
+            let current = app.get_player_chapters();
+            if current.row_count() != rows.len()
+                || rows
+                    .iter()
+                    .enumerate()
+                    .any(|(i, row)| current.row_data(i).as_ref() != Some(row))
+            {
+                app.set_player_chapters(Rc::new(VecModel::from(rows)).into());
+            }
+        }
 
         // The request belongs to the session, not its URL or a transient
         // started/time-pos flag. Resume and renderer setup can arrive in either
