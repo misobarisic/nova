@@ -31,18 +31,14 @@ component StreamRuleToggle inherits SettingsRow {
     }
 }
 
-component StreamRuleHeading inherits Rectangle {
+component StreamRuleHeading inherits SettingsRow {
     in property <string> title;
     in property <string> description;
-    in property <string> setting-key;
-    height: heading.preferred-height;
-    vertical-stretch: 0;
-    heading := VerticalLayout {
-        width: 100%; padding: 16px; spacing: 8px; alignment: start;
-        Text { text: root.title; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
-        if root.description != "": Text { text: root.description; font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
-        if SettingsSync.enabled: SettingSyncBadge { setting_key: root.setting-key; setting_title: root.title; }
-    }
+    row-title: root.title;
+    row-desc: root.description;
+    // Headings have no trailing control: use the full text width and the
+    // ordinary row's intrinsic height, padding and responsive scope badge.
+    full-width-text: true;
 }
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
@@ -84,10 +80,10 @@ export component SettingsPlayerModule inherits Window {
         SettingsContent.focus_shell();
     }
     body_layout := VerticalLayout {
-        width: 100%; height: 100%; spacing: 0px;
+        width: 100%; height: 100%; spacing: 0px; alignment: start;
         VerticalLayout {
 
-            vertical-stretch: 0; spacing: 16px;
+            vertical-stretch: 0; spacing: 16px; alignment: start;
             SectionHeader { label: @tr("Player choice"); }
             SettingsCard {
 
@@ -650,9 +646,11 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
             SectionHeader { label: @tr("Video codecs"); }
-            Text { text: @tr("All codecs when none selected"); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
             SettingsCard {
-                StreamRuleHeading { title: @tr("Allowed video codecs"); setting-key: "stream_filters_allowed_codecs"; }
+                StreamRuleHeading {
+                    title: @tr("Allowed video codecs"); setting-key: "stream_filters_allowed_codecs";
+                    description: @tr("All codecs when none selected");
+                }
                 StreamRuleToggle { row-title: "H.264 / AVC"; rule-field: 3; rule-row: 3; checked <=> StreamFiltersBridge.allow_avc; }
                 StreamRuleToggle { row-title: "H.265 / HEVC"; rule-field: 4; rule-row: 4; checked <=> StreamFiltersBridge.allow_hevc; }
                 StreamRuleToggle { row-title: "AV1"; rule-field: 5; rule-row: 5; checked <=> StreamFiltersBridge.allow_av1; }
@@ -677,6 +675,7 @@ export component SettingsPlayerModule inherits Window {
                 }
                 SettingsRow {
                     row-title: @tr("Add codec preference");
+                    row-desc: StreamFiltersBridge.codec_priority_order.length == 0 ? @tr("No codec preference") : "";
                     Dropdown {
                         width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px)); roomy: true;
                         model: ["H.264 / AVC", "H.265 / HEVC", "AV1", "VP9", @tr("Other video codecs")];
@@ -687,10 +686,6 @@ export component SettingsPlayerModule inherits Window {
                         border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
                         selected(_) => { root.select_filter(13); StreamFiltersBridge.edited(16, "add:" + SettingsContent.stream_filter_codec_key(self.current-index)); }
                     }
-                }
-                if StreamFiltersBridge.codec_priority_order.length == 0: Text {
-                    text: @tr("No codec preference"); color: Theme.current.text_settings; font-size: 14px;
-                    wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
                 }
                 for codec[index] in StreamFiltersBridge.codec_priority_order: SettingsRow {
                     property <bool> row-focused: root.filter_focused(14 + index);

@@ -577,6 +577,8 @@ export component SettingsRow inherits Rectangle {
     in property <string> setting-key: "";
     in property <string> row-title: "";
     in property <string> row-desc: "";
+    // Section-like rows have no trailing control to reserve a text column for.
+    in property <bool> full-width-text: false;
     in property <bool> tinted: false;
     in property <length> row-min-height: InterfaceStyle.tv ? 88px : 64px;
     background: Theme.current.card;
@@ -587,7 +589,7 @@ export component SettingsRow inherits Rectangle {
     // Keep the text column from sprawling across a very wide settings card,
     // while making its narrow-width limit explicit instead of splitting free
     // space with an invisible spacer.
-    property <length> side-text-width: Math.min(
+    property <length> side-text-width: root.full-width-text ? root.inner-width : Math.min(
     Math.max(0px, root.inner-width - root.control-width - 16px),
     root.inner-width * 0.62
     );
