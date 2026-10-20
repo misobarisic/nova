@@ -497,3 +497,149 @@ fn render_universal_filter_previews() {
     );
     app.run().unwrap();
 }
+
+#[test]
+fn initially_requested_filter_form_keeps_its_exit_tree_and_reinitializes_on_reopen() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::initially_requested_filter_form_keeps_its_exit_tree_and_reinitializes_on_reopen"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    fixture(&app);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    // Request the form before the lazy selector tree has ever been evaluated.
+    app.global::<nova::StreamFiltersBridge>().set_open(true);
+    let weak = app.as_weak();
+    app.global::<nova::StreamFiltersBridge>()
+        .on_closed(move || {
+            weak.upgrade()
+                .unwrap()
+                .global::<nova::StreamFiltersBridge>()
+                .set_open(false);
+        });
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    settle(&app);
+    settle(&app);
+    let card = ElementHandle::find_by_element_id(&app, "StreamFilterPanel::card")
+        .next()
+        .expect("first requested form mounted");
+    assert!(card.computed_opacity() > 0.99);
+    app.global::<nova::StreamFiltersBridge>().set_open(false);
+    // Evaluate the conditional tree now, before its retained exit elapses.
+    let _ = ElementQuery::from_root(&app)
+        .match_predicate(|_| true)
+        .find_all();
+    assert!(
+        card.is_valid(),
+        "closing must retain the form's exit animation"
+    );
+    settle(&app);
+    settle(&app);
+    assert!(
+        card.is_valid(),
+        "the first requested form stays mounted after exit"
+    );
+    app.global::<nova::StreamFiltersBridge>()
+        .set_audio_languages("hr".into());
+    app.global::<nova::StreamFiltersBridge>().set_open(true);
+    settle(&app);
+    settle(&app);
+    assert!(card.is_valid(), "reopening reuses the existing form");
+    assert_eq!(
+        language_input(&app).accessible_value().as_deref(),
+        Some("hr")
+    );
+    key(&app, slint::platform::Key::Escape);
+    assert!(!app.global::<nova::StreamFiltersBridge>().get_open());
+}
+
+/// Measure actual compiled selector construction/layout/first rendering on a
+/// native backend. Keep timing informational: shared CI machines cannot enforce
+/// a frame budget reliably. Run the same fixture before/after UI changes.
+#[test]
+#[cfg(feature = "desktop")]
+#[ignore = "requires a display; native stream selector opening timings"]
+fn measure_native_stream_selector_opening() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::measure_native_stream_selector_opening"
+    )) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    fixture(&app);
+    app.set_stream_selector_open(false);
+    app.set_streams(
+        Rc::new(slint::VecModel::from(
+            (0..25)
+                .map(|index| nova::StreamRow {
+                    id: format!("timing-{index}").into(),
+                    title: format!("The.Quiet.Sea.2026.1080p.WEB-DL.HEVC.Release.{index}").into(),
+                    metadata: "Example addon · 1080p · HEVC".into(),
+                    description: "Audio: Japanese / English\nSubtitles: English / Croatian".into(),
+                    size: "4.5 GiB".into(),
+                    lines: 3,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_stream_total(25);
+    app.set_stream_addons(
+        Rc::new(slint::VecModel::from(vec![
+            "Example addon".into(),
+            "Second addon".into(),
+        ]))
+        .into(),
+    );
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    let weak = app.as_weak();
+    let timer = slint::Timer::default();
+    let mut phase = 0;
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(100),
+        move || {
+            let app = weak.upgrade().unwrap();
+            let round = phase / 2;
+            if phase % 2 == 0 {
+                let start = std::time::Instant::now();
+                app.set_stream_selector_open(true);
+                let image = app.window().take_snapshot().unwrap();
+                let elapsed = start.elapsed();
+                let tree = ElementQuery::from_root(&app)
+                    .match_predicate(|_| true)
+                    .find_all();
+                // Accessibility traversal excludes invisible components, so
+                // this count is diagnostic rather than proof of lazy mounting.
+                println!(
+                    "STREAM_SELECTOR_OPEN size={}x{} round={} elapsed_us={} visible_elements={}",
+                    image.width(),
+                    image.height(),
+                    round % 8,
+                    elapsed.as_micros(),
+                    tree.len(),
+                );
+            } else {
+                app.set_stream_selector_open(false);
+                let _ = app.window().take_snapshot().unwrap();
+                if round == 7 {
+                    app.window().set_size(slint::PhysicalSize::new(1280, 800));
+                } else if round == 15 {
+                    slint::quit_event_loop().unwrap();
+                }
+            }
+            phase += 1;
+        },
+    );
+    slint::run_event_loop().unwrap();
+}

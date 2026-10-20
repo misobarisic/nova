@@ -64,11 +64,17 @@ export component StreamFilterPanel inherits Rectangle {
     callback closed();
     visible: root.open || root.retained;
     width: 100%; height: 100%;
+    // First construction can already be open because the selector mounts
+    // this form lazily. Initialize focus/draft exactly as on later openings.
+    function begin_open() {
+        exit_timer.stop(); root.retained = true; root.revealed = !root.motion;
+        root.selected = 0; root.language_draft = StreamFiltersBridge.audio_languages;
+        enter_timer.start(); keys.focus();
+    }
+    init => { if root.open { root.begin_open(); } }
     changed open => {
         if root.open {
-            exit_timer.stop(); root.retained = true; root.revealed = !root.motion;
-            root.selected = 0; root.language_draft = StreamFiltersBridge.audio_languages;
-            enter_timer.start(); keys.focus();
+            root.begin_open();
         } else {
             root.revealed = false;
             if root.motion { exit_timer.start(); } else { root.retained = false; }

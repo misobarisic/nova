@@ -33,6 +33,26 @@ fn player_episode_preview(
     }
 }
 
+// A cached list image is only a provisional player loading backdrop. A
+// delayed resize must never replace a newer recipe fetch or another selection.
+struct EpisodePreviewRequest {
+    open_token: Arc<()>,
+    episode_id: String,
+    stream_generation: u64,
+    image_revision: u64,
+}
+impl EpisodePreviewRequest {
+    fn accepts(&self, state: &Shared, revision: u64, has_backdrop: bool) -> bool {
+        !has_backdrop
+            && revision == self.image_revision
+            && state.stream_generation == self.stream_generation
+            && state.modal_item.as_ref().is_some_and(|modal| {
+                Arc::ptr_eq(&modal.open_token, &self.open_token)
+                    && modal.request_id == self.episode_id
+            })
+    }
+}
+
 impl Bridge {
     pub(super) fn item_selected(&self, index: usize) {
         let searching = self.app().is_some_and(|app| app.get_discover_search_open());
@@ -2132,6 +2152,7 @@ impl Bridge {
                 ..Default::default()
             });
         }
+        let mut preview_work = None;
         if let Some(app) = self.app() {
             app.set_modal_episodes(false);
             app.set_stream_selector_open(true);
@@ -2153,25 +2174,30 @@ impl Bridge {
             app.set_detail_kb_ci(2);
             app.set_detail_kb_ep(local_index as i32);
             app.set_detail_kb_s(0);
-            app.set_player_poster(
-                app.get_selected_poster()
-                    .to_rgba8()
-                    .map(|pixels| {
-                        Image::from_rgba8(player_episode_preview(&pixels, &active_cache_settings()))
-                    })
-                    .unwrap_or_default(),
-            );
-            // Use the episode's thumbnail as the player's loading-screen
-            // background once it has decoded (row order matches the list).
-            if let Some(row) = app.get_episode_rows().row_data(local_index)
-                && row.has_thumb
-                && let Some(pixels) = row.thumb.to_rgba8()
-            {
-                let pixels = player_episode_preview(&pixels, &active_cache_settings());
-                app.set_player_poster(Image::from_rgba8(pixels));
+            // Prefer a ready episode thumbnail without first resizing the
+            // poster it replaces. Large cached images are resized on a worker,
+            // so opening the selector never waits for a Triangle resample.
+            let pixels = app
+                .get_episode_rows()
+                .row_data(local_index)
+                .filter(|row| row.has_thumb)
+                .and_then(|row| row.thumb.to_rgba8())
+                .or_else(|| app.get_selected_poster().to_rgba8());
+            app.set_player_poster(Image::default());
+            if let Some(pixels) = pixels {
+                let settings = active_cache_settings();
+                let maximum =
+                    ImageRecipe::resolve(ImageUse::PlayerEpisodeBackdrop, &settings).max_side;
+                if maximum
+                    .is_some_and(|side| side > 0 && pixels.width().max(pixels.height()) > side)
+                {
+                    preview_work = Some((pixels, settings, image_settings_revision()));
+                } else {
+                    app.set_player_poster(Image::from_rgba8(pixels));
+                }
             }
         }
-        // Keep the immediate list thumbnail, then upgrade through the player's recipe.
+        // Use the cached thumbnail when ready, then upgrade through the player's recipe.
         if let Some(url) = video.thumbnail.clone() {
             let series_id = self
                 .shared
@@ -2185,6 +2211,50 @@ impl Bridge {
             }
         }
         self.start_stream_search(request_id);
+        if let Some((pixels, settings, revision)) = preview_work {
+            self.resize_player_episode_preview(pixels, settings, revision);
+        }
+    }
+
+    fn resize_player_episode_preview(
+        &self,
+        pixels: SharedPixelBuffer<Rgba8Pixel>,
+        settings: CacheSettings,
+        image_revision: u64,
+    ) {
+        let request = {
+            let state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            EpisodePreviewRequest {
+                open_token: modal.open_token.clone(),
+                episode_id: modal.request_id.clone(),
+                stream_generation: state.stream_generation,
+                image_revision,
+            }
+        };
+        let bridge = self.clone();
+        // Both the resize and completion carry the originating profile.
+        thread::Builder::new()
+            .name("episode-preview".into())
+            .spawn(move || {
+                let pixels = player_episode_preview(&pixels, &settings);
+                let _ = profiles::invoke_from_event_loop(move || {
+                    let Some(app) = bridge.app() else { return };
+                    let state = bridge.shared.lock().unwrap();
+                    let current = request.accepts(
+                        &state,
+                        image_settings_revision(),
+                        app.get_player_poster().size().width > 0,
+                    );
+                    drop(state);
+                    if current {
+                        app.set_player_poster(Image::from_rgba8(pixels));
+                    }
+                });
+            })
+            .expect("spawn episode preview resize");
     }
 
     fn load_player_episode_backdrop(&self, series_id: String, episode_id: String, url: String) {
@@ -3631,6 +3701,45 @@ mod source_lookup_tests {
             description: String::new(),
             genres: Vec::new(),
         }
+    }
+
+    #[test]
+    fn resized_player_preview_rejects_new_artwork_requests_settings_and_reopened_titles() {
+        let mut state = Shared {
+            modal_item: Some(modal()),
+            stream_generation: 12,
+            ..Default::default()
+        };
+        let modal = state.modal_item.as_ref().unwrap();
+        let request = EpisodePreviewRequest {
+            open_token: modal.open_token.clone(),
+            episode_id: modal.request_id.clone(),
+            stream_generation: 12,
+            image_revision: 4,
+        };
+        assert!(request.accepts(&state, 4, false));
+        assert!(
+            !request.accepts(&state, 4, true),
+            "a recipe fetch already won"
+        );
+        assert!(!request.accepts(&state, 5, false), "image policy changed");
+        state.stream_generation += 1;
+        assert!(
+            !request.accepts(&state, 4, false),
+            "same episode was requested again"
+        );
+        state.stream_generation = 12;
+        state.modal_item.as_mut().unwrap().request_id = "next-episode".into();
+        assert!(!request.accepts(&state, 4, false));
+        state.modal_item.as_mut().unwrap().request_id = request.episode_id.clone();
+        assert!(request.accepts(&state, 4, false));
+        state.modal_item.as_mut().unwrap().open_token = Arc::new(());
+        assert!(
+            !request.accepts(&state, 4, false),
+            "same title was reopened"
+        );
+        state.modal_item = None;
+        assert!(!request.accepts(&state, 4, false), "Detail closed");
     }
 
     #[test]

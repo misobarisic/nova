@@ -612,7 +612,10 @@ export component StreamSelector inherits Rectangle {
     // data updates and resizing keep this instance, so they never replay it.
     private property <bool> entered: false;
     private property <bool> entrance_motion: Anim.enabled && Anim.transitions;
-    init => { if (!root.entrance_motion) { root.entered = true; } }
+    init => {
+        if (!root.entrance_motion) { root.entered = true; }
+        if StreamFiltersBridge.open { root.filters_mounted = true; }
+    }
     changed entrance_motion => { if (!root.entrance_motion) { root.entered = true; } }
     x: root.entered || !root.entrance_motion ? 0px : Math.min(48px, root.width * 0.08);
     opacity: root.entered || !root.entrance_motion ? 1.0 : 0.0;
@@ -1101,7 +1104,13 @@ export component StreamSelector inherits Rectangle {
         }
     }
 
-    StreamFilterPanel {
+    // The closed preferences form includes an editor and sync comparison
+    // dialog. Do not construct/layout that unused tree on selector entry.
+    // Once requested, retain it for its exit animation and normal reopen state.
+    private property <bool> filters_requested: StreamFiltersBridge.open;
+    private property <bool> filters_mounted: false;
+    changed filters_requested => { if root.filters_requested { root.filters_mounted = true; } }
+    if root.filters_requested || root.filters_mounted: StreamFilterPanel {
         width: 100%; height: 100%;
         safe-top: root.safe-top; safe-bottom: root.safe-bottom;
         safe-left: root.safe-left; safe-right: root.safe-right;
