@@ -163,6 +163,30 @@ fn responsive_selector_keeps_state_and_dispatches_movie_and_stream_actions() {
                 "{width}x{height}: the header poster must retain its 2:3 frame"
             );
         }
+        for removed in ["StreamSelector::stream_count", "StreamSelector::top_pager"] {
+            assert!(
+                ElementHandle::find_by_element_id(&app, removed)
+                    .next()
+                    .is_none(),
+                "{width}x{height}: the heading must omit {removed}"
+            );
+        }
+        for label in ["Universal filters", "Clear"] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, label)
+                    .next()
+                    .is_none(),
+                "{width}x{height}: rules belong in Player settings, not the selector"
+            );
+        }
+        let pager = element(&app, "StreamSelector::bottom_pager");
+        assert!(pager.absolute_position().y >= 0.0);
+        assert!(pager.absolute_position().y + pager.size().height <= height as f32 + 1.0);
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&app, "Next page").count(),
+            1,
+            "{width}x{height}: only the bottom pager may expose page actions"
+        );
         let viewport = element(&app, "StreamSelector::result_scroll");
         let p = viewport.absolute_position();
         let size = viewport.size();
@@ -205,6 +229,23 @@ fn responsive_selector_keeps_state_and_dispatches_movie_and_stream_actions() {
         assert_eq!(app.get_detail_kb_s(), 25);
         assert_eq!(app.get_streams().row_count(), 2);
     }
+    // Rules now belong exclusively to Settings → Player. A former selector
+    // shortcut must neither open the form nor steal the stream focus zone.
+    let focused_stream = app.get_detail_kb_s();
+    for text in ["f", "F"] {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: text.into() });
+        idle();
+    }
+    assert_eq!(app.get_detail_kb_s(), focused_stream);
+    assert!(app.get_stream_selector_open());
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Universal filters")
+            .next()
+            .is_none()
+    );
     app.set_episode_context("".into());
     app.set_streams_hint("".into());
     nova_ui::apply_theme(&app, false);
@@ -490,13 +531,15 @@ fn render_stream_selector_previews() {
     // Keep the original three previews and compare identical short desktop
     // and Android windows, including sticky filters after context scrolls away.
     let sizes = [
-        ("phone", 390, 844, false, false),
-        ("compact", 1000, 800, false, false),
-        ("artwork", 1440, 900, false, false),
-        ("desktop-short", 1280, 576, false, false),
-        ("android-landscape", 1280, 576, true, false),
-        ("android-landscape-scrolled", 1280, 576, true, true),
-        ("android-portrait", 390, 844, true, false),
+        ("phone", 390, 844, false, false, false),
+        ("compact", 1000, 800, false, false, false),
+        ("artwork", 1440, 900, false, false, false),
+        ("desktop-short", 1280, 576, false, false, false),
+        ("android-landscape", 1280, 576, true, false, false),
+        ("android-landscape-scrolled", 1280, 576, true, true, false),
+        ("android-portrait", 390, 844, true, false, false),
+        ("phone-fetching", 390, 844, true, false, true),
+        ("desktop-fetching", 1440, 900, false, false, true),
     ];
     app.window()
         .set_size(slint::PhysicalSize::new(sizes[0].1, sizes[0].2));
@@ -542,6 +585,9 @@ fn render_stream_selector_previews() {
                 let next = sizes[i + 1];
                 app.set_is_android(next.3);
                 app.set_touch_menus(next.3);
+                app.set_streams_searching(next.5);
+                app.set_stream_loading(Rc::new(VecModel::from(vec![next.5, false, next.5])).into());
+                app.set_animations(next.5);
                 if i + 1 >= 3 {
                     app.set_kb_active(false);
                 }
@@ -645,15 +691,19 @@ fn paired_output_picker_keeps_short_results_and_routes_receiver_selection() {
                 );
             }
             let title = element(&app, "StreamSelector::heading_title");
-            let count = element(&app, "StreamSelector::stream_count");
             let center_y =
                 |item: &ElementHandle| item.absolute_position().y + item.size().height / 2.0;
-            for peer in [&heading, &title, &count] {
+            for peer in [&heading, &title] {
                 assert!(
                     (center_y(&output_button) - center_y(peer)).abs() <= 1.0,
                     "Play on must share the heading's vertical center at {width}x{height}"
                 );
             }
+            assert!(
+                title.absolute_position().x + title.size().width
+                    <= picker.absolute_position().x + 1.0,
+                "{language} {width}x{height}: heading and output target must not overlap"
+            );
             let results = element(&app, "StreamSelector::result_scroll");
             let original_y = results.absolute_position().y;
             let original_height = results.size().height;
@@ -774,4 +824,118 @@ fn paired_output_picker_keeps_short_results_and_routes_receiver_selection() {
             .height
             >= 40.0
     );
+}
+
+#[test]
+fn refresh_is_first_in_the_addon_rail_and_routes_pointer_keyboard_and_remote() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "refresh_is_first_in_the_addon_rail_and_routes_pointer_keyboard_and_remote"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_selected_title("Movie".into());
+    app.set_stream_selector_open(true);
+    app.set_stream_refresh_enabled(true);
+    app.set_stream_addons(
+        Rc::new(VecModel::from(vec![
+            "Torrentio".into(),
+            "MediaFusion".into(),
+        ]))
+        .into(),
+    );
+    app.set_streams(Rc::new(VecModel::from(vec![row(0)])).into());
+    app.set_stream_total(1);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.show().unwrap();
+    idle();
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let recorded = calls.clone();
+    app.on_stream_refresh_requested(move || recorded.set(recorded.get() + 1));
+    let refresh = || {
+        ElementHandle::find_by_accessible_label(&app, "Refresh all sources")
+            .next()
+            .unwrap()
+    };
+    for (width, height, tv) in [
+        (320, 360, false),
+        (390, 844, false),
+        (1280, 800, false),
+        (960, 540, true),
+    ] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, height as f32),
+            });
+        idle();
+        let action = refresh();
+        let all = ElementHandle::find_by_accessible_label(&app, "All")
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .unwrap();
+        assert!(action.absolute_position().x + action.size().width <= all.absolute_position().x);
+        assert!((action.absolute_position().y - all.absolute_position().y).abs() < 1.0);
+        assert_eq!(action.size().height, all.size().height);
+        assert!(action.absolute_position().x >= 0.0);
+        assert!(action.absolute_position().x + action.size().width <= width as f32);
+    }
+    app.global::<nova::InterfaceStyle>().set_tv(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    idle();
+    click(&app, refresh());
+    assert_eq!(calls.get(), 1);
+    click(&app, refresh());
+    assert_eq!(
+        calls.get(),
+        1,
+        "pointer spam is blocked during local feedback"
+    );
+    idle();
+    app.set_stream_refresh_enabled(false);
+    idle();
+    assert_eq!(refresh().accessible_enabled(), Some(false));
+    click(&app, refresh());
+    assert_eq!(calls.get(), 1);
+    app.set_stream_refresh_enabled(true);
+    app.set_streams_searching(true);
+    idle();
+    assert_eq!(refresh().accessible_enabled(), Some(false));
+    app.set_streams_searching(false);
+    idle();
+    // Up enters the addon zone; Left from All selects the refresh action
+    // without ever sending a negative addon filter index to the backend.
+    let filters = Rc::new(RefCell::new(Vec::new()));
+    let recorded = filters.clone();
+    app.on_stream_filter_picked(move |index| recorded.borrow_mut().push(index));
+    key(&app, slint::platform::Key::UpArrow);
+    key(&app, slint::platform::Key::LeftArrow);
+    key(&app, slint::platform::Key::Return);
+    assert_eq!(calls.get(), 2);
+    assert!(filters.borrow().is_empty());
+    key(&app, slint::platform::Key::RightArrow);
+    assert_eq!(filters.borrow().as_slice(), &[0]);
+    idle();
+    idle();
+    app.set_remote_target_id("receiver".into());
+    idle();
+    click(&app, refresh());
+    assert_eq!(
+        calls.get(),
+        3,
+        "receiver refresh uses the same guarded backend callback"
+    );
+    // A failed empty response still leaves an explicit refresh path.
+    app.set_stream_addons(Default::default());
+    idle();
+    assert!(refresh().size().width > 0.0);
 }

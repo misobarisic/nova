@@ -45,6 +45,36 @@ component IconBtn inherits Rectangle {
 
 import { MenuRow } from "player-menu-row.slint";
 
+// Saved-scene actions share one compact lane beside the note and timestamp.
+// Keep touch targets large even when the player settings card is phone-sized.
+component BookmarkAction inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> focused;
+    callback activate();
+    callback reveal(length, length);
+    width: InterfaceStyle.tv ? 56px : 44px;
+    height: self.width;
+    border-radius: 10px;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    background: action_touch.has-hover ? Theme.current.control_hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.activate(); }
+    changed focused => { if root.focused { reveal_timer.start(); } }
+    reveal_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); if root.focused { root.reveal(root.absolute-position.y, root.height); } }
+    }
+    Image {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 24px; height: 24px; source: root.icon;
+        image-fit: contain; colorize: Theme.current.accent_soft;
+    }
+    action_touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+}
+
 component SubtitleAddonStatus inherits Text {
     in property <int> status;
     text: root.status == 1 ? @tr("Searching subtitle addons…")
@@ -58,6 +88,59 @@ component SubtitleAddonStatus inherits Text {
     vertical-stretch: 0;
 }
 
+// Keep the current subtitle list below two compact routes to its existing tools.
+component SubtitleShortcuts inherits HorizontalLayout {
+    in property <int> focused_idx: -1;
+    in property <string> secondary_label;
+    callback opened(int);
+    callback reveal(length, length);
+    spacing: 8px;
+    vertical-stretch: 0;
+    for i in 2: shortcut_button := Rectangle {
+        horizontal-stretch: 1; min-width: 0px; preferred-width: 0px;
+        min-height: Math.max(InterfaceStyle.tv ? 64px : 56px, shortcut_label.preferred-height + (i == 1 ? 18px : 0px) + 24px);
+        preferred-height: self.min-height; vertical-stretch: 1;
+        border-radius: 10px;
+        border-width: root.focused_idx == i ? 2px : 1px;
+        border-color: root.focused_idx == i ? Theme.current.focus_ring : Theme.current.player_menu_border;
+        background: shortcut_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
+        accessible-role: button;
+        accessible-label: i == 0 ? @tr("Appearance & timing") : @tr("Second subtitles");
+        accessible-description: i == 1 ? (root.secondary_label != "" ? root.secondary_label : @tr("Off")) : "";
+        accessible-action-default => { root.opened(i == 0 ? 5 : 8); }
+        private property <bool> focused: root.focused_idx == i;
+        changed focused => { if self.focused { reveal_timer.start(); } }
+        reveal_timer := Timer {
+            interval: 1ms; running: false;
+            triggered => { self.stop(); if shortcut_button.focused { root.reveal(shortcut_button.absolute-position.y, shortcut_button.height); } }
+        }
+        Image {
+            x: 12px; y: (parent.height - self.height) / 2;
+            width: 24px; height: 24px;
+            source: i == 0 ? @image-url("../../assets/icons/player/sliders-horizontal.svg") : @image-url("../../assets/icons/player/languages.svg");
+            colorize: Theme.current.accent_soft; image-fit: contain;
+        }
+        VerticalLayout {
+            x: 44px; y: 12px; width: Math.max(1px, parent.width - 56px); height: parent.height - 24px;
+            spacing: 2px; alignment: center;
+            shortcut_label := Text {
+                text: i == 0 ? @tr("Appearance & timing") : @tr("Second subtitles");
+                color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 18px : 13px;
+                font-weight: 600; wrap: word-wrap; min-width: 0px;
+            }
+            if i == 1: Text {
+                text: root.secondary_label != "" ? root.secondary_label : @tr("Off");
+                color: Theme.current.text_player_secondary; font-size: InterfaceStyle.tv ? 16px : 12px;
+                overflow: elide; min-width: 0px;
+            }
+        }
+        shortcut_touch := TouchArea {
+            width: 100%; height: 100%; mouse-cursor: pointer;
+            clicked => { root.opened(i == 0 ? 5 : 8); }
+        }
+    }
+}
+
 // Dark rounded popup card listing audio/subtitle tracks. Anchored by the
 // caller above the button that opens it.
 component TrackMenu inherits Rectangle {
@@ -66,11 +149,14 @@ component TrackMenu inherits Rectangle {
     in property <bool> kb_active: false;
     in property <int> row_icon: 0;   // icon for every track row
     in property <bool> with_off_row: false;
+    in property <string> secondary_label;
     in property <length> max_w: 340px;
     in property <length> max_h: InterfaceStyle.tv ? 440px : 320px;
-    // 6-button nav: focused row index (off-row is 0 when present).
+    // Subtitle navigation starts with two shortcuts, then Off and the tracks.
+    // Audio navigation starts directly at its first track.
     in property <int> focused_idx: -1;
     callback pick(int);
+    callback subtitle_tool_requested(int);
     function reveal_row(y: length, h: length) {
         let top = y - menu_scroll.absolute-position.y;
         if top < 0px { menu_scroll.content-y = Math.min(0px, menu_scroll.content-y - top); }
@@ -101,12 +187,19 @@ component TrackMenu inherits Rectangle {
             padding: 8px;
             spacing: 4px;
 
+            if root.with_off_row: SubtitleShortcuts {
+                secondary_label: root.secondary_label;
+                focused_idx: root.kb_active ? root.focused_idx : -1;
+                opened(page) => { root.subtitle_tool_requested(page); }
+                reveal(y, h) => { root.reveal_row(y, h); }
+            }
+
             if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
 
             if with_off_row: MenuRow {
                 reveal(y, h) => { root.reveal_row(y, h); }
                 label: @tr("Off");
-                focused: root.kb_active && root.focused_idx == 0;
+                focused: root.kb_active && root.focused_idx == 2;
                 activate => { pick(-1); }
             }
 
@@ -128,14 +221,14 @@ component TrackMenu inherits Rectangle {
                 label: track.lang + (track.title != "" ? " — " + track.title : "");
                 value: track.codec;
                 selected: track.selected;
-                focused: root.kb_active && root.focused_idx == i + (root.with_off_row ? 1 : 0);
+                focused: root.kb_active && root.focused_idx == i + (root.with_off_row ? 3 : 0);
                 activate => { pick(track.index); }
             }
         }
     }
 }
 
-// Player settings panel (opened by the gear button in the bottom control
+// Playback menu (opened by the gear button in the bottom control
 // row): an anchored card on wide screens and a centered card on narrow ones.
 // Holds the hardware-decoder picker (Android/Windows/Linux) plus the subtitle and audio
 // track pickers. On narrow layouts the track pickers live here to save
@@ -156,7 +249,8 @@ component SettingsMenu inherits Rectangle {
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
     // Current submenu: 0 = root, 1 = hardware decoding (Android/Windows/Linux), 2 =
     // subtitles, 3 = audio, 4 = playback speed, 5 = subtitle appearance,
-    // 6 = intro skipping, 7 = embedded chapters. Two-way bound to PlayerOverlay
+    // 6 = intro skipping, 7 = chapters, 8 = second subtitles, 9 = bookmarks.
+    // Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
     in property <int> intro_skip_override_index: -1;
@@ -169,7 +263,9 @@ component SettingsMenu inherits Rectangle {
         settings_scroll.content-y = 0px;
         // Replace the page immediately, including its focus and action targets.
         // Only the incoming content is painted during the short push/pop reveal.
-        root.page_direction = root.page == 0 ? -1 : 1;
+        root.page_direction = root.page == 0
+            || ((root.previous_page == 5 || root.previous_page == 8) && root.page == 2) ? -1 : 1;
+        root.previous_page = root.page;
         root.page_revealed = !root.page_motion;
         // Assign both endpoints: a delayed frame must not coalesce a lazy
         // revealed=false/true binding back into an unchanged progress of 1.
@@ -179,6 +275,7 @@ component SettingsMenu inherits Rectangle {
     }
     private property <bool> page_motion: Anim.enabled && Anim.player;
     private property <bool> page_revealed: true;
+    private property <int> previous_page: 0;
     private property <int> page_direction: 1;
     private property <float> page_progress: 1;
     animate page_progress {
@@ -264,6 +361,8 @@ component SettingsMenu inherits Rectangle {
     // Playback rate: a slider value (drags/live) or ± one 0.05 step.
     callback speed_changed(float);
     callback speed_stepped(int);
+    callback back_requested();
+    callback subtitle_tool_requested(int);
     callback closed();
     function reveal_row(y: length, h: length) {
         let top = y - settings_scroll.absolute-position.y;
@@ -292,7 +391,7 @@ component SettingsMenu inherits Rectangle {
         if root.page == 7 { return @tr("Chapters"); }
         if root.page == 8 { return @tr("Second subtitles"); }
         if root.page == 9 { return @tr("Scene bookmarks"); }
-        return @tr("Playback settings");
+        return @tr("Playback");
     }
 
     // Compact layouts dim the video; both layouts dismiss on an outside tap.
@@ -362,7 +461,7 @@ component SettingsMenu inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             mouse-cursor: pointer;
-                            clicked => { root.page = 0; }
+                            clicked => { root.back_requested(); }
                         }
                         IcChevronLeft {
                             x: (parent.width - self.width) / 2;
@@ -495,6 +594,7 @@ component SettingsMenu inherits Rectangle {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             submenu: true;
                             label: @tr("Chapters");
+                            icon: @image-url("../../assets/icons/player/list-video.svg");
                             focused: root.focused_idx == (root.decoder_available ? 6 : 5);
                             activate => { root.page = 7; }
                         }
@@ -600,9 +700,11 @@ component SettingsMenu inherits Rectangle {
                             wrap: word-wrap; color: Theme.current.text_player_muted;
                             font-size: InterfaceStyle.tv ? 20px : 13px;
                         }
-                        for bookmark[i] in root.scene_bookmarks: VerticalLayout {
-                            spacing: 0px;
-                            MenuRow {
+                        for bookmark[i] in root.scene_bookmarks: bookmark_row := HorizontalLayout {
+                            spacing: 4px;
+                            height: Math.max(InterfaceStyle.tv ? 56px : 44px, bookmark_seek.height);
+                            bookmark_seek := MenuRow {
+                                horizontal-stretch: 1; min-width: 0px;
                                 reveal(y, h) => { root.reveal_row(y, h); }
                                 label: bookmark.note == "" ? @tr("Scene bookmark") : bookmark.note;
                                 value: root.format_time(bookmark.position);
@@ -610,20 +712,24 @@ component SettingsMenu inherits Rectangle {
                                 focused: root.focused_idx == 2 + i * 4;
                                 activate => { root.pick_chapter(bookmark.position); }
                             }
-                            MenuRow {
-                                reveal(y, h) => { root.reveal_row(y, h); }
-                                label: @tr("Edit note"); focused: root.focused_idx == 3 + i * 4;
-                                activate => { root.edit_bookmark_note(bookmark.id, bookmark.note); settings_scroll.content-y = 0px; }
-                            }
-                            MenuRow {
-                                reveal(y, h) => { root.reveal_row(y, h); }
-                                label: @tr("Clear note"); focused: root.focused_idx == 4 + i * 4;
-                                activate => { root.edit_scene_bookmark(bookmark.id, ""); }
-                            }
-                            MenuRow {
-                                reveal(y, h) => { root.reveal_row(y, h); }
-                                label: @tr("Delete bookmark"); focused: root.focused_idx == 5 + i * 4;
-                                activate => { if root.delete_scene_bookmark(bookmark.id) && root.bookmark_edit_id == bookmark.id { root.bookmark_edit_id = ""; root.bookmark_note_draft = ""; } }
+                            for action in 3: Rectangle {
+                                width: InterfaceStyle.tv ? 56px : 44px; height: 100%;
+                                BookmarkAction {
+                                    y: (parent.height - self.height) / 2;
+                                    label: action == 0 ? @tr("Edit note") : action == 1 ? @tr("Clear note") : @tr("Delete bookmark");
+                                    icon: action == 0 ? @image-url("../../assets/icons/player/pencil.svg")
+                                        : action == 1 ? @image-url("../../assets/icons/player/eraser.svg")
+                                        : @image-url("../../assets/icons/player/trash.svg");
+                                    focused: root.focused_idx == 3 + i * 4 + action;
+                                    reveal(y, h) => { root.reveal_row(y, h); }
+                                    activate => {
+                                        if action == 0 { root.edit_bookmark_note(bookmark.id, bookmark.note); settings_scroll.content-y = 0px; }
+                                        else if action == 1 { root.edit_scene_bookmark(bookmark.id, ""); }
+                                        else if root.delete_scene_bookmark(bookmark.id) && root.bookmark_edit_id == bookmark.id {
+                                            root.bookmark_edit_id = ""; root.bookmark_note_draft = "";
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -709,6 +815,12 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 2: VerticalLayout {
                         width: 100%;
                         spacing: 4px;
+                        SubtitleShortcuts {
+                            focused_idx: root.focused_idx;
+                            secondary_label: root.secondary_sub_track_label;
+                            opened(page) => { root.subtitle_tool_requested(page); }
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                        }
                         if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
@@ -716,14 +828,14 @@ component SettingsMenu inherits Rectangle {
                             value: root.subtitle_preference_saved
                                 ? @tr("Saved for this title") : @tr("Using global default");
                             selected: !root.subtitle_preference_saved;
-                            focused: root.focused_idx == 0;
+                            focused: root.focused_idx == 2;
                             activate => { root.restore_playback_default(1); }
                         }
                         MenuRow {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2;
                             label: @tr("Off");
-                            focused: root.focused_idx == 1;
+                            focused: root.focused_idx == 3;
                             activate => { root.pick_sub(-1); }
                         }
                         for t[i] in root.sub_tracks: MenuRow {
@@ -732,7 +844,7 @@ component SettingsMenu inherits Rectangle {
                             label: t.lang + (t.title != "" ? " — " + t.title : "");
                             value: t.codec;
                             selected: t.selected;
-                            focused: root.focused_idx == i + 2;
+                            focused: root.focused_idx == i + 4;
                             activate => { root.pick_sub(t.index); }
                         }
                     }
@@ -940,6 +1052,7 @@ export component PlayerOverlay {
     in-out property <string> bookmark_edit_id;
     in-out property <string> bookmark_note_draft;
     in property <bool> try_another_stream_available;
+    in property <bool> automatic_stream_recovery_visible;
     callback pick_secondary_sub_track(int);
     callback add_scene_bookmark(string) -> bool;
     callback delete_scene_bookmark(string) -> bool;
@@ -973,9 +1086,20 @@ export component PlayerOverlay {
     in-out property <int> decoder_selected: -1;
     // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
     // 3 = audio, 4 = speed, 5 = subtitle appearance, 6 = intro skipping,
-    // 7 = embedded chapters.
+    // 7 = chapters, 8 = second subtitles, 9 = scene bookmarks.
     // Driven by the keyboard handler.
     property <int> settings_page: 0;
+    // Subtitle tools return to the exact picker that opened them: the desktop
+    // captions popup (2) or Playback → Subtitles (4), never straight to root.
+    private property <int> subtitle_tools_origin: 0;
+    private property <int> subtitle_return_focus: 0;
+    function open_subtitle_tool(page: int, origin: int) {
+        root.subtitle_tools_origin = origin;
+        root.settings_page = page;
+        root.open_popup = 4;
+        root.kb_menu = 0;
+        root.osd_mouse_moved();
+    }
     // A native menu-row/preset scope may disappear when a submenu changes.
     // The player scope survives every menu body and owns nearest-layer Back.
     changed settings_page => {
@@ -1236,7 +1360,7 @@ export component PlayerOverlay {
 
     function kb_menu_n() -> int {
         if (root.open_popup == 2) {
-            return root.sub_tracks.length + 1;
+            return root.sub_tracks.length + 3;
         }
         if (root.open_popup == 1) {
             return root.audio_tracks.length;
@@ -1250,7 +1374,7 @@ export component PlayerOverlay {
                 return 3;
             }
             if (root.settings_page == 2) {
-                return root.sub_tracks.length + 2;
+                return root.sub_tracks.length + 4;
             }
             if (root.settings_page == 3) {
                 return root.audio_tracks.length + 1;
@@ -1270,7 +1394,20 @@ export component PlayerOverlay {
 
     // Back out of the settings panel: one page at a time, then close.
     function settings_back() {
-        if (root.settings_page != 0) {
+        if (root.settings_page == 5 || root.settings_page == 8) && root.subtitle_tools_origin != 0 {
+            let origin = root.subtitle_tools_origin;
+            let focused = root.settings_page == 5 ? 0 : 1;
+            root.subtitle_tools_origin = 0;
+            if origin == 2 {
+                root.subtitle_return_focus = focused;
+                root.settings_page = 0;
+                root.open_popup = 2;
+            } else {
+                root.settings_page = 2;
+            }
+            root.kb_menu = focused;
+        } else if (root.settings_page != 0) {
+            root.subtitle_tools_origin = 0;
             root.settings_page = 0;
             root.kb_menu = 0;
         } else {
@@ -1424,10 +1561,12 @@ export component PlayerOverlay {
 
     function kb_menu_pick() {
         if (root.open_popup == 2) {
-            if (root.kb_menu == 0) {
+            if root.kb_menu < 2 {
+                root.open_subtitle_tool(root.kb_menu == 0 ? 5 : 8, 2);
+            } else if (root.kb_menu == 2) {
                 root.pick_sub_track(-1);
-            } else if (root.kb_menu - 1 < root.sub_tracks.length) {
-                root.pick_sub_track(root.sub_tracks[root.kb_menu - 1].index);
+            } else if (root.kb_menu - 3 < root.sub_tracks.length) {
+                root.pick_sub_track(root.sub_tracks[root.kb_menu - 3].index);
             }
         } else if (root.open_popup == 1) {
             if (root.kb_menu < root.audio_tracks.length) {
@@ -1471,13 +1610,15 @@ export component PlayerOverlay {
                 }
                 root.open_popup = 0;
             } else if (root.settings_page == 2) {
-                if (root.kb_menu == 0) {
+                if root.kb_menu < 2 {
+                    root.open_subtitle_tool(root.kb_menu == 0 ? 5 : 8, 4);
+                } else if (root.kb_menu == 2) {
                     root.restore_playback_default(1);
-                } else if (root.kb_menu == 1) {
+                } else if (root.kb_menu == 3) {
                     root.pick_sub_track(-1);
                     root.open_popup = 0;
-                } else if (root.kb_menu - 2 < root.sub_tracks.length) {
-                    root.pick_sub_track(root.sub_tracks[root.kb_menu - 2].index);
+                } else if (root.kb_menu - 4 < root.sub_tracks.length) {
+                    root.pick_sub_track(root.sub_tracks[root.kb_menu - 4].index);
                     root.open_popup = 0;
                 }
             } else if (root.settings_page == 3) {
@@ -1674,7 +1815,9 @@ export component PlayerOverlay {
         SliderGesture.hovered = false;
         tap_timer.stop();
         root.tap_side = -2;
-        root.kb_menu = 0;
+        root.kb_menu = root.open_popup == 2 ? root.subtitle_return_focus : 0;
+        root.subtitle_return_focus = 0;
+        if root.open_popup != 4 { root.subtitle_tools_origin = 0; }
         if InterfaceStyle.tv { root.kb_active = true; }
         root.osd_mouse_moved();
     }
@@ -1911,6 +2054,10 @@ export component PlayerOverlay {
                         } else if (e.text == Key.RightArrow) {
                             if (root.settings_page == 0) {
                                 root.kb_menu_pick();
+                            } else if root.settings_page == 2 && root.kb_menu < 2 {
+                                root.kb_menu = 1;
+                            } else if root.settings_page == 9 && root.kb_menu >= 2 {
+                                if Math.mod(root.kb_menu - 2, 4) < 3 { root.kb_menu += 1; }
                             } else if (root.settings_page == 4 && root.kb_menu == 1) {
                                 root.playback_speed_stepped(1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
@@ -1922,7 +2069,11 @@ export component PlayerOverlay {
                             if !e.repeat { root.kb_menu_pick(); }
                             accept
                         } else if (e.text == Key.LeftArrow) {
-                            if (root.settings_page == 4 && root.kb_menu == 1) {
+                            if root.settings_page == 2 && root.kb_menu == 1 {
+                                root.kb_menu = 0;
+                            } else if root.settings_page == 9 && root.kb_menu >= 2 && Math.mod(root.kb_menu - 2, 4) > 0 {
+                                root.kb_menu -= 1;
+                            } else if (root.settings_page == 4 && root.kb_menu == 1) {
                                 root.playback_speed_stepped(-1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
                                 let i = root.kb_menu - 1;
@@ -1946,6 +2097,9 @@ export component PlayerOverlay {
                         if (root.kb_menu + 1 < root.kb_menu_n()) {
                             root.kb_menu += 1;
                         }
+                        accept
+                    } else if root.open_popup == 2 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) && root.kb_menu < 2 {
+                        root.kb_menu = e.text == Key.RightArrow ? 1 : 0;
                         accept
                     } else if (e.text == Key.Return) {
                         if !e.repeat { root.kb_menu_pick(); }
@@ -2173,18 +2327,19 @@ export component PlayerOverlay {
         }
         // Loading/error text paints above the shared dim layer so it stays
         // as readable as the controls over paused video.
-        if !root.playback_started && root.player_status != "": loading_status := VerticalLayout {
+        if (!root.playback_started && root.player_status != "")
+            || (root.automatic_stream_recovery_visible && !root.is_paused && root.open_popup == 0): loading_status := VerticalLayout {
             y: root.safe-top + 56px;
             width: 100%; height: Math.max(0px, player_header.y - root.safe-top - 56px); alignment: center;
             HorizontalLayout {
                 width: 100%; alignment: center;
                 Text {
-                    text: root.player_status; color: Theme.current.text_bright;
+                    text: root.playback_started ? @tr("Playback is taking longer than expected.") : root.player_status; color: Theme.current.text_bright;
                     font-size: 18px; horizontal-alignment: center;
                     wrap: word-wrap; width: 80%;
                 }
             }
-            if root.try_another_stream_available: HorizontalLayout {
+            if root.automatic_stream_recovery_visible && root.try_another_stream_available && root.open_popup == 0: HorizontalLayout {
                 alignment: center;
                 MenuRow {
                     width: Math.min(340px, root.width - root.safe-left - root.safe-right - 32px);
@@ -2888,7 +3043,7 @@ export component PlayerOverlay {
                         width: InterfaceStyle.tv ? 56px : 40px;
                         height: InterfaceStyle.tv ? 56px : 40px;
 
-                        IconBtn {
+                        subtitle_button := IconBtn {
                             x: 0;
                             y: 0;
                             base: Theme.current.player_control;
@@ -2928,8 +3083,10 @@ export component PlayerOverlay {
                             with_off_row: true;
                             tracks: root.sub_tracks;
                             subtitle_addon_status: root.subtitle_addon_status;
+                            secondary_label: root.secondary_sub_track_label;
                             focused_idx: root.kb_menu;
                             kb_active: root.kb_active;
+                            subtitle_tool_requested(page) => { root.kb_active = false; root.open_subtitle_tool(page, 2); }
                             pick(idx) => { root.kb_active = false; root.pick_sub_track(idx); }
                         }
                     }
@@ -3023,11 +3180,11 @@ export component PlayerOverlay {
                             }
                         }
                     }
-                    // Player settings (all platforms/widths): a gear that opens
-                    // the settings panel (subtitles, audio, the Android
-                    // decoder options, and the playback rate). Second to last,
-                    // right before fullscreen.
+                    // Playback menu on all platforms/widths: settings, chapters,
+                    // scene bookmarks and stream recovery share this entry.
+                    // Second to last, right before fullscreen.
                     settings_gear := IconBtn {
+                        accessible-role: button; accessible-label: @tr("Playback");
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
@@ -3176,7 +3333,7 @@ export component PlayerOverlay {
             }
         }
 
-        // Player settings panel (gear button): subtitle + audio track pickers
+        // Playback menu (gear button): subtitle + audio track pickers
         // on every platform, plus the Android/Windows/Linux decoder submenu. On narrow
         // layouts the track pickers live here instead of the control row.
         if root.open_popup == 4: SettingsMenu {
@@ -3185,6 +3342,8 @@ export component PlayerOverlay {
             anchor_y: settings_gear.absolute-position.y - root.absolute-position.y;
             safe_top: root.safe-top; safe_left: root.safe-left; safe_right: root.safe-right;
             page <=> root.settings_page;
+            back_requested => { root.settings_back(); }
+            subtitle_tool_requested(page) => { root.kb_active = false; root.open_subtitle_tool(page, 4); }
             focused_idx: root.kb_active ? root.kb_menu : -1;
             selected_index: root.decoder_selected;
             hwdec_label: root.decode_label;

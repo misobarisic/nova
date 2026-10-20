@@ -1,4 +1,4 @@
-import { SettingsBridge, SettingsContent, SettingsSync, Theme, SettingsStyle } from "@NovaUiShared";
+import { StreamFiltersBridge, SettingsBridge, SettingsContent, SettingsSync, Theme, SettingsStyle } from "@NovaUiShared";
 import { SettingSyncBadge } from "../ui/settings-sync.slint";
 
 import { KbMark } from "../ui/kbnav.slint";
@@ -7,10 +7,29 @@ import { SubtitleControls } from "../ui/subtitle-controls.slint";
 
 import { SpeedControl } from "../ui/speedcontrol.slint";
 
-import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting } from "../ui/settings-controls.slint";
+import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting, SettingsInput, PillButton } from "../ui/settings-controls.slint";
 import { Dropdown } from "../ui/dropdown.slint";
 
 import { PlaybackLanguagePicker } from "../ui/playback-language-picker.slint";
+
+// Reuse the same row/control shell as the other Player preferences. The blob
+// remains one synced setting even though its fields have separate controls.
+component StreamRuleToggle inherits SettingsRow {
+    in property <int> rule-field;
+    in property <int> rule-row;
+    in-out property <bool> checked;
+    ToggleSwitch {
+        name: root.row-title;
+        checked <=> root.checked;
+        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() + root.rule-row;
+        toggled => {
+            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+            SettingsBridge.kb_zone = 9;
+            SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() + root.rule-row;
+            StreamFiltersBridge.edited(root.rule-field, self.checked ? "true" : "false");
+        }
+    }
+}
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
@@ -22,12 +41,30 @@ export component SettingsPlayerModule inherits Window {
     private property <length> measured_preferred: body_layout.preferred-height;
     changed measured_min => { root.publish_size(); }
     changed measured_preferred => { root.publish_size(); }
-    init => { root.publish_size(); }
+    init => { root.publish_size(); SettingsContent.stream_filter_language_draft = StreamFiltersBridge.audio_languages; }
     function publish_size() {
         if SettingsBridge.sel == 5 {
             SettingsContent.content_min_height = root.measured_min;
             SettingsContent.content_preferred_height = root.measured_preferred;
         }
+    }
+    private property <string> effective_filter_languages: StreamFiltersBridge.audio_languages;
+    changed effective_filter_languages => { SettingsContent.stream_filter_language_draft = root.effective_filter_languages; }
+    private property <bool> filter_language_edit: SettingsContent.kb_edit == 8;
+    changed filter_language_edit => { if root.filter_language_edit { filter_languages.focus_at_end(); } }
+    function select_filter(row: int) {
+        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+        SettingsBridge.kb_zone = 9;
+        SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() + row;
+    }
+    pure function filter_focused(row: int) -> bool {
+        return SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() + row;
+    }
+    function apply_filter_languages() {
+        StreamFiltersBridge.edited(7, SettingsContent.stream_filter_language_draft);
+        SettingsContent.kb_edit = 0;
+        SettingsContent.player_language_input_focused = false;
+        SettingsContent.focus_shell();
     }
     body_layout := VerticalLayout {
         width: 100%; height: 100%; spacing: 0px;
@@ -547,6 +584,100 @@ export component SettingsPlayerModule inherits Window {
                             SettingsBridge.kb_zone = 9;
                             SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 10;
                             SettingsContent.schedule_setting("intro_skip_confidence");
+                        }
+                    }
+                }
+            }
+
+            SectionHeader { label: @tr("Universal stream filters"); }
+            SettingsCard {
+                StreamRuleToggle {
+                    setting-key: "stream_filters";
+                    row-title: @tr("Use stream rules");
+                    row-desc: @tr("These rules apply to every addon. Defaults sync between your devices.");
+                    rule-field: 0; rule-row: 0; checked <=> StreamFiltersBridge.enabled;
+                }
+                SettingsRow {
+                    row-title: @tr("Maximum resolution");
+                    Dropdown {
+                        accessible-role: combobox; accessible-label: @tr("Maximum resolution");
+                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                        model: [@tr("Any resolution"), "480p", "720p", "1080p", "1440p", "2160p", "4320p"];
+                        current-index <=> StreamFiltersBridge.max_resolution_index; roomy: true;
+                        property <bool> row-focused: root.filter_focused(1);
+                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                        border-color: root.filter_focused(1) ? Theme.current.focus_ring : Theme.current.control_border;
+                        selected(_) => { root.select_filter(1); StreamFiltersBridge.edited(1, "" + self.current-index); }
+                    }
+                }
+                SettingsRow {
+                    row-title: @tr("Maximum size");
+                    Dropdown {
+                        accessible-role: combobox; accessible-label: @tr("Maximum size");
+                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                        model: [@tr("Any size"), "1 GiB", "2 GiB", "4 GiB", "8 GiB", "16 GiB", "32 GiB", "64 GiB", "128 GiB"];
+                        current-index <=> StreamFiltersBridge.max_size_index; roomy: true;
+                        property <bool> row-focused: root.filter_focused(2);
+                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                        border-color: root.filter_focused(2) ? Theme.current.focus_ring : Theme.current.control_border;
+                        selected(_) => { root.select_filter(2); StreamFiltersBridge.edited(2, "" + self.current-index); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Allowed video codecs"); }
+            SettingsCard {
+                StreamRuleToggle {
+                    row-title: "H.264 / AVC"; row-desc: @tr("All codecs when none selected");
+                    rule-field: 3; rule-row: 3; checked <=> StreamFiltersBridge.allow_avc;
+                }
+                StreamRuleToggle { row-title: "H.265 / HEVC"; rule-field: 4; rule-row: 4; checked <=> StreamFiltersBridge.allow_hevc; }
+                StreamRuleToggle { row-title: "AV1"; rule-field: 5; rule-row: 5; checked <=> StreamFiltersBridge.allow_av1; }
+                StreamRuleToggle { row-title: "VP9"; rule-field: 6; rule-row: 6; checked <=> StreamFiltersBridge.allow_vp9; }
+                StreamRuleToggle { row-title: @tr("Other video codecs"); rule-field: 10; rule-row: 7; checked <=> StreamFiltersBridge.allow_other; }
+            }
+            SettingsCard {
+                SettingsRow {
+                    row-title: @tr("Audio language codes");
+                    row-desc: @tr("Use language codes such as en, ja, hr.");
+                    filter_languages := SettingsInput {
+                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                        placeholder-text: @tr("Audio language codes");
+                        text <=> SettingsContent.stream_filter_language_draft;
+                        property <bool> row-focused: root.filter_focused(8);
+                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                        border-width: root.filter_focused(8) ? 2px : 1px;
+                        border-color: root.filter_focused(8) ? Theme.current.focus_ring : Theme.current.control_border;
+                        changed has-focus => {
+                            SettingsContent.player_language_input_focused = self.has-focus;
+                            if self.has-focus { root.select_filter(8); }
+                        }
+                        accepted(_) => { root.apply_filter_languages(); root.select_filter(9); }
+                    }
+                }
+                SettingsRow {
+                    row-desc: @tr("Languages are preferred in the order listed. Enable the requirement to hide other advertised audio languages.");
+                    PillButton { label: @tr("Apply languages"); focused: root.filter_focused(9); clicked => { root.select_filter(9); root.apply_filter_languages(); } }
+                }
+                StreamRuleToggle {
+                    row-title: @tr("Require one of these audio languages");
+                    rule-field: 8; rule-row: 10; checked <=> StreamFiltersBridge.require_audio;
+                }
+                StreamRuleToggle {
+                    row-title: @tr("Keep streams with unknown details");
+                    rule-field: 9; rule-row: 11; checked <=> StreamFiltersBridge.retain_unknown;
+                }
+                if StreamFiltersBridge.notice != "": Rectangle {
+                    height: filter_notice.preferred-height + 28px; vertical-stretch: 0;
+                    filter_notice := Text { x: 16px; y: 14px; width: Math.max(1px, parent.width - 32px); text: StreamFiltersBridge.notice; font-size: 13px; color: Theme.current.text_destructive; wrap: word-wrap; }
+                }
+                SettingsRow {
+                    row-title: @tr("Reset rules");
+                    PillButton {
+                        label: @tr("Reset"); focused: root.filter_focused(12);
+                        clicked => {
+                            root.select_filter(12); StreamFiltersBridge.reset();
+                            SettingsContent.stream_filter_language_draft = StreamFiltersBridge.audio_languages;
+                            SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell();
                         }
                     }
                 }

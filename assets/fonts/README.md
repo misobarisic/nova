@@ -1,9 +1,35 @@
 # Bundled UI fonts
 
-`Roboto-Regular.ttf` and `Roboto-Bold.ttf` are the hinted static faces from
+`Roboto-Regular.ttf` and `Roboto-Bold.ttf` are prepared hinted static faces from
 [googlefonts/roboto-2](https://github.com/googlefonts/roboto-2/tree/38062f4b4a0be4346d07a928408da21602545e9e/src/hinted),
 revision `38062f4b4a0be4346d07a928408da21602545e9e`. Both use the Apache-2.0
 license in `LICENSE.txt`, included in Nova's in-app license catalog.
+
+`tools/prepare_text_fonts.py` removes only six Unicode cmap mappings shared with
+Noto: ©, ®, ‼, ⁉, ™ and the combining keycap mark U+20E3. Glyph outlines,
+metrics, shaping, hinting and all remaining character mappings are unchanged.
+ASCII digits, `#` and `*` remain Roboto as ordinary text; a complete keycap
+grapheme now falls back to Noto. The name-table description records the Nova
+modification, while the family name remains Roboto.
+
+| Roboto asset | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Prepared Regular | 513,068 | `9ae91dcdf3b50a4a2bead52542d56c7373c02bf2ec34ebafd8d65a8a0422c375` |
+| Prepared Bold | 512,228 | `ed4d913b86ed80e1c8114ccb3a60a3a9d56c946888b46af82ad49c28440954de` |
+| Unmodified upstream Regular (`Roboto-Subtitles.ttf`) | 515,100 | `56a45233d29f11b4dfb86d248e921939d115778f87325e7ae8cc108383d6664d` |
+
+Regenerate with Python 3 and `fonttools==4.61.1`:
+
+```sh
+python assets/fonts/tools/prepare_text_fonts.py
+python assets/fonts/tools/prepare_text_fonts.py --check
+```
+
+Regeneration verifies immutable upstream input hashes. `--check` is offline and
+reads the original input blobs from Git; in a shallow checkout or source archive,
+use `--inputs DIR` containing the two original upstream faces instead. Use
+`--offline` to regenerate from Git without downloading. The generator also
+preserves the unmodified Regular face for Android subtitle rendering.
 
 `crates/ui/appwindow.slint` imports both faces and sets Roboto as the window's
 default family. `crates/ui/build.rs` embeds them for packaged builds on every
@@ -40,11 +66,13 @@ GSUB ligature inputs from the bitmap baseline, including legacy reversed
 sequences. Its alias rows also name their canonical equivalent. The generator
 checks cmap inclusion and HarfBuzz shaping for every sequence, then verifies
 alias glyph identity. `crates/ui/src/fonts.rs` additionally exercises all of
-those sequences through Slint's shaper with the emoji family selected and no
-system fonts, plus representative production fallback cases. Parley's existing
-Roboto-first fallback splits keycaps across fonts because Roboto covers their
-ASCII bases; both the old bitmap and new vector face show that limitation.
-Explicitly selecting the emoji family shapes the complete repertoire in both.
+those sequences through Slint's production Roboto-first fallback without system
+fonts, asserting one nonmissing visible glyph from the bundled Noto face;
+separate format-only runs must have zero advance. Alias glyph identity uses
+explicit Noto selection: malformed reversed aliases can cross grapheme boundaries,
+so production fallback may shape an invisible leading tag separately in Roboto.
+Mixed text,
+bold text, standalone digits and keycaps have separate fallback regressions.
 Codepoint and sequence coverage do not imply pixel-identical bitmap/vector artwork.
 
 To regenerate (Python 3, with `fonttools==4.67.0` and `uharfbuzz==0.56.3` installed):
@@ -59,8 +87,9 @@ by SHA-256. `--inputs DIR` uses previously downloaded inputs instead. The bitmap
 font remains an input only; it is not shipped or retained in this repository.
 
 The font and license ship in every packaged build. `crates/ui/src/fonts.rs`
-registers the embedded font and appends it to Slint's generic fallback chains
-before showing the window. This covers flag pairs and joined emoji without
+registers the embedded faces and orders Slint's generic text fallback chains as
+Roboto, Noto, then the existing system families before showing the window. This
+covers flag pairs and joined emoji without
 relying on the desktop or Android system font inventory; Roboto stays the
 primary text family. Merely importing/registering the emoji family does not
 add it to those fallback chains. Desktop uses the pinned FemtoVG 0.27 fork’s COLRv1
@@ -88,5 +117,6 @@ individual cases. These are one laptop's uncached CPU measurements, not
 Android timings or frame-rate results. Both formats use the same GPU glyph
 atlas; cached redraws skip decoding/rasterization.
 
-Android's mpv subtitle setup also uses the regular face; see
-`crates/player/src/lib.rs`.
+Android's mpv subtitle setup uses the unmodified `Roboto-Subtitles.ttf`; see
+`crates/player/src/lib.rs`. Its libass build has no system-font fallback, so the
+six UI-only mapping removals must not affect video subtitles.

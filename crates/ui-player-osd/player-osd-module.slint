@@ -16,6 +16,7 @@ export component PlayerOsdModule inherits Window {
         scene_bookmarks_available <=> PlayerOsdBridge.scene_bookmarks_available;
         scene_bookmark_notice <=> PlayerOsdBridge.scene_bookmark_notice;
         try_another_stream_available <=> PlayerOsdBridge.try_another_stream_available;
+        automatic_stream_recovery_visible <=> PlayerOsdBridge.automatic_stream_recovery_visible;
         pick_secondary_sub_track(i) => { PlayerOsdBridge.pick_secondary_sub_track(i); }
         add_scene_bookmark(note) => { PlayerOsdBridge.add_scene_bookmark(note) }
         delete_scene_bookmark(id) => { PlayerOsdBridge.delete_scene_bookmark(id) }

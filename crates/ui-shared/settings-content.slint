@@ -44,6 +44,7 @@ export global SettingsContent {
     in-out property <int> kb_home: 0;
     in-out property <int> kb_hr: 0;
     in-out property <int> kb_pr: 0;
+    in-out property <string> stream_filter_language_draft;
     in-out property <int> kb_theme: 0;
     in-out property <int> kb_tr: 0;
     in-out property <bool> player_language_input_focused: false;
@@ -72,6 +73,15 @@ export global SettingsContent {
     callback schedule_setting(string);
     callback focus_shell();
 
+    // Filter rows follow all existing Player controls on both backends. Keep
+    // this calculation shared so leaf focus marks and shell arrows agree.
+    public pure function kb_player_stream_filters_row() -> int {
+        if SettingsBridge.player_backend_index == 0 {
+            return SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11;
+        }
+        return SettingsBridge.is_android ? 2 : 3;
+    }
+
     public function reset_state() {
         SettingsContent.detail_sticky_top = 0px;
         SettingsContent.detail_header_height = 0px;
@@ -94,6 +104,7 @@ export global SettingsContent {
         SettingsContent.kb_home = 0;
         SettingsContent.kb_hr = 0;
         SettingsContent.kb_pr = 0;
+        SettingsContent.stream_filter_language_draft = "";
         SettingsContent.kb_theme = 0;
         SettingsContent.kb_tr = 0;
         SettingsContent.player_language_input_focused = false;

@@ -42,6 +42,7 @@ pub(super) struct PlaybackKey {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct RequestKey {
+    epoch: u64,
     url: String,
     owner: String,
     owner_generation: u64,
@@ -58,11 +59,17 @@ struct Pending {
 
 #[derive(Default)]
 pub(super) struct Cache {
+    epoch: u64,
     pending: HashMap<RequestKey, Pending>,
     ready: HashMap<RequestKey, (Instant, Vec<u8>)>,
 }
 
 impl Cache {
+    pub(super) fn invalidate(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.ready.clear();
+    }
+
     fn prune(&mut self) {
         self.ready.retain(|_, (at, _)| at.elapsed() < TTL);
         while self.ready.len() > MAX_ENTRIES
@@ -164,13 +171,14 @@ impl Bridge {
         on_complete: Complete,
         session: Option<u64>,
     ) {
+        let mut state = self.shared.lock().unwrap();
         let key = RequestKey {
+            epoch: state.stream_prefetch.epoch,
             url: url.clone(),
             owner,
             owner_generation,
             settings_generation,
         };
-        let mut state = self.shared.lock().unwrap();
         if let Some(session) = session
             && (!state.cache_settings.prefetch_next_episode_streams
                 || state.stream_prefetch_live_session != Some(session)
@@ -299,7 +307,8 @@ impl Bridge {
                             })
                             && final_bridge.player.can_prefetch_streams()
                     });
-                    if current_owner(&state, &key)
+                    if key.epoch == state.stream_prefetch.epoch
+                        && current_owner(&state, &key)
                         && playback_valid
                         && may_cache
                         && let Ok(bytes) = &result
@@ -367,6 +376,7 @@ mod tests {
         for index in 0..=MAX_ENTRIES {
             cache.ready.insert(
                 RequestKey {
+                    epoch: 0,
                     url: index.to_string(),
                     owner: String::new(),
                     owner_generation: 0,
@@ -389,6 +399,233 @@ mod tests {
         cache.prune();
         assert!(cache.ready.is_empty());
     }
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn manual_refresh_bypasses_ready_and_pending_work_and_rejects_late_cache_writes() {
+        use std::io::{Read, Write};
+        const ROOT: &str = "NOVA_MANUAL_STREAM_REFRESH_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-manual-stream-refresh-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args([
+                    "--exact",
+                    "app::stream_prefetch::tests::manual_refresh_bypasses_ready_and_pending_work_and_rejects_late_cache_writes",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        const OLD: &[u8] = br#"{"streams":[{"url":"https://example.test/old"}]}"#;
+        const FRESH: &[u8] = br#"{"streams":[{"url":"https://example.test/fresh"}]}"#;
+        fn respond(mut socket: std::net::TcpStream, body: &[u8]) {
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            socket.write_all(body).unwrap();
+        }
+        for preload_ready in [true, false] {
+            let app = AppWindow::new().unwrap();
+            let player = crate::player::Player::setup(&app);
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            let bridge = Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                DownloadCoordinator::new(root.join(format!("downloads-{preload_ready}"))),
+            );
+            let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let owner = format!("http://{}", server.local_addr().unwrap());
+            let url = format!("{owner}/stream/series/tt123:1:1.json");
+            let (accepted_tx, accepted_rx) = mpsc::channel();
+            let (old_release_tx, old_release_rx) = mpsc::channel();
+            let (fresh_release_tx, fresh_release_rx) = mpsc::channel();
+            let fixture = thread::spawn(move || {
+                let (mut old, _) = server.accept().unwrap();
+                let mut request = [0; 4096];
+                assert!(old.read(&mut request).unwrap() > 0);
+                accepted_tx.send(()).unwrap();
+                let old_worker = thread::spawn(move || {
+                    if !preload_ready {
+                        old_release_rx
+                            .recv_timeout(Duration::from_secs(10))
+                            .unwrap();
+                    }
+                    respond(old, OLD);
+                });
+                let (mut fresh, _) = server.accept().unwrap();
+                assert!(fresh.read(&mut request).unwrap() > 0);
+                accepted_tx.send(()).unwrap();
+                fresh_release_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                respond(fresh, FRESH);
+                old_worker.join().unwrap();
+            });
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.installed.push(Installed {
+                    url: owner.clone(),
+                    label: "Fixture".into(),
+                    enabled: true,
+                    available: true,
+                    configure_ok: None,
+                    generation: 1,
+                    manifest: serde_json::from_value(serde_json::json!({
+                        "id":"fixture", "name":"Fixture", "version":"1.0.0",
+                        "types":["series"], "resources":["stream"], "catalogs":[]
+                    }))
+                    .unwrap(),
+                });
+                state.modal_item = Some(ModalItem {
+                    details: Default::default(),
+                    open_token: Arc::new(()),
+                    pending_watch_now: None,
+                    episodes_loading: false,
+                    id: "tt123".into(),
+                    type_: "series".into(),
+                    request_id: "tt123:1:1".into(),
+                    videos: vec![],
+                    season_backdrops: HashMap::new(),
+                    seasons: vec![],
+                    season_index: 0,
+                    episode_page: 0,
+                    name: "Fixture".into(),
+                    year: String::new(),
+                    poster_url: String::new(),
+                    background_url: String::new(),
+                    logo_url: String::new(),
+                    description: String::new(),
+                    genres: vec![],
+                });
+                state.stream_generation = 40;
+                state.stream_addons = vec!["Fixture".into()];
+                state.stream_filter = 1;
+                state.stream_page = 3;
+            }
+            app.set_modal_visible(true);
+            app.set_stream_selector_open(true);
+            let settings = nova_providers::plugin_settings::settings_generation();
+            let (old_done_tx, old_done_rx) = mpsc::channel();
+            bridge.request_streams_with_prefetch_cache(
+                url.clone(),
+                owner.clone(),
+                1,
+                settings,
+                Arc::new(|_| {}),
+                move |response| old_done_tx.send(response.unwrap()).unwrap(),
+            );
+            accepted_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            if preload_ready {
+                assert_eq!(
+                    old_done_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap()
+                        .bytes,
+                    OLD
+                );
+                assert_eq!(bridge.shared.lock().unwrap().stream_prefetch.ready.len(), 1);
+            }
+
+            // Exercise the actual user action, not just Cache::invalidate.
+            bridge.refresh_stream_sources();
+            accepted_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(!app.get_stream_refresh_enabled());
+            assert!(app.get_streams_searching());
+            {
+                let state = bridge.shared.lock().unwrap();
+                assert_eq!(state.stream_generation, 41);
+                assert_eq!(state.stream_filter, 1, "refresh keeps the chosen addon");
+                assert_eq!(state.stream_page, 0);
+                assert_eq!(state.stream_prefetch.epoch, 1);
+                assert!(state.stream_prefetch.ready.is_empty());
+                assert_eq!(
+                    state.stream_prefetch.pending.len(),
+                    if preload_ready { 1 } else { 2 }
+                );
+            }
+            for _ in 0..10 {
+                bridge.refresh_stream_sources();
+            }
+            assert_eq!(bridge.shared.lock().unwrap().stream_generation, 41);
+            assert_eq!(bridge.shared.lock().unwrap().stream_prefetch.epoch, 1);
+            // Join only the new epoch so its callback also acknowledges that
+            // the picker's completion has already been queued on the UI.
+            let (fresh_done_tx, fresh_done_rx) = mpsc::channel();
+            bridge.request_streams_with_prefetch_cache(
+                url.clone(),
+                owner.clone(),
+                1,
+                settings,
+                Arc::new(|_| {}),
+                move |response| fresh_done_tx.send(response.unwrap()).unwrap(),
+            );
+            fresh_release_tx.send(()).unwrap();
+            let fresh = fresh_done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(!fresh.cache_hit);
+            assert_eq!(fresh.bytes, FRESH);
+            slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+            slint::run_event_loop().unwrap();
+            assert!(!app.get_streams_searching());
+            assert_eq!(bridge.shared.lock().unwrap().stream_all.len(), 1);
+            assert!(matches!(
+                &bridge.shared.lock().unwrap().stream_all[0].source,
+                StreamSource::Url(url) if url == "https://example.test/fresh"
+            ));
+            if !preload_ready {
+                // Deliver the old response after fresh cache publication.
+                old_release_tx.send(()).unwrap();
+                assert_eq!(
+                    old_done_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap()
+                        .bytes,
+                    OLD
+                );
+            }
+            fixture.join().unwrap();
+            let (cached_tx, cached_rx) = mpsc::channel();
+            bridge.request_streams_with_prefetch_cache(
+                url,
+                owner,
+                1,
+                settings,
+                Arc::new(|_| {}),
+                move |response| cached_tx.send(response.unwrap()).unwrap(),
+            );
+            let cached = cached_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(cached.cache_hit);
+            assert_eq!(
+                cached.bytes, FRESH,
+                "a late old completion cannot overwrite fresh cache"
+            );
+            let state = bridge.shared.lock().unwrap();
+            assert!(state.stream_prefetch.pending.is_empty());
+            assert_eq!(state.stream_prefetch.ready.len(), 1);
+            assert!(state.stream_prefetch.ready.keys().all(|key| key.epoch == 1));
+        }
+    }
+
     #[test]
     #[cfg(feature = "desktop")]
     fn picker_joins_prefetch_and_reuses_memory_snapshot() {

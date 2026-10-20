@@ -373,8 +373,11 @@ msgstr "Brzina reprodukcije"
 msgid "Player settings"
 msgstr "Postavke reproduktora"
 
-msgid "Playback settings"
-msgstr "Postavke reprodukcije"
+msgid "Playback"
+msgstr "Reprodukcija"
+
+msgid "Appearance & timing"
+msgstr "Izgled i vrijeme"
 
 msgid "zero-copy"
 msgstr "bez kopiranja"
@@ -2083,6 +2086,15 @@ msgstr "↑ ↓ Pomicanje    Enter Reprodukcija    Esc Natrag"
 
 msgid "Loading streams…"
 msgstr "Učitavanje zapisa…"
+
+msgid "Refresh all sources"
+msgstr "Osvježi sve izvore"
+
+msgid "Reset"
+msgstr "Poništi"
+
+msgid "Playback is taking longer than expected."
+msgstr "Reprodukcija se učitava dulje nego što se očekivalo."
 
 msgid "No streams found."
 msgstr "Nema pronađenih zapisa."

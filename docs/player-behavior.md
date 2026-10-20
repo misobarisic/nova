@@ -75,6 +75,17 @@ All groups streams by the current installed-addon order as each cached or live
 snapshot arrives; it displays available results while other addons are pending.
 Local and synced addon reordering updates an already-open selector and its pills
 immediately, retaining the chosen addon and focused stream by identity.
+The icon-only Lucide refresh pill sits before All and refreshes every source for
+the current movie/episode. It retains the selected addon, resets results to page
+one and bypasses ready/pending app caches. A two-second cooldown and in-flight
+guard reject repeated activations; late responses cannot refill the fresh cache.
+Each pending addon pill shows a quiet left-to-right sweep, or a static wash and
+dot with motion disabled. The header omits a duplicate stream count and pager;
+paging remains below the results.
+Universal stream filters live only in Settings → Player, in the regular themed
+settings card. Resolution, size, codec, language and unknown-metadata rules retain
+profile sync and device overrides through the existing scope controls.
+
 Nova remembers one most recently selected usable stream across synced devices for
 seven days. When it is returned again for the same movie/episode, it is pinned
 after downloads, tinted like a download and labelled **Last used**. Other rows
@@ -119,6 +130,62 @@ Implementation: `crates/ui/stream-selector.slint` and the AppWindow/Detail host;
 `src/app/{detail,library,home,run}.rs` own entry/exit and callback wiring. Headless
 coverage includes `tests/streams_layout/selector.rs` and the stream paging, downloads,
 wrapped-row and addon-gesture tests.
+
+## Playback rendering cadence
+
+Slint owns window presentation. Normal mpv rendering uses
+`MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME=0` together with
+`video-timing-offset=0`, so a UI animation redraw does not wait for the next video
+presentation deadline. Video redraws remain driven by mpv's update callback;
+there is no permanent high-frequency timer.
+
+Android clears the content frame-rate hint while controls are visible/fading,
+playback is paused/loading or Slint has active animations. The render notifier
+clears it immediately for an animated frame. Once only playing video remains,
+Nova restores the container frame rate multiplied by playback speed, including
+after surface recreation. It does not permanently request a particular 60/120 Hz
+mode. `nova-player` unit tests cover these transitions; the opt-in
+`measure_native_video_ui_composite_timing` diagnostic compares the old and current
+render waits on a desktop display (`NOVA_PLAYER_TIMING_BASELINE=1` selects the old
+path only in the test binary). Physical Android smoothness and panel-mode changes
+still require device validation.
+
+## Stream recovery and scene bookmarks
+
+The automatic Try another stream prompt waits for 30 continuous foreground
+seconds of startup/loading or stalled playback. Actual progress, a pause, EOF,
+source replacement or a background gap resets the wait. The manual action in
+player settings remains available immediately and retains position and semantic
+track preferences when changing source.
+
+Playback → Scene bookmarks lists the current episode's saved scenes.
+Each row keeps its note and timestamp on the left and Lucide edit, clear-note
+and delete buttons on the right. More → Bookmarks groups saved scenes by title;
+Play, Edit note and Delete use Lucide icons with visible labels in one row when they fit, with a
+wrap fallback on narrow layouts. The Chapters settings row uses Lucide List video
+artwork alongside the existing playback settings icons. The archive note editor
+uses labeled checkmark Save, eraser Clear and X Cancel actions, with Save as the
+primary button. These actions also wrap when needed. Opening a title and returning to
+the title list slide/fade according to the existing page-transition settings;
+the title list stays mounted to preserve its search, sort and scroll position.
+Back closes a note editor before returning from the title.
+
+## Subtitle menu
+
+Playback → Subtitles and the desktop captions popup keep their existing track
+lists and add two top shortcuts: Appearance & timing and Second subtitles.
+These open the existing appearance/delay and second-language menus. Back returns
+to the picker that opened the tool, retaining keyboard focus on its shortcut;
+opening a tool does not change the selected main track.
+
+Automatic addon-subtitle alignment maintains separate main and second-language
+offsets. A full embedded dialogue track, an already-aligned addon in the other
+visible slot, or sufficient retained embedded-reference evidence can anchor a
+track. The main correction is not copied to the second track. If both visible
+tracks are external and neither has a trustworthy timing anchor, Nova leaves
+them unchanged. Matching runs on one bounded worker; the player applies only
+results that still match the current source, seek, tracks and timing choices.
+Manual edits win for their slot, and offsets remain local to the playing source.
 
 ## Player header, screenshots and keyboard controls
 
@@ -384,7 +451,7 @@ reopens a stream or selects a next episode.
 **Settings → Player → Intro skipping** offers **Off**, **Show skip prompt**
 (the default), and **Auto skip**. The global `intro_skip_mode` setting syncs
 independently of next-episode behavior. Off hides the button and avoids playback
-lookups. Player settings → Intro skipping applies an explicit Off/Prompt/Auto
+lookups. Playback → Intro skipping applies an explicit Off/Prompt/Auto
 choice to the current show; **Use global default** clears only that field. These
 choices use control 4 in the existing typed-title `playback_preferences:v1` store
 and sync domain, independently of audio, subtitle, appearance and speed choices.

@@ -48,18 +48,19 @@ impl LoadedSubtitles {
 
     #[cfg(test)]
     fn arm(&mut self, selected: i32) -> Option<i32> {
-        self.arm_pair(selected, -1)
+        self.arm_pair(selected, -1)[0]
     }
 
-    fn arm_pair(&mut self, selected: i32, secondary: i32) -> Option<i32> {
+    fn arm_pair(&mut self, selected: i32, secondary: i32) -> [Option<i32>; 2] {
         // Another teardown can precede the first recovered frame. Its native
         // track list is incomplete, so keep the already captured file identity.
         if self.tracks.iter().any(|track| track.restore) {
-            return self
-                .tracks
-                .iter()
-                .find(|track| track.restore && !track.secondary)
-                .map(|track| track.id);
+            return [false, true].map(|secondary| {
+                self.tracks
+                    .iter()
+                    .find(|track| track.restore && track.secondary == secondary)
+                    .map(|track| track.id)
+            });
         }
         // Only the selected addon returns after reload. Retiring every other
         // numeric ID prevents it from aliasing a recovered embedded track.
@@ -69,33 +70,79 @@ impl LoadedSubtitles {
             track.restore = true;
             track.secondary = track.id == secondary;
         }
-        self.tracks
-            .iter()
-            .find(|track| !track.secondary)
-            .map(|track| track.id)
+        [false, true].map(|secondary| {
+            self.tracks
+                .iter()
+                .find(|track| track.secondary == secondary)
+                .map(|track| track.id)
+        })
     }
 
     fn restore(
         &mut self,
         mpv: &Mpv,
         sync: &mut subtitle_sync::SubtitleSync,
+        primary_delay: f64,
     ) -> Result<bool, String> {
-        let mut restored_primary = false;
-        for track in self.tracks.iter_mut().filter(|track| track.restore) {
-            let primary = mpv
-                .get_property::<String>("sid")
-                .unwrap_or_else(|_| "no".into());
-            let id = add_local_subtitle(mpv, &track.path, &track.title, &track.language)?;
-            if track.secondary {
-                let _ = mpv.set_property("sid", primary);
-                let _ = mpv.set_property("secondary-sid", id.to_string());
-                let _ = mpv.set_property("secondary-sub-visibility", true);
-            } else {
-                sync.remap(track.id, id);
-                restored_primary = true;
+        if !self.tracks.iter().any(|track| track.restore) {
+            return Ok(false);
+        }
+        let primary = mpv
+            .get_property::<String>("sid")
+            .unwrap_or_else(|_| "no".into());
+        let secondary = mpv
+            .get_property::<String>("secondary-sid")
+            .unwrap_or_else(|_| "no".into());
+        let mut mapping = Vec::new();
+        for track in self.tracks.iter().filter(|track| track.restore) {
+            match add_local_subtitle(mpv, &track.path, &track.title, &track.language) {
+                Ok(id) => mapping.push(subtitle_sync::TrackRemap {
+                    slot: if track.secondary {
+                        subtitle_sync::Slot::Secondary
+                    } else {
+                        subtitle_sync::Slot::Primary
+                    },
+                    old: track.id,
+                    new: id,
+                }),
+                Err(error) => {
+                    // A partial pair must not consume either old timing record.
+                    // Remove only this attempt's new tracks, then retry the same
+                    // retained file identities on a later recovered frame.
+                    for remap in &mapping {
+                        let _ = mpv.command("sub-remove", &[&remap.new.to_string()]);
+                    }
+                    let _ = mpv.set_property("sid", primary);
+                    let _ = mpv.set_property("secondary-sid", secondary);
+                    return Err(error);
+                }
             }
-            track.id = id;
-            track.restore = false;
+        }
+        let main = mapping
+            .iter()
+            .find(|remap| remap.slot == subtitle_sync::Slot::Primary);
+        let second = mapping
+            .iter()
+            .find(|remap| remap.slot == subtitle_sync::Slot::Secondary);
+        let _ = mpv.set_property("sid", main.map_or(primary, |remap| remap.new.to_string()));
+        let _ = mpv.set_property(
+            "secondary-sid",
+            second.map_or(secondary, |remap| remap.new.to_string()),
+        );
+        if second.is_some() {
+            let _ = mpv.set_property("secondary-sub-visibility", true);
+        }
+        let restored_primary = main.is_some();
+        sync.remap_pair(&mapping);
+        // Recovery can finish while paused, when the observation tick is
+        // deliberately idle. Restore both independent delays immediately.
+        sync.primary_selection_changed(mpv, primary_delay);
+        sync.secondary_selection_changed(mpv);
+        for track in self.tracks.iter_mut().filter(|track| track.restore) {
+            if let Some(remap) = mapping.iter().find(|remap| remap.old == track.id) {
+                track.id = remap.new;
+                track.restore = false;
+            }
         }
         Ok(restored_primary)
     }
@@ -138,7 +185,7 @@ impl Player {
                 .subtitle_sync
                 .lock()
                 .unwrap()
-                .suspend(mpv, restore);
+                .suspend_pair(mpv, restore);
         }
     }
 
@@ -150,8 +197,22 @@ impl Player {
             return;
         }
         let mut loaded = self.state.loaded_online_subtitles.lock().unwrap();
+        let primary_delay = self
+            .resolve_subtitle_style(
+                self.state
+                    .preferences
+                    .lock()
+                    .unwrap()
+                    .preferences
+                    .subtitle_style(),
+            )
+            .delay as f64;
         if loaded
-            .restore(mpv, &mut self.state.subtitle_sync.lock().unwrap())
+            .restore(
+                mpv,
+                &mut self.state.subtitle_sync.lock().unwrap(),
+                primary_delay,
+            )
             .unwrap_or(false)
         {
             self.state.preferences.lock().unwrap().manual_subtitles = true;
@@ -254,7 +315,7 @@ impl Player {
             .delay;
         let mut sync = self.state.subtitle_sync.lock().unwrap();
         sync.register(id);
-        let _ = mpv.set_property("sub-delay", sync.delay(mpv, base as f64));
+        sync.primary_selection_changed(mpv, base as f64);
         drop(sync);
         #[cfg(target_os = "android")]
         {
@@ -276,11 +337,11 @@ mod tests {
     fn repeated_recovery_retains_a_secondary_only_addon() {
         let mut loaded = LoadedSubtitles::default();
         loaded.register("second.srt", "Second language", "hr", 7);
-        assert_eq!(loaded.arm_pair(2, 7), None);
+        assert_eq!(loaded.arm_pair(2, 7), [None, Some(7)]);
         assert_eq!(loaded.tracks.len(), 1);
         assert!(loaded.tracks[0].secondary);
         assert!(loaded.tracks[0].restore);
-        assert_eq!(loaded.arm_pair(-1, -1), None);
+        assert_eq!(loaded.arm_pair(-1, -1), [None, Some(7)]);
         assert_eq!(
             loaded.tracks.len(),
             1,
@@ -404,7 +465,7 @@ mod tests {
         // Occupy the old A numeric ID in the recovered track list. Restoring
         // A must remap its identity instead of treating that number as stable.
         add_local_subtitle(&mpv, &other.to_string_lossy(), "Replacement track", "hr").unwrap();
-        assert!(loaded.restore(&mpv, &mut sync).unwrap());
+        assert!(loaded.restore(&mpv, &mut sync, 0.0).unwrap());
         let restored_id = mpv
             .get_property::<String>("sid")
             .unwrap()
@@ -429,7 +490,7 @@ mod tests {
         assert_eq!(restored["title"], "Addon A");
         assert_eq!(restored["lang"], "en");
         assert!(
-            !loaded.restore(&mpv, &mut sync).unwrap(),
+            !loaded.restore(&mpv, &mut sync, 0.0).unwrap(),
             "restore runs once per reload"
         );
         assert_eq!(loaded.arm(restored_id), Some(restored_id));
@@ -443,9 +504,29 @@ mod tests {
         mpv.set_property("sid", primary.to_string()).unwrap();
         mpv.set_property("secondary-sid", secondary.to_string())
             .unwrap();
-        assert_eq!(loaded.arm_pair(primary, secondary), Some(primary));
+        sync.register(primary);
+        sync.register(secondary);
+        sync.poll(&mpv, 0.0, false);
+        mpv.set_property("sub-delay", -1.25_f64).unwrap();
+        mpv.set_property("secondary-sub-delay", 2.4_f64).unwrap();
+        sync.poll(&mpv, 0.0, false);
+        let restore = loaded.arm_pair(primary, secondary);
+        assert_eq!(restore, [Some(primary), Some(secondary)]);
+        sync.suspend_pair(&mpv, restore);
+        assert_eq!(
+            loaded.arm_pair(-1, -1),
+            restore,
+            "a second teardown before recovery keeps both file identities"
+        );
         assert_eq!(loaded.tracks.len(), 2);
-        assert!(loaded.restore(&mpv, &mut sync).unwrap());
+        mpv.set_property("sub-delay", 0.0_f64).unwrap();
+        mpv.set_property("secondary-sub-delay", 0.0_f64).unwrap();
+        assert!(loaded.restore(&mpv, &mut sync, 0.0).unwrap());
+        assert!(mpv.get_property::<bool>("pause").unwrap());
+        // Do not poll: the normal cached-pause guard skips observations, so
+        // both corrections must already be applied by the restore itself.
+        assert_eq!(mpv.get_property::<f64>("sub-delay").unwrap(), -1.25);
+        assert!((mpv.get_property::<f64>("secondary-sub-delay").unwrap() - 2.4).abs() < 1e-6);
         let primary = mpv.get_property::<String>("sid").unwrap();
         let secondary = mpv.get_property::<String>("secondary-sid").unwrap();
         assert_ne!(primary, secondary);
@@ -471,7 +552,7 @@ mod tests {
         );
         loaded.clear();
         assert!(loaded.tracks.is_empty());
-        assert!(!loaded.restore(&mpv, &mut sync).unwrap());
+        assert!(!loaded.restore(&mpv, &mut sync, 0.0).unwrap());
     }
 
     #[test]

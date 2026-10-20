@@ -35,5 +35,11 @@ nix develop .#android --command python3 -B android/test_runtime_packaging.py
 
 The cargo-apk2 patch in `android/cargo-apk2-readonly-libs.patch` replaces old
 staged library entries before copying read-only Nix inputs. The regression
-packages all three ABIs twice, checks runtime symbol providers in the extracted
-media payloads and verifies the inputs remain unchanged.
+packages all three ABIs twice in release mode, checks runtime symbol providers
+in the extracted media payloads and verifies the inputs remain unchanged.
+`android/cargo-apk2-uncompressed-libs.patch` honors
+`application.extract_native_libs = false` by storing native libraries
+uncompressed, while preserving other entries' compression policy. The pinned
+SDK 35 packager aligns native ZIP data to 16 KiB before signing. Both the probe
+and release verifier require stored, aligned `.so` entries and the compiled
+manifest's explicit direct-loading flag.

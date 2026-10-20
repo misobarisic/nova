@@ -240,6 +240,7 @@ pub(super) fn apply_secondary_track(
         },
     );
     let _ = mpv.set_property("secondary-sub-visibility", true);
+    sync.secondary_selection_changed(mpv);
 }
 
 fn secondary_track_id(

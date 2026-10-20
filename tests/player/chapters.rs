@@ -110,6 +110,19 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
             key(&app, slint::platform::Key::DownArrow);
             settle(&app);
         }
+        let chapter_setting = button(&app, "Chapters");
+        let icons = chapter_setting
+            .query_descendants()
+            .match_type_name("Image")
+            .find_all();
+        let icon = icons
+            .iter()
+            .find(|icon| icon.size().width == 24.0 && icon.size().height == 24.0)
+            .expect("Chapters must have its 24px Lucide icon");
+        assert!(
+            (icon.absolute_position().x - chapter_setting.absolute_position().x - 14.0).abs() < 1.0,
+            "Chapters shares the same icon column as other settings rows"
+        );
         key(&app, slint::platform::Key::Return);
         settle(&app);
         let _ = button(&app, "Finale");

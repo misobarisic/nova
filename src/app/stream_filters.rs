@@ -173,19 +173,6 @@ impl Bridge {
         };
         let filters = app.global::<StreamFiltersBridge>();
         let b = self.clone();
-        filters.on_opened(move || {
-            b.refresh_stream_filter_settings();
-            if let Some(app) = b.app() {
-                app.global::<StreamFiltersBridge>().set_open(true);
-            }
-        });
-        let b = self.clone();
-        filters.on_closed(move || {
-            if let Some(app) = b.app() {
-                app.global::<StreamFiltersBridge>().set_open(false);
-            }
-        });
-        let b = self.clone();
         filters.on_edited(move |field, value| b.edit_stream_filter_rule(field, value.as_str()));
         let b = self.clone();
         filters.on_reset(move || b.store_stream_filter_rules(StreamFilterRules::default()));

@@ -1,6 +1,5 @@
 // Effective account defaults plus this device's ordinary Settings override.
 export global StreamFiltersBridge {
-    in-out property <bool> open;
     in-out property <bool> enabled;
     in-out property <int> max_resolution_index;
     in-out property <int> max_size_index;
@@ -16,8 +15,6 @@ export global StreamFiltersBridge {
     in-out property <bool> retain_unknown: true;
     in-out property <int> hidden_count;
     in-out property <string> notice;
-    callback opened();
     callback edited(int, string);
     callback reset();
-    callback closed();
 }

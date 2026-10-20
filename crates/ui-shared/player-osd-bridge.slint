@@ -10,6 +10,7 @@ export global PlayerOsdBridge {
     in-out property <bool> scene_bookmarks_available;
     in-out property <string> scene_bookmark_notice;
     in-out property <bool> try_another_stream_available;
+    in-out property <bool> automatic_stream_recovery_visible;
     callback pick_secondary_sub_track(int);
     callback add_scene_bookmark(string) -> bool;
     callback delete_scene_bookmark(string) -> bool;

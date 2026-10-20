@@ -363,7 +363,7 @@ package compression). `assets/fonts/README.md` records input/output hashes and
 reproduction commands; `assets/fonts/tools/prepare_emoji.py` verifies the full
 baseline repertoire and `emoji-coverage.txt` drives Slint shaping coverage
 without host fonts. Desktop's pinned FemtoVG fork painter reuses skrifa 0.44 and
-tiny-skia 0.12; Android keeps native Skia/FreeType COLRv1 rendering.
+tiny-skia 0.12; Android keeps native Skia/FreeType COLRv1 rendering. Production fallback now orders prepared Roboto, Noto, then system families; only six overlapping emoji cmap mappings are removed from UI Roboto, preserving standalone digits and routing complete keycaps to Noto. The full 4,176-sequence test asserts the actual Noto source through this production fallback. Android subtitles retain an unmodified Roboto asset because libass has no system-font fallback.
 
 Remaining validation and optional future work:
 

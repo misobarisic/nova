@@ -603,6 +603,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_stream_filter_picked(move |idx| b.stream_filter_picked(idx as usize));
 
     let b = bridge.clone();
+    app.on_stream_refresh_requested(move || b.refresh_stream_sources());
+
+    let b = bridge.clone();
     app.on_stream_selector_back(move || b.stream_selector_back());
 
     let b = bridge.clone();

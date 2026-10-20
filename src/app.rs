@@ -352,6 +352,7 @@ struct Shared {
     /// A metadata refresh can rerun the same episode with new stream aliases.
     /// Older addon replies must not modify the new search's rows or pills.
     stream_generation: u64,
+    stream_refresh_gate: detail::StreamRefreshGate,
     season_download: Option<season_downloads::Plan>,
     /// Visible row identities whose entrance has already been published.
     stream_revealed_ids: HashSet<String>,

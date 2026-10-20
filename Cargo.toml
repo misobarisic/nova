@@ -81,7 +81,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.34"
+version = "0.0.35"
 edition = "2024"
 license.workspace = true
 
@@ -215,6 +215,9 @@ java_sources = "android/java"
 # builds set this false.
 [package.metadata.android.application]
 has_code = true
+# Direct mmap from the APK; cargo-apk2 stores only native libraries uncompressed
+# and zipalign gives them 16 KiB boundaries (see the Nix packager patch).
+extract_native_libs = false
 # Launcher / task-switcher name. cargo-apk2 falls back to the artifact name
 # (`nova`) when this is empty; the label is what the user reads, so it carries
 # the display capitalisation.

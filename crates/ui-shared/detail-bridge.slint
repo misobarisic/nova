@@ -77,6 +77,7 @@ export global DetailBridge {
     in-out property <string> streams_hint;
     in-out property <[string]> stream_addons;
     in-out property <[bool]> stream_loading;
+    in-out property <bool> stream_refresh_enabled: true;
     in-out property <bool> streams_searching;
     in-out property <int> stream_filter;
     in-out property <bool> stream_action_open;
@@ -148,6 +149,7 @@ export global DetailBridge {
     callback stream_action_requested(string);
     callback stream_action_selected(string, int);
     callback stream_filter_picked(int);
+    callback stream_refresh_requested();
     callback stream_selector_back();
     callback detail_tab_picked(int);
     callback episode_filter_changed(string);

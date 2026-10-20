@@ -121,6 +121,9 @@ pub fn tr(english: &str) -> &str {
         "No addon streams match your rules." => {
             "Nijedan izvor dodatka ne odgovara vašim pravilima."
         }
+        "No addon streams match your rules. Change them in Settings → Player." => {
+            "Nijedan izvor dodatka ne odgovara vašim pravilima. Promijenite ih u Postavke → Reprodukcija."
+        }
         "No smart collections" => "Nema pametnih zbirki",
         "Required audio" => "Obavezan zvuk",
         "Preferred audio" => "Željeni zvuk",

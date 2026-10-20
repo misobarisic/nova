@@ -217,6 +217,7 @@ export component DetailPage {
     // Per-pill loading flags, index-aligned with `stream_addons`; plus a
     // global "any query in flight" flag for the All pill.
     in-out property <[bool]> stream_loading: [];
+    in-out property <bool> stream_refresh_enabled: true;
     in-out property <bool> streams_searching: false;
     // 0 = All, otherwise 1-based index into `stream_addons`.
     in-out property <int> stream_filter: 0;
@@ -670,6 +671,7 @@ export component DetailPage {
     callback stream_action_requested(string);
     callback stream_action_selected(string, int);
     callback stream_filter_picked(int);
+    callback stream_refresh_requested();
     callback stream_selector_back();
     callback detail_tab_picked(int);
     callback episode_filter_changed(string);

@@ -53,8 +53,7 @@ fn second_page_is_populated_and_picks_absolute_index() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
-    // Include the movie selector while keeping both pagers
-    // in view; the test clicks the bottom one rather than scrolling to it.
+    // Keep the movie selector's bottom pager in view for pointer activation.
     app.window().set_size(slint::PhysicalSize::new(900, 800));
     app.window().show().unwrap();
     app.set_animations(false);
@@ -70,7 +69,7 @@ fn second_page_is_populated_and_picks_absolute_index() {
     app.set_stream_page_count(2);
     app.set_stream_page(0);
     app.set_stream_page_start(0);
-    // A short representative page keeps both controls on-screen for this
+    // A short representative page keeps the controls on-screen for this
     // layout check; `stream_total` still advertises multiple pages.
     app.set_streams(Rc::new(VecModel::from((0..2).map(row).collect::<Vec<_>>())).into());
 
@@ -93,18 +92,18 @@ fn second_page_is_populated_and_picks_absolute_index() {
     after(450, move || {
         let app = weak.upgrade().unwrap();
         let pager_count = ElementHandle::find_by_element_type_name(&app, "EpisodePager").count();
-        if pager_count != 2 {
+        if pager_count != 1 {
             failures1.borrow_mut().push(format!(
-                "expected top and bottom pagers, found {pager_count}"
+                "expected only the bottom pager, found {pager_count}"
             ));
         }
         let next_count = ElementHandle::find_by_accessible_label(&app, "Next page").count();
-        if next_count != 2 {
+        if next_count != 1 {
             failures1
                 .borrow_mut()
-                .push(format!("expected two Next controls, found {next_count}"));
+                .push(format!("expected one Next control, found {next_count}"));
         }
-        let Some(next) = ElementHandle::find_by_accessible_label(&app, "Next page").nth(1) else {
+        let Some(next) = ElementHandle::find_by_accessible_label(&app, "Next page").next() else {
             failures1
                 .borrow_mut()
                 .push("missing bottom Next control".into());

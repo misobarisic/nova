@@ -1,9 +1,15 @@
 //! Align addon subtitles against dialogue already decoded by the playing mpv.
-//! A hidden secondary track avoids a second media reader, seeks or downloads.
+//! Both visible slots can share a trusted reference; a hidden secondary track
+//! is used only while that slot is free. No second media reader or scanning.
 //! Only a well-supported constant offset is applied; edits/cuts and drift are
 //! deliberately left to the viewer rather than guessed from a short sample.
 use libmpv2::Mpv;
 use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 
 const RANGE: i32 = 150; // ±15 seconds, in 100 ms steps.
 const STEP: f64 = 0.1;
@@ -52,7 +58,7 @@ impl Cue {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Alignment {
     since: Option<f64>,
     last: Option<f64>,
@@ -62,9 +68,9 @@ struct Alignment {
 }
 
 impl Alignment {
-    fn observe(&mut self, now: f64, downloaded: Option<Cue>, embedded: Option<Cue>) -> Option<f64> {
+    fn collect(&mut self, now: f64, downloaded: Option<Cue>, embedded: Option<Cue>) -> bool {
         if !now.is_finite() || now < 0.0 {
-            return None;
+            return false;
         }
         if self
             .last
@@ -74,7 +80,7 @@ impl Alignment {
             *self = Self::default();
         }
         self.last = Some(now);
-        let since = *self.since.get_or_insert(now);
+        self.since.get_or_insert(now);
         for (cues, cue) in [
             (&mut self.downloaded, downloaded),
             (&mut self.embedded, embedded),
@@ -90,15 +96,26 @@ impl Alignment {
             }
         }
         if now - self.checked < 2.0 {
-            return None;
+            return false;
         }
         self.checked = now;
+        true
+    }
+
+    fn estimate(&self, now: f64) -> Option<f64> {
         self.text_offset().or_else(|| {
             self.timing_offset(
-                since.max(now - HISTORY) + RANGE as f64 * STEP,
+                self.since.unwrap_or(now).max(now - HISTORY) + RANGE as f64 * STEP,
                 now - RANGE as f64 * STEP,
             )
         })
+    }
+
+    #[cfg(test)]
+    fn observe(&mut self, now: f64, downloaded: Option<Cue>, embedded: Option<Cue>) -> Option<f64> {
+        self.collect(now, downloaded, embedded)
+            .then(|| self.estimate(now))
+            .flatten()
     }
 
     fn text_offset(&self) -> Option<f64> {
@@ -247,42 +264,67 @@ fn selected(mpv: &Mpv, property: &str) -> Option<i32> {
     mpv.get_property::<String>(property).ok()?.parse().ok()
 }
 
-fn reference_track(raw: &str, primary: i32) -> Option<i32> {
-    use nova_config::playback_preferences::normalize_language;
-    let tracks: Vec<serde_json::Value> = serde_json::from_str(raw).ok()?;
-    let language = tracks
-        .iter()
-        .find(|t| t["id"].as_i64() == Some(primary as i64))
-        .and_then(|t| t["lang"].as_str())
-        .and_then(normalize_language);
-    let semantics = super::track_preferences::parse_tracks(raw);
-    tracks
-        .iter()
-        .filter(|t| {
-            t["type"] == "sub"
-                && t["external"].as_bool() == Some(false)
-                && t["id"].as_i64() != Some(primary as i64)
-                && matches!(
-                    t["codec"].as_str(),
-                    Some("ass" | "ssa" | "subrip" | "srt" | "webvtt" | "mov_text" | "text")
-                )
-                && semantics.iter().any(|track| {
-                    Some(track.id as i64) == t["id"].as_i64()
-                        && track.descriptor.kind
-                            == Some(nova_config::playback_preferences::TrackKind::Full)
+#[derive(Default)]
+struct Inventory {
+    raw: String,
+    full_embedded: Vec<i32>,
+    references: HashMap<i32, i32>,
+}
+impl Inventory {
+    fn parse(raw: &str) -> Self {
+        use nova_config::playback_preferences::{TrackKind, normalize_language};
+        let tracks: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap_or_default();
+        let semantics = super::track_preferences::parse_tracks(raw);
+        let anchors = tracks
+            .iter()
+            .filter(|t| {
+                t["type"] == "sub"
+                    && t["external"].as_bool() == Some(false)
+                    && matches!(
+                        t["codec"].as_str(),
+                        Some("ass" | "ssa" | "subrip" | "srt" | "webvtt" | "mov_text" | "text")
+                    )
+                    && semantics.iter().any(|track| {
+                        Some(track.id as i64) == t["id"].as_i64()
+                            && track.descriptor.kind == Some(TrackKind::Full)
+                    })
+            })
+            .take(64)
+            .collect::<Vec<_>>();
+        let mut inventory = Self {
+            raw: raw.into(),
+            ..Self::default()
+        };
+        inventory.full_embedded = anchors
+            .iter()
+            .filter_map(|t| t["id"].as_i64().and_then(|id| i32::try_from(id).ok()))
+            .collect();
+        for track in semantics.iter().filter(|track| !track.audio).take(512) {
+            if let Some(reference) = anchors
+                .iter()
+                .filter(|t| t["id"].as_i64() != Some(track.id as i64))
+                .min_by_key(|t| {
+                    let same = track.descriptor.language.is_some()
+                        && t["lang"].as_str().and_then(normalize_language)
+                            == track.descriptor.language;
+                    (
+                        !same,
+                        t["hearing-impaired"].as_bool().unwrap_or(false),
+                        !t["default"].as_bool().unwrap_or(false),
+                    )
                 })
-        })
-        .min_by_key(|t| {
-            let same_language =
-                language.is_some() && t["lang"].as_str().and_then(normalize_language) == language;
-            (
-                !same_language,
-                t["hearing-impaired"].as_bool().unwrap_or(false),
-                !t["default"].as_bool().unwrap_or(false),
-            )
-        })
-        .and_then(|t| t["id"].as_i64())
-        .and_then(|id| i32::try_from(id).ok())
+                .and_then(|t| t["id"].as_i64())
+                .and_then(|id| i32::try_from(id).ok())
+            {
+                inventory.references.insert(track.id, reference);
+            }
+        }
+        inventory
+    }
+}
+#[cfg(test)]
+fn reference_track(raw: &str, primary: i32) -> Option<i32> {
+    Inventory::parse(raw).references.get(&primary).copied()
 }
 
 struct Reference {
@@ -330,47 +372,276 @@ impl Reference {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) enum Slot {
+    #[default]
+    Primary,
+    Secondary,
+}
+impl Slot {
+    fn index(self) -> usize {
+        if self == Self::Primary { 0 } else { 1 }
+    }
+    fn other(self) -> Self {
+        if self == Self::Primary {
+            Self::Secondary
+        } else {
+            Self::Primary
+        }
+    }
+    fn selection(self) -> &'static str {
+        if self == Self::Primary {
+            "sid"
+        } else {
+            "secondary-sid"
+        }
+    }
+    fn delay(self) -> &'static str {
+        if self == Self::Primary {
+            "sub-delay"
+        } else {
+            "secondary-sub-delay"
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Anchor {
+    id: i32,
+    slot: Option<Slot>,
+    delay: u64,
+}
+#[derive(Clone, Default)]
 struct Track {
     offset: f64,
     finished: bool,
+    confident: bool,
+    manual: bool,
+    anchor: Option<Anchor>,
+    cached_revision: Option<u64>,
+    alignment: Alignment,
+}
+impl Track {
+    fn bind_anchor(&mut self, anchor: Anchor) {
+        // A visible/hidden reference can become a cached reference when the
+        // viewer fills the other slot. Its identity and effective timestamps
+        // have not changed: retain the addon cues already overlapping it.
+        if self
+            .anchor
+            .is_none_or(|old| old.id != anchor.id || old.delay != anchor.delay)
+        {
+            self.alignment = Alignment::default();
+            self.cached_revision = None;
+        }
+        self.anchor = Some(anchor);
+    }
+}
+
+#[derive(Default)]
+struct Evidence {
+    cues: Vec<Cue>,
+    delay: u64,
+    since: f64,
+    revision: u64,
+}
+impl Evidence {
+    fn collect(&mut self, now: f64, delay: f64, cue: Option<Cue>) {
+        if self.delay != delay.to_bits() || self.cues.is_empty() {
+            self.cues.clear();
+            self.delay = delay.to_bits();
+            self.since = now;
+            self.revision = self.revision.wrapping_add(1);
+        }
+        let old_len = self.cues.len();
+        self.cues.retain(|cue| cue.end >= now - HISTORY);
+        if old_len != self.cues.len() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        if let Some(cue) = cue
+            && self.cues.len() < 512
+            && !self
+                .cues
+                .iter()
+                .any(|old| (old.start - cue.start).abs() < 0.01 && (old.end - cue.end).abs() < 0.01)
+        {
+            self.cues.push(cue);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+}
+struct EstimateJob {
+    generation: u64,
+    slot: Slot,
+    id: i32,
+    anchor: Anchor,
+    expected_delay: f64,
+    result: mpsc::Receiver<Option<f64>>,
+}
+impl EstimateJob {
+    fn current(
+        &self,
+        generation: u64,
+        selected: Option<i32>,
+        anchor: Option<Anchor>,
+        actual_delay: Option<f64>,
+        eligible: bool,
+    ) -> bool {
+        eligible
+            && self.generation == generation
+            && selected == Some(self.id)
+            && anchor == Some(self.anchor)
+            && actual_delay.is_some_and(|delay| {
+                delay.is_finite() && (delay - self.expected_delay).abs() <= 0.001
+            })
+    }
+}
+#[cfg(any(target_os = "android", test))]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TrackRemap {
+    pub slot: Slot,
+    pub old: i32,
+    pub new: i32,
 }
 
 #[derive(Default)]
 pub(super) struct SubtitleSync {
+    // `tracks` is also the source-local registry of addon IDs. Secondary-only
+    // manual records never enter it, so an embedded ID cannot become an addon.
     tracks: HashMap<i32, Track>,
-    active: Option<i32>,
+    secondary_tracks: HashMap<i32, Track>,
+    suspended: Option<(HashMap<i32, Track>, HashMap<i32, Track>)>,
+    active: [Option<i32>; 2],
+    expected: [Option<f64>; 2],
     reference: Option<Reference>,
-    alignment: Alignment,
+    inventory: Option<Inventory>,
+    evidence: HashMap<i32, Evidence>,
+    last_position: Option<f64>,
+    generation: u64,
+    job: Option<EstimateJob>,
+    busy: Arc<AtomicBool>,
+    next_slot: Slot,
+}
+
+fn shifted(mut cue: Cue, delay: f64) -> Cue {
+    // mpv's cue properties exclude sub-delay/secondary-sub-delay.
+    cue.start += delay;
+    cue.end += delay;
+    cue
 }
 
 impl SubtitleSync {
+    fn records(&self, slot: Slot) -> &HashMap<i32, Track> {
+        if slot == Slot::Primary {
+            &self.tracks
+        } else {
+            &self.secondary_tracks
+        }
+    }
+    fn records_mut(&mut self, slot: Slot) -> &mut HashMap<i32, Track> {
+        if slot == Slot::Primary {
+            &mut self.tracks
+        } else {
+            &mut self.secondary_tracks
+        }
+    }
+    fn invalidate_work(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.job = None;
+    }
+    fn clear_evidence(&mut self) {
+        self.evidence.clear();
+        self.invalidate_work();
+        for track in self
+            .tracks
+            .values_mut()
+            .chain(self.secondary_tracks.values_mut())
+        {
+            track.alignment = Alignment::default();
+            track.anchor = None;
+        }
+    }
+    pub(super) fn update_inventory(&mut self, raw: &str) {
+        if self
+            .inventory
+            .as_ref()
+            .is_none_or(|inventory| inventory.raw != raw)
+        {
+            self.inventory = Some(Inventory::parse(raw));
+        }
+    }
     pub(super) fn register(&mut self, id: i32) {
+        if self.tracks.len() >= 64
+            && !self.tracks.contains_key(&id)
+            && let Some(old) = self
+                .tracks
+                .keys()
+                .copied()
+                .find(|old| !self.active.contains(&Some(*old)))
+        {
+            self.tracks.remove(&old);
+            self.secondary_tracks.remove(&old);
+        }
         self.tracks.entry(id).or_default();
+        self.secondary_tracks.entry(id).or_default();
+        self.inventory = None;
+        self.invalidate_work();
     }
 
     #[cfg(any(target_os = "android", test))]
-    pub(super) fn remap(&mut self, old: i32, new: i32) {
-        let track = self.tracks.remove(&old);
-        // Recovery only re-adds the selected addon. Every other old numeric ID
-        // could now belong to an embedded track in the replacement track list.
+    pub(super) fn remap_pair(&mut self, mapping: &[TrackRemap]) {
+        // Detach both old maps before inserting ANY new ID. A swapped ID or an
+        // ID reused by an embedded recovered track must never consume a partner.
+        let (primary, secondary) = self.suspended.take().unwrap_or_else(|| {
+            (
+                std::mem::take(&mut self.tracks),
+                std::mem::take(&mut self.secondary_tracks),
+            )
+        });
         self.tracks.clear();
-        if let Some(track) = track {
-            self.tracks.insert(new, track);
+        self.secondary_tracks.clear();
+        for remap in mapping {
+            if let Some(track) = primary.get(&remap.old) {
+                self.tracks.insert(remap.new, track.clone());
+            }
+            if let Some(track) = secondary.get(&remap.old) {
+                self.secondary_tracks.insert(remap.new, track.clone());
+            }
+            self.active[remap.slot.index()] = None;
         }
-        self.active = None;
-        self.reference = None;
-        self.alignment = Alignment::default();
+        self.active = [None, None];
+        self.expected = [None, None];
+        self.inventory = None;
+        self.last_position = None;
+        self.clear_evidence();
+    }
+    #[cfg(test)]
+    fn remap(&mut self, old: i32, new: i32) {
+        self.remap_pair(&[TrackRemap {
+            slot: Slot::Primary,
+            old,
+            new,
+        }]);
     }
 
     #[cfg(any(target_os = "android", test))]
-    pub(super) fn suspend(&mut self, mpv: &Mpv, restore: Option<i32>) {
-        if let Some(reference) = self.reference.take() {
-            reference.release(mpv);
+    pub(super) fn suspend_pair(&mut self, mpv: &Mpv, restore: [Option<i32>; 2]) {
+        self.release_reference(mpv);
+        if self.suspended.is_none() {
+            let mut primary = std::mem::take(&mut self.tracks);
+            let mut secondary = std::mem::take(&mut self.secondary_tracks);
+            primary.retain(|id, _| restore.contains(&Some(*id)));
+            secondary.retain(|id, _| restore.contains(&Some(*id)));
+            self.suspended =
+                (!primary.is_empty() || !secondary.is_empty()).then_some((primary, secondary));
         }
-        self.active = None;
-        self.tracks.retain(|id, _| Some(*id) == restore);
-        self.alignment = Alignment::default();
+        self.active = [None, None];
+        self.expected = [None, None];
+        self.inventory = None;
+        self.last_position = None;
+        self.clear_evidence();
+    }
+    #[cfg(test)]
+    pub(super) fn suspend(&mut self, mpv: &Mpv, restore: Option<i32>) {
+        self.suspend_pair(mpv, [restore, None]);
     }
 
     pub(super) fn clear(&mut self, mpv: Option<&Mpv>) {
@@ -379,91 +650,386 @@ impl SubtitleSync {
         {
             reference.release(mpv);
         }
+        // Native slot delays survive loadfile. A closed source must not lend
+        // its secondary correction to an unrelated stream or an Off selection.
+        if let Some(mpv) = mpv {
+            let _ = mpv.set_property("secondary-sub-delay", 0.0_f64);
+        }
+        // An obsolete worker owns only bounded data. Keep its busy lease across
+        // source changes so a second expensive estimator cannot overlap it.
+        let busy = self.busy.clone();
         *self = Self::default();
+        self.busy = busy;
     }
-
     pub(super) fn owns_reference(&self, mpv: &Mpv) -> bool {
         self.reference
             .as_ref()
             .is_some_and(|reference| selected(mpv, "secondary-sid") == Some(reference.id))
     }
-
     pub(super) fn release_reference(&mut self, mpv: &Mpv) {
         if let Some(reference) = self.reference.take() {
             reference.release(mpv);
+            self.invalidate_work();
         }
-        self.alignment = Alignment::default();
     }
-
     pub(super) fn reset_timing(&mut self, mpv: &Mpv, manual: bool) {
         self.release_reference(mpv);
+        self.invalidate_work();
         if let Some(track) = selected(mpv, "sid").and_then(|id| self.tracks.get_mut(&id)) {
             track.offset = 0.0;
             track.finished = manual;
+            track.manual = manual;
+            track.confident = false;
+            track.alignment = Alignment::default();
+            track.anchor = None;
         }
+        self.expected[0] = None;
     }
-
-    /// Never persist the measured correction as a title/global preference.
-    /// An explicit timing edit replaces it with the viewer's absolute delay.
     pub(super) fn delay(&self, mpv: &Mpv, base: f64) -> f64 {
         base + selected(mpv, "sid")
             .and_then(|id| self.tracks.get(&id))
             .map_or(0.0, |track| track.offset)
     }
-
-    pub(super) fn poll(&mut self, mpv: &Mpv, base: f64, manual_timing: bool) {
-        let primary = selected(mpv, "sid");
-        let active = primary.filter(|id| self.tracks.contains_key(id));
-        if self.active != active {
-            if let Some(reference) = self.reference.take() {
-                reference.release(mpv);
-            }
-            self.alignment = Alignment::default();
-            if self.active.is_some() || active.is_some() {
-                let _ = mpv.set_property("sub-delay", self.delay(mpv, base));
-            }
-            self.active = active;
-        }
-        let Some(id) = active else { return };
-        if manual_timing || base.abs() > 0.001 || self.tracks[&id].finished {
-            if let Some(reference) = self.reference.take() {
-                reference.release(mpv);
-            }
-            self.alignment = Alignment::default();
+    pub(super) fn secondary_selection_changed(&mut self, mpv: &Mpv) {
+        if self.owns_reference(mpv) {
             return;
         }
-        if self.reference.is_none() {
-            let Some(reference) = mpv
-                .get_property::<String>("track-list")
+        let id = selected(mpv, Slot::Secondary.selection());
+        if self.active[1] != id {
+            if let Some(old) = self.active[1].and_then(|id| self.secondary_tracks.get_mut(&id)) {
+                old.alignment = Alignment::default();
+                old.anchor = None;
+                old.cached_revision = None;
+            }
+            let delay = id
+                .and_then(|id| self.secondary_tracks.get(&id))
+                .map_or(0.0, |track| track.offset);
+            if mpv.set_property("secondary-sub-delay", delay).is_ok() {
+                self.expected[1] = Some(delay);
+            }
+            self.active[1] = id;
+            self.invalidate_work();
+        }
+    }
+    pub(super) fn primary_selection_changed(&mut self, mpv: &Mpv, base: f64) {
+        let primary = selected(mpv, Slot::Primary.selection());
+        if self.active[0] != primary {
+            if let Some(old) = self.active[0].and_then(|id| self.tracks.get_mut(&id)) {
+                old.alignment = Alignment::default();
+                old.anchor = None;
+                old.cached_revision = None;
+            }
+            self.release_reference(mpv);
+            if self.active[0].is_some() || primary.is_some_and(|id| self.tracks.contains_key(&id)) {
+                let delay = self.delay(mpv, base);
+                if mpv.set_property("sub-delay", delay).is_ok() {
+                    self.expected[0] = Some(delay);
+                }
+            }
+            self.active[0] = primary;
+            self.invalidate_work();
+        }
+    }
+    fn selections(&mut self, mpv: &Mpv, base: f64) {
+        self.primary_selection_changed(mpv, base);
+        self.secondary_selection_changed(mpv);
+        for slot in [Slot::Primary, Slot::Secondary] {
+            if slot == Slot::Secondary && self.owns_reference(mpv) {
+                continue;
+            }
+            let actual = mpv
+                .get_property::<f64>(slot.delay())
                 .ok()
-                .and_then(|raw| reference_track(&raw, id))
-                .and_then(|id| Reference::start(mpv, id))
-            else {
-                return;
-            };
-            self.reference = Some(reference);
-        }
-        if selected(mpv, "secondary-sid") != self.reference.as_ref().map(|reference| reference.id) {
-            if let Some(reference) = self.reference.take() {
-                reference.release(mpv);
+                .filter(|delay| delay.is_finite());
+            if let (Some(id), Some(expected), Some(actual)) = (
+                self.active[slot.index()],
+                self.expected[slot.index()],
+                actual,
+            ) && (actual - expected).abs() > 0.001
+            {
+                if slot == Slot::Primary && !self.tracks.contains_key(&id) {
+                    self.expected[0] = Some(actual);
+                    self.invalidate_work();
+                    continue;
+                }
+                let track = self.records_mut(slot).entry(id).or_default();
+                track.offset = actual - if slot == Slot::Primary { base } else { 0.0 };
+                track.finished = true;
+                track.manual = true;
+                track.confident = false;
+                track.alignment = Alignment::default();
+                track.anchor = None;
+                self.expected[slot.index()] = Some(actual);
+                self.invalidate_work();
+            } else if self.expected[slot.index()].is_none() {
+                self.expected[slot.index()] = actual;
             }
-            self.tracks.get_mut(&id).unwrap().finished = true;
+        }
+    }
+    fn anchor(
+        &self,
+        slot: Slot,
+        id: i32,
+        selected: [Option<i32>; 2],
+        delays: [f64; 2],
+        now: f64,
+    ) -> Option<Anchor> {
+        let other = slot.other();
+        if let Some(reference) = selected[other.index()].filter(|reference| *reference != id) {
+            let embedded = self
+                .inventory
+                .as_ref()
+                .is_some_and(|inventory| inventory.full_embedded.contains(&reference));
+            let trusted = self
+                .records(other)
+                .get(&reference)
+                .is_some_and(|track| track.confident && !track.manual);
+            if embedded || trusted {
+                return Some(Anchor {
+                    id: reference,
+                    slot: Some(other),
+                    delay: delays[other.index()].to_bits(),
+                });
+            }
+        }
+        self.evidence
+            .iter()
+            .filter(|(_, evidence)| evidence.cues.iter().any(|cue| cue.end >= now - HISTORY))
+            .max_by_key(|(_, evidence)| evidence.cues.len())
+            .map(|(id, evidence)| Anchor {
+                id: *id,
+                slot: None,
+                delay: evidence.delay,
+            })
+    }
+    fn start_estimate(
+        &mut self,
+        slot: Slot,
+        id: i32,
+        anchor: Anchor,
+        expected_delay: f64,
+        now: f64,
+    ) {
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return;
         }
-        let Some(now) = mpv.get_property::<f64>("time-pos").ok() else {
+        let alignment = self.records(slot)[&id].alignment.clone();
+        let (send, result) = mpsc::sync_channel(1);
+        let busy = self.busy.clone();
+        let spawned = std::thread::Builder::new()
+            .name("subtitle-align".into())
+            .spawn(move || {
+                struct Lease(Arc<AtomicBool>);
+                impl Drop for Lease {
+                    fn drop(&mut self) {
+                        self.0.store(false, Ordering::Release);
+                    }
+                }
+                let _lease = Lease(busy);
+                let _ = send.send(alignment.estimate(now));
+            });
+        if spawned.is_err() {
+            self.busy.store(false, Ordering::Release);
+            return;
+        }
+        self.job = Some(EstimateJob {
+            generation: self.generation,
+            slot,
+            id,
+            anchor,
+            expected_delay,
+            result,
+        });
+        self.next_slot = slot.other();
+    }
+    fn publish_estimate(&mut self, mpv: &Mpv, anchors: [Option<Anchor>; 2]) {
+        let Some(job) = self.job.as_ref() else { return };
+        let result = match job.result.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        let job = self.job.take().unwrap();
+        if !job.current(
+            self.generation,
+            self.active[job.slot.index()],
+            anchors[job.slot.index()],
+            mpv.get_property::<f64>(job.slot.delay()).ok(),
+            self.records(job.slot)
+                .get(&job.id)
+                .is_some_and(|track| !track.finished && !track.manual),
+        ) {
+            return;
+        }
+        let Some(track) = self
+            .records_mut(job.slot)
+            .get_mut(&job.id)
+            .filter(|track| !track.manual && !track.finished)
+        else {
             return;
         };
-        if let Some(offset) =
-            self.alignment
-                .observe(now, Cue::read(mpv, false), Cue::read(mpv, true))
+        if let Some(offset) = result.filter(|offset| offset.is_finite())
+            && mpv.set_property(job.slot.delay(), offset).is_ok()
         {
-            let track = self.tracks.get_mut(&id).unwrap();
-            if mpv.set_property("sub-delay", base + offset).is_ok() {
-                track.offset = offset;
-                track.finished = true;
+            track.offset = offset;
+            track.finished = true;
+            track.confident = true;
+            track.alignment = Alignment::default();
+            track.anchor = None;
+            track.cached_revision = None;
+            self.expected[job.slot.index()] = Some(offset);
+            if job.slot == Slot::Primary {
+                self.release_reference(mpv);
             }
-            if let Some(reference) = self.reference.take() {
-                reference.release(mpv);
+        }
+    }
+    pub(super) fn poll(&mut self, mpv: &Mpv, base: f64, manual_timing: bool) {
+        if self.suspended.is_some() {
+            return;
+        }
+        if self.tracks.is_empty() {
+            return;
+        }
+        self.selections(mpv, base);
+        if mpv.get_property::<bool>("pause").unwrap_or(true) {
+            return;
+        }
+        let Some(now) = mpv
+            .get_property::<f64>("time-pos")
+            .ok()
+            .filter(|now| now.is_finite() && *now >= 0.0)
+        else {
+            return;
+        };
+        if self
+            .last_position
+            .is_some_and(|last| now < last - 0.5 || now > last + 3.0)
+        {
+            self.clear_evidence();
+        }
+        self.last_position = Some(now);
+        if self.inventory.is_none()
+            && let Ok(raw) = mpv.get_property::<String>("track-list")
+        {
+            self.update_inventory(&raw);
+        }
+        if self.reference.is_some() && !self.owns_reference(mpv) {
+            self.reference = None;
+            self.invalidate_work();
+        }
+        let eligible = |this: &Self, slot: Slot| {
+            this.active[slot.index()].is_some_and(|id| {
+                this.tracks.contains_key(&id)
+                    && this
+                        .records(slot)
+                        .get(&id)
+                        .is_some_and(|track| !track.finished && !track.manual)
+                    && (slot != Slot::Primary || (!manual_timing && base.abs() <= 0.001))
+            })
+        };
+        if !eligible(self, Slot::Primary) {
+            self.release_reference(mpv);
+        }
+        if !eligible(self, Slot::Primary) && !eligible(self, Slot::Secondary) {
+            if self.job.is_some() {
+                self.invalidate_work();
+            }
+            return;
+        }
+        if eligible(self, Slot::Primary)
+            && self.active[1].is_none()
+            && self.reference.is_none()
+            && let Some(reference) = self
+                .inventory
+                .as_ref()
+                .and_then(|inventory| inventory.references.get(&self.active[0]?).copied())
+                .and_then(|id| Reference::start(mpv, id))
+        {
+            self.reference = Some(reference);
+        }
+        // Only embedded full-dialogue cues enter the reusable bounded cache.
+        for slot in [Slot::Primary, Slot::Secondary] {
+            let id = if slot == Slot::Secondary {
+                selected(mpv, "secondary-sid")
+            } else {
+                self.active[0]
+            };
+            if let Some(id) = id.filter(|id| {
+                self.inventory
+                    .as_ref()
+                    .is_some_and(|inventory| inventory.full_embedded.contains(id))
+            }) {
+                let delay = mpv.get_property::<f64>(slot.delay()).unwrap_or(0.0);
+                if self.evidence.contains_key(&id) || self.evidence.len() < 8 {
+                    self.evidence.entry(id).or_default().collect(
+                        now,
+                        delay,
+                        Cue::read(mpv, slot == Slot::Secondary).map(|cue| shifted(cue, delay)),
+                    );
+                }
+            }
+        }
+        let delays = [
+            mpv.get_property::<f64>("sub-delay").unwrap_or(base),
+            mpv.get_property::<f64>("secondary-sub-delay")
+                .unwrap_or(0.0),
+        ];
+        let mut visible = self.active;
+        if self.owns_reference(mpv) {
+            visible[1] = None;
+        }
+        let anchors = [
+            self.active[0].and_then(|id| self.anchor(Slot::Primary, id, visible, delays, now)),
+            self.active[1].and_then(|id| self.anchor(Slot::Secondary, id, visible, delays, now)),
+        ];
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|job| !eligible(self, job.slot))
+        {
+            self.invalidate_work();
+        }
+        self.publish_estimate(mpv, anchors);
+        let order = [self.next_slot, self.next_slot.other()];
+        for slot in order {
+            if !eligible(self, slot) {
+                continue;
+            }
+            let id = self.active[slot.index()].unwrap();
+            let Some(anchor) = anchors[slot.index()] else {
+                continue;
+            };
+            let target = Cue::read(mpv, slot == Slot::Secondary);
+            let reference = anchor
+                .slot
+                .and_then(|slot| Cue::read(mpv, slot == Slot::Secondary))
+                .map(|cue| shifted(cue, f64::from_bits(anchor.delay)));
+            let cached = anchor
+                .slot
+                .is_none()
+                .then(|| self.evidence.get(&anchor.id))
+                .flatten();
+            let record = &self.records(slot)[&id];
+            let cached_cues = cached
+                .filter(|evidence| {
+                    record.anchor != Some(anchor)
+                        || record.cached_revision != Some(evidence.revision)
+                })
+                .map(|evidence| (evidence.cues.clone(), evidence.since, evidence.revision));
+            let track = self.records_mut(slot).get_mut(&id).unwrap();
+            track.bind_anchor(anchor);
+            if let Some((cues, since, revision)) = cached_cues {
+                track.alignment.embedded = cues;
+                track.alignment.since.get_or_insert(since);
+                track.cached_revision = Some(revision);
+            }
+            let ready = track.alignment.collect(now, target, reference);
+            if ready && self.job.is_none() {
+                self.start_estimate(slot, id, anchor, delays[slot.index()], now);
             }
         }
     }
@@ -635,6 +1201,214 @@ mod tests {
     }
 
     #[test]
+    fn visible_reference_slots_use_their_applied_delay_and_never_guess_between_untrusted_addons() {
+        let mut sync = SubtitleSync::default();
+        sync.register(8);
+        sync.register(9);
+        sync.update_inventory(
+            r#"[
+            {"id":1,"type":"sub","external":false,"codec":"subrip","lang":"en"},
+            {"id":2,"type":"sub","external":false,"codec":"subrip","lang":"hr"},
+            {"id":8,"type":"sub","external":true,"codec":"subrip","lang":"en"},
+            {"id":9,"type":"sub","external":true,"codec":"subrip","lang":"hr"}
+        ]"#,
+        );
+        let primary = sync
+            .anchor(Slot::Secondary, 9, [Some(1), Some(9)], [1.4, 0.0], 100.0)
+            .unwrap();
+        assert_eq!(primary.slot, Some(Slot::Primary));
+        assert_eq!(f64::from_bits(primary.delay), 1.4);
+        let secondary = sync
+            .anchor(Slot::Primary, 8, [Some(8), Some(2)], [0.0, -0.7], 100.0)
+            .unwrap();
+        assert_eq!(secondary.slot, Some(Slot::Secondary));
+        assert_eq!(f64::from_bits(secondary.delay), -0.7);
+        for slot in [Slot::Primary, Slot::Secondary] {
+            assert!(
+                sync.anchor(
+                    slot,
+                    if slot == Slot::Primary { 8 } else { 9 },
+                    [Some(8), Some(9)],
+                    [0.0, 0.0],
+                    100.0
+                )
+                .is_none()
+            );
+        }
+        sync.tracks.get_mut(&8).unwrap().confident = true;
+        let anchor = sync
+            .anchor(Slot::Secondary, 9, [Some(8), Some(9)], [-3.2, 0.0], 100.0)
+            .unwrap();
+        assert_eq!(anchor.id, 8);
+        let alignment = Alignment {
+            downloaded: cues(7, 4.7, true),
+            embedded: cues(7, 3.2, true)
+                .into_iter()
+                .map(|cue| shifted(cue, -3.2))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(
+            (alignment.text_offset().unwrap() + 4.7).abs() < 0.001,
+            "secondary measures its own -4.7 correction, never copies primary -3.2"
+        );
+        let shifted_embedded = Alignment {
+            downloaded: cues(7, 3.2, true),
+            embedded: cues(7, 0.0, true)
+                .into_iter()
+                .map(|cue| shifted(cue, 1.4))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(
+            (shifted_embedded.text_offset().unwrap() + 1.8).abs() < 0.001,
+            "manual delay on embedded primary must not disable secondary or omit reference delay"
+        );
+    }
+
+    #[test]
+    fn hidden_reference_evidence_survives_filling_both_slots_but_not_seek_or_source_reset() {
+        let mut sync = SubtitleSync::default();
+        sync.register(8);
+        sync.register(9);
+        let mut evidence = Evidence::default();
+        for cue in cues(7, 0.0, true) {
+            evidence.collect(cue.start, 0.0, Some(cue));
+        }
+        assert!(evidence.cues.len() <= 512);
+        sync.evidence.insert(2, evidence);
+        let anchor = sync
+            .anchor(Slot::Secondary, 9, [Some(8), Some(9)], [0.0, 0.0], 120.0)
+            .unwrap();
+        assert_eq!(anchor.slot, None);
+        assert_eq!(anchor.id, 2);
+        assert!(
+            sync.anchor(Slot::Secondary, 9, [Some(8), Some(9)], [0.0, 0.0], 1000.0)
+                .is_none()
+        );
+        sync.clear_evidence();
+        assert!(
+            sync.anchor(Slot::Secondary, 9, [Some(8), Some(9)], [0.0, 0.0], 120.0)
+                .is_none()
+        );
+        sync.clear(None);
+        assert!(sync.tracks.is_empty());
+        assert!(sync.secondary_tracks.is_empty());
+    }
+
+    #[test]
+    fn filling_reference_slot_preserves_overlapping_addon_evidence_for_cached_alignment() {
+        let visible = Anchor {
+            id: 2,
+            slot: Some(Slot::Secondary),
+            delay: 0.0_f64.to_bits(),
+        };
+        let mut track = Track::default();
+        track.bind_anchor(visible);
+        track.alignment = Alignment {
+            downloaded: cues(7, 3.2, true),
+            embedded: cues(7, 0.0, true),
+            ..Default::default()
+        };
+        let before = track.alignment.downloaded.len();
+        track.bind_anchor(Anchor {
+            slot: None,
+            ..visible
+        });
+        assert_eq!(track.alignment.downloaded.len(), before);
+        assert!((track.alignment.text_offset().unwrap() + 3.2).abs() < 0.001);
+        track.bind_anchor(Anchor {
+            delay: 1.4_f64.to_bits(),
+            ..visible
+        });
+        assert!(
+            track.alignment.downloaded.is_empty(),
+            "changing effective reference timing needs new evidence"
+        );
+    }
+
+    #[test]
+    fn estimator_result_rejects_replaced_generation_track_anchor_manual_delay_and_manual_control() {
+        let (_, result) = mpsc::sync_channel(1);
+        let anchor = Anchor {
+            id: 1,
+            slot: Some(Slot::Primary),
+            delay: 1.4_f64.to_bits(),
+        };
+        let job = EstimateJob {
+            generation: 7,
+            slot: Slot::Secondary,
+            id: 9,
+            anchor,
+            expected_delay: 0.0,
+            result,
+        };
+        assert!(job.current(7, Some(9), Some(anchor), Some(0.0), true));
+        assert!(!job.current(8, Some(9), Some(anchor), Some(0.0), true)); // seek/source/selection generation
+        assert!(!job.current(7, Some(10), Some(anchor), Some(0.0), true));
+        assert!(!job.current(
+            7,
+            Some(9),
+            Some(Anchor {
+                delay: 0.0_f64.to_bits(),
+                ..anchor
+            }),
+            Some(0.0),
+            true
+        ));
+        assert!(!job.current(7, Some(9), Some(anchor), Some(1.7), true));
+        assert!(!job.current(7, Some(9), Some(anchor), Some(f64::NAN), true));
+        assert!(!job.current(7, Some(9), Some(anchor), Some(0.0), false));
+    }
+
+    #[test]
+    fn source_reset_keeps_one_estimator_lease_and_pair_remap_cannot_alias_partner() {
+        let mut sync = SubtitleSync::default();
+        let busy = sync.busy.clone();
+        busy.store(true, Ordering::Release);
+        sync.clear(None);
+        assert!(Arc::ptr_eq(&busy, &sync.busy));
+        sync.register(8);
+        sync.register(9);
+        sync.register(10);
+        let anchor = Anchor {
+            id: 1,
+            slot: None,
+            delay: 0.0_f64.to_bits(),
+        };
+        sync.start_estimate(Slot::Primary, 8, anchor, 0.0, 100.0);
+        assert!(
+            sync.job.is_none(),
+            "obsolete running worker prevents another estimator"
+        );
+        busy.store(false, Ordering::Release);
+        sync.tracks.get_mut(&8).unwrap().offset = -3.2;
+        sync.tracks.get_mut(&8).unwrap().confident = true;
+        sync.secondary_tracks.get_mut(&9).unwrap().offset = 1.7;
+        sync.secondary_tracks.get_mut(&9).unwrap().manual = true;
+        sync.remap_pair(&[
+            TrackRemap {
+                slot: Slot::Primary,
+                old: 8,
+                new: 9,
+            },
+            TrackRemap {
+                slot: Slot::Secondary,
+                old: 9,
+                new: 8,
+            },
+        ]);
+        assert_eq!(sync.tracks.len(), 2);
+        assert!(!sync.tracks.contains_key(&10));
+        assert_eq!(sync.tracks[&9].offset, -3.2);
+        assert!(sync.tracks[&9].confident);
+        assert_eq!(sync.secondary_tracks[&8].offset, 1.7);
+        assert!(sync.secondary_tracks[&8].manual);
+        assert_eq!(sync.secondary_tracks[&9].offset, 0.0);
+        assert_eq!(sync.active, [None, None]);
+    }
+
+    #[test]
     fn subtitle_sync_native_reference_is_hidden_and_keeps_media_pause_and_selection() {
         struct Scratch(std::path::PathBuf);
         impl Drop for Scratch {
@@ -779,9 +1553,41 @@ mod tests {
         assert_eq!(mpv.get_property::<f64>("sub-delay").unwrap(), 0.0);
         assert_eq!(mpv.get_property::<String>("path").unwrap(), path);
         assert!(mpv.get_property::<bool>("pause").unwrap());
+        mpv.set_property("sid", downloaded.to_string()).unwrap();
+        sync.poll(&mpv, 0.0, false);
+        sync.register(reference);
+        mpv.set_property("secondary-sid", reference.to_string())
+            .unwrap();
+        sync.secondary_selection_changed(&mpv);
+        mpv.set_property("secondary-sub-delay", 1.7_f64).unwrap();
+        sync.selections(&mpv, 0.0);
+        assert!(sync.secondary_tracks[&reference].manual);
+        assert!((sync.secondary_tracks[&reference].offset - 1.7).abs() < 1e-6);
+        mpv.set_property("sid", "no").unwrap();
+        mpv.set_property("secondary-sid", downloaded.to_string())
+            .unwrap();
+        sync.secondary_selection_changed(&mpv);
+        assert_eq!(
+            mpv.get_property::<f64>("secondary-sub-delay").unwrap(),
+            0.0,
+            "secondary manual delay cannot leak to a different addon"
+        );
+        mpv.set_property("secondary-sid", reference.to_string())
+            .unwrap();
+        sync.secondary_selection_changed(&mpv);
+        assert!((mpv.get_property::<f64>("secondary-sub-delay").unwrap() - 1.7).abs() < 1e-6);
+        mpv.set_property("secondary-sid", "no").unwrap();
+        sync.secondary_selection_changed(&mpv);
+        assert_eq!(mpv.get_property::<f64>("secondary-sub-delay").unwrap(), 0.0);
         sync.suspend(&mpv, None);
+        mpv.set_property("secondary-sub-delay", 3.0_f64).unwrap();
         sync.clear(Some(&mpv));
         assert!(sync.tracks.is_empty());
+        assert_eq!(
+            mpv.get_property::<f64>("secondary-sub-delay").unwrap(),
+            0.0,
+            "closing a source clears its native secondary delay"
+        );
     }
 }
 
@@ -791,6 +1597,21 @@ impl super::Player {
             || !self.state.started.load(super::Ordering::SeqCst)
         {
             return;
+        }
+        // The cached UI pause state avoids every engine/property query while
+        // menus animate over paused video. Immediate selection hooks apply
+        // existing offsets; an estimator result can safely wait until resume.
+        let Some(app) = self.state.app.upgrade() else {
+            return;
+        };
+        if app.get_is_paused() {
+            return;
+        }
+        {
+            let sync = self.state.subtitle_sync.lock().unwrap();
+            if sync.tracks.is_empty() || sync.suspended.is_some() {
+                return;
+            }
         }
         let engine = self.state.mpv.lock().unwrap();
         let Some(mpv) = engine.as_ref() else { return };

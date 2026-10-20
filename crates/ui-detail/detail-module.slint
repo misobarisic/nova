@@ -64,6 +64,7 @@ export component DetailModule inherits Window {
         streams_hint <=> DetailBridge.streams_hint;
         stream_addons <=> DetailBridge.stream_addons;
         stream_loading <=> DetailBridge.stream_loading;
+        stream_refresh_enabled <=> DetailBridge.stream_refresh_enabled;
         streams_searching <=> DetailBridge.streams_searching;
         stream_filter <=> DetailBridge.stream_filter;
         stream_action_open <=> DetailBridge.stream_action_open;
@@ -130,6 +131,7 @@ export component DetailModule inherits Window {
         stream_action_requested(arg0) => { DetailBridge.stream_action_requested(arg0); }
         stream_action_selected(arg0, arg1) => { DetailBridge.stream_action_selected(arg0, arg1); }
         stream_filter_picked(arg0) => { DetailBridge.stream_filter_picked(arg0); }
+        stream_refresh_requested => { DetailBridge.stream_refresh_requested(); }
         stream_selector_back() => { DetailBridge.stream_selector_back(); }
         detail_tab_picked(arg0) => { DetailBridge.detail_tab_picked(arg0); }
         episode_filter_changed(arg0) => { DetailBridge.episode_filter_changed(arg0); }

@@ -1,7 +1,54 @@
 //! Detail modal: metadata, seasons/episodes, stream list.
 use super::*;
+use std::time::Instant;
 
 const STREAM_PAGE_SIZE: usize = 25;
+const STREAM_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
+
+/// The backend guards every activation, including keyboard repeats and a
+/// close/reopen of the selector. UI feedback is only a reflection of this gate.
+#[derive(Default)]
+pub(super) struct StreamRefreshGate {
+    next: Option<Instant>,
+    timer_epoch: Option<u64>,
+    timer_generation: u64,
+}
+
+impl StreamRefreshGate {
+    fn ready(&self, now: Instant) -> bool {
+        self.next.is_none_or(|next| now >= next)
+    }
+
+    fn claim(&mut self, now: Instant, busy: bool) -> bool {
+        if busy || !self.ready(now) {
+            return false;
+        }
+        self.next = Some(now + STREAM_REFRESH_COOLDOWN);
+        self.timer_epoch = None;
+        true
+    }
+
+    fn publication(&mut self, now: Instant, epoch: u64) -> (bool, Option<(Duration, u64)>) {
+        let ready = self.ready(now);
+        let timer = if !ready && self.timer_epoch != Some(epoch) {
+            self.timer_epoch = Some(epoch);
+            self.timer_generation = self.timer_generation.wrapping_add(1);
+            self.next
+                .map(|next| (next.saturating_duration_since(now), self.timer_generation))
+        } else {
+            None
+        };
+        (ready, timer)
+    }
+
+    fn wake(&mut self, generation: u64) -> bool {
+        if self.timer_generation != generation {
+            return false;
+        }
+        self.timer_epoch = None;
+        true
+    }
+}
 
 #[derive(Clone)]
 struct StreamResponseContext {
@@ -365,6 +412,13 @@ impl Bridge {
     /// `<item>:<season>:<episode>` id of a picked episode) from every
     /// installed addon that provides streams for the modal item's type.
     pub(super) fn start_stream_search(&self, request_id: String) {
+        self.start_stream_search_inner(request_id, false);
+    }
+
+    /// Explicit refresh preserves the selected addon while replacing every
+    /// source response. Navigation continues to start from All.
+    fn start_stream_search_inner(&self, request_id: String, preserve_filter: bool) {
+        self.publish_stream_refresh_gate();
         if self.remote_output_selected() {
             if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
                 modal.request_id = request_id.clone();
@@ -416,8 +470,17 @@ impl Bridge {
         let addon_count = requested.len();
         // Show one pill per addon being queried right away (spinner), then
         // drop each one that answers with no streams.
-        let generation = {
+        let (generation, filter) = {
             let mut state = self.shared.lock().unwrap();
+            let selected = preserve_filter
+                .then(|| {
+                    state
+                        .stream_filter
+                        .checked_sub(1)
+                        .and_then(|index| state.stream_addons.get(index))
+                        .cloned()
+                })
+                .flatten();
             if let Some(m) = state.modal_item.as_mut() {
                 m.request_id = request_id.clone();
             }
@@ -437,8 +500,12 @@ impl Bridge {
                 .map(|(label, _, owner, _)| (owner.clone(), label.clone()))
                 .collect();
             state.stream_warnings.clear();
-            state.stream_filter = 0;
-            state.stream_generation
+            state.stream_filter = selected
+                .as_ref()
+                .and_then(|label| requested.iter().position(|candidate| candidate == label))
+                .map_or(0, |index| index + 1);
+            state.stream_page = 0;
+            (state.stream_generation, state.stream_filter)
         };
         if let Some(app) = self.app() {
             app.set_stream_addons(
@@ -449,7 +516,7 @@ impl Bridge {
             );
             app.set_stream_loading(Rc::new(VecModel::from(vec![true; requested.len()])).into());
             app.set_streams_searching(!requested.is_empty());
-            app.set_stream_filter(0);
+            app.set_stream_filter(filter as i32);
         }
         // Show already-downloaded rows for this request immediately, before
         // the first addon answers. Addon streams keep streaming in per addon
@@ -509,6 +576,70 @@ impl Bridge {
                     final_bridge.receive_stream_response(context, result, true);
                 },
             );
+        }
+    }
+
+    pub(super) fn refresh_stream_sources(&self) {
+        let Some(app) = self.app() else { return };
+        if !app.get_modal_visible()
+            || !app.get_stream_selector_open()
+            || app.get_player_open()
+            || app.get_season_download_review()
+        {
+            return;
+        }
+        let request = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(request) = state
+                .modal_item
+                .as_ref()
+                .map(|modal| modal.request_id.clone())
+                .filter(|id| !id.is_empty())
+            else {
+                return;
+            };
+            let busy = app.get_streams_searching()
+                || (app.get_remote_target_id().is_empty() && !state.stream_pending.is_empty());
+            if !state.stream_refresh_gate.claim(Instant::now(), busy) {
+                return;
+            }
+            // A new cache epoch neither joins an old speculative request nor
+            // lets its late completion overwrite a manually refreshed result.
+            state.stream_prefetch.invalidate();
+            request
+        };
+        app.set_stream_action_open(false);
+        app.set_detail_kb_s(0);
+        self.start_stream_search_inner(request, true);
+    }
+
+    fn publish_stream_refresh_gate(&self) {
+        let Some(app) = self.app() else { return };
+        let context = profiles::capture();
+        let (ready, timer) = {
+            let mut state = self.shared.lock().unwrap();
+            state
+                .stream_refresh_gate
+                .publication(Instant::now(), context.epoch)
+        };
+        app.set_stream_refresh_enabled(ready);
+        if let Some((wait, generation)) = timer {
+            let bridge = self.clone();
+            slint::Timer::single_shot(wait, move || {
+                if profiles::is_current(&context) {
+                    profiles::with_context(context, || {
+                        {
+                            let mut state = bridge.shared.lock().unwrap();
+                            // A native timer can wake just before its deadline.
+                            // Re-arm instead of leaving the button disabled.
+                            if !state.stream_refresh_gate.wake(generation) {
+                                return;
+                            }
+                        }
+                        bridge.publish_stream_refresh_gate();
+                    });
+                }
+            });
         }
     }
 
@@ -2933,7 +3064,10 @@ impl Bridge {
         }
         if hidden > 0 {
             if filtered.is_empty() && pending_count == 0 {
-                hint = text::tr("No addon streams match your rules.").to_owned();
+                hint = text::tr(
+                    "No addon streams match your rules. Change them in Settings → Player.",
+                )
+                .to_owned();
             } else {
                 hint.push('\n');
                 hint.push_str(&text::stream_rules_hidden(hidden));
@@ -4812,6 +4946,67 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_gate_rejects_busy_and_repeated_actions_until_the_deadline() {
+        let start = Instant::now();
+        let mut gate = StreamRefreshGate::default();
+        assert!(!gate.claim(start, true));
+        assert!(gate.ready(start));
+        assert!(gate.claim(start, false));
+        assert!(!gate.claim(
+            start + STREAM_REFRESH_COOLDOWN - Duration::from_nanos(1),
+            false
+        ));
+        let deadline = start + STREAM_REFRESH_COOLDOWN;
+        assert!(
+            !gate.claim(deadline, true),
+            "a completed cooldown cannot bypass active fetching"
+        );
+        assert!(gate.ready(deadline));
+        assert!(
+            gate.claim(deadline, false),
+            "the exact deadline is eligible"
+        );
+        assert!(
+            !gate.claim(deadline, false),
+            "a keyboard repeat cannot claim twice"
+        );
+        assert!(!gate.ready(deadline + STREAM_REFRESH_COOLDOWN - Duration::from_nanos(1)));
+        assert!(gate.ready(deadline + STREAM_REFRESH_COOLDOWN));
+    }
+
+    #[test]
+    fn refresh_gate_rearms_early_timers_and_rejects_old_activation_timers() {
+        let start = Instant::now();
+        let mut gate = StreamRefreshGate::default();
+        assert!(gate.claim(start, false));
+        let (ready, timer) = gate.publication(start, 10);
+        assert!(!ready);
+        let (wait, first) = timer.unwrap();
+        assert_eq!(wait, STREAM_REFRESH_COOLDOWN);
+        assert!(gate.publication(start, 10).1.is_none());
+        assert!(gate.wake(first));
+        let early = start + STREAM_REFRESH_COOLDOWN - Duration::from_millis(1);
+        let (ready, timer) = gate.publication(early, 10);
+        assert!(!ready);
+        let (wait, rearmed) = timer.unwrap();
+        assert_eq!(wait, Duration::from_millis(1));
+        assert!(
+            !gate.wake(first),
+            "an older early wake cannot clear the current timer"
+        );
+        // Returning through a new activation must schedule its own callback;
+        // the original activation's callback is no longer authorized to run.
+        let (_, timer) = gate.publication(early, 11);
+        let (_, replacement) = timer.unwrap();
+        assert!(!gate.wake(rearmed));
+        assert!(gate.wake(replacement));
+        assert_eq!(
+            gate.publication(start + STREAM_REFRESH_COOLDOWN, 11),
+            (true, None)
+        );
+    }
 
     #[test]
     fn detail_entry_uses_saved_metadata_and_resolves_its_action_before_refresh() {

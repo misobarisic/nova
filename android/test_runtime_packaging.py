@@ -2,6 +2,7 @@
 """Exercise cargo-apk2's repeated staging of read-only Nix media libraries."""
 
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -49,6 +50,11 @@ def verify_runtime_symbols(libraries, target):
 
 def main():
     root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "package_android", root / ".github/scripts/package-android.py",
+    )
+    packaging = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packaging)
     libraries = Path(os.environ["NOVA_ANDROID_LIBS"])
     abis = {
         "aarch64-linux-android": "arm64-v8a",
@@ -80,10 +86,11 @@ min_sdk_version = 26
 target_sdk_version = 35
 [package.metadata.android.application]
 has_code = false
+extract_native_libs = false
 [[package.metadata.android.application.activity]]
 name = "android.app.NativeActivity"
 exported = true
-[package.metadata.android.signing.dev]
+[package.metadata.android.signing.release]
 path = "{root / 'android/keystore/debug.keystore'}"
 keystore_password = "android"
 '''
@@ -119,15 +126,22 @@ pub extern "C" fn probe_version() -> u32 {
         )
         env = dict(os.environ, CARGO_TARGET_DIR=str(work / "target"), CARGO_NET_OFFLINE="true")
         for attempt in range(2):
+            # Release avoids the packager's debug-only no-compression shortcut,
+            # exercising the manifest-driven native storage policy itself.
             print(f"Packaging read-only media inputs, attempt {attempt + 1}", flush=True)
             subprocess.run(
-                ["cargo", "apk2", "build", "--lib"],
+                ["cargo", "apk2", "build", "--lib", "--release"],
                 cwd=work,
                 env=env,
                 check=True,
             )
             apks = list((work / "target").rglob("runtime-packaging-probe.apk"))
             assert len(apks) == 1, apks
+            packaging.verify_native_layout(apks[0])
+            aapt = Path(os.environ["ANDROID_HOME"]) / "build-tools/35.0.0/aapt"
+            packaging.verify_native_manifest(subprocess.check_output(
+                [aapt, "dump", "xmltree", apks[0], "AndroidManifest.xml"], text=True,
+            ))
             with zipfile.ZipFile(apks[0]) as apk:
                 entries = set(apk.namelist())
             # Old local 0.1.0 APKs used code 16777472. Even the smallest

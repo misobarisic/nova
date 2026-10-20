@@ -206,8 +206,10 @@ fn playback_defaults_reset_and_player_settings_fit() {
                 "the gear key opens the player settings panel"
             );
 
-            // Subtitle reset is row 0, followed by Off and track rows.
+            // Two subtitle-tool shortcuts precede reset, Off and track rows.
             key(&app, slint::platform::Key::Return);
+            key(&app, slint::platform::Key::DownArrow);
+            key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::Return);
             assert_eq!(restored.borrow().as_slice(), [1]);
             assert_eq!(
@@ -216,7 +218,7 @@ fn playback_defaults_reset_and_player_settings_fit() {
                 "restoring subtitles leaves the panel open"
             );
             assert!(has_text(&app, "Using global default"));
-            // The Off row is now 1 and the first subtitle track is 2.
+            // Off and the first track follow the selected reset row.
             key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::Return);

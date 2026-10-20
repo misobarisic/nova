@@ -1,5 +1,5 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
-import { SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
+import { StreamFiltersBridge, SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
 import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
@@ -1317,11 +1317,30 @@ export component SettingsPage {
         return audio_row < 0 ? -1 : audio_row + 1;
     }
 
-    function kb_player_n() -> int {
-        if root.player_backend_index == 0 {
-            return root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) + 11;
+    function kb_player_existing_n() -> int { return SettingsContent.kb_player_stream_filters_row(); }
+    function kb_player_n() -> int { return root.kb_player_existing_n() + 13; }
+
+    function kb_stream_filter_step(d: int, activate: bool) {
+        let row = root.kb_pr - root.kb_player_existing_n();
+        if row == 0 { StreamFiltersBridge.edited(0, (activate ? !StreamFiltersBridge.enabled : d > 0) ? "true" : "false"); }
+        else if row == 1 { StreamFiltersBridge.edited(1, "" + (activate ? Math.mod(StreamFiltersBridge.max_resolution_index + 1, 7) : Math.clamp(StreamFiltersBridge.max_resolution_index + d, 0, 6))); }
+        else if row == 2 { StreamFiltersBridge.edited(2, "" + (activate ? Math.mod(StreamFiltersBridge.max_size_index + 1, 9) : Math.clamp(StreamFiltersBridge.max_size_index + d, 0, 8))); }
+        else if row == 3 { StreamFiltersBridge.edited(3, (activate ? !StreamFiltersBridge.allow_avc : d > 0) ? "true" : "false"); }
+        else if row == 4 { StreamFiltersBridge.edited(4, (activate ? !StreamFiltersBridge.allow_hevc : d > 0) ? "true" : "false"); }
+        else if row == 5 { StreamFiltersBridge.edited(5, (activate ? !StreamFiltersBridge.allow_av1 : d > 0) ? "true" : "false"); }
+        else if row == 6 { StreamFiltersBridge.edited(6, (activate ? !StreamFiltersBridge.allow_vp9 : d > 0) ? "true" : "false"); }
+        else if row == 7 { StreamFiltersBridge.edited(10, (activate ? !StreamFiltersBridge.allow_other : d > 0) ? "true" : "false"); }
+        else if row == 8 && activate { root.kb_edit = 8; }
+        else if row == 9 && activate {
+            StreamFiltersBridge.edited(7, SettingsContent.stream_filter_language_draft);
+            root.kb_edit = 0; root.player_language_input_focused = false; nav_scope.focus();
         }
-        return root.is_android ? 2 : 3;
+        else if row == 10 { StreamFiltersBridge.edited(8, (activate ? !StreamFiltersBridge.require_audio : d > 0) ? "true" : "false"); }
+        else if row == 11 { StreamFiltersBridge.edited(9, (activate ? !StreamFiltersBridge.retain_unknown : d > 0) ? "true" : "false"); }
+        else if row == 12 && activate {
+            StreamFiltersBridge.reset(); SettingsContent.stream_filter_language_draft = StreamFiltersBridge.audio_languages;
+            root.kb_edit = 0; root.player_language_input_focused = false; nav_scope.focus();
+        }
     }
 
     changed screenshot_format_index => { root.kb_player_clamp(); }
@@ -1333,7 +1352,8 @@ export component SettingsPage {
     }
 
     function kb_player_step(d: int) {
-        if (root.kb_pr == 0) {
+        if root.kb_pr >= root.kb_player_existing_n() { root.kb_stream_filter_step(d, false); }
+        else if (root.kb_pr == 0) {
             root.player_backend_index = root.is_android ? Math.max(0, Math.min(1, root.player_backend_index + d)) : 0;
             root.kb_player_clamp();
             root.schedule_save();
@@ -1353,19 +1373,19 @@ export component SettingsPage {
             root.kb_player_language_step(root.audio_language_choice_index, d, false);
         } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
             root.kb_player_language_step(root.subtitle_language_choice_index, d, true);
-        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 1 {
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 1 {
             root.intro_skip_confidence_index = Math.clamp(root.intro_skip_confidence_index + d, 0, 4);
             root.schedule_setting("intro_skip_confidence");
-        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 2 {
             root.intro_skip_mode_index = Math.clamp(root.intro_skip_mode_index + d, 0, 2);
             root.schedule_setting("intro_skip_mode");
         } else if (root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 1) {
             root.prefetch_next_episode_streams = d > 0;
             root.schedule_setting("prefetch_next_episode_streams");
-        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 4 {
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 4 {
             root.show_chapters = d > 0;
             root.schedule_setting("show_chapters");
-        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 3 {
+        } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 3 {
             root.auto_next_episode = d > 0;
             root.schedule_setting("auto_next_episode");
         } else if (root.kb_pr == root.kb_player_speed_row()) {
@@ -1681,7 +1701,8 @@ export component SettingsPage {
                 root.kb_torrent_flip(root.kb_tr);
             }
         } else if (root.kb_zone == 9) {
-            if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 4) {
+            if root.kb_pr >= root.kb_player_existing_n() { root.kb_stream_filter_step(1, true); }
+            else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 4) {
                 root.android_pip_enabled = !root.android_pip_enabled;
                 root.schedule_setting("android_pip_enabled");
             } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 5) {
@@ -1691,16 +1712,16 @@ export component SettingsPage {
                 root.kb_edit = 4;
             } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
                 root.kb_edit = 5;
-            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 1 {
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 1 {
                 root.intro_skip_confidence_index = Math.mod(root.intro_skip_confidence_index + 1, 5);
                 root.schedule_setting("intro_skip_confidence");
-            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 2 {
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 2 {
                 root.intro_skip_mode_index = Math.mod(root.intro_skip_mode_index + 1, 3);
                 root.schedule_setting("intro_skip_mode");
-            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 4 {
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 4 {
                 root.show_chapters = !root.show_chapters;
                 root.schedule_setting("show_chapters");
-            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_n() - 3 {
+            } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_existing_n() - 3 {
                 root.auto_next_episode = !root.auto_next_episode;
                 root.schedule_setting("auto_next_episode");
             } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) {

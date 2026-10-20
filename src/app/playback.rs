@@ -676,6 +676,7 @@ impl Bridge {
         self.playback_closed();
         {
             let mut state = self.shared.lock().unwrap();
+            state.playback_tools.recovery_prompt = Default::default();
             state.playback_tools.failed_retry = None;
             state.playback_tools.pending_retry = None;
             state.playback_tools.bookmark_resume = None;
@@ -689,6 +690,7 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
+            app.set_automatic_stream_recovery_visible(false);
         }
         if let Some(engine) = crate::torrent::engine() {
             engine.on_playback_stopped(&active_torrent_settings());

@@ -12,6 +12,11 @@ slint::slint! {
         height: 180px;
         in property <bool> touch_feedback: true;
         in property <bool> selected: false;
+        in property <bool> stream_loading: false;
+        in property <bool> refresh_enabled: true;
+        out property <angle> refresh_rotation: refresh.refresh_rotation;
+        out property <bool> refresh_ready: refresh.activation_ready;
+        out property <int> refresh_picks: 0;
         out property <brush> library_fill: library.background;
         out property <length> library_width: library.width;
         out property <brush> stream_fill: stream.background;
@@ -26,9 +31,16 @@ slint::slint! {
         stream := StreamFilterPill {
             x: 20px; y: 100px; width: 180px;
             label: "Torrentio";
+            loading: root.stream_loading;
             touch_feedback: root.touch_feedback;
             selected: root.selected;
             picked => { root.picks += 1; }
+        }
+        refresh := StreamFilterPill {
+            x: 220px; y: 100px;
+            label: "Refresh all sources"; refresh_icon: true;
+            enabled: root.refresh_enabled; touch_feedback: root.touch_feedback;
+            picked => { root.refresh_picks += 1; }
         }
     }
 }
@@ -158,4 +170,115 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
             assert_eq!(fill(), palette.hero_control.into());
         }
     }
+    // Refresh shares the pill's hit testing, but blocks repeated pointer events
+    // immediately, before a backend can publish its own longer cooldown.
+    let refresh = || {
+        i_slint_backend_testing::ElementHandle::find_by_element_id(&app, "PillHarness::refresh")
+            .next()
+            .unwrap()
+    };
+    let tap_refresh = || {
+        for event in [
+            WindowEvent::PointerPressed {
+                position: LogicalPosition::new(242.0, 120.0),
+                button: slint::platform::PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position: LogicalPosition::new(242.0, 120.0),
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+    };
+    app.global::<Anim>().set_enabled(true);
+    app.global::<Anim>().set_transitions(true);
+    app.global::<Anim>().set_hover(true);
+    let start_rotation = app.get_refresh_rotation();
+    tap_refresh();
+    assert_eq!(app.get_refresh_picks(), 1);
+    assert!(!app.get_refresh_ready());
+    for _ in 0..8 {
+        tap_refresh();
+    }
+    assert_eq!(
+        app.get_refresh_picks(),
+        1,
+        "rapid taps cannot repeat refresh"
+    );
+    advance(100);
+    let turning = app.get_refresh_rotation();
+    assert!(
+        turning > start_rotation && turning < start_rotation + 360.0,
+        "refresh turns smoothly after activation: {turning}"
+    );
+    app.set_refresh_enabled(false);
+    advance(500);
+    assert_eq!(refresh().accessible_enabled(), Some(false));
+    tap_refresh();
+    assert_eq!(
+        app.get_refresh_picks(),
+        1,
+        "backend disabled state outlives local feedback"
+    );
+    app.set_refresh_enabled(true);
+    assert!(app.get_refresh_ready());
+
+    app.set_stream_loading(true);
+    let addon =
+        i_slint_backend_testing::ElementHandle::find_by_element_id(&app, "PillHarness::stream")
+            .next()
+            .unwrap();
+    assert_eq!(
+        addon.accessible_description().as_deref(),
+        Some("Loading streams…")
+    );
+    let sweep = || {
+        i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app,
+            "StreamFilterPill::loading-sweep",
+        )
+        .next()
+        .unwrap()
+    };
+    advance(50);
+    let moving_x = sweep().absolute_position().x;
+    advance(100);
+    let next_x = sweep().absolute_position().x;
+    assert_ne!(moving_x, next_x, "fetching animates a background sweep");
+    for (master, transitions, hover) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        app.global::<Anim>().set_enabled(master);
+        app.global::<Anim>().set_transitions(transitions);
+        app.global::<Anim>().set_hover(hover);
+        advance(1);
+        let stationary_x = sweep().absolute_position().x;
+        assert_eq!(sweep().size().width, addon.size().width);
+        advance(600);
+        assert_eq!(
+            sweep().absolute_position().x,
+            stationary_x,
+            "motion-disabled busy state stays static"
+        );
+        assert_eq!(
+            addon.accessible_description().as_deref(),
+            Some("Loading streams…")
+        );
+        let before = app.get_refresh_picks();
+        tap_refresh();
+        assert_eq!(app.get_refresh_picks(), before + 1);
+        let instant = app.get_refresh_rotation();
+        advance(100);
+        assert_eq!(
+            app.get_refresh_rotation(),
+            instant,
+            "reduced motion disables the click turn"
+        );
+        advance(500);
+    }
+    app.set_stream_loading(false);
+    assert_eq!(addon.accessible_description().as_deref(), Some(""));
 }

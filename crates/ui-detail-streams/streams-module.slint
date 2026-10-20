@@ -28,6 +28,8 @@ export component DetailStreamsModule inherits Window {
             addons: DetailBridge.stream_addons;
             loading: DetailBridge.stream_loading;
             searching: DetailBridge.streams_searching;
+            refresh_enabled: DetailBridge.stream_refresh_enabled;
+            refresh_requested => { DetailBridge.stream_refresh_requested(); }
             addon_filter: DetailBridge.stream_filter;
             page: DetailBridge.stream_page;
             page_count: DetailBridge.stream_page_count;

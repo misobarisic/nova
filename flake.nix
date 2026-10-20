@@ -70,6 +70,7 @@
         };
         patches = [
           ./android/cargo-apk2-readonly-libs.patch
+          ./android/cargo-apk2-uncompressed-libs.patch
           ./android/cargo-apk2-version-code.patch
           ./android/cargo-apk2-pip.patch
         ];

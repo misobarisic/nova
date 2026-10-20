@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZIP_STORED, ZipFile
 
 ABIS = {"arm64-v8a", "armeabi-v7a", "x86_64"}
 NATIVE_LIBRARIES = (
@@ -118,6 +118,39 @@ def verify_payload(source, result, abis):
                 raise RuntimeError(f"Packaging changed compression: {name}")
 
 
+
+def verify_native_layout(path):
+    # zipalign alone ignores compressed entries. Verify storage AND actual local
+    # data offsets, including extra fields (central-directory offsets are not
+    # the mmap address). 16 KiB boundaries also satisfy 4 KiB devices.
+    with ZipFile(path) as apk, Path(path).open("rb") as raw:
+        libraries = [entry for entry in apk.infolist()
+                     if entry.filename.startswith("lib/") and entry.filename.endswith(".so")]
+        if not libraries:
+            raise RuntimeError("APK has no native libraries")
+        for entry in libraries:
+            if entry.compress_type != ZIP_STORED:
+                raise RuntimeError(f"APK native library is compressed: {entry.filename}")
+            raw.seek(entry.header_offset)
+            header = raw.read(30)
+            if len(header) != 30 or header[:4] != b"PK\x03\x04":
+                raise RuntimeError(f"Invalid native ZIP header: {entry.filename}")
+            offset = (entry.header_offset + 30
+                      + int.from_bytes(header[26:28], "little")
+                      + int.from_bytes(header[28:30], "little"))
+            if offset % 16384:
+                raise RuntimeError(f"APK native library is not 16 KiB aligned: {entry.filename}")
+
+
+def verify_native_manifest(tree):
+    # aapt dump xmltree exposes the binary manifest boolean, not Cargo metadata.
+    if not re.search(
+        r"^\s*A: android:extractNativeLibs(?:\(0x[0-9a-fA-F]+\))?="
+        r"(?:\(type 0x12\))?(?:false|0x0)\s*$", tree, re.MULTILINE,
+    ):
+        raise RuntimeError("APK must declare android:extractNativeLibs=false")
+
+
 def signing_key(manifest, profile="release"):
     # Match cargo-apk2's selected-profile precedence: environment, then TOML.
     keystore_env = f"CARGO_APK_{profile.upper().replace('-', '_')}_KEYSTORE"
@@ -163,6 +196,8 @@ def main():
     with Path("Cargo.toml").open("rb") as handle:
         version = tomllib.load(handle)["package"]["version"]
     verify_version(run(tools / "aapt2", "dump", "badging", source), version)
+    verify_native_manifest(run(tools / "aapt", "dump", "xmltree", source, "AndroidManifest.xml"))
+    verify_native_layout(source)
     keystore, password = signing_key(Path("Cargo.toml"), profile)
     if not keystore.is_file():
         raise RuntimeError("Configured Android release keystore does not exist")
@@ -188,6 +223,10 @@ def main():
             if signer_certificates(apksigner, output) != original_signers:
                 raise RuntimeError(f"Signing certificate changed for {output}")
             verify_payload(source, output, abis)
+            verify_native_layout(output)
+            verify_native_manifest(run(
+                tools / "aapt", "dump", "xmltree", output, "AndroidManifest.xml",
+            ))
             print(f"Verified {output}: {', '.join(sorted(abis))}")
     print(f"Packaged all {len(VARIANTS)} APKs from one universal build")
 

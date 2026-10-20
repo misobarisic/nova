@@ -59,7 +59,9 @@ fn visible_pills(app: &nova::AppWindow) -> Vec<ElementHandle> {
     ElementHandle::find_by_element_type_name(app, "StreamFilterPill")
         .filter(|pill| {
             let x = pill.absolute_position().x + pill.size().width / 2.0;
-            x >= left && x < right
+            x >= left
+                && x < right
+                && pill.accessible_label().as_deref() != Some("Refresh all sources")
         })
         .collect()
 }

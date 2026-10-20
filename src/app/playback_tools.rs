@@ -1,6 +1,7 @@
 //! Profile-local scene notes and a guarded handoff to the next offered source.
 use super::*;
 use nova_config::playback_preferences::TrackChoice;
+use std::time::{Duration, Instant};
 
 use super::bookmarks::{
     Bookmark, clean_note, identity_key, load_bookmarks, new_bookmark, save_bookmarks, scene_id,
@@ -17,6 +18,59 @@ pub(super) struct PlaybackToolsState {
     pub(super) pending_retry: Option<playback::RetryContext>,
     pub(super) bookmark_resume: Option<playback::BookmarkResume>,
     pub(super) pending_stream_selection: Option<playback::SelectedStream>,
+    pub(super) recovery_prompt: RecoveryPrompt,
+}
+
+/// Only a continuous foreground wait may suggest switching sources. Normal
+/// playback, user pauses, seeks and long background gaps start a fresh wait.
+#[derive(Default)]
+pub(super) struct RecoveryPrompt {
+    last_tick: Option<Instant>,
+    last_position: Option<f64>,
+    waiting: Duration,
+}
+struct RecoveryObservation {
+    open: bool,
+    started: bool,
+    paused: bool,
+    buffering: bool,
+    ended: bool,
+    position: f64,
+}
+impl RecoveryPrompt {
+    fn observe(&mut self, now: Instant, observation: RecoveryObservation) -> bool {
+        let RecoveryObservation {
+            open,
+            started,
+            paused,
+            buffering,
+            ended,
+            position,
+        } = observation;
+        if !open || paused || ended || !position.is_finite() {
+            *self = Self::default();
+            return false;
+        }
+        let elapsed = self
+            .last_tick
+            .replace(now)
+            .map(|previous| now.saturating_duration_since(previous));
+        let previous = self.last_position.replace(position);
+        let moved = previous.is_some_and(|previous| (position - previous).abs() > 0.01);
+        let waiting = !started || buffering || previous.is_some_and(|_| !moved);
+        if (moved && started) || !waiting {
+            self.waiting = Duration::ZERO;
+        } else if let Some(elapsed) = elapsed {
+            // The UI tick normally runs every 250ms. Do not count time asleep,
+            // suspended or behind a blocked event loop toward a recovery prompt.
+            if elapsed <= Duration::from_secs(2) {
+                self.waiting += elapsed;
+            } else {
+                self.waiting = Duration::ZERO;
+            }
+        }
+        self.waiting >= Duration::from_secs(30)
+    }
 }
 
 fn title_key(media_type: &str, title_id: &str) -> String {
@@ -50,7 +104,32 @@ impl Bridge {
             self.publish_scene_bookmarks();
         }
         app.set_scene_bookmarks_available(identity.is_some() && app.get_playback_started());
-        app.set_try_another_stream_available(self.alternate_stream_index().is_some());
+        let available = self.alternate_stream_index().is_some();
+        app.set_try_another_stream_available(available);
+        let readiness = self.player.playback_readiness();
+        let observation = RecoveryObservation {
+            open: app.get_player_open(),
+            started: app.get_playback_started(),
+            // Loading deliberately publishes is_paused=true until its first
+            // frame. The native pause intent distinguishes that placeholder
+            // from an actual pause or Android background suspension.
+            paused: if app.get_playback_started() {
+                app.get_is_paused()
+            } else {
+                self.player.playback_pause_requested()
+            },
+            buffering: readiness.buffering,
+            ended: readiness.ended,
+            position: app.get_position() as f64,
+        };
+        let visible = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .recovery_prompt
+            .observe(Instant::now(), observation);
+        app.set_automatic_stream_recovery_visible(available && visible);
     }
 
     pub(super) fn reload_scene_bookmarks(&self) {
@@ -304,5 +383,69 @@ mod tests {
         other = identity.clone();
         other.title = "translated caption".into();
         assert_eq!(identity_key(&identity), identity_key(&other));
+    }
+
+    fn observation(started: bool, position: f64) -> RecoveryObservation {
+        RecoveryObservation {
+            open: true,
+            started,
+            paused: false,
+            buffering: false,
+            ended: false,
+            position,
+        }
+    }
+
+    #[test]
+    fn recovery_prompt_waits_thirty_continuous_seconds_and_healthy_progress_hides_it() {
+        let base = Instant::now();
+        let mut prompt = RecoveryPrompt::default();
+        for second in 0..30 {
+            assert!(!prompt.observe(base + Duration::from_secs(second), observation(false, 0.0)));
+        }
+        assert!(prompt.observe(base + Duration::from_secs(30), observation(false, 0.0)));
+        // Startup and early-failure text use the same delayed state. First real
+        // progress immediately removes it and never accrues healthy play time.
+        for second in 31..100 {
+            assert!(!prompt.observe(
+                base + Duration::from_secs(second),
+                observation(true, second as f64)
+            ));
+        }
+        // A position stall also qualifies, even without a cache-starved flag.
+        for second in 100..129 {
+            assert!(!prompt.observe(base + Duration::from_secs(second), observation(true, 99.0)));
+        }
+        assert!(prompt.observe(base + Duration::from_secs(129), observation(true, 99.0)));
+        assert!(!prompt.observe(base + Duration::from_secs(130), observation(true, 100.0)));
+    }
+
+    #[test]
+    fn recovery_prompt_resets_for_pause_eof_close_background_gap_and_new_source() {
+        let base = Instant::now();
+        for reset in 0..5 {
+            let mut prompt = RecoveryPrompt::default();
+            for second in 0..26 {
+                let mut sample = observation(true, 10.0);
+                sample.buffering = true;
+                assert!(!prompt.observe(base + Duration::from_secs(second), sample));
+            }
+            let restart = if reset == 3 { 90 } else { 26 };
+            let mut sample = observation(true, 10.0);
+            match reset {
+                0 => sample.paused = true,
+                1 => sample.ended = true,
+                2 => sample.open = false,
+                3 => {}
+                _ => prompt = RecoveryPrompt::default(),
+            }
+            assert!(!prompt.observe(base + Duration::from_secs(restart), sample));
+            for second in restart + 1..restart + 30 {
+                assert!(
+                    !prompt.observe(base + Duration::from_secs(second), observation(true, 10.0)),
+                    "reset {reset} leaked prior waiting time"
+                );
+            }
+        }
     }
 }

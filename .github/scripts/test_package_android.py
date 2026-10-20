@@ -1,10 +1,11 @@
 """Exercise release ABI splits without needing the Android signing tools."""
 import importlib.util
 import tempfile
+import struct
 import tomllib
 import unittest
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 SPEC = importlib.util.spec_from_file_location(
     "package_android", Path(__file__).with_name("package-android.py")
@@ -14,6 +15,46 @@ SPEC.loader.exec_module(packaging)
 
 
 class AndroidPackagingTests(unittest.TestCase):
+    def test_native_manifest_requires_explicit_direct_loading(self):
+        manifest = Path(__file__).resolve().parents[2] / "Cargo.toml"
+        with manifest.open("rb") as handle:
+            application = tomllib.load(handle)["package"]["metadata"]["android"]["application"]
+        self.assertIs(application["extract_native_libs"], False)
+        for value in ("(type 0x12)0x0", "false"):
+            packaging.verify_native_manifest(f"    A: android:extractNativeLibs(0x010104ea)={value}\n")
+        for value in ("(type 0x12)0xffffffff", "true", "0x01", "falsehood", ""):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "extractNativeLibs"):
+                packaging.verify_native_manifest(f"    A: android:extractNativeLibs(0x010104ea)={value}\n")
+        with self.assertRaisesRegex(RuntimeError, "extractNativeLibs"):
+            packaging.verify_native_manifest("E: application\n")
+
+    def test_native_storage_and_actual_16k_data_alignment_are_both_required(self):
+        aligned = self.root / "aligned.apk"
+        with ZipFile(aligned, "w") as apk:
+            apk.writestr("classes.dex", b"keep compressed", compress_type=ZIP_DEFLATED)
+            entry = ZipInfo("lib/arm64-v8a/libnova.so")
+            offset = apk.fp.tell() + 30 + len(entry.filename.encode())
+            padding = (-offset) % 16384
+            if padding < 4:
+                padding += 16384
+            entry.extra = struct.pack("<HH", 0xffff, padding - 4) + bytes(padding - 4)
+            apk.writestr(entry, b"native payload", compress_type=ZIP_STORED)
+        packaging.verify_native_layout(aligned)
+        with ZipFile(aligned) as apk:
+            self.assertEqual(apk.getinfo("classes.dex").compress_type, ZIP_DEFLATED)
+        with self.assertRaisesRegex(RuntimeError, "not 16 KiB aligned"):
+            packaging.verify_native_layout(self.source)
+        compressed = self.root / "compressed.apk"
+        with ZipFile(compressed, "w") as apk:
+            apk.writestr("lib/arm64-v8a/libnova.so", b"native payload", compress_type=ZIP_DEFLATED)
+        with self.assertRaisesRegex(RuntimeError, "is compressed"):
+            packaging.verify_native_layout(compressed)
+        empty = self.root / "empty.apk"
+        with ZipFile(empty, "w"):
+            pass
+        with self.assertRaisesRegex(RuntimeError, "no native libraries"):
+            packaging.verify_native_layout(empty)
+
     def test_installation_epoch_preserves_legacy_local_updates(self):
         def badging(code, version="0.0.31", package="dev.misob.nova"):
             return f"package: name='{package}' versionCode='{code}' versionName='{version}'"

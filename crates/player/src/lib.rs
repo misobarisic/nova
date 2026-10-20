@@ -77,6 +77,16 @@ fn configure_desktop_decoder(mpv: &Mpv) -> libmpv2::Result<()> {
     mpv.set_property("hwdec", "auto")
 }
 
+/// Slint owns the window's presentation clock. mpv must not wait for a video
+/// deadline inside BeforeRendering, or every UI animation inherits video FPS.
+/// Zero offset schedules the video update at its actual deadline, avoiding the
+/// early presentation/A-V offset from disabling the render wait on its own.
+/// See mpv's render.h, MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME and the render()
+/// contract: https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h
+fn configure_render_timing(mpv: &Mpv) -> libmpv2::Result<()> {
+    mpv.set_property("video-timing-offset", 0.0_f64)
+}
+
 fn mpv_http_header_fields(headers: &[(String, String)]) -> Vec<String> {
     let mut fields = Vec::new();
     let mut total_bytes = 0usize;
@@ -395,9 +405,11 @@ fn resume_android_recovery(
 /// has nothing to rasterize and renders blank (the track is still listed and
 /// selectable). Unpacking this font and pointing mpv's `sub-fonts-dir`/
 /// `sub-font` at it gives libass a default for exactly those subtitles; media
-/// with embedded fonts keeps using them. The family name must match the face.
+/// with embedded fonts keeps using them. Keep the unmodified subtitle face:
+/// UI Roboto omits six emoji mappings that libass cannot fall back for here.
+/// The family name must match the face.
 #[cfg(target_os = "android")]
-const SUBTITLE_FONT: &[u8] = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
+const SUBTITLE_FONT: &[u8] = include_bytes!("../../../assets/fonts/Roboto-Subtitles.ttf");
 #[cfg(target_os = "android")]
 const SUBTITLE_FONT_FAMILY: &str = "Roboto";
 
@@ -698,6 +710,28 @@ fn effective_frame_rate(container_fps: Option<f32>, speed: f32) -> Option<f32> {
     container_fps.map(|fps| fps * speed)
 }
 
+/// Keep content-rate power savings only after all UI motion has settled.
+#[cfg(any(target_os = "android", test))]
+fn ui_needs_display_rate(
+    osd_visible: bool,
+    paused: bool,
+    started: bool,
+    osd_opacity: f32,
+    animations: bool,
+) -> bool {
+    osd_visible || paused || !started || osd_opacity > 0.001 || animations
+}
+
+#[cfg(target_os = "android")]
+fn clear_content_frame_rate_for_ui(state: &State) {
+    let mut applied = state.applied_frame_rate.lock().unwrap();
+    if *applied != Some(None) {
+        set_content_frame_rate(None);
+        *applied = Some(None);
+        alog("frame rate: requested None (ui active)");
+    }
+}
+
 /// Desktop video handoff is suspended until external progress tracking is
 /// reworked. Keep the boundary closed even for automatic fallback callers;
 /// Android still uses `external::open_external` and its `ACTION_VIEW` intent.
@@ -986,6 +1020,13 @@ struct State {
     /// Set when mpv could not be initialized / the renderer is not OpenGL.
     mpv_error: Mutex<Option<String>>,
     underlay: Mutex<Option<MpvGlUnderlay>>,
+    /// Only the ignored native diagnostic may reproduce the old blocking path.
+    #[cfg(test)]
+    timing_baseline: AtomicBool,
+    #[cfg(test)]
+    timing_subtitle_us: AtomicU64,
+    #[cfg(test)]
+    timing_mpv_us: AtomicU64,
     /// URL queued for loadfile; consumed on the next `BeforeRendering` (mpv
     /// must have its render context attached before the file is loaded, or
     /// early frames would be dropped).
@@ -1210,6 +1251,7 @@ impl Player {
                 let _ = mpv.set_property("terminal", "no");
                 let _ = mpv.set_property("msg-level", "all=no");
                 let _ = mpv.set_property("vo", "libmpv");
+                let _ = configure_render_timing(mpv);
                 // Android: audio out through OpenSL ES (the vendored libmpv
                 // links it) and no config/script discovery — the app owns mpv's
                 // configuration, and there is no user-editable mpv.conf to
@@ -1287,6 +1329,12 @@ impl Player {
             gpu_screenshot: Mutex::new(None),
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
+            #[cfg(test)]
+            timing_baseline: AtomicBool::new(false),
+            #[cfg(test)]
+            timing_subtitle_us: AtomicU64::new(0),
+            #[cfg(test)]
+            timing_mpv_us: AtomicU64::new(0),
             pending: Mutex::new(None),
             pending_headers: Mutex::new(Vec::new()),
             pending_subtitles: Mutex::new(Vec::new()),
@@ -1504,6 +1552,13 @@ impl Player {
                         let Some(app) = notifier_state.app.upgrade() else {
                             return;
                         };
+                        // A fade, popup or gesture animation may start between
+                        // the 250ms telemetry ticks. Clear the video-only display
+                        // hint before painting its first animated frame.
+                        #[cfg(target_os = "android")]
+                        if app.get_player_open() && app.window().has_active_animations() {
+                            clear_content_frame_rate_for_ui(&notifier_state);
+                        }
                         let underlay = notifier_state.underlay.lock().unwrap();
                         let Some(underlay) = underlay.as_ref() else {
                             return;
@@ -1613,11 +1668,15 @@ impl Player {
 
                         // Apply live layout/fade clearance before rendering, so
                         // paused subtitles also move with the Slint controls.
+                        #[cfg(test)]
+                        let subtitle_start = Instant::now();
                         if let Ok(mpv) = notifier_state.mpv.lock()
                             && let Some(mpv) = mpv.as_ref()
                         {
                             let _ = notifier_state.subtitle_position.lock().unwrap().apply(mpv);
                         }
+                        #[cfg(test)]
+                        notifier_state.timing_subtitle_us.store(subtitle_start.elapsed().as_micros() as u64, Ordering::Relaxed);
 
                         // The default framebuffer (FBO 0) is presented with a
                         // bottom-left origin on both desktop GL and Android's
@@ -1627,7 +1686,15 @@ impl Player {
                         // previously assumed unnecessary there, which left the
                         // video upside down).
                         let mut flip = 1_i32;
+                        // Normal UI redraws also repaint the latest video frame.
+                        // Never hold Slint's UI/GL thread for an mpv video deadline.
+                        #[cfg(not(test))]
+                        let mut block_for_target = 0_i32;
+                        #[cfg(test)]
+                        let mut block_for_target = i32::from(notifier_state.timing_baseline.load(Ordering::Relaxed));
 
+                        #[cfg(test)]
+                        let render_start = Instant::now();
                         unsafe {
                             let mut fbo = mpv_opengl_fbo {
                                 fbo: 0,
@@ -1644,6 +1711,10 @@ impl Player {
                                 mpv_render_param {
                                     type_: MPV_RENDER_PARAM_FLIP_Y,
                                     data: &mut flip as *mut _ as *mut c_void,
+                                },
+                                mpv_render_param {
+                                    type_: MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME,
+                                    data: &mut block_for_target as *mut _ as *mut c_void,
                                 },
                                 mpv_render_param {
                                     type_: MPV_RENDER_PARAM_INVALID,
@@ -1672,6 +1743,8 @@ impl Player {
                             // Also restores mpv's window dimensions after a capture.
                             mpv_render_context_render(underlay.render_ctx, params.as_mut_ptr());
                         }
+                        #[cfg(test)]
+                        notifier_state.timing_mpv_us.store(render_start.elapsed().as_micros() as u64, Ordering::Relaxed);
                     }
                     RenderingState::RenderingTeardown => {
                         // A queued capture belongs to this surface. Wake the worker
@@ -2022,6 +2095,28 @@ impl Player {
             .unwrap_or(true)
     }
 
+    /// Recovery timing needs user intent before the first frame: the loading
+    /// overlay's paused=true placeholder and an idle old mpv file are unrelated.
+    pub fn playback_pause_requested(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if !ANDROID_FOREGROUND.load(Ordering::SeqCst) {
+            return true;
+        }
+        if self.state.source_waiting.load(Ordering::SeqCst) || self.playback_failed() {
+            return false;
+        }
+        #[cfg(target_os = "android")]
+        if self.state.pending.lock().unwrap().is_some() {
+            return self.state.pending_paused.load(Ordering::SeqCst);
+        }
+        self.state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|mpv| mpv.as_ref().and_then(|mpv| mpv.get_property("pause").ok()))
+            .unwrap_or(false)
+    }
+
     /// Apply an explicit pause state using the same platform side effects as Play.
     pub fn set_paused(&self, new_paused: bool) {
         if self.state.source_waiting.load(Ordering::SeqCst) {
@@ -2368,6 +2463,17 @@ impl Player {
             )
             .ok()?;
             let mut session = self.state.preferences.lock().ok()?;
+            if !audio {
+                self.state
+                    .subtitle_sync
+                    .lock()
+                    .unwrap()
+                    .primary_selection_changed(
+                        mpv,
+                        self.resolve_subtitle_style(session.preferences.subtitle_style())
+                            .delay as f64,
+                    );
+            }
             if audio {
                 session.preferences.title.audio = Some(choice.clone());
                 session.manual_audio = true;
@@ -2651,6 +2757,11 @@ impl Player {
             return false;
         }
         session.tracks = raw.clone();
+        self.state
+            .subtitle_sync
+            .lock()
+            .unwrap()
+            .update_inventory(&raw);
         let tracks = track_preferences::parse_tracks(&raw);
         if tracks.is_empty() {
             return false;
@@ -2708,6 +2819,15 @@ impl Player {
                 let _ = mpv.set_property(if audio { "aid" } else { "sid" }, "auto");
             }
         }
+        self.state
+            .subtitle_sync
+            .lock()
+            .unwrap()
+            .primary_selection_changed(
+                mpv,
+                self.resolve_subtitle_style(session.preferences.subtitle_style())
+                    .delay as f64,
+            );
         self.resolve_secondary_subtitle(mpv, &tracks);
         true
     }
@@ -2758,6 +2878,11 @@ impl Player {
             Ok(s) => s,
             Err(_) => return, // no file loaded; keep whatever is shown
         };
+        self.state
+            .subtitle_sync
+            .lock()
+            .unwrap()
+            .update_inventory(&raw);
         let parsed = match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(v) => v,
             Err(_) => return,
@@ -3727,10 +3852,13 @@ impl Player {
         // `osd_opacity` is the scrim's live animated value; the flags cover the
         // window before the first frame of the fade has painted (and any path
         // where the callback has not run yet).
-        let osd_engaged = app.get_osd_visible()
-            || app.get_is_paused()
-            || !app.get_playback_started()
-            || app.get_osd_opacity() > 0.001;
+        let osd_engaged = ui_needs_display_rate(
+            app.get_osd_visible(),
+            app.get_is_paused(),
+            app.get_playback_started(),
+            app.get_osd_opacity(),
+            app.window().has_active_animations(),
+        );
 
         let desired = if osd_engaged {
             None
@@ -3762,12 +3890,7 @@ impl Player {
     /// tick. No-op when the request is already cleared.
     #[cfg(target_os = "android")]
     pub fn notify_osd_activity(&self) {
-        let mut applied = self.state.applied_frame_rate.lock().unwrap();
-        if *applied != Some(None) {
-            set_content_frame_rate(None);
-            *applied = Some(None);
-            alog("frame rate: requested None (osd active)");
-        }
+        clear_content_frame_rate_for_ui(&self.state);
     }
 
     /// Android: re-arm the current URL through `pending` so the
@@ -4488,6 +4611,350 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"12345");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_timing_uses_video_deadline_callbacks_without_blocking_ui() {
+        let mpv = Mpv::new().expect("initialize libmpv");
+        mpv.set_property("video-timing-offset", 0.05_f64).unwrap();
+        configure_render_timing(&mpv).unwrap();
+        assert_eq!(mpv.get_property::<f64>("video-timing-offset").unwrap(), 0.0);
+    }
+
+    #[test]
+    fn android_display_rate_returns_to_video_only_after_ui_motion_finishes() {
+        let desired = |visible, paused, started, opacity, animations| {
+            if ui_needs_display_rate(visible, paused, started, opacity, animations) {
+                None
+            } else {
+                effective_frame_rate(Some(24.0), 1.0)
+            }
+        };
+        assert_eq!(desired(false, false, true, 0.0, false), Some(24.0));
+        // Wake/fade-in, open/retained controls, fade-out, then video-only.
+        assert_eq!(desired(true, false, true, 0.0, false), None);
+        assert_eq!(desired(true, false, true, 0.5, true), None);
+        assert_eq!(desired(true, false, true, 1.0, false), None);
+        assert_eq!(desired(false, false, true, 0.4, true), None);
+        assert_eq!(desired(false, false, true, 0.0, false), Some(24.0));
+        // Independent popup/gesture animation also lifts the hint, without
+        // permanently forcing a specific 60/120Hz refresh rate.
+        assert_eq!(desired(false, false, true, 0.0, true), None);
+        assert_eq!(desired(false, false, true, 0.0, false), Some(24.0));
+        assert_eq!(desired(false, true, true, 0.0, false), None);
+        assert_eq!(desired(false, false, false, 0.0, false), None);
+    }
+
+    /// Informational real-renderer diagnostic: no synthetic timing threshold.
+    /// Use an existing local clip through NOVA_PLAYER_TIMING_SOURCE, or the
+    /// default 24fps lavfi source when the host mpv includes that input device.
+    /// NOVA_PLAYER_TIMING_BASELINE=1 restores both former timing settings in
+    /// this test binary only, so identical runs can compare both paths.
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    #[ignore = "requires native OpenGL display and libmpv video input"]
+    fn measure_native_video_ui_composite_timing() {
+        use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+        use std::cell::{Cell, RefCell};
+        #[derive(Clone, Copy)]
+        struct Sample {
+            phase: usize,
+            composite: f64,
+            interval: Option<f64>,
+            subtitle: f64,
+            video: f64,
+        }
+        const PHASES: [&str; 5] = [
+            "startup",
+            "live-fade",
+            "live-menus",
+            "paused-fade",
+            "paused-menus",
+        ];
+        let app = AppWindow::new().unwrap();
+        nova_ui::initialize_fonts(app.window());
+        nova_ui::apply_theme(&app, false);
+        app.set_show_home(false);
+        app.set_osd_visible(true);
+        app.set_desktop_decoder_available(true);
+        app.window().set_size(slint::PhysicalSize::new(1280, 800));
+        let phase = Rc::new(Cell::new(0));
+        let observed_phase = phase.clone();
+        let before = Rc::new(RefCell::new(None::<(Instant, bool, usize)>));
+        let previous_active = Rc::new(RefCell::new(None::<(Instant, usize)>));
+        let samples = Rc::new(RefCell::new(Vec::<Sample>::new()));
+        let collected = samples.clone();
+        let native_state = Rc::new(RefCell::new(None::<Arc<State>>));
+        let observed_native = native_state.clone();
+        let weak = app.as_weak();
+        let player = Player::setup_with_render_observer(&app, move |state| match state {
+            RenderingState::BeforeRendering => {
+                let active = weak.upgrade().is_some_and(|app| {
+                    app.get_playback_started() && app.window().has_active_animations()
+                });
+                *before.borrow_mut() = Some((Instant::now(), active, observed_phase.get()));
+            }
+            RenderingState::AfterRendering => {
+                if let Some((start, active, phase)) = before.borrow_mut().take() {
+                    if active && phase > 0 {
+                        let interval = previous_active
+                            .borrow_mut()
+                            .replace((start, phase))
+                            .filter(|(_, previous_phase)| *previous_phase == phase)
+                            .map(|(previous, _)| {
+                                start.duration_since(previous).as_secs_f64() * 1000.0
+                            });
+                        let state = observed_native.borrow();
+                        let state = state.as_ref().unwrap();
+                        collected.borrow_mut().push(Sample {
+                            phase,
+                            composite: start.elapsed().as_secs_f64() * 1000.0,
+                            interval,
+                            subtitle: state.timing_subtitle_us.load(Ordering::Relaxed) as f64
+                                / 1000.0,
+                            video: state.timing_mpv_us.load(Ordering::Relaxed) as f64 / 1000.0,
+                        });
+                    } else {
+                        *previous_active.borrow_mut() = None;
+                    }
+                }
+            }
+            _ => {}
+        });
+        *native_state.borrow_mut() = Some(player.state.clone());
+        let callbacks = Rc::new(RefCell::new(Vec::<(usize, &'static str, f64)>::new()));
+        let callback_phase = phase.clone();
+        let recorded = callbacks.clone();
+        let p = player.clone();
+        app.on_settings_opened(move || {
+            let start = Instant::now();
+            let _ = &p;
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            p.refresh_decoder();
+            recorded.borrow_mut().push((
+                callback_phase.get(),
+                "decoder-refresh",
+                start.elapsed().as_secs_f64() * 1000.0,
+            ));
+        });
+        let callback_phase = phase.clone();
+        let recorded = callbacks.clone();
+        let p = player.clone();
+        app.on_tracks_popup_opened(move |_| {
+            let start = Instant::now();
+            p.refresh_tracks();
+            recorded.borrow_mut().push((
+                callback_phase.get(),
+                "tracks-refresh",
+                start.elapsed().as_secs_f64() * 1000.0,
+            ));
+        });
+        let weak = app.as_weak();
+        app.on_osd_mouse_moved(move || {
+            if let Some(app) = weak.upgrade() {
+                app.set_osd_visible(true);
+            }
+        });
+        let baseline = std::env::var_os("NOVA_PLAYER_TIMING_BASELINE").is_some();
+        if baseline {
+            player.state.timing_baseline.store(true, Ordering::Relaxed);
+            player
+                .state
+                .mpv
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .set_property("video-timing-offset", 0.05_f64)
+                .unwrap();
+        }
+        let source = std::env::var("NOVA_PLAYER_TIMING_SOURCE")
+            .unwrap_or_else(|_| "av://lavfi:testsrc=size=320x180:rate=24".into());
+        player.play(&source, 0.0).unwrap();
+        app.show().unwrap();
+        let start = Instant::now();
+        let last_action = Rc::new(Cell::new(Instant::now()));
+        let action_step = Rc::new(Cell::new(0usize));
+        let weak = app.as_weak();
+        let tick_player = player.clone();
+        let callback_phase = phase.clone();
+        let recorded = callbacks.clone();
+        let tick = slint::Timer::default();
+        tick.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(250),
+            move || {
+                let now = Instant::now();
+                tick_player.tick();
+                recorded.borrow_mut().push((
+                    callback_phase.get(),
+                    "player-tick",
+                    now.elapsed().as_secs_f64() * 1000.0,
+                ));
+            },
+        );
+        let driver_player = player.clone();
+        let active_phase = phase.clone();
+        let recorded = callbacks.clone();
+        let driver = slint::Timer::default();
+        driver.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(100),
+            move || {
+                let app = weak.upgrade().unwrap();
+                if active_phase.get() == 0 {
+                    if !app.get_playback_started() {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(15),
+                            "diagnostic source failed to start: {}",
+                            app.get_player_status()
+                        );
+                        return;
+                    }
+                    active_phase.set(1);
+                    action_step.set(0);
+                    last_action.set(Instant::now());
+                }
+                if last_action.get().elapsed() < Duration::from_millis(400) {
+                    return;
+                }
+                last_action.set(Instant::now());
+                let current = active_phase.get();
+                let step = action_step.get();
+                if current == 1 || current == 3 {
+                    app.set_osd_visible(step.is_multiple_of(2));
+                } else {
+                    app.set_osd_visible(true);
+                    let event_start = Instant::now();
+                    if step == 7 {
+                        for text in [
+                            slint::platform::WindowEvent::KeyPressed {
+                                text: slint::platform::Key::Escape.into(),
+                            },
+                            slint::platform::WindowEvent::KeyReleased {
+                                text: slint::platform::Key::Escape.into(),
+                            },
+                        ] {
+                            app.window().dispatch_event(text);
+                        }
+                    } else {
+                        let item = match step {
+                            0 => ElementHandle::find_by_element_id(
+                                &app,
+                                "PlayerOverlay::settings_gear",
+                            )
+                            .next(),
+                            2 | 4 | 6 => {
+                                ElementHandle::find_by_element_id(&app, "SettingsMenu::back_touch")
+                                    .next()
+                            }
+                            _ => {
+                                let label = match step {
+                                    1 => "Subtitles",
+                                    3 => "Audio",
+                                    5 => "Playback speed",
+                                    _ => unreachable!(),
+                                };
+                                ElementHandle::find_by_accessible_label(&app, label).find(|item| {
+                                    item.accessible_role() == Some(AccessibleRole::Button)
+                                })
+                            }
+                        }
+                        .unwrap_or_else(|| {
+                            panic!("missing menu control phase={current} step={step}")
+                        });
+                        let origin = item.absolute_position();
+                        let size = item.size();
+                        let position = slint::LogicalPosition::new(
+                            origin.x + size.width / 2.0,
+                            origin.y + size.height / 2.0,
+                        );
+                        for event in [
+                            slint::platform::WindowEvent::PointerPressed {
+                                position,
+                                button: slint::platform::PointerEventButton::Left,
+                            },
+                            slint::platform::WindowEvent::PointerReleased {
+                                position,
+                                button: slint::platform::PointerEventButton::Left,
+                            },
+                        ] {
+                            app.window().dispatch_event(event);
+                        }
+                    }
+                    recorded.borrow_mut().push((
+                        current,
+                        "menu-input",
+                        event_start.elapsed().as_secs_f64() * 1000.0,
+                    ));
+                }
+                if step == 7 {
+                    if current == 4 {
+                        slint::quit_event_loop().unwrap();
+                    } else {
+                        active_phase.set(current + 1);
+                        action_step.set(0);
+                        // Let the controls finish appearing before the next
+                        // phase queries/clicks the gear's actual visible bounds.
+                        if current == 1 || current == 3 {
+                            app.set_osd_visible(true);
+                        }
+                        if current == 2 {
+                            driver_player.set_paused(true);
+                        }
+                    }
+                } else {
+                    action_step.set(step + 1);
+                }
+            },
+        );
+        slint::run_event_loop().unwrap();
+        let quantiles = |mut values: Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            if values.is_empty() {
+                None
+            } else {
+                Some((
+                    values[values.len() / 2],
+                    values[(values.len() - 1) * 95 / 100],
+                ))
+            }
+        };
+        let samples = samples.borrow();
+        for (phase, label) in PHASES.iter().enumerate().skip(1) {
+            let frames = samples
+                .iter()
+                .filter(|sample| sample.phase == phase)
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(!frames.is_empty(), "no animated frames in {label}");
+            eprintln!(
+                "native player timing baseline={baseline} phase={label} frames={} composite_ms(med,p95)={:?} interval_ms(med,p95)={:?} subtitle_ms(med,p95)={:?} mpv_ms(med,p95)={:?}",
+                frames.len(),
+                quantiles(frames.iter().map(|s| s.composite).collect()),
+                quantiles(frames.iter().filter_map(|s| s.interval).collect()),
+                quantiles(frames.iter().map(|s| s.subtitle).collect()),
+                quantiles(frames.iter().map(|s| s.video).collect())
+            );
+            for kind in [
+                "decoder-refresh",
+                "tracks-refresh",
+                "player-tick",
+                "menu-input",
+            ] {
+                let durations = callbacks
+                    .borrow()
+                    .iter()
+                    .filter(|sample| sample.0 == phase && sample.1 == kind)
+                    .map(|sample| sample.2)
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "native player timing baseline={baseline} phase={label} callback={kind} ms(med,p95)={:?}",
+                    quantiles(durations)
+                );
+            }
+        }
+        player.close();
     }
 
     /// The display hint must follow the effective presentation rate, not the

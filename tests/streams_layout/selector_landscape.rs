@@ -95,15 +95,21 @@ fn touch_landscape_scrolls_context_pins_addons_and_keeps_bottom_paging() {
     app.window().show().unwrap();
     idle();
 
-    // The identical short desktop window keeps its context and top pager.
+    // The identical short desktop window keeps fixed context and bottom-only paging.
     let title_y = element(&app, "StreamSelector::compact_context")
         .absolute_position()
         .y;
     assert!(
         ElementHandle::find_by_element_id(&app, "StreamSelector::top_pager")
             .next()
-            .is_some()
+            .is_none()
     );
+    assert!(
+        ElementHandle::find_by_element_id(&app, "StreamSelector::stream_count")
+            .next()
+            .is_none()
+    );
+    assert!(element(&app, "StreamSelector::bottom_pager").size().height >= 44.0);
     scroll(&app, -160.0);
     assert_eq!(
         element(&app, "StreamSelector::compact_context")
@@ -271,10 +277,11 @@ fn tv_selector_retains_fixed_context_on_short_touch_landscape() {
     app.set_modal_visible(true);
     app.set_selected_title("TV movie".into());
     app.set_detail_is_movie(true);
-    app.set_stream_total(8);
+    app.set_stream_total(30);
+    app.set_stream_page_count(2);
     app.set_streams(
         Rc::new(VecModel::from(
-            (0..8)
+            (0..25)
                 .map(|i| nova::StreamRow {
                     id: format!("tv-source-{i}").into(),
                     text: format!("TV source {i}").into(),
@@ -291,6 +298,24 @@ fn tv_selector_retains_fixed_context_on_short_touch_landscape() {
     app.window().set_size(slint::PhysicalSize::new(960, 540));
     app.window().show().unwrap();
     idle();
+    for removed in ["StreamSelector::stream_count", "StreamSelector::top_pager"] {
+        assert!(
+            ElementHandle::find_by_element_id(&app, removed)
+                .next()
+                .is_none()
+        );
+    }
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Universal filters")
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Next page").count(),
+        1
+    );
+    let pager = element(&app, "StreamSelector::bottom_pager");
+    assert!(pager.absolute_position().y + pager.size().height <= 540.0);
     let before = element(&app, "StreamSelector::compact_context")
         .absolute_position()
         .y;

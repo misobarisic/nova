@@ -321,6 +321,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_stream_action_requested => invoke_detail_bridge_stream_action_requested(arg0),
             on_stream_action_selected => invoke_detail_bridge_stream_action_selected(arg0, arg1),
             on_stream_filter_picked => invoke_detail_bridge_stream_filter_picked(arg0),
+            on_stream_refresh_requested => invoke_detail_bridge_stream_refresh_requested(),
             on_stream_selector_back => invoke_detail_bridge_stream_selector_back(),
             on_detail_tab_picked => invoke_detail_bridge_detail_tab_picked(arg0),
             on_episode_filter_changed => invoke_detail_bridge_episode_filter_changed(arg0),

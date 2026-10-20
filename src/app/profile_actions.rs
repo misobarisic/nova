@@ -417,7 +417,6 @@ impl Bridge {
             self.retry_profile_services();
         }
         if let Some(app) = self.app() {
-            app.global::<crate::StreamFiltersBridge>().set_open(false);
             app.global::<crate::SettingsSync>().set_open(false);
             app.global::<crate::JournalBridge>().set_open(false);
             app.global::<crate::QueueBridge>().set_open(false);
