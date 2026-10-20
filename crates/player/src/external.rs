@@ -74,7 +74,7 @@ static FOCUS_LAST: AtomicI8 = AtomicI8::new(1);
 /// Resolve methods on the existing activity object, avoiding FindClass's
 /// bootstrap loader on native-created threads. Java marshals writes to main.
 pub(crate) fn update_picture_in_picture(active: bool, paused: bool, width: i32, height: i32) {
-    let _ = with_pip_activity(|env, activity| {
+    let _ = with_activity(|env, activity| {
         env.call_method(
             activity,
             jni::jni_str!("updatePictureInPicture"),
@@ -91,7 +91,7 @@ pub(crate) fn update_picture_in_picture(active: bool, paused: bool, width: i32, 
 }
 
 pub fn picture_in_picture_keeps_playing() -> bool {
-    with_pip_activity(|env, activity| {
+    with_activity(|env, activity| {
         env.call_method(
             activity,
             jni::jni_str!("pictureInPictureKeepsPlaying"),
@@ -103,7 +103,20 @@ pub fn picture_in_picture_keeps_playing() -> bool {
     .unwrap_or(false)
 }
 
-fn with_pip_activity(
+/// Request landscape for the player, then sensor-driven catalog rotation.
+pub(crate) fn set_playback_active(active: bool, auto_rotate: bool) {
+    let _ = with_activity(|env, activity| {
+        env.call_method(
+            activity,
+            jni::jni_str!("setPlaybackActive"),
+            jni::jni_sig!("(ZZ)V"),
+            &[jni::JValue::Bool(active), jni::JValue::Bool(auto_rotate)],
+        )?;
+        Ok(false)
+    });
+}
+
+fn with_activity(
     call: impl FnOnce(&mut jni::Env<'_>, &NovaActivity<'_>) -> jni::errors::Result<bool>,
 ) -> Option<bool> {
     let ptr = android_activity_ptr();

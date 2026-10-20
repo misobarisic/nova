@@ -431,6 +431,7 @@ fn android_pip_setting_is_local_translated_and_keyboard_accessible() {
     };
     settle();
     assert!(!has_text(&app, "Picture in picture"));
+    assert!(!has_text(&app, "Auto-rotate for playback"));
     app.set_is_android(true);
     settle();
     assert!(app.get_android_pip_enabled());
@@ -461,12 +462,33 @@ fn android_pip_setting_is_local_translated_and_keyboard_accessible() {
     assert!(!app.get_android_pip_enabled());
     key(&app, slint::platform::Key::Return);
     assert!(app.get_android_pip_enabled());
+    assert!(app.get_android_auto_rotate());
+    let rotation = ElementHandle::find_by_accessible_label(&app, "Auto-rotate for playback")
+        .find(|item| {
+            item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Checkbox)
+        })
+        .expect("Android auto-rotation toggle");
+    assert_eq!(rotation.accessible_checked(), Some(true));
+    rotation.mock_single_click(slint::platform::PointerEventButton::Left);
+    assert!(!app.get_android_auto_rotate());
+    assert_eq!(
+        edits.borrow().last().map(String::as_str),
+        Some("android_auto_rotate")
+    );
+    key(&app, slint::platform::Key::RightArrow);
+    assert!(app.get_android_auto_rotate());
+    key(&app, slint::platform::Key::LeftArrow);
+    assert!(!app.get_android_auto_rotate());
+    key(&app, slint::platform::Key::Return);
+    assert!(app.get_android_auto_rotate());
     slint::select_bundled_translation("hr").unwrap();
     settle();
     assert!(has_text(&app, "Slika u slici"));
+    assert!(has_text(&app, "Automatsko zakretanje pri reprodukciji"));
     app.set_is_android(false);
     settle();
     assert!(!has_text(&app, "Slika u slici"));
+    assert!(!has_text(&app, "Automatsko zakretanje pri reprodukciji"));
 }
 
 #[test]

@@ -126,6 +126,22 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
 
+                if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    row-title: @tr("Auto-rotate for playback");
+                    row-desc: @tr("Open videos in landscape. When leaving the player, follow how you hold your phone. Applies only to this device.");
+                    ToggleSwitch {
+                        name: @tr("Auto-rotate for playback");
+                        checked <=> SettingsBridge.android_auto_rotate;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 5 && SettingsBridge.kb_active;
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = 5;
+                            SettingsContent.schedule_setting("android_auto_rotate");
+                        }
+                    }
+                }
+
                 if SettingsBridge.desktop_decoder_available && SettingsBridge.player_backend_index == 0: SettingsRow {
                     tinted: true;
                     setting-key: "desktop_hwdec";

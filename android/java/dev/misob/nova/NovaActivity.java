@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Rect;
@@ -16,6 +17,7 @@ import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Rational;
+import android.view.View;
 import java.util.Collections;
 
 /** NativeActivity's surface and event loop remain owned by android-activity. */
@@ -26,9 +28,44 @@ public final class NovaActivity extends NativeActivity {
     private boolean paused = true;
     private boolean stopped;
     private boolean screenOff;
+    private boolean playbackActive;
+    private boolean autoRotatePlayback = true;
+    private boolean orientationManaged;
     private int videoWidth = 16;
     private int videoHeight = 9;
     private static native void nativePipEvent(int event);
+
+    private final Runnable applyPlaybackOrientation = () -> {
+        if (!orientationManaged || stopped || screenOff || locked() || isFinishing() || isInMultiWindowMode()
+                || (getResources().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK)
+                    == Configuration.UI_MODE_TYPE_TELEVISION) return;
+        // Release to the physical sensor, not a forced portrait request: the
+        // catalog must stay landscape when the phone is still held sideways.
+        int orientation = !autoRotatePlayback ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                : playbackActive ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : ActivityInfo.SCREEN_ORIENTATION_SENSOR;
+        if (getRequestedOrientation() != orientation) setRequestedOrientation(orientation);
+        if (!autoRotatePlayback) orientationManaged = false;
+    };
+
+    private void schedulePlaybackOrientation() {
+        View decor = getWindow().getDecorView();
+        // Resolving another source closes/reopens the native player in one
+        // turn. Coalesce rapid handoffs to avoid briefly rotating the catalog.
+        decor.removeCallbacks(applyPlaybackOrientation);
+        decor.postOnAnimation(applyPlaybackOrientation);
+    }
+
+    /** Independent of PiP eligibility, pause state and the system rotation lock. */
+    public void setPlaybackActive(boolean active, boolean autoRotate) {
+        runOnUiThread(() -> {
+            if (playbackActive == active && autoRotatePlayback == autoRotate && orientationManaged) return;
+            playbackActive = active;
+            autoRotatePlayback = autoRotate;
+            if (active && autoRotate) orientationManaged = true;
+            schedulePlaybackOrientation();
+        });
+    }
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -161,6 +198,17 @@ public final class NovaActivity extends NativeActivity {
         entering = false;
         nativePipEvent(pip ? 1 : 0);
         if (!pip && stopped) nativePipEvent(4);
+        schedulePlaybackOrientation();
+    }
+
+    @Override public void onMultiWindowModeChanged(boolean multiWindow, Configuration config) {
+        super.onMultiWindowModeChanged(multiWindow, config);
+        schedulePlaybackOrientation();
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) schedulePlaybackOrientation();
     }
 
     @Override protected void onResume() {
@@ -170,10 +218,12 @@ public final class NovaActivity extends NativeActivity {
         super.onResume();
         nativePipEvent(0);
         applyPipParams();
+        schedulePlaybackOrientation();
     }
 
     @Override protected void onStop() {
         stopped = true;
+        getWindow().getDecorView().removeCallbacks(applyPlaybackOrientation);
         entering = false;
         // PiP is visible while paused but must stop when dismissed or locked.
         nativePipEvent(4);
@@ -181,6 +231,7 @@ public final class NovaActivity extends NativeActivity {
     }
 
     @Override protected void onDestroy() {
+        getWindow().getDecorView().removeCallbacks(applyPlaybackOrientation);
         unregisterReceiver(receiver);
         super.onDestroy();
     }

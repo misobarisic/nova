@@ -143,6 +143,7 @@ export component SettingsPage {
     in-out property <int> intro_skip_confidence_index: 2;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> android_pip_enabled: true;
+    in-out property <bool> android_auto_rotate: true;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> show_chapters: true;
     in-out property <bool> auto_next_episode: false;
@@ -1301,14 +1302,14 @@ export component SettingsPage {
     // global speed. The player's OSD title override remains separate.
     public function kb_player_speed_row() -> int {
         if (root.is_android) {
-            return root.player_backend_index == 0 ? 7 : -1;
+            return root.player_backend_index == 0 ? 8 : -1;
         }
         return root.player_backend_index == 0 ? (root.desktop_decoder_available ? 5 : 4) : -1;
     }
 
     public function kb_player_audio_language_row() -> int {
         if (root.player_backend_index != 0) { return -1; }
-        return root.is_android ? 5 : root.desktop_decoder_available ? 3 : 2;
+        return root.is_android ? 6 : root.desktop_decoder_available ? 3 : 2;
     }
 
     public function kb_player_subtitle_language_row() -> int {
@@ -1345,6 +1346,9 @@ export component SettingsPage {
         } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 4) {
             root.android_pip_enabled = d > 0;
             root.schedule_setting("android_pip_enabled");
+        } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 5) {
+            root.android_auto_rotate = d > 0;
+            root.schedule_setting("android_auto_rotate");
         } else if (root.kb_pr == root.kb_player_audio_language_row()) {
             root.kb_player_language_step(root.audio_language_choice_index, d, false);
         } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
@@ -1680,6 +1684,9 @@ export component SettingsPage {
             if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 4) {
                 root.android_pip_enabled = !root.android_pip_enabled;
                 root.schedule_setting("android_pip_enabled");
+            } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 5) {
+                root.android_auto_rotate = !root.android_auto_rotate;
+                root.schedule_setting("android_auto_rotate");
             } else if (root.kb_pr == root.kb_player_audio_language_row()) {
                 root.kb_edit = 4;
             } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {

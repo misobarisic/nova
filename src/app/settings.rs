@@ -314,6 +314,10 @@ impl Bridge {
             self.filter_playback_languages("", true);
             app.set_android_auto_continue(settings.android_auto_continue);
             app.set_android_pip_enabled(settings.android_pip_enabled);
+            app.set_android_auto_rotate(settings.android_auto_rotate);
+            #[cfg(target_os = "android")]
+            self.player
+                .set_android_auto_rotate(settings.android_auto_rotate);
             app.set_intro_skip_mode_index(settings.intro_skip_mode.index());
             app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
@@ -566,6 +570,7 @@ impl Bridge {
                 default_subtitle_language: app.get_default_subtitle_language().to_string(),
                 android_auto_continue: app.get_android_auto_continue(),
                 android_pip_enabled: app.get_android_pip_enabled(),
+                android_auto_rotate: app.get_android_auto_rotate(),
                 intro_skip_mode: nova_config::IntroSkipMode::from_index(
                     app.get_intro_skip_mode_index(),
                 )
@@ -1527,11 +1532,23 @@ mod tests {
         app.set_desktop_hwdec_index(2);
         app.set_android_pip_enabled(false);
         app.invoke_settings_edited("android_pip_enabled".into());
+        app.set_android_auto_rotate(false);
+        app.invoke_settings_edited("android_auto_rotate".into());
         bridge.persist_settings();
         assert!(!read_settings().android_pip_enabled);
+        assert!(!read_settings().android_auto_rotate);
         app.set_android_pip_enabled(true);
+        app.set_android_auto_rotate(true);
         bridge.settings_to_ui();
         assert!(!app.get_android_pip_enabled());
+        assert!(!app.get_android_auto_rotate());
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "android_auto_rotate")
+                .is_none()
+        );
         assert!(
             owner
                 .lock()

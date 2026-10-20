@@ -1914,6 +1914,10 @@ impl Player {
         // requests the bars back.
         #[cfg(target_os = "android")]
         {
+            external::set_playback_active(
+                true,
+                nova_config::active_cache_settings().android_auto_rotate,
+            );
             let _ = set_system_bars_hidden(true);
             app.set_is_fullscreen(true);
         }
@@ -2301,6 +2305,14 @@ impl Player {
         app.set_is_fullscreen(fullscreen);
     }
 
+    /// Apply orientation policy on settings edits and active-profile changes.
+    #[cfg(target_os = "android")]
+    pub fn set_android_auto_rotate(&self, enabled: bool) {
+        if let Some(app) = self.state.app.upgrade() {
+            external::set_playback_active(app.get_player_open(), enabled);
+        }
+    }
+
     /// Select a stream-local id, returning metadata only after a valid pick.
     pub fn pick_track_preference(&self, audio: bool, track_id: i32) -> Option<TrackChoice> {
         if self.state.pending.lock().unwrap().is_some() {
@@ -2540,6 +2552,8 @@ impl Player {
 
     /// Local global edits affect only fields still inheriting in this session.
     pub fn update_playback_defaults(&self, settings: &nova_config::CacheSettings) {
+        #[cfg(target_os = "android")]
+        self.set_android_auto_rotate(settings.android_auto_rotate);
         #[cfg(target_os = "android")]
         if !settings.android_pip_enabled {
             // Apply the device preference at capture time, before the next
@@ -2844,6 +2858,10 @@ impl Player {
         }
         #[cfg(target_os = "android")]
         {
+            external::set_playback_active(
+                true,
+                nova_config::active_cache_settings().android_auto_rotate,
+            );
             let _ = set_system_bars_hidden(true);
             app.set_is_fullscreen(true);
             converge_screen_on(ANDROID_FOREGROUND.load(Ordering::SeqCst));
@@ -3004,7 +3022,15 @@ impl Player {
         #[cfg(target_os = "linux")]
         converge_idle_inhibit(false);
         #[cfg(target_os = "android")]
-        converge_screen_on(false);
+        {
+            converge_screen_on(false);
+            // Decoder teardown may block. Publish rotation only after it so a
+            // following wait_for_source can coalesce the close/open requests.
+            external::set_playback_active(
+                false,
+                nova_config::active_cache_settings().android_auto_rotate,
+            );
+        }
     }
 
     /// Mirror mpv state into the overlay (called every 250 ms while the

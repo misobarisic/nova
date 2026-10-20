@@ -3652,3 +3652,9 @@ msgstr "Prikaži poglavlja na vremenskoj traci"
 
 msgid "Show chapter cutouts and the current chapter name below the seek bar. Tap the name to choose a chapter."
 msgstr "Prikaži razmake između poglavlja i naziv trenutačnog poglavlja ispod trake za traženje. Dodirni naziv za odabir poglavlja."
+
+msgid "Auto-rotate for playback"
+msgstr "Automatsko zakretanje pri reprodukciji"
+
+msgid "Open videos in landscape. When leaving the player, follow how you hold your phone. Applies only to this device."
+msgstr "Otvori videozapise vodoravno. Pri izlasku iz reproduktora prati kako držiš telefon. Vrijedi samo za ovaj uređaj."
