@@ -550,10 +550,30 @@ fn initially_requested_filter_form_keeps_its_exit_tree_and_reinitializes_on_reop
     settle(&app);
     settle(&app);
     assert!(card.is_valid(), "reopening reuses the existing form");
+    // The phone viewport clips the language field until it is revealed.
+    // Navigate through the real keyboard path; this also proves reopen
+    // restored the panel scope rather than leaving focus on hidden content.
+    for _ in 0..8 {
+        key(&app, slint::platform::Key::DownArrow);
+    }
+    key(&app, slint::platform::Key::Return);
+    let input = language_input(&app);
+    assert!(in_form(&app, &input));
+    assert_eq!(input.accessible_value().as_deref(), Some("hr"));
+    let applied = Rc::new(RefCell::new(String::new()));
+    let recorded = applied.clone();
+    app.global::<nova::StreamFiltersBridge>()
+        .on_edited(move |field, value| {
+            assert_eq!(field, 7, "the focused language editor handles Enter");
+            *recorded.borrow_mut() = value.to_string();
+        });
+    type_text(&app, ", en");
     assert_eq!(
         language_input(&app).accessible_value().as_deref(),
-        Some("hr")
+        Some("hr, en")
     );
+    key(&app, slint::platform::Key::Return);
+    assert_eq!(*applied.borrow(), "hr, en");
     key(&app, slint::platform::Key::Escape);
     assert!(!app.global::<nova::StreamFiltersBridge>().get_open());
 }

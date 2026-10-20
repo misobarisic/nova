@@ -5959,6 +5959,53 @@ mod series_open_tests {
 mod player_art_resolution_tests {
     use super::*;
 
+    /// Isolate the exact CPU resample formerly done by episode selection.
+    /// Explicitly include Original: it is the default and only clones pixels,
+    /// so moving a resize to a worker cannot improve that case.
+    #[test]
+    #[ignore = "informational cached artwork resize timings; no CI frame threshold"]
+    fn measure_cached_player_preview_resize_cost() {
+        for (name, width, height, maximum) in [
+            ("default-thumbnail-original", 360, 202, None),
+            ("default-poster-original", 480, 720, None),
+            ("thumbnail-cap-240", 640, 360, Some(240)),
+            ("large-thumbnail-cap-720", 1920, 1080, Some(720)),
+            ("large-poster-cap-720", 1440, 2160, Some(720)),
+        ] {
+            let mut pixels = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
+            for (index, pixel) in pixels.make_mut_slice().iter_mut().enumerate() {
+                *pixel = Rgba8Pixel::new((index % 251) as u8, (index % 239) as u8, 80, 255);
+            }
+            let settings = CacheSettings {
+                player_episode_backdrop_max_side: maximum,
+                ..CacheSettings::default()
+            };
+            // Discard one warm-up so allocator/code page initialization does
+            // not dominate the reported median of the actual resample.
+            std::hint::black_box(player_episode_preview(&pixels, &settings));
+            let mut timings = Vec::new();
+            for _ in 0..9 {
+                let started = std::time::Instant::now();
+                let preview = std::hint::black_box(player_episode_preview(
+                    std::hint::black_box(&pixels),
+                    std::hint::black_box(&settings),
+                ));
+                timings.push(started.elapsed().as_nanos());
+                assert!(
+                    preview.width().max(preview.height()) <= maximum.unwrap_or(width.max(height))
+                );
+            }
+            timings.sort_unstable();
+            println!(
+                "PLAYER_PREVIEW_RESIZE case={name} source={width}x{height} maximum={maximum:?} median_ns={} min_ns={} max_ns={} debug_assertions={}",
+                timings[timings.len() / 2],
+                timings[0],
+                timings[timings.len() - 1],
+                cfg!(debug_assertions),
+            );
+        }
+    }
+
     #[test]
     fn player_preview_obeys_all_presets_and_original_without_upscaling() {
         let source = SharedPixelBuffer::<Rgba8Pixel>::new(640, 360);

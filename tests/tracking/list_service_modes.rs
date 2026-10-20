@@ -77,6 +77,10 @@ fn click(app: &nova::AppWindow, label: &str) {
 }
 
 fn open_service(app: &nova::AppWindow, name: &str, mode_label: &str) {
+    // Resizing can move the retained factory and clamp its scroll offset only
+    // after its children have been measured. Settle before choosing a hit
+    // target, rather than letting the press itself trigger that first layout.
+    settle(app);
     let header = reveal(app, name);
     let header_position = header.absolute_position();
     let header_size = header.size();
@@ -92,6 +96,14 @@ fn open_service(app: &nova::AppWindow, name: &str, mode_label: &str) {
         header.mock_single_click(slint::platform::PointerEventButton::Left);
         settle(app);
     }
+    assert!(
+        card.size().height > header_size.height + 1.0,
+        "{name} disclosure did not open for {mode_label}; width={},header={:?},card={:?},scroll_y={}",
+        app.window().size().width,
+        header.absolute_position(),
+        card.size(),
+        app.get_settings_scroll_y(),
+    );
     reveal(app, mode_label);
 }
 
@@ -181,6 +193,9 @@ fn list_service_modes_require_explicit_start_and_reset_pending_consent() {
         for width in [360, 1280] {
             app.set_is_android(width == 360);
             app.window().set_size(slint::PhysicalSize::new(width, 900));
+            // A fresh viewport changes both Settings' responsive shell and the
+            // retained section's scroll bounds; neither is an input gesture.
+            settle(&app);
             for (service, name) in [(0, "Simkl"), (1, "MDBList")] {
                 let mode_label = format!("{name} · {mode}");
                 let before = events.borrow().len();
