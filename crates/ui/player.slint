@@ -1,4 +1,4 @@
-import { InterfaceStyle, SubtitleStyle, PartyBridge, Theme, ChapterRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -919,6 +919,18 @@ export component PlayerOverlay {
             && position >= root.player_chapters[index].position
             && (index + 1 >= root.player_chapters.length || position < root.player_chapters[index + 1].position);
     }
+    private property <bool> chapter_shortcut_available: !InterfaceStyle.tv && SettingsBridge.show_chapters
+        && root.player_chapters.length > 0 && root.displayed_position >= root.player_chapters[0].position;
+    changed chapter_shortcut_available => {
+        if !root.chapter_shortcut_available && root.kb_idx == 14 { root.kb_idx = 1; }
+    }
+    function open_chapters() {
+        if root.player_chapters.length > 0 {
+            root.settings_page = 7;
+            root.open_popup = 4;
+            root.osd_mouse_moved();
+        }
+    }
     changed player_chapters => {
         if root.settings_page == 7 {
             if root.player_chapters.length == 0 { root.settings_page = 0; root.kb_menu = 0; }
@@ -1102,15 +1114,17 @@ export component PlayerOverlay {
         }
     }
 
-    // Preserve existing action indices; the compact speed shortcut uses 13.
+    // Preserve existing action indices; speed uses 13, chapter title uses 14.
     function kb_control_max() -> int {
-        return 13;
+        return 14;
     }
 
     // Neighbour control in the strip, skipping buttons absent on this
     // layout: the volume control (2) is gone on Android (volume pinned to
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
+        if root.kb_idx == 14 { return 0; }
+        if root.kb_idx == 1 && root.chapter_shortcut_available { return 14; }
         if root.kb_idx == 13 { return 9; }
         if root.kb_idx == 10 { return root.party_owns_playback ? 9 : 13; }
         let raw = Math.max(0, root.kb_idx - 1);
@@ -1125,6 +1139,8 @@ export component PlayerOverlay {
     }
 
     function kb_next() -> int {
+        if root.kb_idx == 14 { return 1; }
+        if root.kb_idx == 0 && root.chapter_shortcut_available { return 14; }
         if root.kb_idx == 11 { return 11; }
         if root.kb_idx == 9 { return !root.party_owns_playback ? 13 : root.next_episode_shown || root.skip_segment_shown ? 10 : 9; }
         if root.kb_idx == 13 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 13; }
@@ -1169,6 +1185,7 @@ export component PlayerOverlay {
     }
 
     function kb_activate() {
+        if root.kb_idx == 14 { root.open_chapters(); return; }
         if (root.kb_idx == 10 && root.skip_segment_shown) {
             root.skip_segment();
         } else if (root.kb_idx == 11 && root.skip_segment_shown) {
@@ -2294,7 +2311,7 @@ export component PlayerOverlay {
                         // Embedded start times split the timeline into real
                         // chapters; ordinary media retains its continuous bar.
                         for chapter in root.player_chapters: chapter_marker := Rectangle {
-                            visible: root.duration > 0 && chapter.position > 0 && chapter.position < root.duration;
+                            visible: SettingsBridge.show_chapters && root.duration > 0 && chapter.position > 0 && chapter.position < root.duration;
                             x: root.duration > 0 ? Math.clamp(chapter.position / root.duration, 0, 1) * parent.width - 1.5px : 0px;
                             y: played_track.y - 1px;
                             width: 3px; height: played_track.height + 2px;
@@ -2389,10 +2406,25 @@ export component PlayerOverlay {
                     Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.displayed_position); font-size: 12px; color: Theme.current.text_player_caption; }
                     Text { x: 0px; width: 100%; height: 100%; text: root.format_time(root.duration); font-size: 12px; color: Theme.current.text_player_caption; horizontal-alignment: right; }
                     for chapter[i] in root.player_chapters: current_chapter_title := Text {
-                        visible: root.chapter_contains(i, root.displayed_position);
+                        visible: SettingsBridge.show_chapters && root.chapter_contains(i, root.displayed_position);
                         x: 64px; width: Math.max(0px, parent.width - 128px); height: 100%;
                         text: chapter.title; horizontal-alignment: center; overflow: elide;
-                        font-size: 12px; color: Theme.current.text_player_caption;
+                        font-size: 12px;
+                        color: chapter_title_touch.has-hover ? Theme.current.text_bright : Theme.current.text_player_caption;
+                        accessible-role: button;
+                        accessible-label: chapter.title;
+                        accessible-action-default => { root.open_chapters(); }
+                        Rectangle {
+                            border-width: root.kb_active && root.kb_idx == 14 && root.open_popup == 0 ? 1px : 0px;
+                            border-color: Theme.current.focus_ring;
+                            border-radius: 4px;
+                        }
+                        chapter_title_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                if root.guard_osd_control() { root.kb_active = false; root.open_chapters(); }
+                            }
+                        }
                     }
                 }
                 // ---- Control row ----------------------------------------

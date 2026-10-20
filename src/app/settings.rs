@@ -317,6 +317,7 @@ impl Bridge {
             app.set_intro_skip_mode_index(settings.intro_skip_mode.index());
             app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
+            app.set_show_chapters(settings.show_chapters);
             app.set_auto_next_episode(settings.auto_next_episode);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
@@ -574,6 +575,7 @@ impl Bridge {
                 )
                 .unwrap_or_default(),
                 prefetch_next_episode_streams: app.get_prefetch_next_episode_streams(),
+                show_chapters: app.get_show_chapters(),
                 auto_next_episode: app.get_auto_next_episode(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,
@@ -1483,6 +1485,23 @@ mod tests {
         bridge.settings_to_ui();
         bridge.torrent_settings_to_ui();
         bridge.persist_settings();
+        app.set_show_chapters(false);
+        app.invoke_settings_edited("show_chapters".into());
+        bridge.persist_settings();
+        assert!(!read_settings().show_chapters);
+        app.set_show_chapters(true);
+        bridge.settings_to_ui();
+        assert!(!app.get_show_chapters());
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "show_chapters")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("false")
+        );
         app.set_tmdb_api_key(" 0123456789abcdef0123456789abcdef ".into());
         app.invoke_settings_edited("tmdb_api_key".into());
         bridge.persist_settings();

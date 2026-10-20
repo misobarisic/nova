@@ -3646,3 +3646,9 @@ msgstr "Postavljeno (skriveno)"
 
 msgid "Not configured"
 msgstr "Nije postavljeno"
+
+msgid "Show chapters on timeline"
+msgstr "Prikaži poglavlja na vremenskoj traci"
+
+msgid "Show chapter cutouts and the current chapter name below the seek bar. Tap the name to choose a chapter."
+msgstr "Prikaži razmake između poglavlja i naziv trenutačnog poglavlja ispod trake za traženje. Dodirni naziv za odabir poglavlja."

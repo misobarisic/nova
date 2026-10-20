@@ -553,6 +553,7 @@ export component AppWindow inherits Window {
         android_auto_continue <=> root.android_auto_continue;
         android_pip_enabled <=> root.android_pip_enabled;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
+        show_chapters <=> root.show_chapters;
         auto_next_episode <=> root.auto_next_episode;
         screenshot_format_index <=> root.screenshot_format_index;
         screenshot_jpeg_quality <=> root.screenshot_jpeg_quality;
@@ -1343,6 +1344,7 @@ export component AppWindow inherits Window {
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> android_pip_enabled: true;
     in-out property <bool> prefetch_next_episode_streams: true;
+    in-out property <bool> show_chapters: true;
     in-out property <bool> auto_next_episode: false;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;

@@ -3583,6 +3583,24 @@ mod tests {
     }
 
     #[test]
+    fn chapter_display_syncs_and_can_be_overridden() {
+        let local = CacheSettings::default();
+        assert!(local.show_chapters);
+        assert!(setting_can_override("show_chapters"));
+        let fields: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields.get("show_chapters").map(String::as_str),
+            Some("true")
+        );
+        let merged = merge_settings_fields(&local, &[("show_chapters".into(), "false".into())]);
+        assert!(!merged.show_chapters);
+        assert_eq!(merged.intro_skip_mode, local.intro_skip_mode);
+    }
+
+    #[test]
     fn episode_start_behavior_syncs_as_an_independent_setting() {
         let local = CacheSettings {
             episode_start_behavior: nova_config::EpisodeStartBehavior::Ask,

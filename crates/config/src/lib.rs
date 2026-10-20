@@ -846,6 +846,9 @@ cache_settings_type! {
     /// Warm the next episode source list in memory near the end of playback.
     #[serde(default = "default_true")]
     pub prefetch_next_episode_streams: bool,
+    /// Show chapter dividers and the current chapter shortcut on the timeline.
+    #[serde(default = "default_true")]
+    pub show_chapters: bool,
     /// Offer an eight-second automatic successor preview at native EOF.
     #[serde(default)]
     pub auto_next_episode: bool,
@@ -1036,6 +1039,7 @@ impl Default for CacheSettings {
             intro_skip_mode: IntroSkipMode::Prompt,
             intro_skip_confidence: IntroSkipConfidence::default(),
             prefetch_next_episode_streams: true,
+            show_chapters: true,
             auto_next_episode: false,
             animations: true,
             anim_transitions: true,
@@ -1699,14 +1703,17 @@ mod tests {
         assert!(CacheSettings::default().android_pip_enabled);
         let disabled = CacheSettings {
             android_pip_enabled: false,
+            show_chapters: false,
             ..Default::default()
         };
         let restored: CacheSettings =
             serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
         assert!(!restored.android_pip_enabled);
+        assert!(!restored.show_chapters);
         assert_eq!(settings.intro_skip_mode, IntroSkipMode::Prompt);
         assert_eq!(settings.intro_skip_confidence.percent(), 50);
         assert!(settings.prefetch_next_episode_streams);
+        assert!(settings.show_chapters);
         assert!(!settings.auto_next_episode);
         assert_eq!(
             settings.episode_start_behavior,
