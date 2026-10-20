@@ -46,13 +46,51 @@ parent evidence remain ungrouped. The optional `novaCatalogGrouping` extension
 is distinguished from those existing addon fields. Conflicts, ambiguous
 episodes, specials and incomplete partitions do not produce guessed groups.
 
-A separate local `catalog_grouping_evidence:v1` cache stores envelope version 2
+A separate local `catalog_grouping_evidence:v1` cache stores envelope version 3
 evidence, capped at 128 entries / 512 KiB, with seven-day positive and 30-second
 negative TTLs. Source ownership and metadata inventory revision participate in
 its keys. The exact-ID resolver permits two concurrent lookups, at most two
 accepting endpoints per request, a two-second total timeout and 2 MiB body cap.
 Original mode does not initiate catalog-grouping network requests. Derived
-evidence is not synced; only the grouping preferences use settings sync.
+evidence is not synced; only the grouping preferences use settings sync. Immutable
+read snapshots remain available while background writers serialize and persist a
+replacement.
+
+`src/app/catalog_grouping.rs` resolves Settings → Display's global and per-catalog
+Home/Discover preferences, projects raw previews and registers opaque display
+actions. Original remains the default. Each genre inherits its catalog's choice;
+settings use the existing profile sync and device override policies. Missing
+addons retain editable and removable overrides, and their configured URLs never
+enter labels.
+The UI chooser retains its outgoing snapshot through close animations. Groups
+prefer a confirmed parent already supplied by a compatible catalog/metadata
+owner; otherwise each original member remains reachable through the chooser.
+
+Discover keeps raw responses separate from visible cards. Its pagination cursor
+advances by fetched raw counts, even if all new seasons collapse into existing
+cards. Empty/repeated/failed pages and automatic backfill-budget pauses remain
+distinct. A paused catalog offers Continue rather than pretending it is exhausted.
+Focus, viewport anchors and poster deliveries carry display identity in addition
+to native IDs. Verified poster repairs update raw candidates only while the
+captured catalog generation, exact source owner, native identity and previous URL
+still match, so regrouping preserves repaired artwork without accepting stale
+callbacks. Home projects each source before featured merging or rail limits,
+retains bounded raw batches and may backfill at most three pages / 120 raw
+candidates per source when grouping is enabled and the catalog supports skip.
+Neither settings reprojection nor switching back to Original refetches catalogs.
+
+Virtual season opening context lives in `src/app/catalog_detail.rs`. It binds the
+exact source owner and generation, current profile/open token, metadata revision,
+semantic mapping fingerprint and complete ordered native episode inventory.
+Corroborating provider provenance remains recorded separately and does not make an
+otherwise identical mapping stale. Display/view
+filtering does not truncate `modal.videos`, stored metadata or stream identities.
+Scoped Watch Now, watch-state and downloads use confirmed native episode IDs;
+ordinary next-episode traversal and tracking still see the full native inventory.
+New, missing or conflicting metadata invalidates the scoped view and leaves an
+explicit All seasons escape rather than silently choosing a different episode.
+Shared reference-counted source/evidence objects keep virtual cards from copying
+a long combined show's metadata once per season.
 
 ## Android cards after library sync
 

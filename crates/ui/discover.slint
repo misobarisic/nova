@@ -553,6 +553,10 @@ component DiscoverGrid {
     in-out property <int> kb_zone;
     in-out property <int> kb_idx;
     in property <bool> loading_more;
+    in property <bool> pagination_paused;
+    in property <string> pagination_hint;
+    callback continue_pagination();
+    callback footer_focused();
     in property <bool> can_retry: false;
     callback retry();
     in property <bool> loading: false;
@@ -710,6 +714,18 @@ component DiscoverGrid {
         }
         }
 
+        if root.pagination_paused: VerticalLayout {
+            width: 100%; spacing: 8px; alignment: start;
+            Text { text: root.pagination_hint; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+            HorizontalLayout { alignment: start;
+                continue_catalog := PillButton {
+                    label: @tr("Continue loading"); primary: true; enabled: !root.loading_more;
+                    focused: root.kb_active && root.kb_zone == 4;
+                    changed keyboard_focused => { if self.keyboard_focused { root.footer_focused(); } }
+                    clicked => { root.continue_pagination(); }
+                }
+            }
+        }
         if root.catalog.length == 0 && root.loading: Rectangle {
             width: 100%;
             min-height: 180px;
@@ -845,6 +861,11 @@ export component DiscoverPage {
     private property <int> nav_count: root.narrow ? 4 : 6;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback load_more();
+    callback continue_pagination();
+    in property <bool> pagination_paused;
+    in property <string> pagination_hint;
+    private property <bool> display_pagination_paused: !root.search_mode && root.pagination_paused;
+    changed display_pagination_paused => { if !root.display_pagination_paused && root.kb_zone == 4 { root.kb_zone = 3; } }
     // Preload fetch window (visible ±2 rows) for poster loading/unloading
     // (Rust fetches it nearest-first and unloads outside a wider window).
     callback visible_range(int, int);
@@ -854,7 +875,7 @@ export component DiscoverPage {
     private property <bool> search_mode: root.search_results_open || root.search_filters_open || root.search_focused;
     private property <bool> grid_active: !root.search_mode || root.search_results_open;
     property <[MediaCard]> display_catalog: root.search_mode ? (root.search_results_open ? root.search_results : []) : root.catalog;
-    property <bool> display_can_load_more: root.search_mode ? root.search_results_open && root.search_can_load_more : root.can_load_more;
+    property <bool> display_can_load_more: root.search_mode ? root.search_results_open && root.search_can_load_more : root.can_load_more && !root.pagination_paused;
     property <bool> display_loading_more: root.search_mode ? root.search_results_open && root.search_loading_more : root.loading_more;
     property <bool> display_loading: root.search_results_open && root.search_loading;
     property <string> display_empty_hint: root.search_mode ? root.search_empty_hint : root.empty_hint;
@@ -1043,7 +1064,8 @@ export component DiscoverPage {
     function kb_cycle_genre(d: int) { root.kb_cycle_filter(3, d); }
 
     function kb_up() {
-        if (root.kb_zone == 3) {
+        if root.kb_zone == 4 { root.kb_zone = 3; }
+        else if (root.kb_zone == 3) {
             if (root.kb_idx >= root.cols) {
                 root.kb_idx -= root.cols;
             } else {
@@ -1057,6 +1079,7 @@ export component DiscoverPage {
     }
 
     function kb_down() {
+        if root.kb_zone == 4 { return; }
         if (root.kb_zone == 0) {
             root.kb_zone = root.kb_addon_on() ? 1 : 2;
         } else if (root.kb_zone == 1) {
@@ -1069,13 +1092,15 @@ export component DiscoverPage {
         } else {
             if (root.kb_idx + root.cols < root.display_catalog.length) {
                 root.kb_idx += root.cols;
-            } else if (root.display_can_load_more && !root.display_loading_more) {
+            } else if root.display_pagination_paused { root.kb_zone = 4; root.reveal_pagination_footer(); }
+            else if (root.display_can_load_more && !root.display_loading_more) {
                 root.load_more();
             }
         }
     }
 
     function kb_left() {
+        if root.kb_zone == 4 { return; }
         if (root.kb_zone == 0) {
             root.kb_nav = NavState.step(root.kb_nav, -1, root.narrow);
         } else if (root.kb_zone == 1) {
@@ -1098,6 +1123,7 @@ export component DiscoverPage {
     }
 
     function kb_right() {
+        if root.kb_zone == 4 { return; }
         if (root.kb_zone == 0) {
             root.kb_nav = NavState.step(root.kb_nav, 1, root.narrow);
         } else if (root.kb_zone == 1) {
@@ -1118,6 +1144,7 @@ export component DiscoverPage {
     }
 
     function kb_enter() {
+        if root.kb_zone == 4 { if root.display_pagination_paused && !root.display_loading_more { root.continue_pagination(); } return; }
         if (root.kb_zone == 0) {
             if (root.kb_nav == 0) {
                 root.home_picked();
@@ -1160,6 +1187,7 @@ export component DiscoverPage {
     // layout (content-height 0) — the one-shot restore timer below
     // retries.
     function kb_follow() {
+        if root.anchor_pending { return; }
         if (root.view_reset_pending || root.kb_zone != 3 || root.display_catalog.length == 0) {
             return;
         }
@@ -1178,6 +1206,22 @@ export component DiscoverPage {
         }
     }
 
+    function reveal_pagination_footer() { root.set_display_scroll_y(Math.min(0px,root.sv_vh - root.sv_vph)); }
+    private property <bool> anchor_pending;
+    private property <length> anchor_y;
+    private property <string> anchor_context: root.addon_combo_idx + ":" + root.type_combo_idx + ":" + root.catalog_combo_idx + ":" + root.genre_combo_idx + (root.search_mode ? ":search" : ":catalog");
+    changed anchor_context => { anchor_restore.stop(); root.anchor_pending = false; }
+    public function remap_catalog_anchor(old_index:int,new_index:int) {
+        if root.search_mode || old_index < 0 || new_index < 0 { return; }
+        root.anchor_pending = true;
+        root.anchor_y = root.scroll_y + (Math.floor(old_index / root.cols) - Math.floor(new_index / root.cols)) * root.row_stride;
+        anchor_restore.stop(); anchor_restore.start();
+    }
+    anchor_restore := Timer { interval: 16ms; running: false; triggered => {
+        self.stop();
+        if !root.search_mode { root.set_display_scroll_y(Math.clamp(root.anchor_y,Math.min(0px,root.sv_vh - root.sv_vph),0px)); }
+        root.anchor_pending = false;
+    } }
     changed kb_idx => { root.kb_follow(); }
     changed kb_zone => { root.kb_follow(); }
     changed catalog => {
@@ -1421,6 +1465,8 @@ export component DiscoverPage {
                     kb_zone <=> root.kb_zone;
                     kb_idx <=> root.kb_idx;
                     loading_more: root.display_loading_more;
+                    pagination_paused: root.display_pagination_paused; pagination_hint: root.pagination_hint;
+                    continue_pagination => { root.continue_pagination(); } footer_focused => { root.reveal_pagination_footer(); }
                     can_retry: root.display_can_load_more;
                     retry => { root.load_more(); }
                     loading: root.display_loading;
@@ -1661,6 +1707,8 @@ export component DiscoverPage {
                 kb_zone <=> root.kb_zone;
                 kb_idx <=> root.kb_idx;
                 loading_more: root.display_loading_more;
+                pagination_paused: root.display_pagination_paused; pagination_hint: root.pagination_hint;
+                continue_pagination => { root.continue_pagination(); } footer_focused => { root.reveal_pagination_footer(); }
                     can_retry: root.display_can_load_more;
                     retry => { root.load_more(); }
                 loading: root.display_loading;

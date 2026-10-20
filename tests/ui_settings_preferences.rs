@@ -41,3 +41,6 @@ mod stremio_flow;
 
 #[path = "settings_preferences/stremio_motion.rs"]
 mod stremio_motion;
+
+#[path = "settings_preferences/catalog_grouping.rs"]
+mod catalog_grouping;

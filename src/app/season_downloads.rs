@@ -11,6 +11,7 @@ pub(super) struct Plan {
     title: String,
     year: String,
     original_request: String,
+    view_generation: u64,
     providers: Vec<(String, u64)>,
     settings: u64,
     episodes: Vec<Video>,
@@ -93,10 +94,19 @@ fn advertised_bytes(label: &str) -> Option<u64> {
 }
 
 impl Plan {
+    #[cfg(test)]
+    pub(super) fn catalog_scope_test_state(&self, state: &Shared) -> (Vec<String>, bool) {
+        (
+            self.episodes.iter().map(|video| video.id.clone()).collect(),
+            self.current(state),
+        )
+    }
     fn current(&self, state: &Shared) -> bool {
         profiles::is_current(&self.context)
+            && self.view_generation == state.catalog_detail.generation()
             && state.modal_item.as_ref().is_some_and(|m| {
-                Arc::ptr_eq(&m.open_token, &self.opening)
+                catalog_detail::ready(state, m)
+                    && Arc::ptr_eq(&m.open_token, &self.opening)
                     && m.id == self.media_id
                     && m.type_ == self.media_type
             })
@@ -188,6 +198,7 @@ impl Bridge {
                 title: job.title.clone(),
                 year: job.year.clone().unwrap_or_default(),
                 original_request: m.request_id.clone(),
+                view_generation: state.catalog_detail.generation(),
                 providers,
                 settings: nova_providers::plugin_settings::settings_generation(),
                 episodes: vec![video],
@@ -243,11 +254,12 @@ impl Bridge {
             let Some(m) = state.modal_item.as_ref() else {
                 return;
             };
-            let Some(season) = m.seasons.get(season_index) else {
+            let visible = catalog_detail::seasons(&state, m);
+            let Some(season) = visible.get(season_index) else {
                 return;
             };
             let mut seen = HashSet::new();
-            let episodes: Vec<_> = season_episodes(&m.videos, *season)
+            let episodes: Vec<_> = catalog_detail::episodes(&state, m, *season)
                 .into_iter()
                 .filter(|v| {
                     !v.id.trim().is_empty()
@@ -294,6 +306,7 @@ impl Bridge {
                 title: m.name.clone(),
                 year: m.year.clone(),
                 original_request: m.request_id.clone(),
+                view_generation: state.catalog_detail.generation(),
                 providers: state
                     .installed
                     .iter()

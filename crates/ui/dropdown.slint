@@ -40,12 +40,14 @@ export component Dropdown inherits Rectangle {
     in property <bool> rail-gesture: false;
 
     callback selected(string);
+    callback opened();
     callback pan_hint();
     callback pan_release();
 
     property <length> item-h: InterfaceStyle.tv ? 56px : root.roomy ? 44px : 32px;
     property <int> popup-index: 0;
     function open_popup() {
+        root.opened();
         root.popup-index = Math.max(0, root.current-index);
         popup.show();
     }

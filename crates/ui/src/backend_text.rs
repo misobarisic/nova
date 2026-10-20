@@ -1006,8 +1006,25 @@ pub fn tr(english: &str) -> &str {
             "Za ovaj zapis potreban je ugrađeni reproduktor, koji nije dostupan."
         }
         "This download is not complete yet." => "Preuzimanje još nije dovršeno.",
+        "Unavailable catalog" => "Nedostupan katalog",
+        "Catalog grouping" => "Grupiranje kataloga",
+        "Catalog overrides" => "Iznimke kataloga",
+        "Original" => "Izvorno",
+        "No catalog overrides" => "Nema iznimki kataloga",
+        "catalog overrides" => "iznimki kataloga",
+        "Checking this season's episode mapping…" => "Provjera rasporeda epizoda ove sezone…",
+        "This season mapping changed. Open All seasons or choose the catalog card again." => {
+            "Raspored ove sezone promijenjen je. Otvorite Sve sezone ili ponovno odaberite karticu kataloga."
+        }
         // ---- Catalog / addons ------------------------------------------
         "No results for this selection." => "Nema rezultata za ovaj odabir.",
+        "More source pages are available. Continue browsing to load another batch." => {
+            "Dostupno je još stranica izvora. Nastavite pregledavanje za učitavanje sljedeće skupine."
+        }
+        "This catalog page could not be loaded. Continue to retry." => {
+            "Ova stranica kataloga nije učitana. Nastavite za ponovni pokušaj."
+        }
+        "This addon repeated an earlier page." => "Ovaj je dodatak ponovio prethodnu stranicu.",
         "No results for this search." => "Nema rezultata za ovu pretragu.",
         "Type at least 2 characters to search." => "Upišite barem 2 znaka za pretraživanje.",
         "Search movies, shows…" => "Pretražite filmove i serije…",
@@ -1806,8 +1823,65 @@ pub fn watch_action(episode: &str, continuing: bool) -> String {
     }
 }
 
+pub fn catalog_grouping_mode(mode: nova_config::CatalogGroupingMode) -> &'static str {
+    tr(match mode {
+        nova_config::CatalogGroupingMode::Original => "Original",
+        nova_config::CatalogGroupingMode::Season => "Season",
+        nova_config::CatalogGroupingMode::Series => "Series",
+    })
+}
+
+// Configured addon URLs may contain credentials. Scope comparisons intentionally
+// summarize surfaces and modes without serializing any key or raw source URL.
+fn catalog_grouping_override_summary(rows: &[nova_config::CatalogGroupingOverride]) -> String {
+    if rows.is_empty() {
+        return tr("No catalog overrides").into();
+    }
+    let mut counts = [[0usize; 3]; 2];
+    for row in rows {
+        counts[match row.key.surface {
+            nova_config::CatalogSurface::Home => 0,
+            nova_config::CatalogSurface::Discover => 1,
+        }][row.mode.index() as usize] += 1;
+    }
+    let mut values = Vec::new();
+    for (surface, modes) in counts.iter().enumerate() {
+        for (mode, count) in modes.iter().enumerate().filter(|(_, count)| **count > 0) {
+            values.push(format!(
+                "{} · {} ×{count}",
+                tr(if surface == 0 { "Home" } else { "Discover" }),
+                catalog_grouping_mode(nova_config::CatalogGroupingMode::from_index(mode as i32))
+            ));
+        }
+    }
+    let noun = if croatian() {
+        plural(
+            rows.len() as u64,
+            "iznimka kataloga",
+            "iznimke kataloga",
+            "iznimki kataloga",
+        )
+    } else if rows.len() == 1 {
+        "catalog override"
+    } else {
+        "catalog overrides"
+    };
+    format!("{} {noun}: {}", rows.len(), values.join("; "))
+}
+
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    if field == "catalog_grouping_default" {
+        return serde_json::from_value::<nova_config::CatalogGroupingMode>(value.clone())
+            .map(|mode| catalog_grouping_mode(mode).into())
+            .unwrap_or_else(|_| tr("Unsupported value").into());
+    }
+    if field == "catalog_grouping_overrides" {
+        return serde_json::from_value::<Vec<nova_config::CatalogGroupingOverride>>(value.clone())
+            .map(|rows| catalog_grouping_override_summary(&rows))
+            .unwrap_or_else(|_| tr("Unsupported value").into());
+    }
+
     if field == "stream_filters_sort_order" {
         return serde_json::from_value::<Vec<nova_config::stream_filters::StreamSortRule>>(
             value.clone(),
@@ -2299,6 +2373,42 @@ mod tests {
                 ),
                 "Koristi željene jezike zvuka"
             );
+        });
+    }
+
+    #[test]
+    fn catalog_scope_values_are_translated_and_never_expose_configured_urls() {
+        let rows = serde_json::json!([{"addonUrl":"https://secret.example/token/credential", "type":"series", "catalogId":"private-catalog-id", "surface":"home", "mode":"season"}]);
+        with_language(Language::English, || {
+            assert_eq!(
+                setting_sync_value("catalog_grouping_default", &serde_json::json!("series")),
+                "Series"
+            );
+            let summary = setting_sync_value("catalog_grouping_overrides", &rows);
+            assert!(summary.contains("Home") && summary.contains("Season"));
+            for secret in [
+                "secret.example",
+                "token",
+                "credential",
+                "private-catalog-id",
+                "https:",
+            ] {
+                assert!(!summary.contains(secret));
+            }
+            assert_eq!(
+                setting_sync_value("catalog_grouping_overrides", &serde_json::json!([])),
+                "No catalog overrides"
+            );
+            assert_eq!(
+                setting_sync_value("catalog_grouping_default", &serde_json::json!("future")),
+                "Unsupported value"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                setting_sync_value("catalog_grouping_default", &serde_json::json!("season")),
+                "Sezona"
+            )
         });
     }
 

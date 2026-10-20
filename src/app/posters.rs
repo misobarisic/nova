@@ -34,6 +34,138 @@ fn poster_indices(previews: &mut [MetaPreview], type_: &str, id: &str, url: &str
         })
         .collect()
 }
+#[derive(Clone)]
+pub(super) struct CatalogPosterRepair {
+    source: nova_providers::catalog_grouping::SourceIdentity,
+    generation: u64,
+    original_url: String,
+}
+
+// Keep the ordinary Detail namespace rules: exact global IDs are portable
+// across accepting metadata providers, while opaque IDs require their owner.
+fn global_artwork_identity(id: &str) -> bool {
+    let kitsu = id.strip_prefix("kitsu:").is_some_and(|id| {
+        !id.is_empty()
+            && id.bytes().all(|byte| byte.is_ascii_digit())
+            && id.parse::<u64>().is_ok_and(|id| id > 0)
+    });
+    kitsu
+        || nova_providers::ExternalId::parse(id).is_some()
+        || nova_providers::catalog_grouping::ParentIdentity::parse(id).is_some()
+}
+
+fn artwork_metadata_sources(
+    installed: &[Installed],
+    type_: &str,
+    id: &str,
+    receipts: &[CatalogPosterRepair],
+) -> VecDeque<(String, String)> {
+    let owner_bound = !receipts.is_empty() && !global_artwork_identity(id);
+    installed
+        .iter()
+        .filter(|addon| {
+            addon.enabled
+                && addon.available
+                && addon.manifest.accepts("meta", type_, id)
+                && (!owner_bound
+                    || receipts
+                        .iter()
+                        .any(|receipt| receipt.source.addon_url == addon.url))
+        })
+        .filter_map(|addon| Addon::new(&addon.url).ok())
+        .map(|addon| (addon.meta_url(type_, id), id.into()))
+        .collect()
+}
+
+fn catalog_poster_repair_receipts(
+    state: &Shared,
+    preview: &MetaPreview,
+    generation: u64,
+    original_url: &str,
+) -> Vec<CatalogPosterRepair> {
+    let Some(owner) = preview
+        .extra
+        .get("novaSourceUrl")
+        .and_then(serde_json::Value::as_str)
+        .filter(|owner| !owner.is_empty())
+    else {
+        return vec![];
+    };
+    state
+        .catalog_raw
+        .iter()
+        .filter(|raw| {
+            raw.id == preview.id
+                && raw.type_ == preview.type_
+                && raw
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(owner)
+                && raw.poster.as_deref().unwrap_or_default() == original_url
+        })
+        .map(|raw| CatalogPosterRepair {
+            source: nova_providers::catalog_grouping::SourceIdentity {
+                addon_url: owner.into(),
+                media_type: raw.type_.clone(),
+                id: raw.id.clone(),
+            },
+            generation,
+            original_url: original_url.into(),
+        })
+        .collect()
+}
+
+fn apply_catalog_poster_repair(
+    raw: &mut [MetaPreview],
+    generation: u64,
+    receipts: &[CatalogPosterRepair],
+    url: &str,
+) -> bool {
+    let mut accepted = false;
+    for preview in raw {
+        if receipts.iter().any(|receipt| {
+            receipt.generation == generation
+                && receipt.source.id == preview.id
+                && receipt.source.media_type == preview.type_
+                && preview
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(receipt.source.addon_url.as_str())
+                && (preview.poster.as_deref().unwrap_or_default() == receipt.original_url
+                    || preview.poster.as_deref() == Some(url))
+        }) {
+            preview.poster = Some(url.into());
+            accepted = true;
+        }
+    }
+    accepted
+}
+
+fn catalog_repaired_poster_indices(
+    previews: &mut [MetaPreview],
+    receipts: &[CatalogPosterRepair],
+    url: &str,
+) -> Vec<usize> {
+    let Some(receipt) = receipts.first() else {
+        return vec![];
+    };
+    previews
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(index, preview)| {
+            apply_catalog_poster_repair(
+                std::slice::from_mut(preview),
+                receipt.generation,
+                receipts,
+                url,
+            )
+            .then_some(index)
+        })
+        .collect()
+}
+
 fn paint_poster_rows(
     model: &slint::ModelRc<MediaCard>,
     indices: &[usize],
@@ -94,17 +226,33 @@ fn artwork_request_current(state: &Shared, type_: &str, id: &str, failed_url: &s
     current && !type_.is_empty() && !id.is_empty()
 }
 
+#[cfg(test)]
 fn grid_artwork_recovery_target(
     state: &mut Shared,
     type_: &str,
     id: &str,
     failed_url: &str,
 ) -> Option<(String, String)> {
+    grid_artwork_recovery_target_for_owner(state, type_, id, failed_url, "")
+}
+
+fn grid_artwork_recovery_target_for_owner(
+    state: &mut Shared,
+    type_: &str,
+    id: &str,
+    failed_url: &str,
+    owner: &str,
+) -> Option<(String, String)> {
     if !artwork_request_current(state, type_, id, failed_url) {
         return None;
     }
     let target = (type_.to_owned(), id.to_owned());
-    let key = (target.0.clone(), target.1.clone(), failed_url.into());
+    let key = (
+        target.0.clone(),
+        target.1.clone(),
+        failed_url.into(),
+        owner.into(),
+    );
     let now = std::time::Instant::now();
     if state
         .artwork_recovery
@@ -212,6 +360,17 @@ impl Bridge {
         url: &str,
         pixels: &SharedPixelBuffer<Rgba8Pixel>,
     ) {
+        self.publish_discover_poster_with_receipts(type_, id, url, pixels, &[]);
+    }
+
+    fn publish_discover_poster_with_receipts(
+        &self,
+        type_: &str,
+        id: &str,
+        url: &str,
+        pixels: &SharedPixelBuffer<Rgba8Pixel>,
+        receipts: &[CatalogPosterRepair],
+    ) {
         let Some(app) = self.app() else { return };
         merge_meta_header_for(
             type_,
@@ -223,7 +382,11 @@ impl Bridge {
         );
         let (browse, search, library) = {
             let mut state = self.shared.lock().unwrap();
-            let browse = poster_indices(&mut state.previews, type_, id, url);
+            let browse = if receipts.is_empty() {
+                poster_indices(&mut state.previews, type_, id, url)
+            } else {
+                catalog_repaired_poster_indices(&mut state.previews, receipts, url)
+            };
             let search = poster_indices(&mut state.search_previews, type_, id, url);
             let library = state
                 .entries
@@ -373,10 +536,21 @@ impl Bridge {
     /// work goes on the high-priority channel so it jumps ahead of the
     /// background full-grid sweep.
     pub(super) fn fetch_card_poster(&self, library: bool, index: usize, url: String) {
+        let display_key = (!library)
+            .then(|| {
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .previews
+                    .get(index)
+                    .map(catalog_grouping::display_key)
+            })
+            .flatten();
         #[cfg(feature = "desktop")]
         {
             let generation = self.catalog_gen.load(Ordering::Relaxed);
             self.poster_tx.send_hi(PosterJob {
+                display_key,
                 generation,
                 index,
                 url,
@@ -396,6 +570,11 @@ impl Bridge {
             let image_revision = image_settings_revision();
             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = crate::app::profiles::invoke_from_event_loop(move || {
+                    if display_key.as_ref().is_some_and(|key| {
+                        !bridge.catalog_poster_slot_matches(generation, index, key, &requested_url)
+                    }) {
+                        return;
+                    }
                     if image_settings_revision() != image_revision {
                         if let Some(app) = app_weak.upgrade() {
                             let model = if library {
@@ -476,8 +655,10 @@ impl Bridge {
                 return;
             };
             let mut candidates = Vec::new();
-            if episodes && let Some(&season) = m.seasons.get(m.season_index) {
-                for v in season_episodes(&m.videos, season)
+            if episodes
+                && let Some(&season) = catalog_detail::seasons(&state, m).get(m.season_index)
+            {
+                for v in catalog_detail::episodes(&state, m, season)
                     .into_iter()
                     .filter(|v| episode_matches_filter(v, &filter))
                     .skip(m.episode_page * EPISODE_PAGE_SIZE)
@@ -500,8 +681,8 @@ impl Bridge {
                 }
             }
             if seasons {
-                for &season in &m.seasons {
-                    if let Some(url) = season_thumb_url(&m.videos, &m.season_backdrops, season) {
+                for season in catalog_detail::seasons(&state, m) {
+                    if let Some(url) = catalog_detail::season_artwork(&state, m, season) {
                         let identity = super::detail::detail_artwork_identity(
                             m,
                             "season",
@@ -652,7 +833,7 @@ impl Bridge {
                 return;
             };
             let mut identities = HashSet::new();
-            for v in &m.videos {
+            for v in catalog_detail::visible_native_videos(&state, m) {
                 if v.thumbnail.as_deref() != Some(&job.url) {
                     continue;
                 }
@@ -671,10 +852,8 @@ impl Bridge {
                     ));
                 }
             }
-            for &season in &m.seasons {
-                if season_thumb_url(&m.videos, &m.season_backdrops, season).as_deref()
-                    == Some(&job.url)
-                {
+            for season in catalog_detail::seasons(&state, m) {
+                if catalog_detail::season_artwork(&state, m, season).as_deref() == Some(&job.url) {
                     identities.insert(super::detail::detail_artwork_identity(
                         m,
                         "season",
@@ -794,37 +973,67 @@ impl Bridge {
     }
 
     pub(super) fn recover_missing_artwork(&self, type_: &str, id: &str, failed_url: &str) {
+        self.recover_missing_artwork_with_receipts(type_, id, failed_url, vec![]);
+    }
+
+    fn recover_missing_artwork_with_receipts(
+        &self,
+        type_: &str,
+        id: &str,
+        failed_url: &str,
+        receipts: Vec<CatalogPosterRepair>,
+    ) {
         let target = {
             let mut state = self.shared.lock().unwrap();
             if !artwork_request_current(&state, type_, id, failed_url) {
                 return;
             }
+            let owner = receipts
+                .first()
+                .map_or("", |receipt| receipt.source.addon_url.as_str());
+            if !receipts.is_empty()
+                && !receipts.iter().any(|receipt| {
+                    receipt.generation == self.catalog_gen.load(Ordering::Relaxed)
+                        && state.catalog_raw.iter().any(|raw| {
+                            raw.id == receipt.source.id
+                                && raw.type_ == receipt.source.media_type
+                                && raw
+                                    .extra
+                                    .get("novaSourceUrl")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(receipt.source.addon_url.as_str())
+                                && raw.poster.as_deref().unwrap_or_default() == receipt.original_url
+                        })
+                })
+            {
+                return;
+            }
             // A pending manifest is not a failed metadata request. Don't spend
             // the cooldown before any source can service this native identity.
-            if !state.installed.iter().any(|addon| {
-                addon.enabled && addon.available && addon.manifest.accepts("meta", type_, id)
-            }) {
+            if artwork_metadata_sources(&state.installed, type_, id, &receipts).is_empty() {
                 if state.installed.is_empty()
                     || state
                         .installed
                         .iter()
                         .any(|addon| addon.enabled && !addon.available)
                 {
-                    state.pending_artwork_recovery.insert((
-                        type_.into(),
-                        id.into(),
-                        failed_url.into(),
-                    ));
+                    state.pending_artwork_recovery.insert(
+                        (type_.into(), id.into(), failed_url.into(), owner.into()),
+                        receipts,
+                    );
                 }
                 return;
             }
-            state
-                .pending_artwork_recovery
-                .remove(&(type_.into(), id.into(), failed_url.into()));
-            grid_artwork_recovery_target(&mut state, type_, id, failed_url)
+            state.pending_artwork_recovery.remove(&(
+                type_.into(),
+                id.into(),
+                failed_url.into(),
+                owner.into(),
+            ));
+            grid_artwork_recovery_target_for_owner(&mut state, type_, id, failed_url, owner)
         };
         if let Some(target) = target {
-            self.recover_artwork_target(target, failed_url);
+            self.recover_artwork_target(target, failed_url, receipts);
         }
     }
 
@@ -832,8 +1041,8 @@ impl Bridge {
     /// be decoding or outside the viewport; neither needs metadata recovery.
     pub(super) fn retry_pending_artwork(&self) {
         let targets = std::mem::take(&mut self.shared.lock().unwrap().pending_artwork_recovery);
-        for (type_, id, url) in targets {
-            self.recover_missing_artwork(&type_, &id, &url);
+        for ((type_, id, url, _owner), receipts) in targets {
+            self.recover_missing_artwork_with_receipts(&type_, &id, &url, receipts);
         }
     }
 
@@ -842,40 +1051,68 @@ impl Bridge {
         if self.catalog_gen.load(Ordering::Relaxed) != generation {
             return;
         }
-        let target = self
-            .shared
-            .lock()
-            .unwrap()
-            .previews
-            .get(index)
-            .filter(|preview| preview.poster.as_deref().unwrap_or_default() == failed_url)
-            .map(|preview| (preview.type_.clone(), preview.id.clone()));
-        if let Some((type_, id)) = target {
-            self.recover_missing_artwork(&type_, &id, failed_url);
+        let target = {
+            let state = self.shared.lock().unwrap();
+            state
+                .previews
+                .get(index)
+                .filter(|preview| preview.poster.as_deref().unwrap_or_default() == failed_url)
+                .map(|preview| {
+                    (
+                        preview.type_.clone(),
+                        preview.id.clone(),
+                        catalog_poster_repair_receipts(&state, preview, generation, failed_url),
+                    )
+                })
+        };
+        if let Some((type_, id, receipts)) = target
+            && !receipts.is_empty()
+        {
+            self.recover_missing_artwork_with_receipts(&type_, &id, failed_url, receipts);
         }
     }
 
-    /// Artwork is essential grid content, independent of episode prefetch.
-    /// Do not stop at the first metadata response: its image may also be bad.
-    fn recover_artwork_target(&self, (type_, id): (String, String), failed_url: &str) {
-        let urls = self
-            .shared
-            .lock()
-            .unwrap()
-            .installed
-            .iter()
-            .filter(|addon| {
-                addon.enabled && addon.available && addon.manifest.accepts("meta", &type_, &id)
-            })
-            .filter_map(|addon| Addon::new(&addon.url).ok())
-            .map(|addon| (addon.meta_url(&type_, &id), id.clone()))
-            .collect();
+    fn publish_repaired_discover_poster(
+        &self,
+        type_: &str,
+        id: &str,
+        url: &str,
+        pixels: &SharedPixelBuffer<Rgba8Pixel>,
+        receipts: &[CatalogPosterRepair],
+    ) {
+        if !receipts.is_empty() {
+            let mut state = self.shared.lock().unwrap();
+            if !apply_catalog_poster_repair(
+                &mut state.catalog_raw,
+                self.catalog_gen.load(Ordering::Relaxed),
+                receipts,
+                url,
+            ) {
+                return;
+            }
+        }
+        self.publish_discover_poster_with_receipts(type_, id, url, pixels, receipts);
+    }
+
+    fn recover_artwork_target(
+        &self,
+        (type_, id): (String, String),
+        failed_url: &str,
+        receipts: Vec<CatalogPosterRepair>,
+    ) {
+        let urls = artwork_metadata_sources(
+            &self.shared.lock().unwrap().installed,
+            &type_,
+            &id,
+            &receipts,
+        );
         fn next(
             bridge: Bridge,
             type_: String,
             id: String,
             mut urls: VecDeque<(String, String)>,
             mut tried: HashSet<String>,
+            receipts: Vec<CatalogPosterRepair>,
         ) {
             let job = loop {
                 let Some((url, expected_id)) = urls.pop_front() else {
@@ -919,21 +1156,28 @@ impl Bridge {
                     .and_then(|item| item.preview.poster)
                     .filter(|poster| !poster.trim().is_empty());
                 let Some(poster) = poster else {
-                    next(bridge, type_, id, urls, tried);
+                    next(bridge, type_, id, urls, tried, receipts);
                     return;
                 };
                 net::fetch_image(poster.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                     if let Some(pixels) = pixels {
                         let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                            bridge.publish_discover_poster(&type_, &id, &poster, &pixels);
+                            bridge.publish_repaired_discover_poster(
+                                &type_, &id, &poster, &pixels, &receipts,
+                            );
                         });
                     } else {
-                        next(bridge, type_, id, urls, tried);
+                        next(bridge, type_, id, urls, tried, receipts);
                     }
                 });
             });
         }
-        let cached = read_meta_header_for(&type_, &id)
+        // Legacy headers are keyed by native ID, without catalog ownership.
+        // An owned opaque catalog request requires its owner or a validated
+        // broker connection, rather than another addon's coincidentally equal ID.
+        let cached = (receipts.is_empty() || global_artwork_identity(&id))
+            .then(|| read_meta_header_for(&type_, &id))
+            .flatten()
             .map(|header| header.poster_url)
             .filter(|url| !url.is_empty() && url != failed_url);
         if let Some(url) = cached {
@@ -943,14 +1187,16 @@ impl Bridge {
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 if let Some(pixels) = pixels {
                     let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                        bridge.publish_discover_poster(&type_, &id, &url, &pixels);
+                        bridge.publish_repaired_discover_poster(
+                            &type_, &id, &url, &pixels, &receipts,
+                        );
                     });
                 } else {
-                    next(bridge, type_, id, urls, HashSet::new());
+                    next(bridge, type_, id, urls, HashSet::new(), receipts);
                 }
             });
         } else {
-            next(self.clone(), type_, id, urls, HashSet::new());
+            next(self.clone(), type_, id, urls, HashSet::new(), receipts);
         }
     }
 
@@ -1589,7 +1835,7 @@ mod discover_artwork_tests {
                 std::process::id(),
                 nova_config::now_ms()
             ));
-            for mode in ["0", "1", "2", "3", "4", "5", "6"] {
+            for mode in ["0", "1", "2", "3", "4", "5", "6", "7"] {
                 let child_root = root.join(mode);
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .env(ROOT, &child_root)
@@ -1617,8 +1863,8 @@ mod discover_artwork_tests {
         let mode = std::env::var("NOVA_ARTWORK_MAP_TEST").unwrap();
         let detail = mode == "3" || mode == "6";
         let cached_alternative = mode == "4";
-        let pending_failure = mode == "5";
-        let library = mode == "2" || detail || cached_alternative || pending_failure;
+        let pending_failure = mode == "5" || mode == "7";
+        let library = mode == "2" || detail || cached_alternative || mode == "5";
         let media_type = if detail { "movie" } else { "series" };
         let mapped = mode != "0";
         storage::init_at(&root);
@@ -1688,12 +1934,15 @@ mod discover_artwork_tests {
                             meta["poster"] = serde_json::Value::Null;
                             meta["imdb_id"] = serde_json::json!("tt5095466");
                         }
-                    } else if mapped && path.starts_with("/first/") {
+                    } else if path.starts_with("/first/") {
+                        // An explicit current broker receipt authorizes the
+                        // second owner, including equal opaque native IDs.
+                        // Equality of "saved" alone must never grant that.
                         meta["novaMetadataRevision"] =
                             serde_json::json!(nova_providers::metadata_revision());
                         meta["novaConnections"] = serde_json::json!([{
                             "addonId":nova_providers::addon_metadata_id(&format!("{server_base}/second")),
-                            "mediaId":"tt5095466", "ids":[], "basis":"exact-title-year"
+                            "mediaId":if mapped { "tt5095466" } else { "saved" }, "ids":[], "basis":"exact-title-year"
                         }]);
                     }
                     (
@@ -1756,6 +2005,20 @@ mod discover_artwork_tests {
                 manifest:serde_json::from_value(serde_json::json!({"id":path, "name":path, "version":"1", "types":[media_type],
                     "resources":[{"name":"meta", "types":[media_type], "idPrefixes": if mapped && path == "second" { vec!["tt"] } else { vec!["saved"] }}], "catalogs":[]})).unwrap()
             }).to_vec();
+            // Discover responses now require the exact selected catalog owner.
+            // Exercise the real selected-catalog path rather than publishing
+            // an unowned page into an otherwise metadata-only fixture.
+            let owner = &mut state.installed[0];
+            let mut manifest = serde_json::to_value(&owner.manifest).unwrap();
+            manifest["resources"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!("catalog"));
+            manifest["catalogs"] =
+                serde_json::json!([{"id":"artwork","name":"Artwork","type":media_type}]);
+            owner.manifest = serde_json::from_value(manifest).unwrap();
+            let type_defs = catalog::build_type_defs(&owner.manifest, &owner.label, &owner.url);
+            state.type_defs = type_defs;
         }
         write_episodes_cache_for(
             media_type,
@@ -1906,7 +2169,21 @@ mod discover_artwork_tests {
                 );
             }
         } else {
+            if pending_failure {
+                for addon in &mut bridge.shared.lock().unwrap().installed {
+                    addon.available = false;
+                }
+            }
+            let mut preview = preview;
+            if mode == "1" {
+                preview.poster = Some(format!("{base}/bad.png"));
+            }
             bridge.apply_catalog(0, vec![preview], false);
+            if mode == "1" {
+                // Desktop poster jobs normally report this failed decode.
+                // This fixture's queue is intentionally detached from workers.
+                bridge.recover_catalog_artwork(0, 0, &format!("{base}/bad.png"));
+            }
         }
         let weak = app.as_weak();
         let started = std::time::Instant::now();
@@ -1993,6 +2270,23 @@ mod discover_artwork_tests {
             let row = model.row_data(0).unwrap();
             assert!(row.is_loaded);
             assert_eq!(row.id.as_str(), "saved");
+            assert_eq!(row.poster_path.as_str(), good);
+        }
+        if !library {
+            {
+                let state = bridge.shared.lock().unwrap();
+                assert_eq!(state.catalog_raw[0].poster.as_deref(), Some(good.as_str()));
+                assert_eq!(
+                    state.catalog_raw[0].extra["novaSourceUrl"],
+                    format!("{base}/first")
+                );
+            }
+            bridge.reproject_catalog_grouping_discover();
+            let row = app.get_catalog().row_data(0).unwrap();
+            assert!(
+                row.is_loaded,
+                "reprojection retains repaired decoded artwork"
+            );
             assert_eq!(row.poster_path.as_str(), good);
         }
         assert_eq!(bridge.shared.lock().unwrap().entries[0].poster_url, good);
@@ -2251,6 +2545,175 @@ mod discover_artwork_tests {
             grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_none()
         );
         assert!(grid_artwork_recovery_target(&mut state, "series", "removed", &old).is_none());
+    }
+
+    #[test]
+    fn catalog_only_global_owner_retains_exact_id_metadata_and_header_fallback() {
+        let addon = |url: &str, resources: serde_json::Value| Installed {
+            url: url.into(),
+            label: "same label".into(),
+            enabled: true,
+            available: true,
+            configure_ok: None,
+            generation: 0,
+            manifest: serde_json::from_value(serde_json::json!({
+                "id":url, "name":"Fixture", "version":"1", "types":["series"],
+                "resources":resources, "catalogs":[]
+            }))
+            .unwrap(),
+        };
+        let installed = vec![
+            addon("https://catalog-only", serde_json::json!(["catalog"])),
+            addon("https://metadata", serde_json::json!(["meta"])),
+        ];
+        let mut raw = MetaPreview {
+            id: "tt123".into(),
+            type_: "series".into(),
+            ..Default::default()
+        };
+        raw.extra.insert(
+            "novaSourceUrl".into(),
+            serde_json::json!("https://catalog-only"),
+        );
+        let mut state = Shared::default();
+        state.catalog_raw = vec![raw.clone()];
+        let receipts = catalog_poster_repair_receipts(&state, &raw, 1, "");
+        let endpoints = artwork_metadata_sources(&installed, "series", "tt123", &receipts);
+        assert_eq!(endpoints.len(), 1);
+        assert!(
+            endpoints[0]
+                .0
+                .starts_with("https://metadata/meta/series/tt123")
+        );
+        assert!(
+            global_artwork_identity("tt123"),
+            "global IDs may also reuse the legacy exact-ID header"
+        );
+        assert!(apply_catalog_poster_repair(
+            &mut state.catalog_raw,
+            1,
+            &receipts,
+            "repaired"
+        ));
+        assert_eq!(
+            state.catalog_raw[0].extra["novaSourceUrl"],
+            "https://catalog-only"
+        );
+        for id in [
+            "tt123",
+            "tmdb:tv:123",
+            "tmdb:movie:123",
+            "kitsu:123",
+            "mal:123",
+            "anilist:123",
+        ] {
+            assert!(global_artwork_identity(id), "{id}");
+        }
+        for id in ["opaque", "123", "tt", "kitsu:0", "kitsu:x"] {
+            assert!(!global_artwork_identity(id), "{id}");
+            let mut opaque = receipts.clone();
+            opaque[0].source.id = id.into();
+            assert!(artwork_metadata_sources(&installed, "series", id, &opaque).is_empty());
+        }
+    }
+
+    #[test]
+    fn catalog_artwork_receipts_bind_owner_native_identity_url_and_generation() {
+        let preview = |owner: &str, type_: &str, id: &str, poster: &str| {
+            let mut preview = MetaPreview {
+                id: id.into(),
+                type_: type_.into(),
+                poster: Some(poster.into()),
+                ..Default::default()
+            };
+            preview
+                .extra
+                .insert("novaSourceUrl".into(), serde_json::json!(owner));
+            preview
+        };
+        let mut state = Shared::default();
+        state.catalog_raw = vec![
+            preview("https://first", "series", "opaque", "failed"),
+            preview("https://second", "series", "opaque", "failed"),
+            preview("https://first", "movie", "opaque", "failed"),
+            preview("https://first", "series", "other", "failed"),
+        ];
+        let original = state.catalog_raw[0].clone();
+        let receipts = catalog_poster_repair_receipts(&state, &original, 4, "failed");
+        assert_eq!(receipts.len(), 1);
+        let unchanged = serde_json::to_value(&state.catalog_raw).unwrap();
+        assert!(!apply_catalog_poster_repair(
+            &mut state.catalog_raw,
+            5,
+            &receipts,
+            "good"
+        ));
+        assert_eq!(serde_json::to_value(&state.catalog_raw).unwrap(), unchanged);
+        state.catalog_raw[0].poster = Some("newer".into());
+        assert!(!apply_catalog_poster_repair(
+            &mut state.catalog_raw,
+            4,
+            &receipts,
+            "good"
+        ));
+        state.catalog_raw[0].poster = Some("failed".into());
+        assert!(apply_catalog_poster_repair(
+            &mut state.catalog_raw,
+            4,
+            &receipts,
+            "good"
+        ));
+        assert_eq!(state.catalog_raw[0].poster.as_deref(), Some("good"));
+        for raw in &state.catalog_raw[1..] {
+            assert_eq!(raw.poster.as_deref(), Some("failed"));
+        }
+        assert!(
+            state
+                .catalog_raw
+                .iter()
+                .all(|raw| !raw.extra.contains_key("novaCatalogDisplayKey"))
+        );
+        let mut visible = vec![
+            preview("https://second", "series", "opaque", "failed"),
+            original.clone(),
+            original,
+        ];
+        visible[1].extra.insert(
+            "novaCatalogDisplayKey".into(),
+            serde_json::json!("season-one"),
+        );
+        visible[2].extra.insert(
+            "novaCatalogDisplayKey".into(),
+            serde_json::json!("season-two"),
+        );
+        assert_eq!(
+            catalog_repaired_poster_indices(&mut visible, &receipts, "good"),
+            vec![1, 2]
+        );
+        assert_eq!(visible[0].poster.as_deref(), Some("failed"));
+        assert_eq!(visible[1].extra["novaCatalogDisplayKey"], "season-one");
+        assert_eq!(visible[2].extra["novaCatalogDisplayKey"], "season-two");
+        state.previews = visible;
+        assert!(
+            grid_artwork_recovery_target_for_owner(
+                &mut state,
+                "series",
+                "opaque",
+                "failed",
+                "https://first"
+            )
+            .is_some()
+        );
+        assert!(
+            grid_artwork_recovery_target_for_owner(
+                &mut state,
+                "series",
+                "opaque",
+                "failed",
+                "https://second"
+            )
+            .is_some()
+        );
     }
 
     #[test]

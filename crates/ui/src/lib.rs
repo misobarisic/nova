@@ -18,14 +18,15 @@ pub use generated::*;
 // Preserve Nova's public model paths while sharing the leaf's exact types.
 pub use nova_ui_shared::{
     AddonBrowserRow, AddonRow, BookmarkSceneRow, BookmarkTitleRow, CalCell, CalendarDay,
-    CalendarRelease, CategoryRow, ChapterRow, CompletionDestination, ContinueRow, DetailActionRow,
-    DetailInfo, DownloadEpisode, DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard,
-    HomeCatalogRow, HomeCatalogSection, JournalMonthRow, JournalSessionRow, JournalTitleRow,
-    LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow, ProfileRow, RemoteBookmarkRow,
-    RemoteChapterRow, RemoteDeviceRow, RemoteOfferRow, SceneBookmarkRow, SeasonCard,
-    SettingSyncInfo, SheetItem, SmartCollectionRow, StreamRow, SyncInspectorRow, SyncInvite,
-    SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
-    TrackingMappingRow, TrackingSetupRow, UpcomingRow, WatchQueueRow,
+    CalendarRelease, CatalogGroupMemberRow, CatalogGroupingRow, CategoryRow, ChapterRow,
+    CompletionDestination, ContinueRow, DetailActionRow, DetailInfo, DownloadEpisode,
+    DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
+    JournalMonthRow, JournalSessionRow, JournalTitleRow, LicenseSource, MediaCard, PartyMemberRow,
+    PluginSettingRow, ProfileRow, RemoteBookmarkRow, RemoteChapterRow, RemoteDeviceRow,
+    RemoteOfferRow, SceneBookmarkRow, SeasonCard, SettingSyncInfo, SheetItem, SmartCollectionRow,
+    StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow,
+    TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+    WatchQueueRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {
@@ -52,6 +53,7 @@ macro_rules! forward_app_callbacks {
 }
 pub(crate) use forward_app_callbacks;
 
+mod catalog_grouping_bridge;
 mod collection_factories;
 mod completion_bridge;
 mod page_factories;

@@ -2233,6 +2233,40 @@ pub(crate) fn sync_torrent_engine(settings: &TorrentSettings) {
 mod home_return_tests {
     use super::*;
 
+    fn finalize_closed_playback(bridge: &Bridge) {
+        let app = bridge.app().unwrap();
+        assert!(!app.get_player_open());
+        let home = app.get_show_home();
+        let before = progress_projection::publication_count();
+        bridge.note_player_progress_from_ui();
+        assert!(bridge.shared.lock().unwrap().playback.is_none());
+        // Closing persists progress immediately; the metadata joins and Home
+        // publication deliberately happen on the coalesced worker. Await its
+        // accepted publication, rather than forcing a synchronous rebuild or
+        // reading the previous Home card before the event loop can deliver it.
+        let started = std::time::Instant::now();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(3),
+            move || {
+                assert!(
+                    started.elapsed() < Duration::from_secs(20),
+                    "closed-playback Home projection did not publish"
+                );
+                if progress_projection::publication_count() > before {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        slint::run_event_loop().unwrap();
+        assert_eq!(
+            app.get_show_home(),
+            home,
+            "publication cannot navigate away from Home"
+        );
+    }
+
     #[test]
     fn closing_playback_refreshes_home_without_navigation() {
         const ROOT: &str = "NOVA_HOME_PLAYBACK_TEST_ROOT";
@@ -2256,7 +2290,7 @@ mod home_return_tests {
             return;
         };
         let root = PathBuf::from(root);
-        i_slint_backend_testing::init_integration_test_with_mock_time();
+        i_slint_backend_testing::init_integration_test_with_system_time();
         storage::init_at(&root);
         let app = AppWindow::new().unwrap();
         app.set_show_home(true);
@@ -2479,7 +2513,7 @@ mod home_return_tests {
             ..Default::default()
         });
         app.set_player_open(false);
-        bridge.note_player_progress_from_ui();
+        finalize_closed_playback(&bridge);
         assert!(app.get_show_home());
         assert_eq!(
             bridge.shared.lock().unwrap().continue_list[0].episode_id,
@@ -2497,7 +2531,7 @@ mod home_return_tests {
             last_dur: 1000.0,
             ..Default::default()
         });
-        bridge.note_player_progress_from_ui();
+        finalize_closed_playback(&bridge);
         assert!((app.get_home_continue().row_data(0).unwrap().progress - 0.5).abs() < 0.001);
 
         // Complete the known show, announce a future episode, then release it.
@@ -2508,7 +2542,7 @@ mod home_return_tests {
             last_dur: 1000.0,
             ..Default::default()
         });
-        bridge.note_player_progress_from_ui();
+        finalize_closed_playback(&bridge);
         assert_eq!(
             read_viewing_activity()["series"].phase,
             ViewingPhase::AwaitingReturn
@@ -2569,7 +2603,7 @@ mod home_return_tests {
                 last_dur: 1000.0,
                 ..Default::default()
             });
-            bridge.note_player_progress_from_ui();
+            finalize_closed_playback(&bridge);
             assert_eq!(app.get_library().row_data(0).unwrap().status, expected);
         }
         assert_eq!(app.get_home_new_episodes().row_count(), 0);
@@ -2603,7 +2637,7 @@ mod home_return_tests {
             last_dur: 1000.0,
             ..Default::default()
         });
-        bridge.note_player_progress_from_ui();
+        finalize_closed_playback(&bridge);
         assert_eq!(app.get_library().row_data(0).unwrap().activity_action, 3);
         let before = read_progress_map();
         bridge.library_status_action(0, 3);

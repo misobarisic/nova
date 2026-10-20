@@ -4453,3 +4453,42 @@ msgstr "Mrežni titlovi su spremni."
 
 msgid "Refresh subtitle tracks"
 msgstr "Osvježi zapise titlova"
+
+msgid "Catalog grouping"
+msgstr "Grupiranje kataloga"
+
+msgid "Catalog overrides"
+msgstr "Iznimke kataloga"
+
+msgid "Season"
+msgstr "Sezona"
+
+msgid "Default catalog grouping"
+msgstr "Zadano grupiranje kataloga"
+
+msgid "Search catalogs"
+msgstr "Pretraži kataloge"
+
+msgid "No catalogs match this search."
+msgstr "Nijedan katalog ne odgovara ovoj pretrazi."
+
+msgid "Choose a source"
+msgstr "Odaberite izvor"
+
+msgid "All seasons"
+msgstr "Sve sezone"
+
+msgid "Continue loading"
+msgstr "Nastavi učitavanje"
+
+msgid "Choose how Home and Discover organize catalog entries. Original keeps addon entries, Season separates confirmed seasons, and Series groups confirmed entries for the same show. Playback and Library identity stay unchanged."
+msgstr "Odaberite kako Početna i Istraži organiziraju stavke kataloga. Izvorno zadržava stavke dodatka, Sezona odvaja potvrđene sezone, a Serija grupira potvrđene stavke iste serije. Reprodukcija i identitet u zbirci ostaju nepromijenjeni."
+
+msgid "Set Home and Discover independently for each catalog. Default follows the choice above; every genre uses its catalog's rule."
+msgstr "Postavite Početnu i Istraži neovisno za svaki katalog. Zadano slijedi gornji odabir; svaki žanr koristi pravilo svojeg kataloga."
+
+msgid "Unavailable catalog"
+msgstr "Nedostupan katalog"
+
+msgid "No catalogs available."
+msgstr "Nema dostupnih kataloga."

@@ -258,6 +258,7 @@ impl Bridge {
             let prepared = PreparedProfile::load(self, id)?;
             let incoming = profiles::prepare_activation(id)?;
             self.cancel_season_download();
+            self.shared.lock().unwrap().catalog_detail.clear();
             self.party_leave();
             self.remote_disconnect();
             self.clear_addon_subtitles();

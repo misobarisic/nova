@@ -209,6 +209,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_more_picked => invoke_discover_bridge_more_picked(),
             on_about_picked => invoke_discover_bridge_about_picked(),
             on_load_more => invoke_discover_bridge_load_more(),
+            on_continue_pagination => invoke_discover_bridge_continue_pagination(),
             on_visible_range => invoke_discover_bridge_visible_range(arg0, arg1),
         );
         let weak = app.as_weak();
@@ -220,6 +221,13 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             ) {
                 Ok(page) => {
                     let weak = page.as_weak();
+                    let anchor_page = page.as_weak();
+                    app.global::<DiscoverBridge>()
+                        .on_remap_catalog_anchor(move |old, new| {
+                            if let Some(page) = anchor_page.upgrade() {
+                                page.invoke_remap_catalog_anchor(old, new);
+                            }
+                        });
                     app.global::<DiscoverBridge>().on_focus_shell(move || {
                         if let Some(page) = weak.upgrade() {
                             page.invoke_focus_shell();

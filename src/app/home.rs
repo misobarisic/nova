@@ -2,21 +2,66 @@
 use super::*;
 
 const HOME_SHOWCASE_PER_CATALOG: usize = 5;
+const HOME_RAW_CANDIDATES_PER_CATALOG: usize = 120;
 const HOME_SHOWCASE_CACHE_KEY: &str = "home:showcase:v1";
 const HOME_CATALOG_ROWS_PER_CATALOG: usize = 20;
 const HOME_CATALOG_ROWS_CACHE_KEY: &str = "home:catalog-rows:v1";
 const HOME_SHOWCASE_RETRY_DELAY: Duration = Duration::from_secs(30);
-type HomeShowcaseBatch = (HomeCatalogSource, Option<Vec<MetaPreview>>);
+pub(super) type HomeShowcaseBatch = (HomeCatalogSource, Option<Vec<MetaPreview>>);
+
+fn home_grouping_key(source: &HomeCatalogSource) -> nova_config::CatalogGroupingKey {
+    nova_config::CatalogGroupingKey {
+        addon_url: source.addon_url.clone(),
+        type_: source.type_.clone(),
+        catalog_id: source.catalog_id.clone(),
+        surface: nova_config::CatalogSurface::Home,
+    }
+}
+
+pub(super) fn catalog_grouping_context_sources(
+    state: &Shared,
+    key: &nova_config::CatalogGroupingKey,
+    fingerprint: &str,
+) -> Vec<HomeCatalogSource> {
+    let mut seen = HashSet::new();
+    [
+        &state.catalog_grouping.home_featured_raw,
+        &state.catalog_grouping.home_rows_raw,
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|cache| &cache.catalogs)
+    .filter(|catalog| {
+        home_grouping_key(&catalog.source) == *key
+            && catalog_grouping::raw_fingerprint(&catalog.previews) == fingerprint
+            && seen.insert(catalog.source.clone())
+    })
+    .map(|catalog| catalog.source.clone())
+    .collect()
+}
+
+pub(super) fn catalog_grouping_sources_selected(
+    state: &Shared,
+    key: &nova_config::CatalogGroupingKey,
+    sources: &[HomeCatalogSource],
+) -> bool {
+    let selected = home_showcase_sources(state)
+        .into_iter()
+        .chain(home_catalog_row_sources(state));
+    selected.into_iter().any(|source| {
+        home_grouping_key(&source) == *key && (sources.is_empty() || sources.contains(&source))
+    })
+}
 
 /// Device-local catalog results, keyed by the complete configured selection.
 /// Failed requests keep the previous batch; only successful responses replace
 /// it. Artwork uses the ordinary image cache rather than a second disk copy.
-#[derive(Default, Serialize, Deserialize)]
-struct HomeShowcaseCache {
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(super) struct HomeShowcaseCache {
     catalogs: Vec<HomeShowcaseCatalog>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct HomeShowcaseCatalog {
     source: HomeCatalogSource,
     previews: Vec<MetaPreview>,
@@ -47,7 +92,7 @@ impl HomeShowcaseCache {
     }
 
     fn update(&mut self, selected: &[HomeCatalogSource], batches: Vec<HomeShowcaseBatch>) {
-        self.update_with_limit(selected, batches, HOME_SHOWCASE_PER_CATALOG);
+        self.update_with_limit(selected, batches, HOME_RAW_CANDIDATES_PER_CATALOG);
     }
 
     fn update_with_limit(
@@ -60,7 +105,7 @@ impl HomeShowcaseCache {
             .retain(|cached| selected.contains(&cached.source));
         // Keep enough candidates to fill each selected rail after
         // deduplication, without persisting entire addon catalog pages.
-        let limit = per_catalog * selected.iter().collect::<HashSet<_>>().len().max(1);
+        let limit = per_catalog.min(HOME_RAW_CANDIDATES_PER_CATALOG);
         for (source, previews) in batches {
             let Some(previews) = previews.filter(|_| selected.contains(&source)) else {
                 continue;
@@ -195,9 +240,20 @@ fn merge_home_showcase_preview(preview: &mut MetaPreview, fresh: &MetaPreview) {
         // the catalog's ownership remains the authority for private IDs.
         if usable_home_metadata_value(value)
             && (key != "novaSourceUrl" || !preview.extra.contains_key(key))
+            && !matches!(
+                key.as_str(),
+                "novaCatalogDisplayKey" | "novaCatalogDisplaySeason" | "novaCatalogVirtualSeason"
+            )
         {
             preview.extra.insert(key.clone(), value.clone());
         }
+    }
+    if let Some(season) = catalog_grouping::canonical_season(preview)
+        && !fresh.title().trim().is_empty()
+        && catalog_grouping::canonical_season(fresh) != Some(season)
+    {
+        preview.name = format!("{} · {} {season}", fresh.title(), text::tr("Season"));
+        preview.title_legacy = None;
     }
 }
 
@@ -323,6 +379,7 @@ struct HomeBackdropRequest {
 fn home_showcase_same_identity(left: &MetaPreview, right: &MetaPreview) -> bool {
     left.id == right.id
         && left.type_ == right.type_
+        && catalog_grouping::virtual_season(left) == catalog_grouping::virtual_season(right)
         && (nova_providers::ExternalId::parse(&left.id).is_some()
             || left.extra.get("novaSourceUrl") == right.extra.get("novaSourceUrl"))
 }
@@ -470,7 +527,7 @@ fn home_catalog_row_groups(
         .collect()
 }
 
-fn parse_home_showcase_catalog(bytes: &[u8], type_: &str) -> Option<Vec<MetaPreview>> {
+pub(super) fn parse_home_showcase_catalog(bytes: &[u8], type_: &str) -> Option<Vec<MetaPreview>> {
     // A 200 response carrying an addon error or an empty stub is a failed
     // refresh, rather than proof that a previously cached catalog is empty.
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
@@ -514,33 +571,128 @@ fn home_catalog_targets(
 
 // Share transport and response collection, while each Home surface retains
 // its own generation checks, cache limits and publication policy.
-fn fetch_home_catalogs(
-    targets: Vec<(HomeCatalogSource, String)>,
-    finish: impl FnOnce(Vec<HomeShowcaseBatch>) + Clone + Send + 'static,
-) {
-    if targets.is_empty() {
-        return;
-    }
-    let results = Arc::new(Mutex::new(Vec::<HomeShowcaseBatch>::new()));
-    let remaining = Arc::new(AtomicUsize::new(targets.len()));
-    for (source, url) in targets {
-        let results = results.clone();
-        let remaining = remaining.clone();
-        let finish = finish.clone();
-        net::fetch_bytes(url, move |result| {
-            let previews = result
-                .ok()
-                .and_then(|bytes| parse_home_showcase_catalog(&bytes, &source.type_));
-            results.lock().unwrap().push((source, previews));
-            if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let batches = std::mem::take(&mut *results.lock().unwrap());
-                let _ = crate::app::profiles::invoke_from_event_loop(move || finish(batches));
-            }
-        });
-    }
-}
-
 impl Bridge {
+    fn schedule_home_grouping_candidates(
+        &self,
+        key: nova_config::CatalogGroupingKey,
+        raw: &[MetaPreview],
+        projected: &[MetaPreview],
+        visible_limit: usize,
+    ) {
+        if self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .catalog_grouping_mode(&key)
+            == nova_config::CatalogGroupingMode::Original
+        {
+            return;
+        }
+        let visible = projected
+            .iter()
+            .take(visible_limit)
+            .flat_map(|preview| {
+                self.catalog_grouping_display_context(preview)
+                    .map(|context| context.members)
+                    .unwrap_or_else(|| {
+                        vec![nova_providers::catalog_grouping::SourceIdentity {
+                            addon_url: key.addon_url.clone(),
+                            media_type: preview.type_.clone(),
+                            id: preview.id.clone(),
+                        }]
+                    })
+            })
+            .collect::<HashSet<_>>();
+        let candidates = raw
+            .iter()
+            .filter(|preview| {
+                visible.contains(&nova_providers::catalog_grouping::SourceIdentity {
+                    addon_url: key.addon_url.clone(),
+                    media_type: preview.type_.clone(),
+                    id: preview.id.clone(),
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.schedule_catalog_grouping(key, &candidates);
+    }
+
+    fn project_home_showcase_cache(
+        &self,
+        cache: &HomeShowcaseCache,
+        sources: &[HomeCatalogSource],
+    ) -> Vec<MetaPreview> {
+        self.shared
+            .lock()
+            .unwrap()
+            .catalog_grouping
+            .home_featured_raw = Some(cache.clone());
+        let mut projected = cache.clone();
+        for catalog in &mut projected.catalogs {
+            if !sources.contains(&catalog.source) {
+                continue;
+            }
+            let key = home_grouping_key(&catalog.source);
+            let raw = &catalog.previews;
+            let previews = self.project_catalog_grouping(&key, raw);
+            self.schedule_home_grouping_candidates(key, raw, &previews, HOME_SHOWCASE_PER_CATALOG);
+            catalog.previews = previews;
+        }
+        projected.previews(sources)
+    }
+
+    fn project_home_row_cache(
+        &self,
+        cache: &HomeShowcaseCache,
+        sources: &[HomeCatalogSource],
+        installed: &[Installed],
+    ) -> Vec<HomeCatalogGroup> {
+        self.shared.lock().unwrap().catalog_grouping.home_rows_raw = Some(cache.clone());
+        let mut projected = cache.clone();
+        for catalog in &mut projected.catalogs {
+            if !sources.contains(&catalog.source) {
+                continue;
+            }
+            let key = home_grouping_key(&catalog.source);
+            let raw = &catalog.previews;
+            let previews = self.project_catalog_grouping(&key, raw);
+            self.schedule_home_grouping_candidates(
+                key,
+                raw,
+                &previews,
+                HOME_CATALOG_ROWS_PER_CATALOG,
+            );
+            catalog.previews = previews;
+        }
+        home_catalog_row_groups(&projected, sources, installed)
+    }
+
+    /// Reproject the in-memory raw Home batches. Settings changes and accepted
+    /// background evidence must not trigger another catalog HTTP request.
+    pub(super) fn reproject_home_catalog_grouping(&self) {
+        let (featured, rows, featured_sources, row_sources, installed) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.catalog_grouping.home_featured_raw.clone(),
+                state.catalog_grouping.home_rows_raw.clone(),
+                home_showcase_sources(&state),
+                home_catalog_row_sources(&state),
+                state.installed.clone(),
+            )
+        };
+        if let Some(cache) = featured {
+            self.install_home_showcase(self.project_home_showcase_cache(&cache, &featured_sources));
+        }
+        if let Some(cache) = rows {
+            self.install_prepared_home_catalog_rows(self.project_home_row_cache(
+                &cache,
+                &row_sources,
+                &installed,
+            ));
+        }
+    }
+
     /// Load a small first page from each selected Home catalog. Each catalog
     /// contributes at most five distinct titles; Discover's current picker,
     /// pagination and search state are intentionally untouched.
@@ -571,12 +723,18 @@ impl Bridge {
             write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
         }
         if restore {
-            self.install_home_showcase(cached.previews(&sources));
+            self.install_home_showcase(self.project_home_showcase_cache(&cached, &sources));
         }
         let bridge = self.clone();
-        fetch_home_catalogs(targets, move |batches| {
-            bridge.finish_home_showcase_refresh(generation, sources, batches);
-        });
+        home_catalog_fetch::fetch(
+            self,
+            targets,
+            HOME_SHOWCASE_PER_CATALOG,
+            home_catalog_fetch::Scope::Showcase(generation),
+            move |batches| {
+                bridge.finish_home_showcase_refresh(generation, sources, batches);
+            },
+        );
     }
 
     /// Invalidate any in-flight response when addon/catalog preferences
@@ -642,18 +800,24 @@ impl Bridge {
         let mut cached =
             read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
         let before = serde_json::to_value(&cached.catalogs).ok();
-        cached.update_with_limit(&selected, Vec::new(), HOME_CATALOG_ROWS_PER_CATALOG);
+        cached.update_with_limit(&selected, Vec::new(), HOME_RAW_CANDIDATES_PER_CATALOG);
         if before != serde_json::to_value(&cached.catalogs).ok() {
             write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
         }
         if restore || sources.is_empty() {
-            let groups = home_catalog_row_groups(&cached, &sources, &installed);
+            let groups = self.project_home_row_cache(&cached, &sources, &installed);
             self.install_home_catalog_rows(groups);
         }
         let bridge = self.clone();
-        fetch_home_catalogs(targets, move |batches| {
-            bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
-        });
+        home_catalog_fetch::fetch(
+            self,
+            targets,
+            HOME_CATALOG_ROWS_PER_CATALOG,
+            home_catalog_fetch::Scope::Rows(generation),
+            move |batches| {
+                bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
+            },
+        );
     }
 
     pub(super) fn invalidate_home_catalog_rows(&self) {
@@ -696,9 +860,9 @@ impl Bridge {
         };
         let mut cached =
             read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
-        cached.update_with_limit(&selected, batches, HOME_CATALOG_ROWS_PER_CATALOG);
+        cached.update_with_limit(&selected, batches, HOME_RAW_CANDIDATES_PER_CATALOG);
         write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
-        self.install_home_catalog_rows(home_catalog_row_groups(&cached, &sources, &installed));
+        self.install_home_catalog_rows(self.project_home_row_cache(&cached, &sources, &installed));
     }
 
     pub(super) fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
@@ -939,7 +1103,7 @@ impl Bridge {
             read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap_or_default();
         cached.update(&selected, batches);
         write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
-        let previews = cached.previews(&sources);
+        let previews = self.project_home_showcase_cache(&cached, &sources);
         if self.shared.lock().unwrap().home_showcase.is_empty() {
             self.install_home_showcase(previews);
         } else {
@@ -973,13 +1137,37 @@ impl Bridge {
     }
 
     fn install_home_showcase(&self, previews: Vec<MetaPreview>) {
+        let anchor = self.shared.lock().unwrap().home_showcase_displayed.clone();
+        let index = anchor
+            .as_ref()
+            .and_then(|anchor| {
+                previews.iter().position(|preview| {
+                    home_showcase_same_identity(preview, anchor)
+                        || self
+                            .catalog_grouping_display_context(preview)
+                            .is_some_and(|context| {
+                                context.members.iter().any(|member| {
+                                    member.id == anchor.id
+                                        && member.media_type == anchor.type_
+                                        && anchor
+                                            .extra
+                                            .get("novaSourceUrl")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(member.addon_url.as_str())
+                                }) && (context.canonical_season.is_none()
+                                    || context.canonical_season
+                                        == catalog_grouping::canonical_season(anchor))
+                            })
+                })
+            })
+            .unwrap_or(0);
         let (first, count) = {
             let mut state = self.shared.lock().unwrap();
-            replace_home_showcase_list(&mut state, previews, 0);
-            state.home_showcase_pending_index = (!state.home_showcase.is_empty()).then_some(0);
-            state.home_showcase_displayed = state.home_showcase.first().cloned();
+            replace_home_showcase_list(&mut state, previews, index);
+            state.home_showcase_pending_index = (!state.home_showcase.is_empty()).then_some(index);
+            state.home_showcase_displayed = state.home_showcase.get(index).cloned();
             (
-                state.home_showcase.first().cloned(),
+                state.home_showcase.get(index).cloned(),
                 state.home_showcase.len(),
             )
         };
@@ -1041,12 +1229,12 @@ impl Bridge {
                 .iter()
                 .find_map(|url| decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))));
             app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
-            app.set_home_featured_index(0);
+            app.set_home_featured_index(index as i32);
             app.set_home_featured_count(count as i32);
             app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
         }
         let generation = self.shared.lock().unwrap().home_showcase_list_generation;
-        self.ensure_home_showcase_art(0, generation);
+        self.ensure_home_showcase_art(index, generation);
     }
 
     /// Catalog previews are intentionally sparse. Hydrate only the current
@@ -1162,6 +1350,9 @@ impl Bridge {
                 .is_none_or(|item| home_showcase_needs_metadata(&item.preview))
                 .then(std::time::Instant::now);
             if let Some(item) = &item {
+                if let Some(cache) = &mut state.catalog_grouping.home_featured_raw {
+                    cache.enrich(&requested, &item.preview);
+                }
                 let previous = serde_json::to_value(&state.home_showcase[index]).ok();
                 merge_home_showcase_preview(&mut state.home_showcase[index], &item.preview);
                 let changed = previous != serde_json::to_value(&state.home_showcase[index]).ok();
@@ -2779,7 +2970,12 @@ fn merge_home_showcase_results(mut batches: Vec<(usize, Vec<MetaPreview>)>) -> V
                         .unwrap_or_default()
                         .to_owned()
                 });
-            if seen.insert((preview.type_.clone(), preview.id.clone(), owner)) {
+            if seen.insert((
+                preview.type_.clone(),
+                preview.id.clone(),
+                owner,
+                catalog_grouping::virtual_season(&preview),
+            )) {
                 merged.push(preview);
                 added += 1;
                 if added == HOME_SHOWCASE_PER_CATALOG {
@@ -3710,7 +3906,7 @@ mod tests {
         let second = showcase_source("latest", "");
         let selected = vec![first.clone(), second.clone()];
         let mut cached = HomeShowcaseCache::default();
-        let page = (0..100)
+        let page = (0..HOME_RAW_CANDIDATES_PER_CATALOG + 20)
             .map(|index| showcase_preview(&format!("title-{index}")))
             .collect::<Vec<_>>();
         cached.update(
@@ -3721,7 +3917,7 @@ mod tests {
             cached
                 .catalogs
                 .iter()
-                .all(|catalog| catalog.previews.len() == 10)
+                .all(|catalog| catalog.previews.len() == HOME_RAW_CANDIDATES_PER_CATALOG)
         );
         let previews = cached.previews(&selected);
         assert_eq!(previews.len(), 10);
@@ -4972,6 +5168,47 @@ mod tests {
         assert_eq!(
             (merged[10].id.as_str(), merged[10].type_.as_str()),
             ("a", "movie")
+        );
+    }
+
+    #[test]
+    fn home_showcase_keeps_virtual_seasons_distinct_without_changing_original_dedup() {
+        let first: MetaPreview = serde_json::from_value(serde_json::json!({
+            "id":"mal:440","type":"series","name":"Combined · Season 1",
+            "novaSourceUrl":"https://owner.invalid/manifest.json",
+            "novaCatalogVirtualSeason":true,"novaCatalogDisplaySeason":1,
+            "novaCatalogDisplayKey":"season-one"
+        }))
+        .unwrap();
+        let mut second = first.clone();
+        second.name = "Combined · Season 2".into();
+        second
+            .extra
+            .insert("novaCatalogDisplaySeason".into(), 2.into());
+        second
+            .extra
+            .insert("novaCatalogDisplayKey".into(), "season-two".into());
+        let merged = merge_home_showcase_results(vec![
+            (0, vec![first.clone(), second.clone()]),
+            (1, vec![first.clone(), second.clone()]),
+        ]);
+        assert_eq!(
+            merged.len(),
+            2,
+            "overlapping catalogs deduplicate the same virtual season only"
+        );
+        assert!(!home_showcase_same_identity(&first, &second));
+        let fresh: MetaPreview = serde_json::from_value(serde_json::json!({"id":"mal:440","type":"series","name":"Fresh title","novaCatalogDisplayKey":"untrusted"})).unwrap();
+        merge_home_showcase_preview(&mut second, &fresh);
+        assert_eq!(second.title(), "Fresh title · Season 2");
+        assert_eq!(second.extra["novaCatalogDisplayKey"], "season-two");
+        let original: MetaPreview = serde_json::from_value(
+            serde_json::json!({"id":"mal:440","type":"series","name":"Combined"}),
+        )
+        .unwrap();
+        assert_eq!(
+            merge_home_showcase_results(vec![(0, vec![original.clone(), original])]).len(),
+            1
         );
     }
 }

@@ -2631,29 +2631,13 @@ pub(crate) fn resolve_catalog_grouping_evidence(
         else {
             continue;
         };
-        if let Some(previous) = &evidence {
-            let previous: &crate::catalog_grouping::GroupingEvidence = previous;
-            let combined: Vec<_> = previous.parents.iter().chain(&found.parents).collect();
-            let mut namespaces = BTreeMap::new();
-            if combined.iter().any(|p| {
-                let namespace = match p {
-                    crate::catalog_grouping::ParentIdentity::ImdbSeries(_) => 0,
-                    crate::catalog_grouping::ParentIdentity::TmdbTv(_) => 1,
-                    crate::catalog_grouping::ParentIdentity::TvdbSeries(_) => 2,
-                };
-                namespaces
-                    .insert(namespace, *p)
-                    .is_some_and(|old| old != *p)
-            }) || previous.season != found.season
-            {
+        if let Some(previous) = evidence.take() {
+            let Some(merged) =
+                crate::catalog_grouping::merge_grouping_evidence(Some(previous), Some(found))
+            else {
                 conflicting = true;
                 break;
-            }
-            let mut merged = previous.clone();
-            merged.parents.extend(found.parents);
-            merged.parents.sort();
-            merged.parents.dedup();
-            merged.proofs.extend(found.proofs);
+            };
             evidence = Some(merged);
         } else {
             evidence = Some(found);

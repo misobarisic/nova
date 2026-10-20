@@ -366,6 +366,8 @@ impl Bridge {
         self.apply_category_rows();
         self.refresh_stream_filter_settings();
         self.refresh_stream_preferences_policy();
+        self.refresh_catalog_grouping_settings();
+        self.refresh_catalog_grouping_policy();
         self.refresh_smart_collections();
         if let Some(app) = self.app() {
             if app.get_stream_selector_open() {
@@ -653,6 +655,7 @@ impl Bridge {
         if self.refresh_stream_preferences_policy() {
             self.refresh_stream_filter_settings();
         }
+        self.refresh_catalog_grouping_policy();
         self.invalidate_home_pending_logo();
         if !applying() {
             self.player.update_playback_defaults(&settings);
@@ -1190,6 +1193,7 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = None;
+            state.catalog_detail.clear();
             state.related_detail_history.clear();
             state.streams.clear();
             state.stream_all.clear();
@@ -1198,6 +1202,7 @@ impl Bridge {
             state.stream_warnings.clear();
             state.stream_filter = 0;
         }
+        self.publish_catalog_detail_scope();
         if let Some(app) = self.app() {
             (*app)
                 .global::<nova_ui_shared::DetailContent>()

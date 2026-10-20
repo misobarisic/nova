@@ -14,6 +14,7 @@ impl AppWindow {
         crate::remote_bridge::install(&app);
         crate::party_bridge::install(&app);
         crate::completion_bridge::install(&app);
+        crate::catalog_grouping_bridge::install(&app);
         Ok(Self(app))
     }
 
@@ -79,6 +80,7 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    CatalogGroupingBridge,
     SmartCollectionsBridge,
     StreamFiltersBridge,
     BookmarksBridge,

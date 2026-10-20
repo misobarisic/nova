@@ -184,6 +184,9 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     if result.is_ok() && progress_projection::invalidation_key(key) {
         progress_projection::invalidate();
     }
+    if result.is_ok() {
+        library::invalidate_display_proof(key);
+    }
     result
 }
 

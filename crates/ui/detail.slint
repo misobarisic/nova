@@ -1,4 +1,4 @@
-import { DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
+import { CatalogGroupingBridge, DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
 
 import { QueueBridge, DetailContent, DetailBridge } from "@NovaUiShared";
 import { TitleArtwork } from "title-artwork.slint";
@@ -359,6 +359,8 @@ export component DetailPage {
         root.kb_top = Math.max(0, root.kb_top - 1);
     }
 
+    private property <bool> grouping_scope_active: CatalogGroupingBridge.detail_scope_active;
+    changed grouping_scope_active => { if !root.grouping_scope_active && root.kb_ci < 0 { root.kb_ci = 0; } }
     function det_zone_down() {
         let old_zone = root.kb_zone;
         if (root.kb_zone == 0) {
@@ -368,6 +370,7 @@ export component DetailPage {
         } else if (root.kb_zone == 2) {
             if (root.det_content() != 0) {
                 root.kb_zone = 3;
+                if root.det_content() == 2 && CatalogGroupingBridge.detail_scope_active { root.kb_ci = -1; }
             }
         } else {
             // Inside episode content, Down moves one grid row.
@@ -398,6 +401,8 @@ export component DetailPage {
             } else if (root.det_content() == 2 && root.kb_ci == 1) {
                 root.kb_ci = 0;
                 root.kb_nudge(80px);
+            } else if (root.det_content() == 2 && root.kb_ci == 0 && CatalogGroupingBridge.detail_scope_active) {
+                root.kb_ci = -1; root.kb_nudge(80px);
             } else if (root.det_content() == 2 && root.kb_ci == 0) {
                 root.kb_zone = 2;
             } else {
@@ -483,7 +488,8 @@ export component DetailPage {
             else { root.watch_now(); }
         } else {
             if (root.det_content() == 2) {
-                if (root.kb_ci == 0) {
+                if root.kb_ci == -1 && CatalogGroupingBridge.detail_scope_active { CatalogGroupingBridge.detail_all_seasons(); }
+                else if (root.kb_ci == 0) {
                     root.kb_cycle_season(1);
                 } else if (root.kb_ci == 1) {
                     root.kb_edit = true;

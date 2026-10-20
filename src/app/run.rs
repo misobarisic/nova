@@ -300,6 +300,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 return;
                             }
+                            if job.display_key.as_ref().is_some_and(|key| {
+                                bridge::with_global_bridge(|bridge| {
+                                    bridge.catalog_poster_slot_matches(
+                                        job.generation,
+                                        job.index,
+                                        key,
+                                        &job.url,
+                                    )
+                                }) == Some(false)
+                            }) {
+                                return;
+                            }
                             if let Some(app) = app_weak.upgrade() {
                                 let model = if job.library {
                                     app.get_library()
@@ -323,7 +335,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else if !job.library {
                         let _ = profiles::invoke_account(move || {
                             bridge::with_global_bridge(|bridge| {
-                                bridge.recover_catalog_artwork(job.generation, job.index, &job.url);
+                                if job.display_key.as_ref().is_none_or(|key| {
+                                    bridge.catalog_poster_slot_matches(
+                                        job.generation,
+                                        job.index,
+                                        key,
+                                        &job.url,
+                                    )
+                                }) {
+                                    bridge.recover_catalog_artwork(
+                                        job.generation,
+                                        job.index,
+                                        &job.url,
+                                    );
+                                }
                             });
                         });
                     }
@@ -614,6 +639,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_season_picked(move |idx| b.season_picked(idx as usize));
     let b = bridge.clone();
+    app.on_catalog_grouping_detail_all_seasons(move || b.catalog_detail_all_seasons());
+    let b = bridge.clone();
     app.on_season_download_start(move |idx, unwatched| {
         b.season_download_start(idx as usize, unwatched)
     });
@@ -780,6 +807,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Route callbacks share the same production wiring used by headless tests.
     wire_page_navigation(&app, &bridge);
+    catalog_grouping::wire_catalog_grouping_callbacks(&app, &bridge);
 
     let b = bridge.clone();
     app.on_home_featured_picked(move || b.home_showcase_picked());

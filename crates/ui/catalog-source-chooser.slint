@@ -1,0 +1,118 @@
+import { CatalogGroupingBridge, CatalogGroupMemberRow, Theme, Anim, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { ScrollView } from "scrollview.slint";
+import { MenuRow } from "player-menu-row.slint";
+import { AddonIconButton } from "settings-controls.slint";
+
+// Rendered data is captured at entry. Runtime may clear its authoritative
+// selection immediately on close while this inactive image finishes leaving.
+export component CatalogSourceChooser inherits Rectangle {
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    private property <bool> mounted;
+    private property <[CatalogGroupMemberRow]> rendered;
+    private property <string> rendered_title;
+    private property <int> selected;
+    private property <bool> open: CatalogGroupingBridge.chooser_open;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <float> slide;
+    animate slide { duration: root.motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> alpha;
+    animate alpha { duration: root.motion ? Anim.transition_fade : 0ms; }
+    visible: root.mounted;
+    changed open => {
+        leave.stop();
+        if root.open {
+            root.rendered = CatalogGroupingBridge.chooser_members;
+            root.rendered_title = CatalogGroupingBridge.chooser_title;
+            root.selected = 0; root.mounted = true;
+            CatalogGroupingBridge.chooser_visual_retained = true;
+            root.slide = 1.0; root.alpha = 1.0;
+            entry_focus.start();
+        } else {
+            entry_focus.stop(); root.slide = 0.0; root.alpha = 0.0;
+            if root.mounted && root.motion { leave.start(); } else { root.finish(); }
+        }
+    }
+    changed motion => {
+        if !root.motion {
+            root.slide = root.open ? 1.0 : 0.0; root.alpha = root.open ? 1.0 : 0.0;
+            if !root.open { root.finish(); }
+        }
+    }
+    function finish() {
+        leave.stop();
+        if !root.open && root.mounted {
+            root.mounted = false; root.rendered = []; root.rendered_title = "";
+            CatalogGroupingBridge.chooser_visual_retained = false;
+            CatalogGroupingBridge.visual_closed();
+        }
+    }
+    function close() { if root.open { CatalogGroupingBridge.chooser_closed(); } }
+    function pick(key: string) { if root.open { CatalogGroupingBridge.member_picked(key); } }
+    private property <int> back_request: CatalogGroupingBridge.back_request;
+    changed back_request => { root.close(); }
+    leave := Timer { interval: Math.max(Anim.transition_slide, Anim.transition_fade); running: false; triggered => { root.finish(); } }
+    entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.open { chooser_focus.focus(); } } }
+    // The scrim/input blocker stays fixed while its card animates.
+    Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_shadow.with-alpha(root.alpha * 0.75); }
+    TouchArea { width: 100%; height: 100%; clicked => { root.close(); } scroll-event => { accept } }
+    chooser_focus := FocusScope {
+        width: 100%; height: 100%; enabled: root.open;
+        key-pressed(e) => {
+            if e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace { if !e.repeat { root.close(); } accept }
+            else if e.text == Key.UpArrow || e.text == Key.DownArrow {
+                SettingsStyle.keyboard-mode = true;
+                root.selected = Math.clamp(root.selected + (e.text == Key.UpArrow ? -1 : 1), -1, root.rendered.length - 1); accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat { if root.selected < 0 { root.close(); } else if root.selected < root.rendered.length { root.pick(root.rendered[root.selected].key); } } accept
+            } else { reject }
+        }
+        chooser_card := Rectangle {
+            width: Math.max(0px,Math.min(620px,root.width - root.safe-left - root.safe-right - 24px));
+            height: Math.min(chooser_col.preferred-height,Math.max(0px,root.height - root.safe-top - root.safe-bottom - 32px));
+            x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: (root.width < 700px ? root.height - root.safe-bottom - self.height - 12px : Math.max(root.safe-top + 16px,(root.height - self.height) / 2)) + (1.0 - root.slide) * 40px;
+            opacity: root.alpha;
+            background: Theme.current.player_menu; border-radius: Theme.card_corner_radius;
+            border-width: 1px; border-color: Theme.current.player_menu_border; clip: true;
+            TouchArea { width: 100%; height: 100%; scroll-event => { reject } }
+            choices := ScrollView {
+                width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+                chooser_col := VerticalLayout {
+                    width: 100%; padding: 12px; spacing: 8px; alignment: start;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout { min-width: 0px; horizontal-stretch: 1; spacing: 4px; alignment: center;
+                            Text { text: @tr("Choose a source"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 20px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                            Text { text: root.rendered_title; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                        }
+                        AddonIconButton { name: @tr("Close"); enabled: root.open; focused: root.selected < 0 && SettingsStyle.keyboard-mode;
+                            private property <bool> key_current: root.open && root.selected < 0 && SettingsStyle.keyboard-mode;
+                            changed key_current => { if self.key_current { self.focus(); } }
+                            clicked => { root.close(); }
+                            Image { width: 20px; height: 20px; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; source: @image-url("../../assets/icons/player/x.svg"); colorize: Theme.current.text_settings; }
+                        }
+                    }
+                    for member[i] in root.rendered: MenuRow {
+                        accessible-id: "catalog-member:" + member.key;
+                        label: member.title; value: member.subtitle; submenu: true;
+                        enabled: root.open;
+                        focused: SettingsStyle.keyboard-mode && root.selected == i;
+                        private property <bool> key_current: root.open && SettingsStyle.keyboard-mode && root.selected == i;
+                        changed key_current => { if self.key_current { self.focus(); } }
+                        icon: @image-url("../../assets/icons/player/list-video.svg");
+                        activate => { root.pick(member.key); }
+                        reveal(y,h) => {
+                            let top = y - choices.absolute-position.y;
+                            if top < 0px { choices.content-y -= top; }
+                            else if top + h > choices.visible-height { choices.content-y -= top + h - choices.visible-height; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !root.open: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+}

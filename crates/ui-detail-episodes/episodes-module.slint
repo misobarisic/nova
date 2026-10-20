@@ -1,4 +1,5 @@
-import { InterfaceStyle, Theme, Anim, DetailBridge, DetailContent } from "@NovaUiShared";
+import { InterfaceStyle, Theme, Anim, CatalogGroupingBridge, DetailBridge, DetailContent } from "@NovaUiShared";
+import { PillButton } from "../ui/settings-controls.slint";
 import { EpisodePager } from "../ui/episode-pager.slint";
 import { SearchField } from "../ui/searchfield.slint";
 import { IcCheck, IcSchedule, IcSearch, IcClose } from "../ui/icons.slint";
@@ -55,6 +56,17 @@ export component DetailEpisodesModule inherits Window {
             color: Theme.current.text_secondary;
             font-size: InterfaceStyle.tv ? 20px : 14px;
             wrap: word-wrap;
+        }
+
+        if CatalogGroupingBridge.detail_scope_active: VerticalLayout {
+            spacing: 8px; alignment: start;
+            Text { text: CatalogGroupingBridge.detail_season_label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+            if CatalogGroupingBridge.detail_scope_notice != "": Text { text: CatalogGroupingBridge.detail_scope_notice; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+            all_seasons := PillButton {
+                label: @tr("All seasons"); horizontal-stretch: 0;
+                focused: DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == -1 && DetailBridge.kb_active;
+                clicked => { CatalogGroupingBridge.detail_all_seasons(); }
+            }
         }
 
         // Keep toolbar anchors and focus timers addressable across the body

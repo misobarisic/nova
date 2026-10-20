@@ -285,6 +285,8 @@ struct Shared {
     party: party::State,
     stream_prefetch: stream_prefetch::Cache,
     stream_preferences: stream_preferences::State,
+    catalog_grouping: catalog_grouping::State,
+    catalog_detail: catalog_detail::State,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
     addon_browser: addon_browser::State,
@@ -315,6 +317,9 @@ struct Shared {
     catalog_gen: u64,
     /// MetaPreviews backing the current grid, index-aligned with `catalog`.
     previews: Vec<MetaPreview>,
+    /// Raw addon catalog entries; display grouping never writes into this list.
+    catalog_raw: Vec<MetaPreview>,
+    catalog_page: catalog::PageState,
     /// Search result set, kept separate so returning from Search restores the
     /// selected browse catalog without another request.
     search_previews: Vec<MetaPreview>,
@@ -326,9 +331,10 @@ struct Shared {
     search_loading_more: bool,
     search_poster_inflight: HashSet<(u64, String, String)>,
     /// Cooldown prevents failed saved artwork from flooding metadata requests.
-    artwork_recovery: HashMap<(String, String, String), std::time::Instant>,
+    artwork_recovery: HashMap<(String, String, String, String), std::time::Instant>,
     /// Confirmed missing/failed URLs awaiting usable addon manifests.
-    pending_artwork_recovery: HashSet<(String, String, String)>,
+    pending_artwork_recovery:
+        HashMap<(String, String, String, String), Vec<posters::CatalogPosterRepair>>,
     library_poster_inflight: HashSet<(String, String, String)>,
     /// Session-only refresh state, independent of legacy header/episode caches.
     metadata_prefetch: HashMap<(String, String), MetadataPrefetch>,
@@ -700,6 +706,8 @@ const PROGRESS_MIN_DELTA_SECS: f64 = 5.0;
 
 #[cfg(feature = "desktop")]
 struct PosterJob {
+    /// Exact projected slot identity; Library jobs retain their existing guard.
+    display_key: Option<String>,
     generation: u64,
     index: usize,
     url: String,
@@ -786,6 +794,8 @@ mod bridge;
 mod cache_gc;
 mod calendar;
 mod catalog;
+mod catalog_detail;
+mod catalog_grouping;
 #[cfg(feature = "desktop")]
 mod desktop_window;
 mod detail;
@@ -793,6 +803,7 @@ mod detail_extras;
 mod downloads;
 mod downloads_page;
 mod home;
+mod home_catalog_fetch;
 mod intro_skip;
 mod last_stream;
 mod library;

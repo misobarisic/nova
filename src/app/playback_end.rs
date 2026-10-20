@@ -612,6 +612,7 @@ impl Bridge {
         self.note_player_progress_from_ui();
         self.player
             .with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+        self.release_catalog_detail_for_native_successor();
         self.clear_streams();
         // Re-enter the ordinary episode/stream path with a verified candidate.
         // No resolver URL, headers or torrent work is activated by discovery.

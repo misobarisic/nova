@@ -1,0 +1,25 @@
+// Catalog presentation only. Opaque keys never enter visible labels or requests.
+export struct CatalogGroupingRow { key: string, title: string, addon: string, media_type: string, available: bool, home_mode: int, discover_mode: int }
+export struct CatalogGroupMemberRow { key: string, title: string, subtitle: string }
+export global CatalogGroupingBridge {
+    in-out property <int> default_index;
+    in-out property <[CatalogGroupingRow]> rows;
+    in-out property <string> search;
+    in-out property <[CatalogGroupMemberRow]> chooser_members;
+    in-out property <bool> chooser_open;
+    in-out property <string> chooser_title;
+    // Rendering lifetime only; outgoing rows have no selection authority.
+    in-out property <bool> chooser_visual_retained;
+    in-out property <int> back_request;
+    in-out property <bool> detail_scope_active;
+    in-out property <string> detail_season_label;
+    in-out property <string> detail_scope_notice;
+    callback default_changed(int);
+    callback override_changed(string, int, int);
+    callback override_removed(string);
+    callback search_changed(string);
+    callback member_picked(string);
+    callback chooser_closed();
+    callback visual_closed();
+    callback detail_all_seasons();
+}

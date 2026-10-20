@@ -128,16 +128,31 @@ fn display_groups_for_identities(
     LibraryDisplayGroups::from_index(identities, &index)
 }
 
+static DISPLAY_PROOF_REVISION: AtomicU64 = AtomicU64::new(1);
+pub(super) type DisplayProofStamp = (u64, u64);
+pub(super) fn display_proof_stamp() -> DisplayProofStamp {
+    (
+        DISPLAY_PROOF_REVISION.load(Ordering::Acquire),
+        nova_providers::metadata_revision(),
+    )
+}
+pub(super) fn invalidate_display_proof(key: &str) {
+    if key.starts_with("episodes:") {
+        DISPLAY_PROOF_REVISION.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 type DisplayGroupsCache = (
     (String, u64),
-    u64,
+    DisplayProofStamp,
     Vec<(TitleKey, u64)>,
     Option<TitleKey>,
     Arc<LibraryDisplayGroups>,
 );
 thread_local! {
     // This compact index owns no metadata or physical Library records. Its
-    // revision already changes on Library, metadata and profile-affecting I/O.
+    // proof stamp changes only for episode facts/provider revision; ordinary
+    // playback/settings writes cannot force metadata I/O on the next action.
     static DISPLAY_GROUPS: std::cell::RefCell<Option<DisplayGroupsCache>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -159,7 +174,7 @@ impl Bridge {
         };
         let context = profiles::capture();
         let profile = (context.id.clone(), context.epoch);
-        let revision = progress_projection::revision();
+        let revision = display_proof_stamp();
         if let Some(groups) = DISPLAY_GROUPS.with(|cache| {
             cache
                 .borrow()
@@ -179,12 +194,49 @@ impl Bridge {
             modal.as_ref(),
             &mut |type_, id| read_episodes_cache_for(type_, id).unwrap_or_default(),
         ));
-        if profiles::is_current(&context) && progress_projection::revision() == revision {
+        if profiles::is_current(&context) && display_proof_stamp() == revision {
             DISPLAY_GROUPS.with(|cache| {
                 *cache.borrow_mut() = Some((profile, revision, identities, modal, groups.clone()))
             });
         }
         groups
+    }
+
+    pub(super) fn cache_prepared_display_groups(
+        &self,
+        groups: Arc<LibraryDisplayGroups>,
+        stamp: DisplayProofStamp,
+        identities: Vec<(TitleKey, u64)>,
+        modal: Option<TitleKey>,
+    ) {
+        if display_proof_stamp() != stamp {
+            return;
+        }
+        let context = profiles::capture();
+        let matches = {
+            let state = self.shared.lock().unwrap();
+            state
+                .entries
+                .iter()
+                .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+                .eq(identities.iter().cloned())
+                && state
+                    .modal_item
+                    .as_ref()
+                    .map(|item| (item.type_.clone(), item.id.clone()))
+                    == modal
+        };
+        if matches && profiles::is_current(&context) && display_proof_stamp() == stamp {
+            DISPLAY_GROUPS.with(|cache| {
+                *cache.borrow_mut() = Some((
+                    (context.id, context.epoch),
+                    stamp,
+                    identities,
+                    modal,
+                    groups,
+                ))
+            });
+        }
     }
 
     pub(super) fn library_contains(&self, id: &str) -> bool {

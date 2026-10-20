@@ -960,6 +960,8 @@ impl Bridge {
     pub(super) fn apply_addon_rows(&self) {
         self.apply_addon_browser_rows();
         self.publish_metadata_addons();
+        self.refresh_catalog_grouping_settings();
+        self.refresh_catalog_grouping_policy();
         let Some(app) = self.app() else {
             return;
         };

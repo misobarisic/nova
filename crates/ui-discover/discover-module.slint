@@ -3,6 +3,7 @@ import { DiscoverBridge } from "@NovaUiShared";
 
 export component DiscoverModule inherits Window {
     public function focus_shell() { page.focus_shell(); }
+    public function remap_catalog_anchor(old_index:int,new_index:int) { page.remap_catalog_anchor(old_index,new_index); }
     default-font-family: "Roboto";
     background: transparent;
     width: DiscoverBridge.viewport_width; height: DiscoverBridge.viewport_height;
@@ -47,6 +48,9 @@ export component DiscoverModule inherits Window {
         min_cols <=> DiscoverBridge.min_cols;
         can_load_more <=> DiscoverBridge.can_load_more;
         loading_more <=> DiscoverBridge.loading_more;
+        pagination_paused: DiscoverBridge.pagination_paused;
+        pagination_hint: DiscoverBridge.pagination_hint;
+        continue_pagination => { DiscoverBridge.continue_pagination(); }
         kb_zone <=> DiscoverBridge.kb_zone;
         kb_nav <=> DiscoverBridge.kb_nav;
         kb_ctl <=> DiscoverBridge.kb_ctl;

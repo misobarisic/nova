@@ -1,6 +1,164 @@
 //! Discover catalog: fetching, pagination, prefetching and pickers.
 use super::*;
+use nova_config::{CatalogGroupingKey, CatalogGroupingMode, CatalogSurface};
+use nova_providers::catalog_grouping::SourceIdentity;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+
+const GROUPING_BACKFILL_PAGES: usize = 3;
+const GROUPING_VISIBLE_TARGET: usize = 24;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PageStop {
+    #[default]
+    Ready,
+    Empty,
+    Repeated,
+    Failed,
+    Budget,
+}
+
+#[derive(Default)]
+pub(super) struct PageState {
+    key: Option<CatalogGroupingKey>,
+    fingerprints: HashSet<String>,
+    stop: PageStop,
+    pages_in_wave: usize,
+    visible_first: usize,
+    visible_last: usize,
+    mode: CatalogGroupingMode,
+}
+
+impl PageState {
+    fn accept(&mut self, key: CatalogGroupingKey, page: &[MetaPreview], append: bool) -> bool {
+        if !append {
+            *self = Self {
+                key: Some(key),
+                ..Default::default()
+            };
+        }
+        self.pages_in_wave += 1;
+        if page.is_empty() {
+            self.stop = PageStop::Empty;
+            return false;
+        }
+        let mut identities: Vec<_> = page.iter().map(catalog_source_identity).collect();
+        identities.sort();
+        identities.dedup();
+        let fingerprint = nova_providers::catalog_grouping::projection_fingerprint(&identities);
+        if !self.fingerprints.insert(fingerprint) {
+            self.stop = PageStop::Repeated;
+            return false;
+        }
+        self.stop = PageStop::Ready;
+        true
+    }
+
+    fn resume(&mut self) -> bool {
+        if !matches!(self.stop, PageStop::Budget | PageStop::Failed) {
+            return false;
+        }
+        self.stop = PageStop::Ready;
+        self.pages_in_wave = 0;
+        true
+    }
+
+    fn should_backfill(
+        &mut self,
+        mode: CatalogGroupingMode,
+        visible: usize,
+        old_visible: usize,
+        new_page: bool,
+    ) -> bool {
+        if self.mode != mode {
+            self.mode = mode;
+            if self.stop == PageStop::Budget {
+                self.stop = PageStop::Ready;
+            }
+            self.pages_in_wave = self.pages_in_wave.min(1);
+        }
+        if mode == CatalogGroupingMode::Original
+            || self.stop != PageStop::Ready
+            || visible >= GROUPING_VISIBLE_TARGET
+                && !(new_page && visible <= old_visible || !new_page && visible < old_visible)
+        {
+            return false;
+        }
+        if self.pages_in_wave >= GROUPING_BACKFILL_PAGES {
+            self.stop = PageStop::Budget;
+            false
+        } else {
+            true
+        }
+    }
+
+    fn paused(&self) -> bool {
+        self.stop == PageStop::Budget
+    }
+    fn terminal(&self) -> bool {
+        matches!(self.stop, PageStop::Empty | PageStop::Repeated)
+    }
+}
+
+fn selected_catalog_key(state: &Shared) -> Option<CatalogGroupingKey> {
+    let type_ = state.type_defs.get(state.chosen_type)?;
+    let catalog = type_.catalogs.get(state.chosen_catalog)?;
+    Some(CatalogGroupingKey {
+        addon_url: catalog.addon_url.clone(),
+        type_: type_.type_.clone(),
+        catalog_id: catalog.id.clone(),
+        surface: CatalogSurface::Discover,
+    })
+}
+
+fn catalog_source_identity(preview: &MetaPreview) -> SourceIdentity {
+    SourceIdentity {
+        addon_url: preview
+            .extra
+            .get("novaSourceUrl")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        media_type: preview.type_.clone(),
+        id: preview.id.clone(),
+    }
+}
+
+fn append_catalog_raw(raw: &mut Vec<MetaPreview>, page: Vec<MetaPreview>) {
+    let mut seen: HashSet<_> = raw.iter().map(catalog_source_identity).collect();
+    raw.extend(
+        page.into_iter()
+            .filter(|preview| seen.insert(catalog_source_identity(preview))),
+    );
+}
+
+#[derive(Clone)]
+struct CatalogAnchor {
+    index: usize,
+    display_key: String,
+    members: Vec<SourceIdentity>,
+    season: Option<u32>,
+}
+
+fn locate_catalog_anchor(
+    anchor: &CatalogAnchor,
+    projected: &[(String, Vec<SourceIdentity>, Option<u32>)],
+) -> usize {
+    projected
+        .iter()
+        .position(|(key, _, _)| *key == anchor.display_key)
+        .or_else(|| {
+            projected.iter().position(|(_, members, season)| {
+                *season == anchor.season
+                    && members.iter().any(|member| anchor.members.contains(member))
+            })
+        })
+        .or_else(|| {
+            projected.iter().position(|(_, members, _)| {
+                members.iter().any(|member| anchor.members.contains(member))
+            })
+        })
+        .unwrap_or_else(|| anchor.index.min(projected.len().saturating_sub(1)))
+}
 
 fn reserve_metadata_prefetch(
     state: &mut Shared,
@@ -49,10 +207,13 @@ impl Bridge {
             state.next_skip = 0;
             state.catalog_exhausted = false;
             state.loading_more = false;
+            state.catalog_page = PageState::default();
         }
         if let Some(app) = self.app() {
             app.set_loading_more(false);
             app.set_can_load_more(false);
+            app.set_discover_pagination_paused(false);
+            app.set_discover_pagination_hint(SharedString::default());
         }
         self.fetch_catalog_page(false);
     }
@@ -91,6 +252,14 @@ impl Bridge {
         let l = (last.max(0) as usize).min(len.saturating_sub(1));
         if f > l {
             return;
+        }
+        if !library && !searching {
+            {
+                let mut state = self.shared.lock().unwrap();
+                state.catalog_page.visible_first = f;
+                state.catalog_page.visible_last = l;
+            }
+            self.schedule_visible_catalog_grouping();
         }
         let keep_f = f.saturating_sub(UNLOAD_EXTRA_CARDS);
         let keep_l = (l + UNLOAD_EXTRA_CARDS).min(len.saturating_sub(1));
@@ -189,9 +358,10 @@ impl Bridge {
         // on completion, so duplicate calls while in-flight are no-ops.
         {
             let mut state = self.shared.lock().unwrap();
-            if state.loading_more {
+            if state.loading_more || state.catalog_page.paused() {
                 return;
             }
+            state.catalog_page.pages_in_wave = 0;
             state.loading_more = true;
         }
         if let Some(app) = self.app() {
@@ -261,7 +431,7 @@ impl Bridge {
 
         // Build the endpoint URLs on the main thread (pure URL math), then
         // fetch from all matching addons in parallel and merge.
-        let fetch_urls: Vec<String> = urls
+        let fetch_urls: Vec<(String, String)> = urls
             .iter()
             .filter_map(|url| {
                 let addon = Addon::new(url).ok()?;
@@ -275,7 +445,10 @@ impl Bridge {
                 }
                 let extra_refs: Vec<(&str, &str)> =
                     extra.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                Some(addon.catalog_url(&type_, &catalog_id, &extra_refs))
+                Some((
+                    url.clone(),
+                    addon.catalog_url(&type_, &catalog_id, &extra_refs),
+                ))
             })
             .collect();
 
@@ -295,15 +468,20 @@ impl Bridge {
         let results = Arc::new(Mutex::new(Vec::<MetaPreview>::new()));
         let remaining = Arc::new(AtomicUsize::new(fetch_urls.len()));
         let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        for url in fetch_urls {
+        for (owner, url) in fetch_urls {
             let bridge = bridge.clone();
             let results = results.clone();
             let remaining = remaining.clone();
             let failed = failed.clone();
             net::fetch_bytes(url, move |result| {
                 if let Ok(bytes) = result
-                    && let Ok(metas) = Addon::parse_catalog(&bytes)
+                    && let Ok(mut metas) = Addon::parse_catalog(&bytes)
                 {
+                    for preview in &mut metas {
+                        preview
+                            .extra
+                            .insert("novaSourceUrl".into(), serde_json::json!(owner));
+                    }
                     results.lock().unwrap().extend(metas);
                 } else {
                     failed.store(true, Ordering::SeqCst);
@@ -339,256 +517,363 @@ impl Bridge {
         if generation != self.catalog_gen.load(Ordering::Relaxed) {
             return;
         }
-        self.shared.lock().unwrap().loading_more = false;
-        if let Some(app) = self.app() {
-            app.set_loading_more(false);
-            app.set_can_load_more(true);
-        }
-    }
-
-    /// Main thread: replace or append the grid with freshly fetched metas.
-    pub(super) fn apply_catalog(&self, generation: u64, metas: Vec<MetaPreview>, append: bool) {
-        let current = self.catalog_gen.load(Ordering::Relaxed);
-        if generation != current {
-            return; // stale response for an older selection
-        }
-        let app = match self.app() {
-            Some(a) => a,
-            None => return,
-        };
-
         {
             let mut state = self.shared.lock().unwrap();
-            let mut new_metas = metas;
-            let type_ = state
-                .type_defs
-                .get(state.chosen_type)
-                .map(|t| t.type_.as_str())
-                .unwrap_or_default();
-            for meta in &mut new_metas {
+            state.loading_more = false;
+            state.catalog_page.stop = PageStop::Failed;
+        }
+        self.refresh_catalog_pagination_ui();
+    }
+
+    /// Main thread: raw page accounting precedes every display projection.
+    pub(super) fn apply_catalog(&self, generation: u64, mut metas: Vec<MetaPreview>, append: bool) {
+        if generation != self.catalog_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let (key, accepted, old_visible_count) = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(key) = selected_catalog_key(&state) else {
+                return;
+            };
+            let old_visible_count = state.previews.len();
+            for meta in &mut metas {
                 if meta.type_.is_empty() {
-                    meta.type_ = type_.into();
+                    meta.type_ = key.type_.clone();
                 }
+                // Ownership comes from the selected installed catalog, never
+                // from provider-supplied display labels or extension claims.
+                meta.extra
+                    .insert("novaSourceUrl".into(), serde_json::json!(key.addon_url));
                 reuse_discover_poster(
                     meta,
                     read_meta_header_for(&meta.type_, &meta.id).as_ref(),
                     &state.entries,
                 );
             }
-            if append {
-                // Dedup new items against existing previews by id.
-                new_metas.retain(|m| !state.previews.iter().any(|p| p.id == m.id));
-                if new_metas.is_empty() {
-                    state.catalog_exhausted = true;
-                    state.loading_more = false;
-                    drop(state);
-                    if let Some(app) = self.app() {
-                        app.set_loading_more(false);
-                        app.set_can_load_more(false);
-                    }
-                    return;
-                }
-                state.next_skip += new_metas.len();
-                let offset = state.previews.len();
-                state.previews.extend(new_metas.iter().cloned());
-                drop(state);
+            let raw_count = metas.len();
+            if !append {
+                state.catalog_raw.clear();
+                state.next_skip = 0;
+            }
+            let accepted = state.catalog_page.accept(key.clone(), &metas, append);
+            state.next_skip = state.next_skip.saturating_add(raw_count);
+            if accepted {
+                append_catalog_raw(&mut state.catalog_raw, metas);
+            }
+            state.catalog_exhausted = state.catalog_page.terminal();
+            state.catalog_gen = generation;
+            state.loading_more = false;
+            (key, accepted, old_visible_count)
+        };
+        if accepted || !append {
+            self.publish_catalog_projection(&key, !append);
+        }
+        self.refresh_catalog_pagination_ui();
+        if accepted {
+            self.backfill_grouped_catalog(old_visible_count, true);
+        }
+        trim_heap();
+    }
 
-                // Push new cards onto the existing VecModel.
-                let catalog = app.get_catalog();
-                if let Some(vm) = catalog.as_any().downcast_ref::<VecModel<MediaCard>>() {
-                    for m in &new_metas {
-                        vm.push(MediaCard {
-                            id: SharedString::from(&m.id),
-                            title: SharedString::from(&m.title()),
-                            year: SharedString::from(m.year_str().unwrap_or_default()),
-                            poster_path: SharedString::from(m.poster.clone().unwrap_or_default()),
-                            poster: Image::default(),
-                            is_loaded: false,
-                            badge: SharedString::default(),
-                            watched: false,
-                            ..Default::default()
-                        });
-                    }
-                    // Poster downloads only for the new cards (background sweep:
-                    // low priority — scroll-driven preloads jump ahead of it).
-                    #[cfg(feature = "desktop")]
-                    for (i, m) in new_metas.iter().enumerate() {
-                        if let Some(poster) = &m.poster {
-                            self.poster_tx.send_lo(PosterJob {
-                                generation,
-                                index: offset + i,
-                                url: poster.clone(),
-                                library: false,
-                            });
-                        }
-                    }
-                    #[cfg(not(feature = "desktop"))]
-                    {
-                        let app_weak = self.app.clone();
-                        let gen_counter = self.catalog_gen.clone();
-                        for (i, m) in new_metas.iter().enumerate() {
-                            let Some(poster) = &m.poster else { continue };
-                            let url = poster.clone();
-                            let weak = app_weak.clone();
-                            let gen_counter = gen_counter.clone();
-                            let bridge = self.clone();
-                            let requested_url = url.clone();
-                            net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                                let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                                    let Some(pixels) = pixels else {
-                                        bridge.recover_catalog_artwork(
-                                            generation,
-                                            offset + i,
-                                            &requested_url,
-                                        );
-                                        return;
-                                    };
-                                    if generation != gen_counter.load(Ordering::Relaxed) {
-                                        return;
-                                    }
-                                    if let Some(app) = weak.upgrade() {
-                                        if app.get_catalog().row_data(offset + i).is_none_or(
-                                            |row| row.poster_path.as_str() != requested_url,
-                                        ) {
-                                            return;
-                                        }
-                                        let img = Image::from_rgba8(pixels);
-                                        app.invoke_set_card_poster(
-                                            (offset + i) as i32,
-                                            img.clone(),
-                                        );
-                                    }
-                                });
-                            });
-                        }
-                    }
-                }
-                let total = {
-                    let state = self.shared.lock().unwrap();
-                    state.previews.len()
-                };
-                let old_loading = {
-                    let mut state = self.shared.lock().unwrap();
-                    state.loading_more = false;
-                    true
-                };
-                let _ = old_loading;
-                app.set_loading_more(false);
-                // Page settled: worker decode transients are freed — hand
-                // fully-free pages back before the next scroll burst.
-                trim_heap();
-                crate::web_log(&format!(
-                    "nova: catalog appended {} items (total {})",
-                    new_metas.len(),
-                    total
-                ));
-                #[cfg(feature = "desktop")]
-                {
-                    let cached = decoded_cache_stats().0;
-                    crate::web_log(&format!(
-                        "nova: memory posters-cached={cached} cards={total}"
-                    ));
-                }
-                for meta in &new_metas {
-                    if meta
-                        .poster
-                        .as_deref()
-                        .is_none_or(|url| url.trim().is_empty())
-                    {
-                        self.recover_missing_artwork(
-                            &meta.type_,
-                            &meta.id,
-                            meta.poster.as_deref().unwrap_or_default(),
-                        );
-                    }
-                }
-            } else {
-                // Replace mode (original behaviour).
-                let cards: Vec<MediaCard> = new_metas
-                    .iter()
-                    .map(|m| MediaCard {
-                        id: SharedString::from(&m.id),
-                        title: SharedString::from(&m.title()),
-                        year: SharedString::from(m.year_str().unwrap_or_default()),
-                        poster_path: SharedString::from(m.poster.clone().unwrap_or_default()),
-                        poster: Image::default(),
-                        is_loaded: false,
-                        badge: SharedString::default(),
-                        watched: false,
-                        ..Default::default()
-                    })
-                    .collect();
-
-                state.loading_more = false;
-                state.next_skip = new_metas.len();
-                state.catalog_exhausted = new_metas.is_empty();
-                state.previews = new_metas.clone();
-                state.catalog_gen = generation;
-                drop(state);
-
-                app.set_loading_more(false);
-                app.set_catalog(Rc::new(VecModel::from(cards)).into());
-                app.set_empty_hint(SharedString::from(text::tr(
-                    "No results for this selection.",
-                )));
-                crate::web_log(&format!(
-                    "nova: catalog applied ({} items)",
-                    new_metas.len()
-                ));
-
-                // Poster downloads for every card (background sweep: low
-                // priority — the top rows still win because index order is
-                // viewport order on a fresh catalog, and scroll preloads use
-                // the high-priority channel).
-                #[cfg(feature = "desktop")]
-                for (index, m) in new_metas.iter().enumerate() {
-                    if let Some(poster) = &m.poster {
-                        self.poster_tx.send_lo(PosterJob {
-                            generation,
-                            index,
-                            url: poster.clone(),
-                            library: false,
-                        });
-                    }
-                }
-
-                #[cfg(not(feature = "desktop"))]
-                {
-                    for (index, meta) in new_metas.iter().enumerate() {
-                        if let Some(poster) = &meta.poster {
-                            self.fetch_card_poster(false, index, poster.clone());
-                        }
-                    }
-                }
-
-                for meta in &new_metas {
-                    if meta
-                        .poster
-                        .as_deref()
-                        .is_none_or(|url| url.trim().is_empty())
-                    {
-                        self.recover_missing_artwork(
-                            &meta.type_,
-                            &meta.id,
-                            meta.poster.as_deref().unwrap_or_default(),
-                        );
-                    }
-                }
-                if active_cache_settings().prefetch_metadata {
-                    self.prefetch_background_meta(&new_metas, generation);
-                }
+    pub(super) fn continue_catalog_pagination(&self) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.loading_more || !state.catalog_page.resume() {
+                return;
             }
         }
+        self.load_more();
+    }
 
-        // Update can_load_more: depends on the selected catalog's supports_skip
-        // and whether we've exhausted the catalog.
-        if let Some(app) = self.app() {
+    fn refresh_catalog_pagination_ui(&self) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let (loading, can_load, paused, stop) = {
             let state = self.shared.lock().unwrap();
-            let ty = state.type_defs.get(state.chosen_type);
-            let cat = ty.and_then(|t| t.catalogs.get(state.chosen_catalog));
-            let supports_skip = cat.is_some_and(|c| c.supports_skip);
-            app.set_can_load_more(supports_skip && !state.catalog_exhausted);
+            let supports_skip = state
+                .type_defs
+                .get(state.chosen_type)
+                .and_then(|type_| type_.catalogs.get(state.chosen_catalog))
+                .is_some_and(|catalog| catalog.supports_skip);
+            let paused = matches!(state.catalog_page.stop, PageStop::Budget | PageStop::Failed);
+            (
+                state.loading_more,
+                supports_skip && !state.catalog_exhausted && !paused && !state.loading_more,
+                paused,
+                state.catalog_page.stop,
+            )
+        };
+        app.set_loading_more(loading);
+        app.set_can_load_more(can_load);
+        app.set_discover_pagination_paused(paused);
+        app.set_discover_pagination_hint(
+            text::tr(match stop {
+                PageStop::Budget => {
+                    "More source pages are available. Continue browsing to load another batch."
+                }
+                PageStop::Failed => "This catalog page could not be loaded. Continue to retry.",
+                PageStop::Repeated => "This addon repeated an earlier page.",
+                _ => "",
+            })
+            .into(),
+        );
+    }
+
+    fn capture_catalog_anchor(
+        &self,
+        previews: &[MetaPreview],
+        index: usize,
+    ) -> Option<CatalogAnchor> {
+        let preview = previews.get(index)?;
+        let context = self.catalog_grouping_display_context(preview);
+        Some(CatalogAnchor {
+            index,
+            display_key: catalog_grouping::display_key(preview),
+            members: context.as_ref().map_or_else(
+                || vec![catalog_source_identity(preview)],
+                |context| context.members.clone(),
+            ),
+            season: context.and_then(|context| context.canonical_season),
+        })
+    }
+
+    fn publish_catalog_projection(&self, key: &CatalogGroupingKey, fresh: bool) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let (raw, old, first, generation) = {
+            let state = self.shared.lock().unwrap();
+            if state.catalog_page.key.as_ref() != Some(key)
+                || selected_catalog_key(&state).as_ref() != Some(key)
+            {
+                return;
+            }
+            (
+                state.catalog_raw.clone(),
+                state.previews.clone(),
+                state.catalog_page.visible_first,
+                self.catalog_gen.load(Ordering::Relaxed),
+            )
+        };
+        // Snapshot old membership before common projection replaces its action registry.
+        let focus = (!fresh)
+            .then(|| self.capture_catalog_anchor(&old, app.get_discover_kb_idx().max(0) as usize))
+            .flatten();
+        let viewport = (!fresh)
+            .then(|| self.capture_catalog_anchor(&old, first))
+            .flatten();
+        let old_model = app.get_catalog();
+        let old_pixels: Vec<_> = old
+            .iter()
+            .enumerate()
+            .filter_map(|(index, preview)| {
+                old_model
+                    .row_data(index)
+                    .filter(|card| card.is_loaded)
+                    .map(|card| {
+                        (
+                            catalog_source_identity(preview),
+                            catalog_grouping::canonical_season(preview),
+                            preview.poster.clone().unwrap_or_default(),
+                            card,
+                        )
+                    })
+            })
+            .collect();
+        let projected = self.project_catalog_grouping(key, &raw);
+        let contexts: Vec<_> = projected
+            .iter()
+            .map(|preview| {
+                let context = self.catalog_grouping_display_context(preview);
+                (
+                    catalog_grouping::display_key(preview),
+                    context.as_ref().map_or_else(
+                        || vec![catalog_source_identity(preview)],
+                        |context| context.members.clone(),
+                    ),
+                    context.and_then(|context| context.canonical_season),
+                )
+            })
+            .collect();
+        let cards: Vec<_> = projected
+            .iter()
+            .map(|preview| {
+                let source = catalog_source_identity(preview);
+                let season = catalog_grouping::canonical_season(preview);
+                let url = preview.poster.clone().unwrap_or_default();
+                let retained =
+                    old_pixels
+                        .iter()
+                        .find(|(identity, previous_season, previous_url, _)| {
+                            *identity == source
+                                && *previous_url == url
+                                && (*previous_season == season
+                                    || previous_season.is_none()
+                                    || season.is_none())
+                        });
+                MediaCard {
+                    id: preview.id.as_str().into(),
+                    title: preview.title().into(),
+                    year: preview.year_str().unwrap_or_default().into(),
+                    poster_path: url.into(),
+                    poster: retained
+                        .map_or_else(Image::default, |(_, _, _, card)| card.poster.clone()),
+                    is_loaded: retained.is_some(),
+                    badge: season.map_or_else(SharedString::default, |season| {
+                        text::season_label(season).into()
+                    }),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let len = projected.len();
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.previews = projected.clone();
         }
+        app.set_catalog(Rc::new(VecModel::from(cards)).into());
+        app.set_empty_hint(text::tr("No results for this selection.").into());
+        if let Some(focus) = focus {
+            app.set_discover_kb_idx(locate_catalog_anchor(&focus, &contexts) as i32);
+        }
+        if let Some(viewport) = viewport {
+            let mapped = locate_catalog_anchor(&viewport, &contexts);
+            self.shared.lock().unwrap().catalog_page.visible_first = mapped;
+            app.global::<nova_ui::DiscoverBridge>()
+                .invoke_remap_catalog_anchor(viewport.index as i32, mapped as i32);
+        }
+        for (index, preview) in projected.iter().enumerate() {
+            if let Some(url) = preview.poster.as_ref().filter(|url| !url.trim().is_empty()) {
+                if app
+                    .get_catalog()
+                    .row_data(index)
+                    .is_some_and(|card| !card.is_loaded)
+                {
+                    #[cfg(feature = "desktop")]
+                    self.poster_tx.send_lo(PosterJob {
+                        generation,
+                        index,
+                        url: url.clone(),
+                        library: false,
+                        display_key: Some(catalog_grouping::display_key(preview)),
+                    });
+                    #[cfg(not(feature = "desktop"))]
+                    self.fetch_card_poster(false, index, url.clone());
+                }
+            } else {
+                self.recover_catalog_artwork(generation, index, "");
+            }
+        }
+        if fresh && active_cache_settings().prefetch_metadata {
+            self.prefetch_background_meta(&projected, generation);
+        }
+        self.schedule_visible_catalog_grouping();
+        crate::web_log(&format!("nova: catalog projected {len} cards"));
+    }
+
+    fn schedule_visible_catalog_grouping(&self) {
+        let (key, candidates) = {
+            let state = self.shared.lock().unwrap();
+            let Some(key) = state
+                .catalog_page
+                .key
+                .clone()
+                .filter(|key| selected_catalog_key(&state).as_ref() == Some(key))
+            else {
+                return;
+            };
+            let first = state.catalog_page.visible_first.min(state.previews.len());
+            let last = state
+                .catalog_page
+                .visible_last
+                .saturating_add(1)
+                .max(first.saturating_add(GROUPING_VISIBLE_TARGET))
+                .min(state.previews.len());
+            let visible: HashSet<_> = state.previews[first..last]
+                .iter()
+                .map(catalog_source_identity)
+                .collect();
+            let candidates = state
+                .catalog_raw
+                .iter()
+                .filter(|preview| visible.contains(&catalog_source_identity(preview)))
+                .take(48)
+                .cloned()
+                .collect::<Vec<_>>();
+            (key, candidates)
+        };
+        self.schedule_catalog_grouping(key, &candidates);
+    }
+
+    /// Rebuild only the derived grid. Raw source order, cursor and selection survive.
+    pub(super) fn reproject_catalog_grouping_discover(&self) {
+        let (key, old_count) = {
+            let state = self.shared.lock().unwrap();
+            let Some(key) = state
+                .catalog_page
+                .key
+                .clone()
+                .filter(|key| selected_catalog_key(&state).as_ref() == Some(key))
+            else {
+                return;
+            };
+            (key, state.previews.len())
+        };
+        self.publish_catalog_projection(&key, false);
+        self.refresh_catalog_pagination_ui();
+        self.backfill_grouped_catalog(old_count, false);
+    }
+
+    fn backfill_grouped_catalog(&self, old_visible_count: usize, new_page: bool) {
+        let fetch = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(key) = state.catalog_page.key.clone() else {
+                return;
+            };
+            let mode = state.cache_settings.catalog_grouping_mode(&key);
+            let supports_skip = state
+                .type_defs
+                .get(state.chosen_type)
+                .and_then(|type_| type_.catalogs.get(state.chosen_catalog))
+                .is_some_and(|catalog| catalog.supports_skip);
+            if state.loading_more
+                || !supports_skip
+                || state.catalog_exhausted
+                || state.catalog_raw.is_empty()
+            {
+                false
+            } else {
+                let visible = state.previews.len();
+                state
+                    .catalog_page
+                    .should_backfill(mode, visible, old_visible_count, new_page)
+            }
+        };
+        self.refresh_catalog_pagination_ui();
+        if fetch {
+            self.fetch_catalog_page(true);
+        }
+    }
+
+    pub(super) fn catalog_poster_slot_matches(
+        &self,
+        generation: u64,
+        index: usize,
+        key: &str,
+        url: &str,
+    ) -> bool {
+        generation == self.catalog_gen.load(Ordering::Relaxed)
+            && self
+                .shared
+                .lock()
+                .unwrap()
+                .previews
+                .get(index)
+                .is_some_and(|preview| {
+                    catalog_grouping::display_key(preview) == key
+                        && preview.poster.as_deref().unwrap_or_default() == url
+                })
     }
 
     /// Prefetch season/episode metadata for catalog items in the background.
@@ -1721,6 +2006,7 @@ impl Bridge {
         app.set_search_empty_hint(SharedString::from(search_hint));
         self.apply_catalog_labels_to_ui();
         self.apply_genre_selection_to_ui();
+        self.refresh_catalog_pagination_ui();
     }
 }
 
@@ -2594,6 +2880,250 @@ pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grouping_preview(id: &str, parent: &str, season: u32, owner: &str) -> MetaPreview {
+        serde_json::from_value(serde_json::json!({"id":id,"type":"series","name":id,"poster":format!("https://images.invalid/{id}.jpg"),"novaSourceUrl":owner,"novaCatalogGrouping":{"version":1,"kind":"series_member","parentIds":[parent],"season":season}})).unwrap()
+    }
+
+    fn grouping_key(owner: &str) -> CatalogGroupingKey {
+        CatalogGroupingKey {
+            addon_url: owner.into(),
+            type_: "series".into(),
+            catalog_id: "anime".into(),
+            surface: CatalogSurface::Discover,
+        }
+    }
+
+    #[test]
+    fn grouped_backfill_distinguishes_novel_collapsed_repeated_empty_failed_and_budget_pages() {
+        let key = grouping_key("https://owner.invalid");
+        let mut pages = PageState::default();
+        for index in 0..GROUPING_BACKFILL_PAGES {
+            assert!(pages.accept(
+                key.clone(),
+                &[grouping_preview(
+                    &format!("mal:{index}"),
+                    "tt1",
+                    1,
+                    &key.addon_url
+                )],
+                index > 0
+            ));
+            let fetch = pages.should_backfill(CatalogGroupingMode::Series, 1, 1, true);
+            assert_eq!(fetch, index + 1 < GROUPING_BACKFILL_PAGES);
+        }
+        assert!(pages.paused());
+        assert!(!pages.terminal());
+        assert!(pages.resume());
+        assert_eq!(pages.pages_in_wave, 0);
+        assert!(!pages.accept(
+            key.clone(),
+            &[grouping_preview("mal:1", "tt1", 1, &key.addon_url)],
+            true
+        ));
+        assert_eq!(pages.stop, PageStop::Repeated);
+        assert!(pages.terminal());
+        assert!(!pages.resume());
+        assert!(!pages.accept(key.clone(), &[], false));
+        assert_eq!(pages.stop, PageStop::Empty);
+        pages.stop = PageStop::Failed;
+        assert!(pages.resume());
+        assert_eq!(pages.stop, PageStop::Ready);
+        // Reprojection with unchanged full visible content is not a collapsed page.
+        assert!(!pages.should_backfill(CatalogGroupingMode::Series, 40, 40, false));
+        assert!(!pages.should_backfill(CatalogGroupingMode::Original, 1, 1, true));
+    }
+
+    #[test]
+    fn raw_catalog_dedup_uses_exact_owner_type_and_native_identity() {
+        let first = grouping_preview("opaque:one", "tt1", 1, "https://first.invalid/key");
+        let second = grouping_preview("opaque:one", "tt1", 1, "https://second.invalid/key");
+        let mut raw = vec![];
+        append_catalog_raw(&mut raw, vec![first.clone(), second.clone(), first]);
+        assert_eq!(raw.len(), 2);
+        assert_eq!(
+            catalog_source_identity(&raw[0]).addon_url,
+            "https://first.invalid/key"
+        );
+        assert_eq!(
+            catalog_source_identity(&raw[1]).addon_url,
+            "https://second.invalid/key"
+        );
+        let mut pages = PageState::default();
+        let key = grouping_key("https://first.invalid/key");
+        assert!(pages.accept(key.clone(), &raw, false));
+        raw.reverse();
+        assert!(
+            !pages.accept(key, &raw, true),
+            "a reordered repeated response is still a repeated page"
+        );
+    }
+
+    #[test]
+    fn focused_member_and_virtual_season_remap_to_owning_group() {
+        let one = SourceIdentity {
+            addon_url: "https://one.invalid/key".into(),
+            media_type: "series".into(),
+            id: "native:1".into(),
+        };
+        let two = SourceIdentity {
+            id: "native:2".into(),
+            ..one.clone()
+        };
+        let other_owner = SourceIdentity {
+            addon_url: "https://two.invalid/key".into(),
+            ..two.clone()
+        };
+        let anchor = CatalogAnchor {
+            index: 5,
+            display_key: "old".into(),
+            members: vec![two.clone()],
+            season: Some(2),
+        };
+        let groups = [
+            ("wrong-owner".into(), vec![other_owner], Some(2)),
+            ("season-one".into(), vec![one.clone(), two.clone()], Some(1)),
+            ("season-two".into(), vec![one, two], Some(2)),
+        ];
+        assert_eq!(locate_catalog_anchor(&anchor, &groups), 2);
+        let series = [("parent".into(), groups[2].1.clone(), None)];
+        assert_eq!(locate_catalog_anchor(&anchor, &series), 0);
+    }
+
+    #[test]
+    fn grouping_discover_reprojects_raw_keeps_owner_cursor_focus_and_pixels() {
+        const CHILD: &str = "NOVA_TEST_CATALOG_GROUPING_CHILD";
+        let Ok(root) = std::env::var(CHILD) else {
+            let root =
+                std::env::temp_dir().join(format!("nova-catalog-grouping-{}", std::process::id()));
+            let result = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","app::catalog::tests::grouping_discover_reprojects_raw_keeps_owner_cursor_focus_and_pixels","--nocapture"]).env(CHILD,&root).output().unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(7)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(7)),
+            player,
+            downloads,
+        );
+        let owner = "https://owner.invalid/secret";
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.type_defs = vec![TypeDef {
+                type_: "series".into(),
+                label: "Series".into(),
+                catalogs: vec![CatDef {
+                    id: "anime".into(),
+                    addon_url: owner.into(),
+                    supports_skip: false,
+                    genre_options: vec![],
+                    label: "Same addon label".into(),
+                    addon_label: "Same addon label".into(),
+                }],
+            }];
+            state.cache_settings.catalog_grouping_default = CatalogGroupingMode::Series;
+        }
+        let first = grouping_preview("mal:1", "tt1", 1, owner);
+        let second = grouping_preview("kitsu:2", "tt1", 2, owner);
+        bridge.apply_catalog(7, vec![first.clone(), second], false);
+        assert_eq!(app.get_catalog().row_count(), 1);
+        let old_key = catalog_grouping::display_key(&bridge.shared.lock().unwrap().previews[0]);
+        app.invoke_set_card_poster(
+            0,
+            Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(1, 1)),
+        );
+        assert!(app.get_catalog().row_data(0).unwrap().is_loaded);
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .catalog_grouping_default = CatalogGroupingMode::Original;
+        bridge.reproject_catalog_grouping_discover();
+        assert_eq!(app.get_catalog().row_count(), 2);
+        assert!(app.get_catalog().row_data(0).unwrap().is_loaded);
+        assert!(!bridge.catalog_poster_slot_matches(
+            7,
+            0,
+            &old_key,
+            first.poster.as_deref().unwrap()
+        ));
+        app.set_discover_kb_idx(1);
+        bridge.apply_catalog(
+            7,
+            vec![first, grouping_preview("anilist:3", "tt3", 1, owner)],
+            true,
+        );
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(
+                state.next_skip, 4,
+                "raw response count includes an exact-ID duplicate"
+            );
+            assert_eq!(state.catalog_raw.len(), 3);
+            assert_eq!(state.previews.len(), 3);
+            assert_eq!(catalog_source_identity(&state.previews[1]).addon_url, owner);
+        }
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .catalog_grouping_default = CatalogGroupingMode::Series;
+        bridge.reproject_catalog_grouping_discover();
+        assert_eq!(app.get_catalog().row_count(), 2);
+        assert_eq!(
+            app.get_discover_kb_idx(),
+            0,
+            "a source season follows its grouped parent"
+        );
+        assert!(app.get_catalog().row_data(0).unwrap().is_loaded);
+        bridge.apply_catalog(6, vec![grouping_preview("stale", "tt99", 1, owner)], true);
+        bridge.catalog_page_failed(6);
+        assert_eq!(bridge.shared.lock().unwrap().next_skip, 4);
+        bridge.catalog_page_failed(7);
+        assert_eq!(bridge.shared.lock().unwrap().next_skip, 4);
+        assert_eq!(
+            bridge.shared.lock().unwrap().catalog_page.stop,
+            PageStop::Failed
+        );
+        assert!(app.get_discover_pagination_paused());
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .catalog_grouping_default = CatalogGroupingMode::Original;
+        bridge.reproject_catalog_grouping_discover();
+        assert_eq!(app.get_catalog().row_count(), 3);
+        assert_eq!(bridge.shared.lock().unwrap().catalog_raw[1].id, "kitsu:2");
+    }
 
     #[test]
     fn failed_search_pages_preserve_retry_cursor() {

@@ -204,6 +204,10 @@ impl<'a> Metadata<'a> {
 }
 
 struct Prepared {
+    display_groups: Arc<library::LibraryDisplayGroups>,
+    proof_stamp: library::DisplayProofStamp,
+    proof_identities: Vec<(media_identity::TitleKey, u64)>,
+    proof_modal: Option<media_identity::TitleKey>,
     cards: Vec<library::LibraryCardSnapshot>,
     home: home::PreparedProgressHome,
     continuing: Vec<ContinueEntry>,
@@ -235,6 +239,8 @@ fn prepare(
         hidden,
         None,
         HashMap::new(),
+        library::display_proof_stamp(),
+        None,
     )
 }
 
@@ -248,14 +254,16 @@ fn prepare_with_aliases(
     hidden: &HashMap<String, u64>,
     identity: Option<&media_identity::IdentityIndex>,
     aliases: HashMap<String, EpisodeProgress>,
+    proof_stamp: library::DisplayProofStamp,
+    proof_modal: Option<media_identity::TitleKey>,
 ) -> Prepared {
-    let groups = if let Some(identity) = identity {
+    let groups = Arc::new(if let Some(identity) = identity {
         library::display_groups_from_index(&data.entries, identity)
     } else {
         library::prepare_display_groups(&data.entries, |type_, id| {
             metadata.episodes(type_, id).as_ref().clone()
         })
-    };
+    });
     let cards = library::prepare_progress_cards(&data, view, metadata, activity, &groups);
     let home = home::prepare_progress_home(&mut data, metadata, activity, new_hidden, &groups);
     watch_history::prepare_progress_history(&mut data, metadata, hidden);
@@ -276,6 +284,14 @@ fn prepare_with_aliases(
         })
         .collect();
     Prepared {
+        display_groups: groups,
+        proof_stamp,
+        proof_identities: data
+            .entries
+            .iter()
+            .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+            .collect(),
+        proof_modal,
         cards,
         home,
         continuing: std::mem::take(&mut data.continue_list),
@@ -383,8 +399,12 @@ impl Bridge {
                         }
                     };
                     let version = revision();
-                    let current =
-                        || profiles::is_current(&context) && owner.is_current(generation, version);
+                    let proof_stamp = library::display_proof_stamp();
+                    let current = || {
+                        profiles::is_current(&context)
+                            && owner.is_current(generation, version)
+                            && library::display_proof_stamp() == proof_stamp
+                    };
                     let Some(mut data) = snapshot(&bridge, current) else {
                         if !profiles::is_current(&context) {
                             owner.finish();
@@ -411,15 +431,15 @@ impl Bridge {
                         .filter(|entry| entry.type_ != "movie")
                         .map(|entry| (entry.type_.clone(), entry.id.clone()))
                         .collect::<HashSet<_>>();
-                    if let Some(item) = bridge
+                    let proof_modal = bridge
                         .shared
                         .lock()
                         .unwrap()
                         .modal_item
                         .as_ref()
-                        .filter(|item| item.type_ != "movie")
-                    {
-                        titles.insert((item.type_.clone(), item.id.clone()));
+                        .map(|item| (item.type_.clone(), item.id.clone()));
+                    if let Some(key) = proof_modal.as_ref().filter(|(type_, _)| type_ != "movie") {
+                        titles.insert(key.clone());
                     }
                     let index = media_identity::IdentityIndex::with_progress(
                         titles.into_iter().map(|(media_type, series_id)| {
@@ -470,6 +490,8 @@ impl Bridge {
                         &hidden,
                         Some(&index),
                         aliases,
+                        proof_stamp,
+                        proof_modal,
                     );
                     if !current() {
                         continue;
@@ -486,10 +508,22 @@ impl Bridge {
                             return;
                         }
                         profiles::with_context(callback_context, || {
+                            let (modal_matches, settings_match) = {
+                                let state = callback_bridge.shared.lock().unwrap();
+                                (
+                                    state
+                                        .modal_item
+                                        .as_ref()
+                                        .map(|item| (item.type_.clone(), item.id.clone()))
+                                        == prepared.proof_modal,
+                                    state.cache_settings == prepared.settings,
+                                )
+                            };
                             if !callback_owner.is_current(generation, version)
+                                || library::display_proof_stamp() != prepared.proof_stamp
+                                || !modal_matches
+                                || !settings_match
                                 || View::capture(&callback_bridge).as_ref() != Some(&view)
-                                || callback_bridge.shared.lock().unwrap().cache_settings
-                                    != prepared.settings
                             {
                                 callback_bridge.request_progress_projection();
                                 return;
@@ -528,6 +562,12 @@ impl Bridge {
                 return;
             }
         }
+        self.cache_prepared_display_groups(
+            prepared.display_groups,
+            prepared.proof_stamp,
+            prepared.proof_identities,
+            prepared.proof_modal,
+        );
         let action = {
             let mut state = self.shared.lock().unwrap();
             if state.restoring_models {
@@ -1164,6 +1204,53 @@ mod tests {
                 );
             }
         }
+        // Accepted worker proof can warm the UI memo without another cache
+        // pass. Unrelated durable progress/settings writes preserve that Arc.
+        let groups = Arc::new(library::prepare_display_groups(&entries, |type_, id| {
+            read_episodes_cache_for(type_, id).unwrap_or_default()
+        }));
+        let stamp = library::display_proof_stamp();
+        let modal = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|item| (item.type_.clone(), item.id.clone()));
+        let identities = entries
+            .iter()
+            .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+            .collect::<Vec<_>>();
+        bridge.cache_prepared_display_groups(
+            groups.clone(),
+            stamp,
+            identities.clone(),
+            modal.clone(),
+        );
+        assert!(Arc::ptr_eq(&groups, &bridge.library_display_groups()));
+        let (progress, settings) = {
+            let state = bridge.shared.lock().unwrap();
+            (state.progress.clone(), state.cache_settings.clone())
+        };
+        write_json("episode_progress", &progress);
+        write_json("settings", &settings);
+        assert_eq!(library::display_proof_stamp(), stamp);
+        assert!(
+            Arc::ptr_eq(&groups, &bridge.library_display_groups()),
+            "watch/settings writes cannot cause a UI proof rescan"
+        );
+        let videos = read_episodes_cache_for("series", "resume").unwrap();
+        write_episodes_cache_for("series", "resume", &videos);
+        assert_ne!(
+            library::display_proof_stamp(),
+            stamp,
+            "real episode cache replacement invalidates proof"
+        );
+        bridge.cache_prepared_display_groups(groups.clone(), stamp, identities, modal);
+        assert!(
+            !Arc::ptr_eq(&groups, &bridge.library_display_groups()),
+            "stale worker proof cannot replace newer metadata"
+        );
         drop(writer);
     }
 }

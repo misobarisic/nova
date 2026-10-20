@@ -164,6 +164,10 @@ impl Bridge {
         discover_index: Option<usize>,
         watch_now: bool,
     ) {
+        if !searching && self.open_catalog_group(&preview, generation, discover_index, watch_now) {
+            return;
+        }
+        let preview = self.catalog_grouping_source_preview(preview);
         self.shared.lock().unwrap().related_detail_history.clear();
         self.open_preview_inner(
             preview,
@@ -184,6 +188,7 @@ impl Bridge {
         watch_now: bool,
         record_source: bool,
     ) {
+        let catalog_opening = self.begin_catalog_detail_open();
         self.cancel_season_download();
         let _ = (generation, searching);
         let app = match self.app() {
@@ -245,6 +250,8 @@ impl Bridge {
             });
             state.streams.clear();
         }
+
+        self.bind_catalog_detail_open(catalog_opening);
 
         // The last resolved detail text takes precedence over a thinner
         // catalog preview, so reentry does not replay the same corrections.
@@ -837,10 +844,21 @@ impl Bridge {
 
         let candidates: Vec<Installed> = {
             let state = self.shared.lock().unwrap();
+            let owner = state
+                .modal_item
+                .as_ref()
+                .and_then(|m| state.catalog_detail.owner(m));
             state
                 .installed
                 .iter()
-                .filter(|a| a.enabled && a.manifest.accepts("meta", &modal_type, &id))
+                .filter(|a| {
+                    a.enabled
+                        && a.available
+                        && a.manifest.accepts("meta", &modal_type, &id)
+                        && owner.is_none_or(|(source, generation)| {
+                            a.url == source.addon_url && Some(a.generation) == generation
+                        })
+                })
                 .cloned()
                 .collect()
         };
@@ -863,53 +881,158 @@ impl Bridge {
         // must not yank the user out of a deeper view) or this is the very
         // first population (then the picker must be shown unconditionally).
         let refresh = had_cache;
+        let scoped = self.shared.lock().unwrap().catalog_detail.active();
         let bridge = self.clone();
         // Meta endpoint URLs built on the main thread; addons are tried in
         // order via fetch-continuations until one lists episodes.
-        let meta_urls: Vec<String> = candidates
+        let meta_urls = candidates
             .iter()
-            .filter_map(|c| Addon::new(&c.url).ok())
-            .map(|a| a.meta_url(&modal_type, &id))
-            .collect();
-
+            .filter_map(|installed| {
+                let addon = Addon::new(&installed.url).ok()?;
+                Some((
+                    nova_providers::catalog_grouping::SourceIdentity {
+                        addon_url: installed.url.clone(),
+                        media_type: modal_type.clone(),
+                        id: id.clone(),
+                    },
+                    installed.generation,
+                    addon.meta_url(&modal_type, &id),
+                ))
+            })
+            .collect::<VecDeque<_>>();
+        #[allow(clippy::too_many_arguments)]
         fn run(
             bridge: Bridge,
             modal_type: String,
             id: String,
             refresh: bool,
             open_token: Arc<()>,
-            mut urls: Vec<String>,
-            mut found: Option<MetaItem>,
+            mut urls: VecDeque<(
+                nova_providers::catalog_grouping::SourceIdentity,
+                u64,
+                String,
+            )>,
+            profile: profiles::Context,
+            revision: u64,
+            scoped: bool,
         ) {
-            if let Some(mut item) = found {
-                item.videos = write_episode_meta_cache_for(&modal_type, &id, &item);
-                let bridge2 = bridge.clone();
-                let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                    bridge2.apply_episode_meta(id, Some(item), refresh, open_token);
-                });
-                return;
-            }
-            let Some(url) = (!urls.is_empty()).then(|| urls.remove(0)) else {
-                let bridge2 = bridge.clone();
-                let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                    bridge2.apply_episode_meta(id, None, refresh, open_token);
+            let Some((source, owner_generation, url)) = urls.pop_front() else {
+                let _ = profiles::invoke_from_event_loop(move || {
+                    bridge.apply_episode_meta_owned(id, None, refresh, open_token, None)
                 });
                 return;
             };
-            let bridge2 = bridge.clone();
-            net::fetch_bytes(url, move |result| {
-                if let Ok(bytes) = result
-                    && let Ok(Some(item)) = Addon::parse_meta(&bytes)
-                    && meta_matches_request(&item, &modal_type, &id)
-                    && item.videos.iter().any(|v| v.season.is_some())
-                {
-                    found = Some(item);
-                }
-                run(bridge2, modal_type, id, refresh, open_token, urls, found);
+            profiles::with_context(profile.clone(), || {
+                net::fetch_bytes(url, move |result| {
+                    profiles::with_context(profile.clone(), || {
+                        let found = result
+                            .ok()
+                            .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                            .filter(|item| {
+                                meta_matches_request(item, &modal_type, &id)
+                                    && (item.videos.iter().any(|v| v.season.is_some())
+                                        || (!item.videos.is_empty() && scoped))
+                            });
+                        let Some(mut item) = found else {
+                            run(
+                                bridge, modal_type, id, refresh, open_token, urls, profile,
+                                revision, scoped,
+                            );
+                            return;
+                        };
+                        if !profiles::is_current(&profile) {
+                            return;
+                        }
+                        let owner_current =
+                            bridge.shared.lock().unwrap().installed.iter().any(|a| {
+                                a.url == source.addon_url
+                                    && a.enabled
+                                    && a.available
+                                    && a.generation == owner_generation
+                            });
+                        if revision != nova_providers::metadata_revision() || !owner_current {
+                            let receipt = catalog_detail::Receipt {
+                                source,
+                                owner_generation,
+                                revision,
+                                evidence: None,
+                            };
+                            let _ = profiles::invoke_from_event_loop(move || {
+                                bridge.apply_episode_meta_owned(
+                                    id,
+                                    None,
+                                    refresh,
+                                    open_token,
+                                    Some(receipt),
+                                )
+                            });
+                            return;
+                        }
+                        let evidence = profiles::with_context(profile.clone(), || {
+                            let cached = nova_providers::catalog_grouping::cached_evidence(
+                                &source, revision,
+                            )
+                            .flatten();
+                            // A same-ID inventory alone cannot revalidate old
+                            // canonical triples. The provider verdict separates
+                            // a legitimate external broker proof from removed,
+                            // partial or contradictory owner mapping fields.
+                            let proof =
+                                nova_providers::catalog_grouping::evidence_for_refreshed_detail(
+                                    &source,
+                                    &item,
+                                    &source.addon_url,
+                                    cached,
+                                );
+                            // Evidence persistence stays on this worker. A changed or
+                            // newly unmapped inventory clears obsolete catalog proof.
+                            if revision == nova_providers::metadata_revision() {
+                                nova_providers::catalog_grouping::remember_evidence(
+                                    &source,
+                                    revision,
+                                    proof.clone(),
+                                );
+                            }
+                            // A virtual view is bound to this exact owner's complete
+                            // native inventory, not a merged/sliced canonical cache.
+                            // Keep even episodes without native season numbers.
+                            item.videos = if scoped {
+                                write_episodes_cache_for(&modal_type, &id, &item.videos)
+                            } else {
+                                write_episode_meta_cache_for(&modal_type, &id, &item)
+                            };
+                            proof
+                        });
+                        let receipt = catalog_detail::Receipt {
+                            source,
+                            owner_generation,
+                            revision,
+                            evidence,
+                        };
+                        let _ = profiles::invoke_from_event_loop(move || {
+                            bridge.apply_episode_meta_owned(
+                                id,
+                                Some(item),
+                                refresh,
+                                open_token,
+                                Some(receipt),
+                            )
+                        });
+                    })
+                })
             });
         }
-
-        run(bridge, modal_type, id, refresh, open_token, meta_urls, None);
+        run(
+            bridge,
+            modal_type,
+            id,
+            refresh,
+            open_token,
+            meta_urls,
+            profiles::capture(),
+            nova_providers::metadata_revision(),
+            scoped,
+        );
     }
 
     /// Restore the last resolved detail text over catalog/library snapshots.
@@ -1159,12 +1282,24 @@ impl Bridge {
     /// still receives the fresh videos in place when the show is unfinished.
     /// When no addon can provide episodes, fall back to plain streams unless
     /// a cached list is already being shown.
+    #[cfg(test)]
     pub(super) fn apply_episode_meta(
         &self,
         id: String,
         found: Option<MetaItem>,
         refresh: bool,
         open_token: Arc<()>,
+    ) {
+        self.apply_episode_meta_owned(id, found, refresh, open_token, None);
+    }
+
+    pub(super) fn apply_episode_meta_owned(
+        &self,
+        id: String,
+        found: Option<MetaItem>,
+        refresh: bool,
+        open_token: Arc<()>,
+        receipt: Option<catalog_detail::Receipt>,
     ) {
         let (still_open, modal_type) = {
             let mut state = self.shared.lock().unwrap();
@@ -1179,6 +1314,39 @@ impl Bridge {
         if !still_open {
             return;
         }
+        if !self.catalog_detail_receipt_current(receipt.as_ref()) {
+            self.publish_catalog_detail_scope();
+            self.apply_season_cards();
+            self.refresh_episode_rows();
+            return;
+        }
+        if receipt.is_some() {
+            // The worker already persisted fresh evidence. Reproject cards
+            // without making an invalid detail selection valid again.
+            self.refresh_catalog_grouping_evidence();
+        }
+        if !self.accept_catalog_detail_meta(receipt.as_ref(), found.as_ref()) {
+            if let Some(item) = found.as_ref() {
+                self.tracking_metadata(id.clone(), modal_type.clone(), &item.videos);
+                self.upgrade_detail_meta(&id, item, true, true);
+            }
+            {
+                let mut state = self.shared.lock().unwrap();
+                if let Some(modal) = state.modal_item.as_mut() {
+                    modal.episodes_loading = false;
+                    modal.pending_watch_now = None;
+                    if let Some(item) = found {
+                        modal.videos = item.videos;
+                        modal.seasons = ordered_seasons(&modal.videos);
+                    }
+                }
+            }
+            self.publish_catalog_detail_scope();
+            self.apply_season_cards();
+            self.refresh_episode_rows();
+            return;
+        }
+        self.publish_catalog_detail_scope();
         if let Some(item) = found.as_ref() {
             self.tracking_metadata(id.clone(), modal_type.clone(), &item.videos);
         }
@@ -1219,10 +1387,11 @@ impl Bridge {
         }
         match found {
             Some(item) => {
+                let scoped = self.shared.lock().unwrap().catalog_detail.active();
                 let videos: Vec<Video> = item
                     .videos
                     .into_iter()
-                    .filter(|v| v.season.is_some())
+                    .filter(|v| scoped || v.season.is_some())
                     .collect();
                 if !refresh && self.history_stream_selected() {
                     self.update_episode_videos(id, videos);
@@ -1322,8 +1491,9 @@ impl Bridge {
     /// and thumbnail too, including corrected canonical season numbering.
     /// Current-season thumbnails are re-queued by `refresh_episode_rows`.
     pub(super) fn update_episode_videos(&self, id: String, videos: Vec<Video>) {
+        self.observe_catalog_detail_inventory(&id, &videos);
         let seasons = ordered_seasons(&videos);
-        if seasons.is_empty() {
+        if seasons.is_empty() && !self.shared.lock().unwrap().catalog_detail.active() {
             return; // never blank an open picker on a bad refresh
         }
         let (season_names, season_idx, selected, thumbnail_changed) = {
@@ -1339,7 +1509,7 @@ impl Bridge {
                 .and_then(|video| video.thumbnail.clone());
             m.videos = videos;
             m.seasons = seasons;
-            m.season_index = m.season_index.min(m.seasons.len() - 1);
+            m.season_index = m.season_index.min(m.seasons.len().saturating_sub(1));
             let idx = m.season_index;
             let names = m
                 .seasons
@@ -1401,7 +1571,9 @@ impl Bridge {
                 Some(m) => m,
                 None => return,
             };
-            let season_val = m.seasons.get(m.season_index).copied();
+            let season_val = (!state.catalog_detail.active())
+                .then(|| m.seasons.get(m.season_index).copied())
+                .flatten();
             let filter = app.get_episode_filter().to_string();
             // A later visit restores the content choices underneath, not
             // the temporary stream selector or its navigation position.
@@ -1594,19 +1766,20 @@ impl Bridge {
             let Some(m) = state.modal_item.as_ref() else {
                 return (0, 0, Vec::new());
             };
-            if m.seasons.is_empty() {
+            let visible_seasons = catalog_detail::seasons(&state, m);
+            if visible_seasons.is_empty() {
                 return (0, 0, Vec::new());
             }
             let date_relative = state.cache_settings.date_relative;
             let show_unwatched = state.cache_settings.show_unwatched_thumbs;
-            let season = m.seasons[m.season_index.min(m.seasons.len() - 1)];
+            let season = visible_seasons[m.season_index.min(visible_seasons.len() - 1)];
             // The card filter box narrows the same season list the picker
             // shows (episode_picked resolves through this same filter).
             let filter = self
                 .app()
                 .map(|a| a.get_episode_filter().to_string())
                 .unwrap_or_default();
-            let episodes: Vec<_> = season_episodes(&m.videos, season)
+            let episodes: Vec<_> = catalog_detail::episodes(&state, m, season)
                 .into_iter()
                 .filter(|v| episode_matches_filter(v, &filter))
                 .collect();
@@ -1726,6 +1899,7 @@ impl Bridge {
     /// Render the current filtered page, preserving correctly identified live
     /// images even when their pixels have been evicted from the shared cache.
     pub(super) fn apply_episode_rows(&self) {
+        self.refresh_catalog_detail_season_names();
         let Some(app) = self.app() else {
             return;
         };
@@ -1832,8 +2006,16 @@ impl Bridge {
                 }
             }
             let mut fractions: HashMap<u32, (usize, usize)> = HashMap::new();
-            for video in &modal.videos {
-                let Some(season) = video.season else { continue };
+            let visible_videos = catalog_detail::visible_native_videos(&state, modal);
+            let virtual_season = state
+                .catalog_detail
+                .active()
+                .then(|| catalog_detail::seasons(&state, modal).first().copied())
+                .flatten();
+            for video in visible_videos.iter() {
+                let Some(season) = virtual_season.or(video.season) else {
+                    continue;
+                };
                 let tally = fractions.entry(season).or_default();
                 tally.0 += 1;
                 tally.1 += usize::from(
@@ -1897,12 +2079,14 @@ impl Bridge {
                     .app()
                     .map(|a| a.get_episode_filter().to_string())
                     .unwrap_or_default();
-                m.seasons.get(m.season_index).map_or(0, |&season| {
-                    season_episodes(&m.videos, season)
-                        .into_iter()
-                        .filter(|v| episode_matches_filter(v, &filter))
-                        .count()
-                })
+                catalog_detail::seasons(&state, m)
+                    .get(m.season_index)
+                    .map_or(0, |&season| {
+                        catalog_detail::episodes(&state, m, season)
+                            .into_iter()
+                            .filter(|v| episode_matches_filter(v, &filter))
+                            .count()
+                    })
             })
         };
         let pages = page_count(total) as i32;
@@ -1982,10 +2166,10 @@ impl Bridge {
         let Some(m) = state.modal_item.as_ref() else {
             return Vec::new();
         };
-        m.seasons
+        catalog_detail::seasons(&state, m)
             .iter()
             .map(|&s| {
-                let url = season_thumb_url(&m.videos, &m.season_backdrops, s);
+                let url = catalog_detail::season_artwork(&state, m, s);
                 let artwork_identity =
                     detail_artwork_identity(m, "season", &s.to_string(), url.as_deref());
                 let (thumb, has_thumb) = match url.as_deref().and_then(|url| {
@@ -1998,7 +2182,7 @@ impl Bridge {
                 // playback both land here). Every known episode counts,
                 // including unaired ones: a season with episodes still to
                 // come never reads fully watched.
-                let eps = season_episodes(&m.videos, s);
+                let eps = catalog_detail::episodes(&state, m, s);
                 let total = eps.len();
                 let watched_n = eps
                     .iter()
@@ -2046,8 +2230,9 @@ impl Bridge {
     }
 
     pub(super) fn show_episode_picker(&self, id: String, videos: Vec<Video>) {
+        self.observe_catalog_detail_inventory(&id, &videos);
         let seasons = ordered_seasons(&videos);
-        if seasons.is_empty() {
+        if seasons.is_empty() && !self.shared.lock().unwrap().catalog_detail.active() {
             self.refresh_watch_action();
             self.resolve_watch_now();
             self.start_stream_search(id);
@@ -2063,6 +2248,7 @@ impl Bridge {
             .cloned();
         let (season_names, season_idx) = {
             let mut state = self.shared.lock().unwrap();
+            let scoped = state.catalog_detail.active();
             let m = match state.modal_item.as_mut() {
                 Some(m) if m.id == id => m,
                 _ => return,
@@ -2071,6 +2257,7 @@ impl Bridge {
             m.seasons = seasons;
             m.season_index = snapshot
                 .as_ref()
+                .filter(|_| !scoped)
                 .and_then(|s| s.season)
                 .and_then(|sv| m.seasons.iter().position(|&x| x == sv))
                 .unwrap_or(0);
@@ -2110,11 +2297,15 @@ impl Bridge {
         self.reset_episode_page();
         let idx = {
             let mut state = self.shared.lock().unwrap();
-            let m = match state.modal_item.as_mut() {
-                Some(m) if !m.seasons.is_empty() => m,
-                _ => return,
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
             };
-            m.season_index = index.min(m.seasons.len() - 1);
+            let total = catalog_detail::seasons(&state, modal).len();
+            if total == 0 {
+                return;
+            }
+            let m = state.modal_item.as_mut().unwrap();
+            m.season_index = index.min(total - 1);
             m.season_index
         };
         if let Some(app) = self.app() {
@@ -2137,15 +2328,14 @@ impl Bridge {
     ) -> Option<(String, String, Vec<String>)> {
         let state = self.shared.lock().unwrap();
         let m = state.modal_item.as_ref()?;
-        if m.seasons.is_empty() {
-            return None;
-        }
-        let season = m.seasons[m.season_index.min(m.seasons.len() - 1)];
+        let visible_seasons = catalog_detail::seasons(&state, m);
+        let season =
+            *visible_seasons.get(m.season_index.min(visible_seasons.len().saturating_sub(1)))?;
         let filter = self
             .app()
             .map(|a| a.get_episode_filter().to_string())
             .unwrap_or_default();
-        let season_eps = season_episodes(&m.videos, season);
+        let season_eps = catalog_detail::episodes(&state, m, season);
         let ordered: Vec<String> = season_eps.iter().map(|v| v.id.clone()).collect();
         let video = *season_eps
             .iter()
@@ -2318,14 +2508,12 @@ impl Bridge {
             let Some(m) = state.modal_item.as_ref() else {
                 return;
             };
-            if m.seasons.is_empty() {
-                return;
-            }
-            let Some(&season) = m.seasons.get(index) else {
+            let visible_seasons = catalog_detail::seasons(&state, m);
+            let Some(&season) = visible_seasons.get(index) else {
                 return;
             };
             // Bulk actions skip unaired episodes (known future air date).
-            let eps: Vec<&Video> = season_episodes(&m.videos, season)
+            let eps: Vec<&Video> = catalog_detail::episodes(&state, m, season)
                 .into_iter()
                 .filter(|v| episode_is_out(v, today))
                 .collect();
@@ -2372,17 +2560,20 @@ impl Bridge {
         let (series_id, request_id, video) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
-                Some(m) if !m.seasons.is_empty() => m,
+                Some(m) => m,
                 _ => return,
             };
-            let season = m.seasons[m.season_index];
+            let visible_seasons = catalog_detail::seasons(&state, m);
+            let Some(&season) = visible_seasons.get(m.season_index) else {
+                return;
+            };
             // Same filter current_episode_page applies, so a filtered card
             // opens its own episode (row order matches the list).
             let filter = self
                 .app()
                 .map(|a| a.get_episode_filter().to_string())
                 .unwrap_or_default();
-            let season_eps = season_episodes(&m.videos, season);
+            let season_eps = catalog_detail::episodes(&state, m, season);
             let episodes: Vec<&&Video> = season_eps
                 .iter()
                 .filter(|v| episode_matches_filter(v, &filter))
@@ -2401,19 +2592,34 @@ impl Bridge {
         self.cancel_watch_now();
         let selection = {
             let mut state = self.shared.lock().unwrap();
-            let Some(m) = state.modal_item.as_mut().filter(|m| m.id == series_id) else {
+            let Some(m) = state.modal_item.as_ref().filter(|m| m.id == series_id) else {
                 return;
             };
+            if !catalog_detail::allows(&state, m, episode_id) {
+                return;
+            }
             let Some(video) = m.videos.iter().find(|v| v.id == episode_id).cloned() else {
                 return;
             };
-            let Some(season_index) = m.seasons.iter().position(|s| Some(*s) == video.season) else {
+            let visible = catalog_detail::seasons(&state, m);
+            let season_index = if state.catalog_detail.active() {
+                0
+            } else {
+                let Some(index) = visible.iter().position(|s| Some(*s) == video.season) else {
+                    return;
+                };
+                index
+            };
+            let Some(&season) = visible.get(season_index) else {
                 return;
             };
-            let index = season_episodes(&m.videos, m.seasons[season_index])
+            let Some(index) = catalog_detail::episodes(&state, m, season)
                 .iter()
                 .position(|v| v.id == episode_id)
-                .unwrap();
+            else {
+                return;
+            };
+            let m = state.modal_item.as_mut().unwrap();
             m.season_index = season_index;
             m.episode_page = index / EPISODE_PAGE_SIZE;
             (video, season_index, index)
@@ -2608,7 +2814,7 @@ impl Bridge {
             state
                 .modal_item
                 .as_ref()
-                .map(|m| !m.seasons.is_empty())
+                .map(|m| !catalog_detail::seasons(&state, m).is_empty())
                 .unwrap_or(false)
         };
         if !is_episodic {
@@ -2643,6 +2849,7 @@ impl Bridge {
             let video = modal
                 .videos
                 .iter()
+                .filter(|video| catalog_detail::allows(&state, modal, &video.id))
                 .filter_map(|video| {
                     let progress = state
                         .progress
@@ -2656,14 +2863,19 @@ impl Bridge {
                 .max_by_key(|(video, progress)| (progress.updated_at_secs, video.id.as_str()))
                 .map(|(video, _)| video.clone());
             video.and_then(|video| {
-                let modal = state.modal_item.as_mut()?;
-                let season_index = modal
-                    .seasons
-                    .iter()
-                    .position(|season| Some(*season) == video.season)?;
-                let index = season_episodes(&modal.videos, modal.seasons[season_index])
+                let modal = state.modal_item.as_ref()?;
+                let visible = catalog_detail::seasons(&state, modal);
+                let season_index = if state.catalog_detail.active() {
+                    0
+                } else {
+                    visible
+                        .iter()
+                        .position(|season| Some(*season) == video.season)?
+                };
+                let index = catalog_detail::episodes(&state, modal, *visible.get(season_index)?)
                     .iter()
                     .position(|v| v.id == video.id)?;
+                let modal = state.modal_item.as_mut()?;
                 modal.season_index = season_index;
                 modal.episode_page = index / EPISODE_PAGE_SIZE;
                 Some((season_index, index % EPISODE_PAGE_SIZE))
@@ -2733,6 +2945,7 @@ impl Bridge {
     /// Keep the advertised episode identical to the primary action's target,
     /// independent of the selected season, text filter or episode page.
     pub(super) fn refresh_watch_action(&self) {
+        self.publish_catalog_detail_scope();
         self.refresh_watch_queue();
         self.refresh_watch_action_label();
     }
@@ -2745,12 +2958,17 @@ impl Bridge {
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            if modal.type_ == "movie" || (!modal.episodes_loading && modal.seasons.is_empty()) {
-                watch_action_label(&modal.id, None, &state.progress)
-            } else if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
-                watch_action_label(&modal.id, Some(&modal.videos), &state.progress)
-            } else {
+            if !catalog_detail::ready(&state, modal) {
                 text::tr("Choose an episode").into()
+            } else if modal.type_ == "movie"
+                || (!state.catalog_detail.active()
+                    && !modal.episodes_loading
+                    && modal.seasons.is_empty())
+            {
+                watch_action_label(&modal.id, None, &state.progress)
+            } else {
+                let videos = catalog_detail::view_videos(&state, modal);
+                watch_action_label(&modal.id, Some(&videos), &state.progress)
             }
         };
         if let Some(app) = self.app() {
@@ -2761,15 +2979,27 @@ impl Bridge {
     /// Movie and episode actions open the same selector; streams remain a
     /// manual choice so quality/addon preferences are respected.
     pub(super) fn watch_now(&self) {
+        self.publish_catalog_detail_scope();
+        {
+            let state = self.shared.lock().unwrap();
+            if state
+                .modal_item
+                .as_ref()
+                .is_some_and(|m| !catalog_detail::ready(&state, m))
+            {
+                return;
+            }
+        }
         let direct_streams = {
             let mut state = self.shared.lock().unwrap();
+            let scoped = state.catalog_detail.active();
             let Some(modal) = state.modal_item.as_mut() else {
                 return;
             };
             // Some addons can stream a title without providing episodes.
             // Keep that existing fallback reachable through the hero action.
-            let direct =
-                modal.type_ == "movie" || (!modal.episodes_loading && modal.seasons.is_empty());
+            let direct = modal.type_ == "movie"
+                || (!scoped && !modal.episodes_loading && modal.seasons.is_empty());
             modal.pending_watch_now = if direct {
                 None
             } else {
@@ -2833,12 +3063,23 @@ impl Bridge {
     /// no cached candidate, wait for metadata before using the direct-stream
     /// fallback for providers that cannot list episodes.
     fn resolve_watch_now(&self) {
+        {
+            let state = self.shared.lock().unwrap();
+            if state
+                .modal_item
+                .as_ref()
+                .is_some_and(|m| !catalog_detail::ready(&state, m))
+            {
+                return;
+            }
+        }
         let direct_origin = {
             let mut state = self.shared.lock().unwrap();
+            let scoped = state.catalog_detail.active();
             let Some(modal) = state.modal_item.as_mut() else {
                 return;
             };
-            if !modal.episodes_loading && modal.seasons.is_empty() {
+            if !scoped && !modal.episodes_loading && modal.seasons.is_empty() {
                 modal.pending_watch_now.take()
             } else {
                 None
@@ -2860,13 +3101,21 @@ impl Bridge {
             let Some(origin) = modal.pending_watch_now else {
                 return;
             };
+            let visible_videos = catalog_detail::view_videos(&state, modal);
             let target =
-                watch_now_episode(&modal.id, &modal.videos, &state.progress).and_then(|video| {
-                    let season = video.season?;
-                    let row = Self::filtered_row_index(&modal.videos, season, "", &video.id)?;
-                    let season_index = modal.seasons.iter().position(|&s| s == season)?;
+                watch_now_episode(&modal.id, &visible_videos, &state.progress).and_then(|video| {
+                    let visible = catalog_detail::seasons(&state, modal);
+                    let season_index = if state.catalog_detail.active() {
+                        0
+                    } else {
+                        visible.iter().position(|&s| Some(s) == video.season)?
+                    };
+                    let row = catalog_detail::episodes(&state, modal, *visible.get(season_index)?)
+                        .iter()
+                        .position(|v| v.id == video.id)?;
                     Some((season_index, row))
                 });
+            drop(visible_videos);
             if target.is_none() && modal.episodes_loading {
                 return;
             }
@@ -3604,8 +3853,9 @@ impl Bridge {
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            modal.seasons.clone()
+            catalog_detail::seasons(&state, modal)
         };
+        self.publish_catalog_detail_scope();
         app.set_season_names(
             Rc::new(VecModel::from(
                 seasons

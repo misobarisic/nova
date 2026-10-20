@@ -80,6 +80,10 @@ export global DiscoverBridge {
     callback settings_picked();
     callback more_picked();
     callback about_picked();
+    in-out property <bool> pagination_paused;
+    in-out property <string> pagination_hint;
+    callback continue_pagination();
+    callback remap_catalog_anchor(int,int);
     callback load_more();
     callback visible_range(int, int);
 }

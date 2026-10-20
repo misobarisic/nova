@@ -1,14 +1,15 @@
+import { CatalogSourceChooser } from "catalog-source-chooser.slint";
 import { CompletionRatingPrompt } from "completion-rating.slint";
 import { PlatformIcon } from "platform-icon.slint";
 import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CatalogGroupingBridge, CatalogGroupingRow, CatalogGroupMemberRow, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { CatalogGroupingBridge, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -128,6 +129,33 @@ export component AppWindow inherits Window {
     callback party_continue_without_waiting();
     public function party_bridge_continue_without_waiting() { root.party_continue_without_waiting(); }
 
+    in-out property <bool> discover_pagination_paused <=> DiscoverBridge.pagination_paused;
+    in-out property <string> discover_pagination_hint <=> DiscoverBridge.pagination_hint;
+    callback discover_continue_pagination();
+    public function discover_bridge_continue_pagination() { root.discover_continue_pagination(); }
+    in-out property <int> catalog_grouping_default_index <=> CatalogGroupingBridge.default_index;
+    in-out property <[CatalogGroupingRow]> catalog_grouping_rows <=> CatalogGroupingBridge.rows;
+    in-out property <string> catalog_grouping_search <=> CatalogGroupingBridge.search;
+    in-out property <bool> catalog_grouping_chooser_open <=> CatalogGroupingBridge.chooser_open;
+    in-out property <string> catalog_grouping_chooser_title <=> CatalogGroupingBridge.chooser_title;
+    in-out property <[CatalogGroupMemberRow]> catalog_grouping_chooser_members <=> CatalogGroupingBridge.chooser_members;
+    in-out property <bool> catalog_grouping_detail_scope_active <=> CatalogGroupingBridge.detail_scope_active;
+    in-out property <string> catalog_grouping_detail_season_label <=> CatalogGroupingBridge.detail_season_label;
+    in-out property <string> catalog_grouping_detail_scope_notice <=> CatalogGroupingBridge.detail_scope_notice;
+    callback catalog_grouping_default_changed(int);
+    callback catalog_grouping_override_changed(string,int,int);
+    callback catalog_grouping_override_removed(string);
+    callback catalog_grouping_search_changed(string);
+    callback catalog_grouping_member_picked(string);
+    callback catalog_grouping_chooser_closed();
+    callback catalog_grouping_detail_all_seasons();
+    public function catalog_grouping_bridge_default_changed(value:int) { root.catalog_grouping_default_changed(value); }
+    public function catalog_grouping_bridge_override_changed(key:string,surface:int,mode:int) { root.catalog_grouping_override_changed(key,surface,mode); }
+    public function catalog_grouping_bridge_override_removed(key:string) { root.catalog_grouping_override_removed(key); }
+    public function catalog_grouping_bridge_search_changed(query:string) { root.catalog_grouping_search_changed(query); }
+    public function catalog_grouping_bridge_member_picked(key:string) { root.catalog_grouping_member_picked(key); }
+    public function catalog_grouping_bridge_chooser_closed() { root.catalog_grouping_chooser_closed(); }
+    public function catalog_grouping_bridge_detail_all_seasons() { root.catalog_grouping_detail_all_seasons(); }
     in-out property <[RemoteOfferRow]> remote_offers <=> RemoteBridge.offers;
     in-out property <[RemoteDeviceRow]> remote_devices <=> RemoteBridge.devices;
     in-out property <bool> remote_has_playing_devices <=> RemoteBridge.has_playing_devices;
@@ -2290,7 +2318,10 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if root.profiles_require_selection && (e.text == Key.Back || e.text == Key.Escape) {
+            if CatalogGroupingBridge.chooser_visual_retained && !CatalogGroupingBridge.chooser_open { if e.text == Key.Back { root.system_back_held = true; } accept }
+            else if CatalogGroupingBridge.chooser_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
+                if !e.repeat && (e.text != Key.Back || !root.system_back_held) { if e.text == Key.Back { root.system_back_held = true; } CatalogGroupingBridge.back_request += 1; } accept
+            } else if root.profiles_require_selection && (e.text == Key.Back || e.text == Key.Escape) {
                 if !e.repeat && (e.text != Key.Back || !root.system_back_held) {
                     root.system_back_held = e.text == Key.Back;
                     root.page_back_request += 1;
@@ -2852,6 +2883,8 @@ export component AppWindow inherits Window {
             safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
         }
     }
+    // Always mounted state holder retains its own immutable rendered snapshot.
+    CatalogSourceChooser { width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; }
     if root.remote_replacement_token != "": RemoteReplacementDialog {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
