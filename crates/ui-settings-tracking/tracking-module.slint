@@ -1,6 +1,7 @@
-import { SettingsBridge, SettingsContent, Theme } from "@NovaUiShared";
+import { SettingsBridge, SettingsContent, SettingsSync, Theme } from "@NovaUiShared";
 
 import { SettingsCard, SettingsInput } from "../ui/settings-controls.slint";
+import { SettingSyncBadge } from "../ui/settings-sync.slint";
 
 import { TrackingSettings } from "../ui/tracking.slint";
 import { StremioSettings } from "../ui/stremio.slint";
@@ -58,6 +59,11 @@ export component SettingsTrackingModule inherits Window {
             VerticalLayout {
                 alignment: start; spacing: 12px; padding: 16px;
                 Text { text: @tr("TMDB recommendations"); font-size: 16px; font-weight: 700; color: Theme.current.text_bright; }
+                if SettingsSync.enabled: SettingSyncBadge {
+                    setting_key: "tmdb_api_key";
+                    setting_title: @tr("TMDB recommendations");
+                    max-width: Math.min(self.preferred-width, parent.width);
+                }
                 Text {
                     text: @tr("Use TMDB for Similar titles and Because you watched. Leave the key empty to use installed metadata sources.");
                     color: Theme.current.text_secondary; font-size: 14px; wrap: word-wrap;

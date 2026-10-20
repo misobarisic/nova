@@ -660,3 +660,149 @@ fn comparison_modal_keeps_long_folder_values_inside_the_panel() {
     }
     slint::select_bundled_translation("en").unwrap();
 }
+
+#[test]
+fn tmdb_badge_opens_masked_comparison_and_switches_scope() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tmdb_badge_opens_masked_comparison_and_switches_scope"
+    )) {
+        return;
+    }
+    // This case runs in its own subprocess, so both backend languages can be
+    // checked here without a separate UI library test executable.
+    for (language, configured, empty) in [
+        (
+            nova_config::Language::English,
+            "Configured (hidden)",
+            "Not configured",
+        ),
+        (
+            nova_config::Language::Croatian,
+            "Postavljeno (skriveno)",
+            "Nije postavljeno",
+        ),
+    ] {
+        nova_ui::backend_text::set_language(language);
+        assert_eq!(
+            nova_ui::backend_text::setting_sync_value(
+                "tmdb_api_key",
+                &serde_json::json!("0123456789abcdef0123456789abcdef")
+            ),
+            configured
+        );
+        for value in [
+            serde_json::json!(""),
+            serde_json::json!("   "),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(
+                nova_ui::backend_text::setting_sync_value("tmdb_api_key", &value),
+                empty
+            );
+        }
+    }
+    nova_ui::backend_text::set_language(nova_config::Language::English);
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(12);
+    app.set_settings_detail_open(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 4000));
+    let rows = Rc::new(VecModel::from(vec![nova::SettingSyncInfo {
+        key: "tmdb_api_key".into(),
+        status: 1,
+        can_override: true,
+        local_value: nova_ui::backend_text::setting_sync_value(
+            "tmdb_api_key",
+            &serde_json::json!("local-key"),
+        )
+        .into(),
+        shared_value: nova_ui::backend_text::setting_sync_value(
+            "tmdb_api_key",
+            &serde_json::json!("shared-key"),
+        )
+        .into(),
+        has_shared: true,
+        shared_supported: true,
+    }]));
+    app.global::<nova::SettingsSync>()
+        .set_rows(rows.clone().into());
+    app.global::<nova::SettingsSync>()
+        .on_lookup(|key| if key == "tmdb_api_key" { 0 } else { -1 });
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    let updated = rows.clone();
+    app.global::<nova::SettingsSync>()
+        .on_override_changed(move |key, enabled| {
+            recorded.borrow_mut().push((key.to_string(), enabled));
+            let mut row = updated.row_data(0).unwrap();
+            row.status = if enabled { 2 } else { 1 };
+            updated.set_row_data(0, row);
+        });
+    app.show().unwrap();
+    settle(&app);
+    assert!(!has_badge(&app, "tmdb_api_key"));
+    app.set_sync_enabled(true);
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 4000));
+        settle(&app);
+        let scope = badge(&app, "tmdb_api_key");
+        assert_eq!(scope.accessible_label().as_deref(), Some("Synced"));
+        let p = scope.absolute_position();
+        let size = scope.size();
+        assert!(p.x >= 0.0 && p.x + size.width <= width as f32 + 0.5);
+        assert!(size.width < 220.0, "pill retains its natural width");
+        scope.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(
+            app.global::<nova::SettingsSync>().get_selected_key(),
+            "tmdb_api_key"
+        );
+        assert_eq!(
+            app.global::<nova::SettingsSync>().get_selected_title(),
+            "TMDB recommendations"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Configured (hidden)")
+                .next()
+                .is_some()
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "local-key")
+                .next()
+                .is_none()
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "shared-key")
+                .next()
+                .is_none()
+        );
+        click_label(&app, "Use device override");
+        assert_eq!(
+            badge(&app, "tmdb_api_key").accessible_label().as_deref(),
+            Some("This device (overridden)")
+        );
+        badge(&app, "tmdb_api_key").mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        click_label(&app, "Use synced value");
+        assert_eq!(
+            badge(&app, "tmdb_api_key").accessible_label().as_deref(),
+            Some("Synced")
+        );
+    }
+    let expected = (0..3)
+        .flat_map(|_| {
+            [
+                ("tmdb_api_key".to_owned(), true),
+                ("tmdb_api_key".to_owned(), false),
+            ]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&*actions.borrow(), &expected);
+    app.set_sync_enabled(false);
+    settle(&app);
+    assert!(!has_badge(&app, "tmdb_api_key"));
+}

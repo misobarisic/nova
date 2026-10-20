@@ -3640,3 +3640,9 @@ msgstr "Integracije"
 
 msgid "Tracking services and metadata"
 msgstr "Usluge praćenja i metapodaci"
+
+msgid "Configured (hidden)"
+msgstr "Postavljeno (skriveno)"
+
+msgid "Not configured"
+msgstr "Nije postavljeno"

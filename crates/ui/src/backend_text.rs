@@ -491,6 +491,8 @@ pub fn tr(english: &str) -> &str {
         "Unlimited" => "Neograničeno",
         "Image disk-cache limit" => "Ograničenje slikovne predmemorije na disku",
         "Not received yet" => "Još nije primljeno",
+        "Configured (hidden)" => "Postavljeno (skriveno)",
+        "Not configured" => "Nije postavljeno",
         "Every minute" => "Svake minute",
         "Every 5 minutes" => "Svakih 5 minuta",
         "Every 15 minutes" => "Svakih 15 minuta",
@@ -1684,6 +1686,15 @@ pub fn watch_action(episode: &str, continuing: bool) -> String {
 
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    // The sync comparison must preserve the key editor's password masking.
+    if field == "tmdb_api_key" {
+        return tr(if value.as_str().is_none_or(|key| key.trim().is_empty()) {
+            "Not configured"
+        } else {
+            "Configured (hidden)"
+        })
+        .into();
+    }
     if matches!(
         field,
         "detail_poster_max_side"

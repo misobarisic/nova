@@ -3489,6 +3489,7 @@ mod tests {
 
     #[test]
     fn tmdb_recommendation_key_syncs_and_preserves_unrelated_settings() {
+        assert!(setting_can_override("tmdb_api_key"));
         let local = CacheSettings {
             tmdb_api_key: "0123456789abcdef0123456789abcdef".into(),
             ..Default::default()
