@@ -73,7 +73,7 @@ component DetailPeople inherits Rectangle {
     }
 }
 
-component DetailRelatedPoster inherits Rectangle {
+component DetailRelatedPosterCard inherits Rectangle {
     in property <DetailActionRow> entry;
     callback picked();
     height: self.width * 1.5 + (InterfaceStyle.tv ? 88px : 64px);
@@ -129,12 +129,42 @@ component DetailRelatedPoster inherits Rectangle {
     }
 }
 
+component DetailRelatedPoster inherits Rectangle {
+    in property <DetailActionRow> entry;
+    in property <bool> reveal: true;
+    in property <duration> reveal-delay: 0ms;
+    callback picked();
+    height: self.width * 1.5 + (InterfaceStyle.tv ? 88px : 64px);
+    min-width: 0px;
+    reveal_layer := DetailRelatedPosterCard {
+        x: 0px; y: root.reveal ? 0px : 12px;
+        width: 100%; height: 100%;
+        opacity: root.reveal ? 1.0 : 0.0;
+        animate opacity { duration: root.reveal ? Anim.transition_fade : 0ms; delay: root.reveal ? root.reveal-delay : 0ms; }
+        animate y { duration: root.reveal ? Anim.transition_slide : 0ms; delay: root.reveal ? root.reveal-delay : 0ms; }
+        entry: root.entry;
+        picked => { root.picked(); }
+    }
+}
+
 export component DetailExtrasPanel inherits Rectangle {
     in property <DetailInfo> info;
     in property <bool> narrow;
     in property <bool> is_movie;
     in property <length> available-width;
     property <int> related_columns: root.narrow ? 2 : (InterfaceStyle.tv ? 4 : 5);
+    private property <int> related_reveal_request: DetailContent.similar_reveal_request;
+    private property <bool> related_revealed: true;
+    changed related_reveal_request => {
+        if Anim.enabled && Anim.transitions && !DetailContent.restoring_navigation {
+            root.related_revealed = false;
+            related_reveal_timer.restart();
+        }
+    }
+    related_reveal_timer := Timer {
+        interval: 40ms;
+        triggered => { self.stop(); root.related_revealed = true; }
+    }
     callback picked(int,string);
     property <bool> trailers_expanded <=> DetailContent.trailers_expanded;
     property <float> trailer_reveal: root.trailers_expanded ? 1.0 : 0.0;
@@ -201,6 +231,8 @@ export component DetailExtrasPanel inherits Rectangle {
                     max-width: Math.max(0px, (root.available-width - 12px * (root.related_columns - 1)) / root.related_columns);
                     horizontal-stretch: 0;
                     entry: title;
+                    reveal: root.related_revealed || !Anim.enabled || !Anim.transitions;
+                    reveal-delay: Anim.enabled && Anim.transitions ? Math.min(i, 12) * 30ms : 0ms;
                     picked => { root.picked(2, title.target); }
                 }
             }

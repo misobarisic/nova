@@ -94,7 +94,19 @@ fn inventory_key(installed: &[Installed], tmdb: &tmdb::Settings) -> String {
     .unwrap_or_default()
 }
 
+fn memory_key(authority: &str, generation: u64, type_: &str, id: &str) -> String {
+    serde_json::to_string(&(authority, generation, type_, id)).unwrap_or_default()
+}
+
 impl Bridge {
+    pub(super) fn reveal_detail_similar(&self) {
+        if let Some(app) = self.app() {
+            let content = (*app).global::<nova_ui_shared::DetailContent>();
+            content
+                .set_similar_reveal_request(content.get_similar_reveal_request().wrapping_add(1));
+        }
+    }
+
     /// Completion runs on a worker in the originating profile context. Callers
     /// publishing Slint models must use profiles::invoke_from_event_loop.
     pub(super) fn fetch_similar(
@@ -131,8 +143,7 @@ impl Bridge {
             )
         };
         let authority = inventory_key(&installed, &tmdb);
-        let key = serde_json::to_string(&(&authority, settings_generation, &type_, &id))
-            .unwrap_or_default();
+        let key = memory_key(&authority, settings_generation, &type_, &id);
         let shared = self.shared.clone();
         profiles::thread::spawn(move || {
             profiles::with_context(context.clone(), || {
@@ -277,9 +288,21 @@ impl Bridge {
         };
         let tmdb = tmdb::Settings::from_settings(&self.shared.lock().unwrap().cache_settings);
         let authority = inventory_key(&self.shared.lock().unwrap().installed, &tmdb);
+        let settings = nova_providers::plugin_settings::capture_settings_capability();
+        let generation = settings.with(nova_providers::plugin_settings::settings_generation);
         let cached_rows = {
-            let installed = self.shared.lock().unwrap().installed.clone();
-            read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows)
+            let (installed, cache) = {
+                let state = self.shared.lock().unwrap();
+                (state.installed.clone(), state.similar_cache.clone())
+            };
+            let memory = cache
+                .lock()
+                .unwrap()
+                .entries
+                .get(&memory_key(&authority, generation, &type_, &id))
+                .filter(|(at, _)| at.elapsed() < TTL)
+                .map(|(_, rows)| rows.clone());
+            memory.or_else(|| read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows))
         };
         if let Some(rows) = &cached_rows {
             if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut()
@@ -289,8 +312,6 @@ impl Bridge {
             }
             self.publish_detail_extras();
         }
-        let settings = nova_providers::plugin_settings::capture_settings_capability();
-        let generation = settings.with(nova_providers::plugin_settings::settings_generation);
         let bridge = self.clone();
         self.fetch_similar(&type_.clone(), &id.clone(), move |rows| {
             let _ = profiles::invoke_from_event_loop(move || {
@@ -315,17 +336,28 @@ impl Bridge {
                         && Arc::ptr_eq(&modal.open_token, &token)
                         && (modal.details.related.is_empty()
                             || modal.details.related == original_rows
+                            || (prefer_tmdb
+                                && !modal.details.related.iter().any(|row| {
+                                    row.extra
+                                        .get("novaRecommendationSource")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some("tmdb")
+                                }))
                             || cached_rows.as_ref() == Some(&modal.details.related))
                         && !rows.is_empty()
                     {
+                        let reveal = modal.details.related.is_empty() && cached_rows.is_none();
                         modal.details.related = rows;
-                        true
+                        Some(reveal)
                     } else {
-                        false
+                        None
                     }
                 };
-                if changed {
+                if let Some(reveal) = changed {
                     bridge.publish_detail_extras();
+                    if reveal {
+                        bridge.reveal_detail_similar();
+                    }
                 }
             });
         });
@@ -916,7 +948,8 @@ mod tests {
             );
             return;
         };
-        storage::init_at(&PathBuf::from(root));
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
         let addon = Installed {
             url: "https://installed.example".into(), label: "Installed".into(), enabled: true,
             configure_ok: None, available: true, generation: 1,
@@ -950,6 +983,182 @@ mod tests {
         assert!(read_saved(&[], "movie", "tt100", &tmdb::Settings::default()).is_none());
         storage::try_set_str("plugin_settings", r#"{"source":{"filter":"different"}}"#).unwrap();
         assert!(read_saved(&[], "series", "tt100", &tmdb::Settings::default()).is_none());
+
+        // Library and related-card entry points must hydrate their Overview
+        // before returning, without requiring a tab click or a worker reply.
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        let config = tmdb::Settings::from_settings(&bridge.shared.lock().unwrap().cache_settings);
+        let authority = saved_authority(&[], &config).unwrap();
+        for (id, next) in [("tt100", "tt1"), ("tt1", "tt2")] {
+            write_json(
+                &saved_key("series", id),
+                &SavedTitles {
+                    authority,
+                    fetched_at: now_secs(),
+                    rows: vec![MetaPreview {
+                        id: next.into(),
+                        type_: "series".into(),
+                        name: format!("Cached {next}"),
+                        ..Default::default()
+                    }],
+                },
+            );
+        }
+        let entry: LibraryEntry = serde_json::from_value(json!({
+            "id":"tt100", "type_":"series", "name":"Library show", "year":"2020",
+            "poster_url":"", "genres":[], "description":"", "categories":[], "watch_status":"Auto"
+        }))
+        .unwrap();
+        bridge.shared.lock().unwrap().detail_snapshots.insert(
+            "tt100".into(),
+            DetailSnapshot {
+                tab: 0,
+                season: None,
+                filter: String::new(),
+            },
+        );
+        bridge.open_library_entry(entry.clone());
+        assert_eq!(app.get_detail_tab(), 0);
+        assert_eq!(
+            app.get_selected_details()
+                .related
+                .row_data(0)
+                .unwrap()
+                .title,
+            "Cached tt1"
+        );
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        assert_eq!(
+            content.get_similar_reveal_request(),
+            0,
+            "cached entry is immediate"
+        );
+
+        bridge.shared.lock().unwrap().detail_snapshots.insert(
+            "tt1".into(),
+            DetailSnapshot {
+                tab: 3,
+                season: None,
+                filter: String::new(),
+            },
+        );
+        bridge.detail_extra_picked(2, &serde_json::to_string(&("series", "tt1")).unwrap());
+        assert_eq!(app.get_detail_tab(), 0);
+        assert_eq!(
+            app.get_selected_details()
+                .related
+                .row_data(0)
+                .unwrap()
+                .title,
+            "Cached tt2",
+            "forcing Overview after an Episodes snapshot also loads recommendations"
+        );
+        assert!(bridge.related_detail_back());
+        assert_eq!(
+            app.get_selected_details()
+                .related
+                .row_data(0)
+                .unwrap()
+                .title,
+            "Cached tt1"
+        );
+
+        // A memory-only hit has the same synchronous publication contract.
+        bridge.modal_closed();
+        app.set_modal_visible(false);
+        let capability = nova_providers::plugin_settings::capture_settings_capability();
+        let generation = capability.with(nova_providers::plugin_settings::settings_generation);
+        let key = memory_key(&inventory_key(&[], &config), generation, "series", "tt200");
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .similar_cache
+            .lock()
+            .unwrap()
+            .entries
+            .insert(
+                key,
+                (
+                    Instant::now(),
+                    vec![MetaPreview {
+                        id: "tt3".into(),
+                        type_: "series".into(),
+                        name: "Memory only".into(),
+                        ..Default::default()
+                    }],
+                ),
+            );
+        bridge.shared.lock().unwrap().detail_snapshots.insert(
+            "tt200".into(),
+            DetailSnapshot {
+                tab: 0,
+                season: None,
+                filter: String::new(),
+            },
+        );
+        bridge.open_library_entry(LibraryEntry {
+            id: "tt200".into(),
+            ..entry
+        });
+        assert_eq!(
+            app.get_selected_details()
+                .related
+                .row_data(0)
+                .unwrap()
+                .title,
+            "Memory only"
+        );
+        assert_eq!(content.get_similar_reveal_request(), 0);
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .details
+            .related
+            .clear();
+        let fresh: MetaItem = serde_json::from_value(json!({
+            "id":"tt200", "type":"series", "name":"Library show",
+            "related":[{"id":"tt4", "type":"series", "name":"Fresh recommendation"}]
+        }))
+        .unwrap();
+        bridge.upgrade_detail_meta("tt200", &fresh, true, false);
+        assert_eq!(
+            content.get_similar_reveal_request(),
+            1,
+            "first fresh metadata recommendations request an entrance"
+        );
+        bridge.upgrade_detail_meta("tt200", &fresh, true, false);
+        assert_eq!(
+            content.get_similar_reveal_request(),
+            1,
+            "subsequent metadata publications do not replay it"
+        );
     }
 
     #[test]

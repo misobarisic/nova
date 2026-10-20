@@ -284,6 +284,7 @@ impl Bridge {
         // Similar cards live in Overview; preserve its mounted body until
         // layout has consumed the restored models before restoring the offset.
         app.set_detail_tab(0);
+        self.load_detail_similar();
         let bridge = self.clone();
         let context = profiles::capture();
         slint::Timer::single_shot(Duration::from_millis(16), move || {
@@ -511,6 +512,7 @@ impl Bridge {
                     let selected_index = app.get_selected_index();
                     self.open_preview_inner(preview, 0, false, None, false, true);
                     app.set_detail_tab(0);
+                    self.load_detail_similar();
                     if let Some(modal) = previous {
                         let mut state = self.shared.lock().unwrap();
                         let child_token = state.modal_item.as_ref().unwrap().open_token.clone();

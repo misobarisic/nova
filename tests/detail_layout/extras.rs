@@ -1,6 +1,6 @@
 //! Optional detail sections share the production page factory and fit phones.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use slint::{ComponentHandle, VecModel};
+use slint::{ComponentHandle, Model, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 fn tap(app: &nova::AppWindow, label: &str) {
@@ -22,6 +22,118 @@ fn tap(app: &nova::AppWindow, label: &str) {
     ] {
         app.window().dispatch_event(event);
     }
+}
+
+#[test]
+fn uncached_related_cards_stagger_once_but_cached_entry_and_poster_updates_are_immediate() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::uncached_related_cards_stagger_once_but_cached_entry_and_poster_updates_are_immediate"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(900, 2000));
+    app.set_show_home(false);
+    app.set_detail_tab(0);
+    let info = || nova::DetailInfo {
+        related: Rc::new(VecModel::from(vec![
+            nova::DetailActionRow {
+                title: "First result".into(),
+                target: "first".into(),
+                ..Default::default()
+            },
+            nova::DetailActionRow {
+                title: "Second result".into(),
+                target: "second".into(),
+                ..Default::default()
+            },
+        ]))
+        .into(),
+        ..Default::default()
+    };
+    app.set_selected_details(info());
+    app.set_modal_visible(true);
+    app.show().unwrap();
+    let tick = |ms| {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(ms));
+        slint::platform::update_timers_and_animations();
+    };
+    tick(500);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    let positions = || {
+        ElementHandle::find_by_element_id(&app, "DetailRelatedPoster::reveal_layer")
+            .map(|item| {
+                let _ = item.size();
+                item.absolute_position().y
+            })
+            .collect::<Vec<_>>()
+    };
+    let cached = positions();
+    assert_eq!(cached.len(), 2);
+    tick(100);
+    assert_eq!(positions(), cached, "cached content never starts hidden");
+
+    app.set_selected_details(Default::default());
+    tick(50);
+    app.set_selected_details(info());
+    let content = (*app).global::<nova_ui_shared::DetailContent>();
+    content.set_similar_reveal_request(content.get_similar_reveal_request() + 1);
+    tick(1);
+    let initial = positions();
+    tick(40);
+    let _ = positions();
+    tick(100);
+    let midway = positions();
+    tick(700);
+    let settled = positions();
+    assert!(
+        initial[0] > settled[0] + 10.0,
+        "fresh cards start 12px below their final position: {initial:?} → {midway:?} → {settled:?}"
+    );
+    assert!(
+        midway[0] < initial[0] - 0.5 && midway[0] > settled[0] + 0.5,
+        "fresh cards slide in over time"
+    );
+    assert!(
+        midway[1] - settled[1] > midway[0] - settled[0],
+        "second card follows the Home-style stagger"
+    );
+
+    let fresh = info();
+    let rows = fresh
+        .related
+        .as_any()
+        .downcast_ref::<VecModel<nova::DetailActionRow>>()
+        .unwrap();
+    let mut row = rows.row_data(0).unwrap();
+    row.is_loaded = true;
+    rows.set_row_data(0, row);
+    app.set_selected_details(fresh);
+    tick(10);
+    assert_eq!(
+        positions(),
+        settled,
+        "poster/model updates do not restart the entrance"
+    );
+    app.set_detail_tab(3);
+    tick(100);
+    app.set_detail_tab(0);
+    tick(1);
+    assert_eq!(
+        positions(),
+        settled,
+        "returning to Overview does not replay a prior request"
+    );
+    app.set_selected_details(Default::default());
+    tick(50);
+    app.set_selected_details(info());
+    app.global::<nova::Anim>().set_enabled(false);
+    content.set_similar_reveal_request(content.get_similar_reveal_request() + 1);
+    tick(1);
+    assert_eq!(positions(), settled, "reduced motion publishes immediately");
 }
 
 #[test]

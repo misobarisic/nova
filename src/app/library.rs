@@ -863,6 +863,7 @@ impl Bridge {
         } else {
             self.prepare_episodes(e.id, e.type_);
         }
+        self.load_detail_similar();
         app.set_modal_visible(true);
     }
 

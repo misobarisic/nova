@@ -274,8 +274,8 @@ impl Bridge {
         }
         // Cached episodes and the primary action must also be ready before
         // constructing the incoming shell (including featured shortcuts).
-        app.set_modal_visible(true);
         self.load_detail_similar();
+        app.set_modal_visible(true);
     }
 
     /// Movies also recheck metadata behind cached content; stream discovery
@@ -805,7 +805,7 @@ impl Bridge {
         overwrite: bool,
         refresh_images: bool,
     ) {
-        let (backdrop_to_load, poster_to_load, header, header_cache, modal_type) = {
+        let (backdrop_to_load, poster_to_load, header, header_cache, modal_type, reveal_related) = {
             let mut state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_mut() {
                 Some(m) if m.id == id => m,
@@ -813,8 +813,10 @@ impl Bridge {
             };
             let mut backdrop_to_load: Option<String> = None;
             let mut poster_to_load: Option<String> = None;
+            let had_related = !m.details.related.is_empty();
             m.details
                 .merge(&detail_extras::DetailExtras::from_item(item));
+            let reveal_related = !had_related && !m.details.related.is_empty();
             // Art upgrades also apply to finished shows and deeper episode
             // views: season cards must not stay on their cached fallback.
             m.season_backdrops.extend(item.season_backdrops());
@@ -889,6 +891,7 @@ impl Bridge {
                 header,
                 header_cache,
                 modal_type,
+                reveal_related,
             )
         };
         // Backfill persisted text so later library reopens paint instantly.
@@ -905,6 +908,9 @@ impl Bridge {
         }
         self.apply_season_cards();
         self.publish_detail_extras();
+        if reveal_related {
+            self.reveal_detail_similar();
+        }
         self.dispatch_season_thumbs();
         if let Some(app) = self.app() {
             let state = self.shared.lock().unwrap();
@@ -2430,6 +2436,7 @@ impl Bridge {
             app.set_stream_action_open(false);
             app.set_detail_tab(0);
             app.set_detail_kb_zone(2);
+            self.load_detail_similar();
         }
     }
 
