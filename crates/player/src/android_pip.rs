@@ -84,6 +84,16 @@ pub fn note_android_pip_event(event: i32) {
             Player { state }.set_paused(event == 2);
         }
         4 => note_android_pause(),
+        5 => {
+            // A retained PiP window becomes visible on Start/unlock, without
+            // an Activity Resume. Reuse the same auto-continue/party policy
+            // and release recovery even when the surface is still rebuilding.
+            app.set_android_pip_active(true);
+            let settings = nova_config::active_cache_settings();
+            resume_android_playback(settings.android_auto_continue && settings.android_pip_enabled);
+            publish(&state, &app, false);
+            app.window().request_redraw();
+        }
         _ => {}
     }
 }

@@ -261,7 +261,11 @@ controls, menus and modal layers stay hidden until returning. Its aspect ratio
 follows the selected video's display dimensions within Android's supported
 range. Paused, unloaded, failed, audio-only and external playback do not
 auto-enter PiP. Screen lock, PiP dismissal and activity Stop pause and checkpoint
-playback. Disabled/unavailable PiP follows ordinary background pausing.
+playback. If Android retains the pinned window across lock/unlock, becoming visible
+again restores its native recovery and Play action without requiring fullscreen
+expansion or an Activity Resume. Stay paused/Auto continue and manual pause
+choices still apply; watch parties still wait for the host timeline.
+Disabled/unavailable PiP follows ordinary background pausing.
 
 Settings → Player → Picture in picture enables this behavior by default on
 Android. The choice is saved only on this device, applies to every title, and

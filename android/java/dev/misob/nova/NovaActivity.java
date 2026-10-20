@@ -16,6 +16,7 @@ import android.graphics.Rect;
 import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.util.Rational;
 import android.view.View;
 import java.util.Collections;
@@ -27,7 +28,8 @@ public final class NovaActivity extends NativeActivity {
     private volatile boolean entering;
     private boolean paused = true;
     private boolean stopped;
-    private boolean screenOff;
+    private volatile boolean screenOff;
+    private boolean pipVisible;
     private boolean playbackActive;
     private boolean autoRotatePlayback = true;
     private boolean orientationManaged;
@@ -71,10 +73,14 @@ public final class NovaActivity extends NativeActivity {
         @Override public void onReceive(Context context, Intent intent) {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                 screenOff = true;
+                pipVisible = false;
                 entering = false;
                 eligible = false;
                 applyPipParams();
                 nativePipEvent(4);
+            } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())
+                    || Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
+                restoreVisiblePictureInPicture();
             } else if (TRANSPORT.equals(intent.getAction()) && isInPictureInPictureMode()
                     && eligible && !screenOff && !locked()) {
                 nativePipEvent(intent.getBooleanExtra("paused", true) ? 2 : 3);
@@ -86,6 +92,8 @@ public final class NovaActivity extends NativeActivity {
         super.onCreate(state);
         IntentFilter filter = new IntentFilter(TRANSPORT);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(Intent.ACTION_USER_PRESENT);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -103,6 +111,18 @@ public final class NovaActivity extends NativeActivity {
 
     private boolean supportsPip() {
         return getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    private void restoreVisiblePictureInPicture() {
+        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pipVisible || stopped || isFinishing() || !isInPictureInPictureMode()
+                || locked() || power == null || !power.isInteractive()) return;
+        // Unlock can restore a pinned Activity to Started/Paused without ever
+        // calling onResume. Restore native recovery too, then let its current
+        // source/setting checks republish eligibility and the Play action.
+        screenOff = false;
+        pipVisible = true;
+        nativePipEvent(5);
     }
 
     /** Called from the native UI thread; publish eligibility before its next Home event. */
@@ -197,6 +217,8 @@ public final class NovaActivity extends NativeActivity {
         super.onPictureInPictureModeChanged(pip, config);
         entering = false;
         nativePipEvent(pip ? 1 : 0);
+        if (pip) restoreVisiblePictureInPicture();
+        else pipVisible = false;
         if (!pip && stopped) nativePipEvent(4);
         schedulePlaybackOrientation();
     }
@@ -215,6 +237,7 @@ public final class NovaActivity extends NativeActivity {
         stopped = false;
         screenOff = false;
         entering = false;
+        pipVisible = false;
         super.onResume();
         nativePipEvent(0);
         applyPipParams();
@@ -223,11 +246,18 @@ public final class NovaActivity extends NativeActivity {
 
     @Override protected void onStop() {
         stopped = true;
+        pipVisible = false;
         getWindow().getDecorView().removeCallbacks(applyPlaybackOrientation);
         entering = false;
         // PiP is visible while paused but must stop when dismissed or locked.
         nativePipEvent(4);
         super.onStop();
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        stopped = false;
+        restoreVisiblePictureInPicture();
     }
 
     @Override protected void onDestroy() {

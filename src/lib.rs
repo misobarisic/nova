@@ -107,6 +107,9 @@ pub extern "system" fn Java_dev_misob_nova_NovaActivity_nativePipEvent(
         if event == 4 {
             crate::app::remote_playback::playback_foreground(false);
             crate::app::note_android_pause_checkpoint();
+        } else if event == 5 {
+            // Visible PiP is controllable even though the Activity is Paused.
+            crate::app::remote_playback::playback_foreground(true);
         }
     });
 }

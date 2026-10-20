@@ -332,6 +332,11 @@ pub fn note_android_pause() {
 
 #[cfg(target_os = "android")]
 pub fn note_android_resume() {
+    resume_android_playback(nova_config::active_cache_settings().android_auto_continue);
+}
+
+#[cfg(target_os = "android")]
+fn resume_android_playback(auto_continue: bool) {
     ANDROID_FOREGROUND.store(true, Ordering::SeqCst);
     if let Some(state) = ANDROID_PLAYER
         .lock()
@@ -342,7 +347,7 @@ pub fn note_android_resume() {
         let mut recovery = state.recovery.lock().unwrap();
         let play = resume_android_recovery(
             &mut recovery,
-            nova_config::active_cache_settings().android_auto_continue,
+            auto_continue,
             *state.party_playback_rate.lock().unwrap(),
         );
         alog(&format!("lifecycle resume: {recovery:?}"));
@@ -3818,6 +3823,58 @@ mod tests {
             recovery.observe(Some(43.0), Some(false));
             recovery.pause();
             assert!(resume_android_recovery(&mut recovery, true, None));
+        }
+    }
+
+    #[test]
+    fn retained_pip_unlock_recovers_without_activity_resume_and_preserves_pause_policy() {
+        for auto_continue in [false, true] {
+            for manually_paused in [false, true] {
+                for renderer_lost in [false, true] {
+                    for visible_before_surface in [false, true] {
+                        for party_rate in [None, Some(1.0)] {
+                            let mut recovery = android_recovery::Recovery::new(true);
+                            recovery.setup();
+                            recovery.begin(42.0);
+                            recovery.submitted();
+                            recovery.observe(Some(42.0), Some(manually_paused));
+                            recovery.pause(); // screen-off / Stop while pinned
+                            if renderer_lost {
+                                recovery.teardown();
+                            }
+                            assert!(recovery.waiting());
+                            if !visible_before_surface {
+                                recovery.setup();
+                            }
+                            // The visible-PiP callback uses this same policy
+                            // even though Android never sends Activity Resume.
+                            let play =
+                                resume_android_recovery(&mut recovery, auto_continue, party_rate);
+                            assert_eq!(
+                                play,
+                                auto_continue && !manually_paused && party_rate.is_none()
+                            );
+                            if visible_before_surface {
+                                recovery.setup();
+                            }
+                            let reload = recovery.take_reload();
+                            assert_eq!(reload.is_some(), renderer_lost);
+                            if let Some(reload) = reload {
+                                assert_eq!(reload.position, 42.0);
+                                assert_eq!(reload.paused, !play);
+                                recovery.submitted();
+                            }
+                            assert!(!recovery.waiting());
+                            // Stay paused still permits explicit Play. A later
+                            // surface replacement must retain that new state.
+                            recovery.observe(Some(43.0), Some(false));
+                            recovery.teardown();
+                            recovery.setup();
+                            assert!(!recovery.take_reload().unwrap().paused);
+                        }
+                    }
+                }
+            }
         }
     }
 
