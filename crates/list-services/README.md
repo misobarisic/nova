@@ -40,7 +40,9 @@ sensitive when serialized; the caller owns persistence and account isolation.
   policy. Merely linking an account does not authorize a whole-library import.
   The API client never mutates Nova state or chooses synchronization scope.
 - Treat an incomplete/failed fetch as an error, never an empty authoritative
-  library. Successful HTTP mutations with `not_found` or `errors` are rejected.
+  library. Successful HTTP mutations with `not_found` or `errors` return `ApiError::ItemRejected`,
+  distinct from cancellation/local-save rejection so the caller can leave that
+  title pending and continue with other titles.
 
 ## Capability boundaries
 

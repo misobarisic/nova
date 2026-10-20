@@ -143,8 +143,13 @@ pub enum ApiError {
     Authentication,
     Offline,
     Rejected,
+    /// A single media mutation was rejected (for example, an unresolved ID).
+    /// Distinct from local cancellation/storage failures using `Rejected`.
+    ItemRejected,
     Unsupported,
-    RateLimited { retry_after: u64 },
+    RateLimited {
+        retry_after: u64,
+    },
     Pending,
     SlowDown,
     Expired,
@@ -157,6 +162,7 @@ impl fmt::Display for ApiError {
             Self::Authentication => "service authentication failed",
             Self::Offline => "service unavailable",
             Self::Rejected => "service rejected the request",
+            Self::ItemRejected => "service could not update this title",
             Self::Unsupported => "operation unsupported by this service",
             Self::RateLimited { .. } => "service rate limit reached",
             Self::Pending => "authorization pending",

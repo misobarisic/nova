@@ -77,7 +77,10 @@ keep their native identities. Series episode progress requires an exact
 `<IMDb ID>:<season>:<episode>` native episode ID or a current confirmed canonical
 episode alias. Displayed season/episode numbers alone never authorize a mapping.
 Unresolved identities and uncovered episodes remain pending rather than being
-marked synchronized or uploaded by guesswork.
+marked synchronized or uploaded by guesswork. A rejected individual media
+mutation (including a successful HTTP response with unresolved IDs) leaves that
+title pending and continues with later titles. Authentication, rate limits,
+transport failures, cancellation and local-save failures still stop the pass.
 
 Unfinished playback can export a paused scrobble checkpoint when Nova has a real
 finite duration and a proven episode identity. Only the most recently updated

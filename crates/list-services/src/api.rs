@@ -866,7 +866,7 @@ fn mutation_receipt(value: Value) -> Result<(), ApiError> {
         .iter()
         .any(|k| value.get(k).is_some_and(contains_failure))
     {
-        return Err(ApiError::Rejected);
+        return Err(ApiError::ItemRejected);
     }
     if value.is_null() || !value.is_object() {
         return Err(ApiError::InvalidResponse);
@@ -1520,7 +1520,7 @@ mod tests {
                 }),
                 true
             ),
-            Err(ApiError::Rejected)
+            Err(ApiError::ItemRejected)
         );
         let requests = fake.requests.lock().unwrap();
         assert_eq!(

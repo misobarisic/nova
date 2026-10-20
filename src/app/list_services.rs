@@ -180,6 +180,16 @@ fn index(service: i32) -> Option<usize> {
 fn service(index: usize) -> Service {
     [Service::Simkl, Service::MdbList, Service::Trakt][index]
 }
+
+// Only classify the result of an individual API mutation here. Scope checks,
+// local saves and transport cancellation must still abort the owning pass.
+fn item_write_succeeded(result: Result<(), ApiError>) -> Result<bool, ApiError> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(ApiError::ItemRejected | ApiError::InvalidInput | ApiError::Unsupported) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
 impl Bridge {
     pub(super) fn start_list_services(&self) {
         if !self.profile_services_can_start() {
@@ -1063,7 +1073,7 @@ impl Worker {
                 }
             }
         }
-        for (source, selection) in sources {
+        'sources: for (source, selection) in sources {
             self.scope_current(i, generation, &connection, &source, &selection)?;
             let matches: Vec<_> = remote
                 .iter()
@@ -1088,12 +1098,15 @@ impl Worker {
             };
             if saved && remote.is_none() {
                 self.scope_current(i, generation, &connection, &source, &selection)?;
-                self.client.set_list_status(
+                if !item_write_succeeded(self.client.set_list_status(
                     &connection.credentials,
                     &source.ids,
                     source.kind,
                     ListStatus::Planning,
-                )?;
+                ))? {
+                    pending += 1;
+                    continue;
+                }
             }
             let targets: Vec<_> = if source.kind == MediaType::Movie {
                 vec![(source.entry.id.clone(), None)]
@@ -1136,13 +1149,16 @@ impl Worker {
                         .has_trakt_observation(&source.entry.id, Some(native));
                 if export && !remote_watched && !live_scrobble {
                     self.scope_current(i, generation, &connection, &source, &selection)?;
-                    self.client.set_watched(
+                    if !item_write_succeeded(self.client.set_watched(
                         &connection.credentials,
                         &source.ids,
                         source.kind,
                         *episode,
                         true,
-                    )?;
+                    ))? {
+                        pending += 1;
+                        continue 'sources;
+                    }
                 }
                 if remote_watched && existing.is_none_or(|p| !p.watched && p.unwatched_at_secs == 0)
                 {
@@ -1181,14 +1197,17 @@ impl Worker {
                         .is_none_or(|r| percent > r + 0.1)
                 {
                     self.scope_current(i, generation, &connection, &source, &selection)?;
-                    self.client.scrobble(
+                    if !item_write_succeeded(self.client.scrobble(
                         &connection.credentials,
                         &source.ids,
                         source.kind,
                         episode,
                         percent,
                         ScrobbleAction::Pause,
-                    )?;
+                    ))? {
+                        pending += 1;
+                        continue;
+                    }
                 } else if !compatible {
                     pending += 1;
                 }
@@ -1396,7 +1415,7 @@ impl Worker {
                 "Waiting for refreshed sign-in from paired devices. Reconnect if this continues."
             }
             ApiError::Rejected => "Sync interrupted or local save failed. Try Sync now.",
-            ApiError::InvalidInput | ApiError::InvalidResponse => {
+            ApiError::ItemRejected | ApiError::InvalidInput | ApiError::InvalidResponse => {
                 "Unsupported or invalid service data. Some titles remain pending."
             }
             ApiError::Unsupported => "This operation is unavailable for this service.",

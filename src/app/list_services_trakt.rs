@@ -534,6 +534,7 @@ impl Worker {
                 if matches!(
                     error,
                     ApiError::Unsupported
+                        | ApiError::ItemRejected
                         | ApiError::InvalidInput
                         | ApiError::InvalidResponse
                         | ApiError::Rejected

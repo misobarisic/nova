@@ -338,7 +338,122 @@ fn actor_filters_remote_imports_and_exports_by_account_title_and_current_consent
     assert_eq!(worker.merge(1, 0, None), Err(ApiError::Authentication));
     assert_eq!(fake.requests.lock().unwrap().len(), 2);
     trakt_actor_regressions(&bridge);
+    bulk_item_failure_regressions(&bridge);
     std::fs::write(root.join("completed"), "ok").unwrap();
+}
+
+struct ItemFailureFake {
+    path: &'static str,
+    failure: ApiError,
+    requests: Mutex<Vec<(String, String)>>,
+}
+impl nova_list_services::Transport for ItemFailureFake {
+    fn send(
+        &self,
+        request: nova_list_services::Request,
+    ) -> Result<nova_list_services::Response, ApiError> {
+        let url = url::Url::parse(&request.url).unwrap();
+        let body = if request.method == "POST" {
+            let body = request.body.as_ref().unwrap().to_string();
+            self.requests
+                .lock()
+                .unwrap()
+                .push((url.path().into(), body.clone()));
+            if url.path() == self.path && body.contains("tt4444444") {
+                if self.failure != ApiError::ItemRejected {
+                    return Err(self.failure);
+                }
+                // Exercise the real API receipt parser, not a preclassified
+                // fake error: this is a successful HTTP response for a bad ID.
+                json!({"not_found":{"movies":[{"ids":{"imdb":"tt4444444"}}]}})
+            } else {
+                json!({"added":{"movies":1}})
+            }
+        } else if url.path() == "/sync/playback" {
+            json!([])
+        } else {
+            json!({"movies":[],"shows":[]})
+        };
+        Ok(nova_list_services::Response {
+            status: 200,
+            retry_after: None,
+            has_more: false,
+            pagination: None,
+            body,
+        })
+    }
+}
+
+fn bulk_item_failure_regressions(bridge: &Bridge) {
+    let connection = account();
+    for path in ["/watchlist/items/add", "/sync/watched", "/scrobble/pause"] {
+        let fake = Arc::new(ItemFailureFake {
+            path,
+            failure: ApiError::ItemRejected,
+            requests: Mutex::new(Vec::new()),
+        });
+        let mut worker = Worker::new(bridge.clone(), Client::new(fake.clone()));
+        worker.connections[1] = Some(connection.clone());
+        worker.verified[1] = true;
+        worker.full[1] = true;
+        worker
+            .set_record("connection:1", Some(&connection))
+            .unwrap();
+        worker
+            .set_record(&flag_key(1, &connection, "full"), Some(&true))
+            .unwrap();
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = vec![movie("tt4444444"), movie("tt5555555")];
+            state.progress.clear();
+            for id in ["tt4444444", "tt5555555"] {
+                state.progress.insert(
+                    progress_map_key(id, id),
+                    EpisodeProgress {
+                        watched: path != "/scrobble/pause",
+                        series_id: id.into(),
+                        episode_id: id.into(),
+                        position_secs: 30.0,
+                        duration_secs: 120.0,
+                        updated_at_secs: 1,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        for _ in 0..2 {
+            fake.requests.lock().unwrap().clear();
+            assert_eq!(worker.merge(1, 0, None), Ok(1), "pending title at {path}");
+            assert!(
+                fake.requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(p, body)| { p == path && body.contains("tt5555555") }),
+                "a rejected title must not starve later titles at {path}"
+            );
+        }
+    }
+    // A service-wide failure or local transport cancellation is not a bad
+    // title. It must stop this pass before another mutation is attempted.
+    for failure in [
+        ApiError::Rejected,
+        ApiError::Authentication,
+        ApiError::Offline,
+        ApiError::RateLimited { retry_after: 120 },
+        ApiError::InvalidResponse,
+    ] {
+        let fake = Arc::new(ItemFailureFake {
+            path: "/watchlist/items/add",
+            failure,
+            requests: Mutex::new(Vec::new()),
+        });
+        let mut worker = Worker::new(bridge.clone(), Client::new(fake.clone()));
+        worker.connections[1] = Some(connection.clone());
+        worker.full[1] = true;
+        assert_eq!(worker.merge(1, 0, None), Err(failure));
+        assert_eq!(fake.requests.lock().unwrap().len(), 1);
+    }
 }
 
 /// A transport that can deliver a peer change while a refresh is in flight.
