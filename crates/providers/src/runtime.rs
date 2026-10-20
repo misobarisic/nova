@@ -21,6 +21,88 @@ const DEFAULT_PLUGIN_RUN_MS: u64 = 5_000;
 const MAX_PLUGIN_RUN_MS: u64 = 10_000;
 const MAX_PLUGIN_BODY: usize = 2 * 1024 * 1024;
 
+struct InvocationSettings {
+    values: Option<serde_json::Map<String, serde_json::Value>>,
+    generation: u64,
+    cache_context: Option<[u8; 32]>,
+    preferences: Option<nova_config::stream_filters::StreamFilterRules>,
+}
+
+fn preference_facts(raw: &str) -> Option<nova_config::stream_filters::StreamFacts> {
+    if raw.len() > 16 * 1024 {
+        return None;
+    }
+    let facts: nova_config::stream_filters::StreamFacts = serde_json::from_str(raw).ok()?;
+    valid_preference_facts(&facts).then_some(facts)
+}
+
+fn valid_preference_facts(facts: &nova_config::stream_filters::StreamFacts) -> bool {
+    facts
+        .height
+        .is_none_or(|height| (144..=8640).contains(&height))
+        && ![&facts.audio_languages, &facts.subtitle_languages]
+            .iter()
+            .any(|languages| {
+                languages.len() > 32
+                    || languages.iter().any(|language| {
+                        language.is_empty()
+                            || language.len() > 64
+                            || !language
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    })
+            })
+}
+
+fn sort_preference_rows(rules: &nova_config::StreamFilterRules, raw: &str) -> String {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        id: String,
+        facts: nova_config::stream_filters::StreamFacts,
+    }
+    let invalid =
+        || serde_json::json!({"error":"invalid stream preference sort input"}).to_string();
+    if raw.len() > MAX_PLUGIN_BODY {
+        return invalid();
+    }
+    let Ok(rows) = serde_json::from_str::<Vec<Row>>(raw) else {
+        return invalid();
+    };
+    if rows.len() > 4096
+        || rows.iter().any(|row| {
+            row.id.is_empty()
+                || row.id.len() > 8192
+                || row.id.chars().any(char::is_control)
+                || !valid_preference_facts(&row.facts)
+        })
+    {
+        return invalid();
+    }
+    let mut indices: Vec<_> = (0..rows.len()).collect();
+    indices.sort_unstable_by(|left, right| {
+        rules
+            .compare(&rows[*left].facts, &rows[*right].facts)
+            .then_with(|| rows[*left].id.cmp(&rows[*right].id))
+            .then_with(|| left.cmp(right))
+    });
+    serde_json::to_string(&indices).expect("sort indices serialize")
+}
+
+fn preference_cache_key(key: &str, context: Option<[u8; 32]>) -> String {
+    let Some(context) = context.filter(|_| crate::plugin_settings::validate_key(key).is_ok())
+    else {
+        return key.to_owned();
+    };
+    let mut digest = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
+    digest.update(&context);
+    digest.update(key.as_bytes());
+    format!(
+        "preferences:{}",
+        base64_url_encode(digest.finish().as_ref())
+    )
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
@@ -73,6 +155,9 @@ pub struct PluginCapabilities {
     pub contextual_streams: bool,
     #[serde(default)]
     pub configurable_capabilities: bool,
+    /// Consume the owner's effective, ephemeral stream preference context.
+    #[serde(default)]
+    pub stream_preferences: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,6 +265,20 @@ impl PluginRuntime {
                 "provider settings snapshot exceeded its limit".into(),
             ));
         }
+        let preferences = request
+            .get("streamPreferences")
+            .map(|value| {
+                serde_json::from_value::<nova_config::stream_filters::StreamFilterRules>(
+                    value.clone(),
+                )
+            })
+            .transpose()
+            .map_err(|_| ProviderError::InvalidData("invalid stream preferences".into()))?;
+        let cache_context = request.get("streamPreferences").map(|preferences| {
+            let bytes = serde_json::to_vec(preferences).expect("JSON value serializes");
+            let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &bytes);
+            <[u8; 32]>::try_from(digest.as_ref()).expect("SHA256 digest size")
+        });
         let request = serde_json::to_string(request)
             .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
         if request.len() > MAX_PLUGIN_BODY || self.source.len() > MAX_PLUGIN_BODY {
@@ -254,8 +353,12 @@ impl PluginRuntime {
                 &self.manifest,
                 fallback.clone(),
                 is_details,
-                settings_snapshot,
-                settings_generation,
+                InvocationSettings {
+                    values: settings_snapshot,
+                    generation: settings_generation,
+                    cache_context,
+                    preferences,
+                },
             )
             .map_err(convert)?;
             ctx.eval::<(), _>(self.source.as_str()).map_err(convert)?;
@@ -536,18 +639,66 @@ fn install_capabilities<'js>(
     manifest: &PluginManifest,
     fallback: Arc<Mutex<Option<String>>>,
     is_details: bool,
-    settings_snapshot: Option<serde_json::Map<String, serde_json::Value>>,
-    settings_generation: u64,
+    settings: InvocationSettings,
 ) -> rquickjs::Result<()> {
     let nova = Object::new(ctx.clone())?;
-    install_settings(
-        ctx,
-        &nova,
-        manifest,
-        settings_snapshot,
-        settings_generation,
-        host.clone(),
-    )?;
+    if let Some(rules) = settings.preferences.clone() {
+        let preferences = Object::new(ctx.clone())?;
+        let complete = rules.clone();
+        let mut provisional = rules.clone();
+        // Unproved candidates can acquire missing facts during bounded file
+        // inspection. Final stream rows enforce the actual unknown policy.
+        provisional.retain_unknown = true;
+        preferences.set(
+            "accepts",
+            Function::new(ctx.clone(), move |raw: String, complete_metadata: bool| {
+                preference_facts(&raw).is_some_and(|facts| {
+                    if complete_metadata {
+                        complete.accepts(&facts)
+                    } else {
+                        provisional.accepts(&facts)
+                    }
+                })
+            })?,
+        )?;
+        let comparison = rules.clone();
+        preferences.set(
+            "compare",
+            Function::new(ctx.clone(), move |left: String, right: String| {
+                match (preference_facts(&left), preference_facts(&right)) {
+                    (Some(left), Some(right)) => match comparison.compare(&left, &right) {
+                        std::cmp::Ordering::Less => -1,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    },
+                    _ => 0,
+                }
+            })?,
+        )?;
+        let sorting = rules.clone();
+        preferences.set(
+            "sort",
+            Function::new(ctx.clone(), move |raw: String| {
+                sort_preference_rows(&sorting, &raw)
+            })?,
+        )?;
+        preferences.set(
+            "rank",
+            Function::new(ctx.clone(), move |raw: String| {
+                let rank = preference_facts(&raw)
+                    .map(|facts| {
+                        [
+                            rules.audio_rank(&facts).min(1_000_000),
+                            rules.codec_rank(&facts).min(1_000_000),
+                        ]
+                    })
+                    .unwrap_or([1_000_000; 2]);
+                serde_json::to_string(&rank).expect("rank serializes")
+            })?,
+        )?;
+        nova.set("streamPreferences", preferences)?;
+    }
+    install_settings(ctx, &nova, manifest, settings, host.clone())?;
     let http = Object::new(ctx.clone())?;
     let html = Object::new(ctx.clone())?;
     let crypto = Object::new(ctx.clone())?;
@@ -899,10 +1050,15 @@ fn install_settings<'js>(
     ctx: &rquickjs::Ctx<'js>,
     nova: &Object<'js>,
     manifest: &PluginManifest,
-    initial: Option<serde_json::Map<String, serde_json::Value>>,
-    generation: u64,
+    invocation: InvocationSettings,
     host: Arc<dyn ProviderHost>,
 ) -> rquickjs::Result<()> {
+    let InvocationSettings {
+        values: initial,
+        generation,
+        cache_context,
+        ..
+    } = invocation;
     let settings = Object::new(ctx.clone())?;
     let cache = Object::new(ctx.clone())?;
     let writes = Arc::new(AtomicUsize::new(0));
@@ -1040,7 +1196,7 @@ fn install_settings<'js>(
             }
             crate::plugin_settings::cache_get_memory_for_generation(
                 &id,
-                &key,
+                &preference_cache_key(&key, cache_context),
                 unix_seconds(),
                 generation,
             )
@@ -1067,7 +1223,7 @@ fn install_settings<'js>(
             }
             crate::plugin_settings::cache_set_memory_for_generation(
                 &id,
-                &key,
+                &preference_cache_key(&key, cache_context),
                 &value,
                 ttl,
                 unix_seconds(),
@@ -1089,9 +1245,13 @@ fn install_settings<'js>(
             {
                 return "provider cache write limit exceeded".to_owned();
             }
-            crate::plugin_settings::cache_remove_memory_for_generation(&id, &key, generation)
-                .map(|()| String::new())
-                .unwrap_or_else(|_| "could not remove provider cache".into())
+            crate::plugin_settings::cache_remove_memory_for_generation(
+                &id,
+                &preference_cache_key(&key, cache_context),
+                generation,
+            )
+            .map(|()| String::new())
+            .unwrap_or_else(|_| "could not remove provider cache".into())
         })?,
     )?;
     let id = plugin.clone();
@@ -1106,10 +1266,15 @@ fn install_settings<'js>(
             {
                 return String::new();
             }
-            crate::plugin_settings::cache_get_for_generation(&id, &key, unix_seconds(), generation)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
+            crate::plugin_settings::cache_get_for_generation(
+                &id,
+                &preference_cache_key(&key, cache_context),
+                unix_seconds(),
+                generation,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_default()
         })?,
     )?;
     let id = plugin.clone();
@@ -1131,7 +1296,7 @@ fn install_settings<'js>(
             }
             crate::plugin_settings::cache_set_for_generation(
                 &id,
-                &key,
+                &preference_cache_key(&key, cache_context),
                 &value,
                 ttl,
                 unix_seconds(),
@@ -1151,9 +1316,13 @@ fn install_settings<'js>(
             {
                 return "provider cache write limit exceeded".to_owned();
             }
-            crate::plugin_settings::cache_remove_for_generation(&plugin, &key, generation)
-                .map(|()| String::new())
-                .unwrap_or_else(|_| "could not remove provider cache".into())
+            crate::plugin_settings::cache_remove_for_generation(
+                &plugin,
+                &preference_cache_key(&key, cache_context),
+                generation,
+            )
+            .map(|()| String::new())
+            .unwrap_or_else(|_| "could not remove provider cache".into())
         })?,
     )?;
     nova.set("settings", settings)?;
@@ -1591,6 +1760,78 @@ fn script_error(error: rquickjs::Error) -> ProviderError {
 
 // Called by the serialized service fixture rather than a separate test: cache
 // generations are global, so parallel configure/reset fixtures would race.
+#[cfg(test)]
+pub(crate) fn exercise_stream_preference_cache_runtime() {
+    use serde_json::json;
+    let manifest: PluginManifest = serde_json::from_value(json!({
+        "formatVersion":1,"id":"preference-cache-fixture","name":"Fixture","version":"1","entry":"fixture.js","permissions":{},"capabilities":{"streamPreferences":true}
+    })).unwrap();
+    let runtime = PluginRuntime::new(
+        manifest,
+        r#"globalThis.novaProvider={handle(request){
+        const before=[nova.cache.get('same'),nova.cache.getMemory('same')];
+        if(request.write){
+            if(nova.cache.set('same',request.write,60)!=='' || nova.cache.setMemory('same',request.write,60)!=='')throw new Error('cache write failed');
+        }
+        if(request.remove){nova.cache.remove('same');nova.cache.removeMemory('same');}
+        return {before,after:[nova.cache.get('same'),nova.cache.getMemory('same')],invalid:nova.cache.setMemory('../bad','x',60)};
+    }}"#,
+    );
+    let a = nova_config::StreamFilterRules {
+        enabled: true,
+        max_height: Some(1080),
+        ..Default::default()
+    };
+    let b = nova_config::StreamFilterRules {
+        max_height: Some(720),
+        ..a.clone()
+    };
+    let mut reordered = a.clone();
+    reordered.sort_order.rotate_left(1);
+    let invoke =
+        |context: Option<&nova_config::StreamFilterRules>, write: Option<&str>, remove: bool| {
+            let mut request = json!({"write":write,"remove":remove});
+            if let Some(context) = context {
+                request["streamPreferences"] = json!(context);
+            }
+            runtime
+                .invoke(crate::MemoryProviderHost::new(), &request)
+                .unwrap()
+        };
+    assert_eq!(
+        invoke(Some(&a), Some("A"), false)["before"],
+        json!(["", ""])
+    );
+    assert_eq!(
+        invoke(Some(&b), Some("B"), false)["before"],
+        json!(["", ""])
+    );
+    assert_eq!(
+        invoke(Some(&reordered), Some("reordered"), false)["before"],
+        json!(["", ""]),
+        "sort-only policy changes use a distinct cache namespace"
+    );
+    assert_eq!(invoke(Some(&a), None, false)["after"], json!(["A", "A"]));
+    assert_eq!(
+        invoke(Some(&reordered), None, false)["after"],
+        json!(["reordered", "reordered"])
+    );
+    assert_eq!(invoke(Some(&b), None, true)["after"], json!(["", ""]));
+    let ordinary = invoke(None, Some("ordinary"), false);
+    assert_eq!(ordinary["before"], json!(["", ""]));
+    assert_ne!(
+        ordinary["invalid"], "",
+        "context hashing must not authorize invalid original keys"
+    );
+    assert_eq!(invoke(Some(&a), None, false)["after"], json!(["A", "A"]));
+    assert_eq!(
+        invoke(None, None, false)["after"],
+        json!(["ordinary", "ordinary"])
+    );
+    crate::plugin_settings::cache_clear("preference-cache-fixture").unwrap();
+}
+
+// Shares the serialized settings service fixture above.
 #[cfg(test)]
 pub(crate) fn exercise_memory_cache_runtime() {
     struct Host;

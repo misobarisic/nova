@@ -1678,6 +1678,15 @@ fn deeper_advertised_pack_is_checked_once_after_first_page_progress() {
 
 #[test]
 fn filled_discovery_pool_keeps_crawling_and_admits_better_ranked_later_pack() {
+    exercise_filled_discovery_pool(false);
+}
+
+#[test]
+fn native_policy_filled_discovery_pool_keeps_crawling_within_the_operation_budget() {
+    exercise_filled_discovery_pool(true);
+}
+
+fn exercise_filled_discovery_pool(native_policy: bool) {
     let host = Arc::new(FixtureHost::default());
     let row = |index: usize, seeders: u64| json!({"infoHash":format!("{index:040x}"),"title":"Example (2020) S01 Complete 1080p","sizeBytes":4,"seeders":seeders,"torrentUrl":null,"sources":["Nyaa"]});
     host.json(
@@ -1699,11 +1708,23 @@ fn filled_discovery_pool_keeps_crawling_and_admits_better_ranked_later_pack() {
       let retained=[];const cacheSet=Supernova.cacheSet;
       Supernova.cacheSet=(key,payload,ttl)=>{if(payload.records)retained=payload.records;cacheSet(key,payload,ttl);};
       const handle=novaProvider.handle;novaProvider.handle=request=>{const result=handle(request);return {result,retainedCount:retained.length,firstHash:retained[0] && retained[0].infoHash};};"#;
+    let mut request =
+        json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","cached")});
+    if native_policy {
+        use nova_config::stream_filters::{StreamFilterRules, VideoCodec};
+        request["streamPreferences"] = json!(StreamFilterRules {
+            enabled: true,
+            max_height: Some(1080),
+            max_bytes: Some(1000),
+            codec_priority: vec![VideoCodec::Hevc, VideoCodec::Avc],
+            ..StreamFilterRules::default().resolved_with_subtitles("ja,en", "en,hr")
+        });
+    }
+    // Use the production manifest's unchanged script/request budgets. A
+    // complete lookup must crawl past the full pool and preserve the superior
+    // later pack while native parsing, comparison and filtering are active.
     let output = runtime_with_suffix(suffix)
-        .invoke(
-            host.clone(),
-            &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","cached")}),
-        )
+        .invoke(host.clone(), &request)
         .unwrap();
     let result = &output["result"];
     let rows = result.get("streams").unwrap_or(result).as_array().unwrap();
@@ -1720,6 +1741,11 @@ fn filled_discovery_pool_keeps_crawling_and_admits_better_ranked_later_pack() {
     // only 16 KiB. Inspect the intended bounded cache payload directly here.
     assert_eq!(output["retainedCount"], 300);
     assert_eq!(output["firstHash"], selected);
+    if native_policy {
+        assert_eq!(rows[0]["streamFacts"]["cached"], true);
+        assert!(rows[0]["streamFacts"]["seeders"].is_null());
+        assert_eq!(rows[0]["streamFacts"]["bytes"], 4);
+    }
 }
 
 #[test]

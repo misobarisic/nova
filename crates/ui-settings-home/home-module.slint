@@ -1,6 +1,50 @@
-import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
+import { SettingsBridge, SettingsContent, Theme, SettingsStyle, InterfaceStyle, ControlInput } from "@NovaUiShared";
+
+import { ControlTouchArea } from "../ui/control-input.slint";
 
 import { PillButton, ToggleSwitch, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+// Same pill treatment and native keyboard focus as other Settings actions.
+// Only reorder controls hide their caption; their delayed tooltip is painted by
+// the section window so the surrounding clipped card cannot cut it off.
+component HomeCatalogAction inherits PillButton {
+    in property <string> caption;
+    in property <image> icon;
+    in property <bool> icon-only;
+    callback tip(string, length, length);
+    label: "";
+    accessible-label: root.caption;
+    width: root.icon-only ? (InterfaceStyle.tv ? 56px : 44px) : natural_caption.preferred-width + 56px;
+    horizontal-stretch: 0; vertical-stretch: 0;
+    natural_caption := Text { width: 0px; height: 0px; text: root.caption; font-size: InterfaceStyle.tv ? 20px : 13px; }
+    Image {
+        x: root.icon-only ? (parent.width - self.width) / 2 : 14px;
+        y: (parent.height - self.height) / 2;
+        width: 20px; height: 20px; source: root.icon; image-fit: contain;
+        colorize: root.destructive ? Theme.current.text_destructive : Theme.current.text_settings;
+    }
+    if !root.icon-only: Text {
+        x: 42px; width: Math.max(0px,parent.width - 56px); height: 100%;
+        text: root.caption; font-size: InterfaceStyle.tv ? 20px : 13px;
+        color: root.destructive ? Theme.current.text_destructive : Theme.current.text_settings;
+        vertical-alignment: center;
+    }
+    background: root.destructive ? (hit.feedback-active ? Theme.current.destructive_control_hover : Theme.current.destructive_control)
+        : hit.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control;
+    hit := ControlTouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { root.tip("",0px,0px); SettingsStyle.keyboard-mode = false; root.clicked(); }
+    }
+    private property <bool> wants_tip: root.icon-only && root.enabled
+        && ((!ControlInput.touch-feedback && hit.has-hover) || root.keyboard_focused);
+    changed wants_tip => {
+        tip_delay.stop();
+        if root.wants_tip { tip_delay.start(); } else { root.tip("",0px,0px); }
+    }
+    tip_delay := Timer { interval: 400ms; running: false; triggered => {
+        self.stop(); if root.wants_tip { root.tip(root.caption,root.absolute-position.x,root.absolute-position.y); }
+    } }
+}
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
@@ -8,6 +52,10 @@ export component SettingsHomeModule inherits Window {
     default-font-family: "Roboto";
     background: transparent;
     width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <string> tip_label;
+    private property <length> tip_x;
+    private property <length> tip_y;
+    function show_tip(label: string, x: length, y: length) { root.tip_label = label; root.tip_x = x; root.tip_y = y; }
     private property <length> measured_min: body_layout.min-height;
     private property <length> measured_preferred: body_layout.preferred-height;
     changed measured_min => { root.publish_size(); }
@@ -62,38 +110,44 @@ export component SettingsHomeModule inherits Window {
                             toggled => {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16; SettingsContent.kb_home = i * 4;
+                                root.tip_label = "";
                                 SettingsBridge.home_row_catalog_action(i, 0);
                             }
                         }
                         Rectangle { horizontal-stretch: 1; }
-                        PillButton {
-                            label: "↑"; accessible-label: @tr("Move up");
+                        HomeCatalogAction {
+                            caption: @tr("Move up"); icon-only: true; icon: @image-url("../../assets/icons/addons/arrow-up.svg");
+                            tip(label,x,y) => { root.show_tip(label,x,y); }
                             btn_min_width: 44px; compact: true;
                             enabled: i > 0;
                             focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 1 && SettingsBridge.kb_active;
                             clicked => {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16; SettingsContent.kb_home = (i - 1) * 4 + 1;
+                                root.tip_label = "";
                                 SettingsBridge.home_row_catalog_action(i, 1);
                             }
                         }
-                        PillButton {
-                            label: "↓"; accessible-label: @tr("Move down");
+                        HomeCatalogAction {
+                            caption: @tr("Move down"); icon-only: true; icon: @image-url("../../assets/icons/addons/arrow-down.svg");
+                            tip(label,x,y) => { root.show_tip(label,x,y); }
                             btn_min_width: 44px; compact: true;
                             enabled: i + 1 < SettingsBridge.home_row_catalog_rows.length;
                             focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 2 && SettingsBridge.kb_active;
                             clicked => {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16; SettingsContent.kb_home = (i + 1) * 4 + 2;
+                                root.tip_label = "";
                                 SettingsBridge.home_row_catalog_action(i, 2);
                             }
                         }
-                        PillButton {
-                            label: @tr("Remove"); destructive: true; compact: true;
+                        HomeCatalogAction {
+                            caption: @tr("Remove"); icon: @image-url("../../assets/icons/player/trash.svg"); destructive: true; compact: true;
                             focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 3 && SettingsBridge.kb_active;
                             clicked => {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16; SettingsContent.kb_home = i * 4 + 3;
+                                root.tip_label = "";
                                 SettingsBridge.home_row_catalog_action(i, 3);
                             }
                         }
@@ -186,8 +240,8 @@ export component SettingsHomeModule inherits Window {
                         + " · " + (home.genre == "" ? @tr("All genres") : home.genre)
                         + (home.available ? (home.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
 
-                        home_catalog_remove := PillButton {
-                            label: @tr("Remove");
+                        home_catalog_remove := HomeCatalogAction {
+                            caption: @tr("Remove"); icon: @image-url("../../assets/icons/player/trash.svg");
                             destructive: true;
                             roomy: true;
                             focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + i + 3 && SettingsBridge.kb_active;
@@ -195,6 +249,7 @@ export component SettingsHomeModule inherits Window {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16;
                                 SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + i + 3;
+                                root.tip_label = "";
                                 SettingsBridge.home_catalog_removed(i);
                             }
                         }
@@ -217,4 +272,12 @@ export component SettingsHomeModule inherits Window {
 
         }
     }
+    if root.tip_label != "": Rectangle {
+        width: tip_text.preferred-width + 20px; height: tip_text.preferred-height + 14px;
+        x: Math.max(4px,Math.min(root.tip_x,parent.width - self.width - 4px));
+        y: Math.max(4px,root.tip_y - self.height - 8px);
+        background: Theme.current.popup; border-width: 1px; border-color: Theme.current.border_medium; border-radius: 6px;
+        tip_text := Text { x: 10px; y: 7px; text: root.tip_label; font-size: 12px; color: Theme.current.text_primary; }
+    }
+
 }

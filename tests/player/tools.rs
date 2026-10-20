@@ -113,8 +113,10 @@ fn bookmarks_second_language_and_source_retry_work_at_phone_landscape_and_deskto
         app.on_try_another_stream(move || recorded.set(recorded.get() + 1));
         app.show().unwrap();
         settle(&app);
-        // The first six categories keep their established indices.
-        open_page(&app, 6);
+        // Secondary subtitles are reached only from the normal subtitle picker.
+        open_page(&app, 0);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::Return);
         let _ = button(&app, "Off");
         key(&app, slint::platform::Key::DownArrow);
         key(&app, slint::platform::Key::Return);
@@ -125,7 +127,8 @@ fn bookmarks_second_language_and_source_retry_work_at_phone_landscape_and_deskto
         assert_eq!(placement.get(), 1);
         key(&app, slint::platform::Key::Escape);
         key(&app, slint::platform::Key::Escape);
-        open_page(&app, 7);
+        key(&app, slint::platform::Key::Escape);
+        open_page(&app, 5);
         let _ = button(&app, "The reveal");
         key(&app, slint::platform::Key::DownArrow);
         key(&app, slint::platform::Key::Return);
@@ -143,7 +146,7 @@ fn bookmarks_second_language_and_source_retry_work_at_phone_landscape_and_deskto
         assert_eq!(deleted.borrow().as_str(), "scene-one");
         key(&app, slint::platform::Key::Escape);
         key(&app, slint::platform::Key::Escape);
-        open_page(&app, 8);
+        open_page(&app, 6);
         assert_eq!(retries.get(), 1);
     }
 }
@@ -199,7 +202,7 @@ fn bookmark_editor_keeps_note_and_stable_id_until_a_save_succeeds() {
     });
     app.show().unwrap();
     settle(&app);
-    open_page(&app, 7);
+    open_page(&app, 5);
     for _ in 0..3 {
         key(&app, slint::platform::Key::DownArrow);
     }
@@ -364,6 +367,16 @@ fn render_player_settings_icon_previews() {
                     step.set(step.get() + 1);
                     return;
                 }
+                16 | 17 => {
+                    click(back());
+                    step.set(if step.get() == 16 { 3 } else { 8 });
+                    return;
+                }
+                14 | 15 => {
+                    click(button(&app, "Second subtitles"));
+                    step.set(if step.get() == 14 { 2 } else { 7 });
+                    return;
+                }
                 11 => {
                     click(button(&app, "Subtitles"));
                     step.set(12);
@@ -388,9 +401,7 @@ fn render_player_settings_icon_previews() {
                     "Audio",
                     "Hardware decoding",
                     "Playback speed",
-                    "Subtitle appearance and timing",
                     "Intro skipping",
-                    "Second subtitles",
                     "Scene bookmarks",
                     "Try another stream",
                 ] {
@@ -457,12 +468,12 @@ fn render_player_settings_icon_previews() {
             }
             match step.get() {
                 1 | 6 => {
-                    click(button(&app, "Second subtitles"));
-                    step.set(step.get() + 1);
+                    click(button(&app, "Subtitles"));
+                    step.set(if step.get() == 1 { 14 } else { 15 });
                 }
                 2 | 7 => {
                     click(back());
-                    step.set(step.get() + 1);
+                    step.set(if step.get() == 2 { 16 } else { 17 });
                 }
                 5 => {
                     click(back());
@@ -517,7 +528,7 @@ fn automatic_stream_recovery_is_separate_from_immediate_manual_settings_action()
         "initial loading must not immediately suggest recovery"
     );
     // The setting stays usable before the automatic wait has elapsed.
-    open_page(&app, 8);
+    open_page(&app, 6);
     assert_eq!(calls.get(), 1);
     app.set_automatic_stream_recovery_visible(true);
     settle(&app);
@@ -604,7 +615,7 @@ fn saved_scene_actions_fit_beside_note_and_timestamp_and_support_horizontal_keys
             size: slint::LogicalSize::new(width as f32, height as f32),
         });
         settle(&app);
-        open_page(&app, 7);
+        open_page(&app, 5);
         key(&app, slint::platform::Key::DownArrow); // Save.
         key(&app, slint::platform::Key::DownArrow); // First saved scene.
         let note = button(&app, "impossible");
@@ -809,5 +820,101 @@ fn subtitle_shortcuts_fit_and_return_to_the_picker_that_opened_them() {
                     .is_some()
             );
         }
+    }
+}
+
+#[test]
+fn direct_subtitle_tools_animate_forward_and_back_and_respect_reduced_motion() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::direct_subtitle_tools_animate_forward_and_back_and_respect_reduced_motion"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(1280, 800));
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(600.0);
+    app.set_osd_visible(true);
+    app.show().unwrap();
+    settle(&app);
+    let element = |id: &str| ElementHandle::find_by_element_id(&app, id).next().unwrap();
+    element("PlayerOverlay::settings_gear")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    for label in ["Subtitle appearance and timing", "Second subtitles"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, label)
+                .next()
+                .is_none(),
+            "duplicate root row: {label}"
+        );
+    }
+    key(&app, slint::platform::Key::Escape);
+    for motion in [true, false] {
+        app.set_animations(motion);
+        app.global::<nova::Anim>().set_enabled(motion);
+        app.global::<nova::Anim>().set_player(motion);
+        element("PlayerOverlay::subtitle_button")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        for label in ["Appearance & timing", "Second subtitles"] {
+            button(&app, label).mock_single_click(slint::platform::PointerEventButton::Left);
+            let incoming_x = element("SettingsMenu::card_col").absolute_position().x
+                - element("SettingsMenu::card").absolute_position().x;
+            if motion {
+                assert!(
+                    incoming_x > 20.0,
+                    "direct tool must enter from the right: {incoming_x}"
+                );
+            } else {
+                assert!(incoming_x.abs() < 0.5);
+            }
+            assert!(
+                ElementHandle::find_by_element_type_name(&app, "TrackMenu")
+                    .next()
+                    .is_none(),
+                "only the incoming menu may own input"
+            );
+            settle(&app);
+            settle(&app);
+            let settled_x = element("SettingsMenu::card_col").absolute_position().x
+                - element("SettingsMenu::card").absolute_position().x;
+            assert!(settled_x.abs() < 0.5);
+            element("SettingsMenu::back_touch")
+                .mock_single_click(slint::platform::PointerEventButton::Left);
+            let returning_x = element("TrackMenu::menu_scroll").absolute_position().x
+                - ElementHandle::find_by_element_type_name(&app, "TrackMenu")
+                    .next()
+                    .unwrap()
+                    .absolute_position()
+                    .x;
+            if motion {
+                assert!(
+                    returning_x < -20.0,
+                    "Back must reveal the captions picker from the left: {returning_x}"
+                );
+            } else {
+                assert!(returning_x.abs() < 0.5);
+            }
+            assert!(
+                ElementHandle::find_by_element_type_name(&app, "SettingsMenu")
+                    .next()
+                    .is_none()
+            );
+            settle(&app);
+            settle(&app);
+            let settled_x = element("TrackMenu::menu_scroll").absolute_position().x
+                - ElementHandle::find_by_element_type_name(&app, "TrackMenu")
+                    .next()
+                    .unwrap()
+                    .absolute_position()
+                    .x;
+            assert!(settled_x.abs() < 0.5);
+        }
+        key(&app, slint::platform::Key::Escape);
     }
 }

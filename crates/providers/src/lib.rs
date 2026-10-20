@@ -4,6 +4,7 @@
 //! Providers return normalized Nova models. A Stremio adapter and the installed
 //! source's protocol bridge let the app reuse its catalog and library flows.
 
+pub mod catalog_grouping;
 mod host;
 mod ids;
 mod matching;
@@ -56,8 +57,9 @@ pub use registry::{
     fetch_builtin_addon_with_progress_for_generation, fetch_builtin_addon_with_timeout,
     has_installed_provider, installed_packages, mark_known_provider_ids, private_provider_id,
     provider_asset_bytes, provider_capabilities, provider_owns_id, provider_settings_schema,
-    resolve_provider_stream, set_installed_packages, stable_stream_identity, stream_lookup_url,
-    supports_capability_config, supports_contextual_streams, supports_provider_configuration,
+    provider_uses_stream_preferences, resolve_provider_stream, set_installed_packages,
+    stable_stream_identity, stream_lookup_url, supports_capability_config,
+    supports_contextual_streams, supports_provider_configuration,
 };
 pub use runtime::{
     EphemeralPlaybackCredential, PluginCapabilities, PluginLimits, PluginManifest,

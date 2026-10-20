@@ -886,6 +886,13 @@ fn refresh_is_first_in_the_addon_rail_and_routes_pointer_keyboard_and_remote() {
         assert!(action.absolute_position().x + action.size().width <= all.absolute_position().x);
         assert!((action.absolute_position().y - all.absolute_position().y).abs() < 1.0);
         assert_eq!(action.size().height, all.size().height);
+        let bar = ElementHandle::find_by_element_id(&app, "StreamSelector::filter_bar")
+            .next()
+            .unwrap();
+        assert!(
+            (action.absolute_position().x - bar.absolute_position().x).abs() <= 1.0,
+            "refresh pill must share the selector content edge at {width}px"
+        );
         assert!(action.absolute_position().x >= 0.0);
         assert!(action.absolute_position().x + action.size().width <= width as f32);
     }

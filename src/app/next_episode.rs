@@ -202,7 +202,12 @@ impl Bridge {
                 }
                 let modal = state.modal_item.as_ref().filter(|m| m.id == p.series_id)?;
                 let next = successor(&modal.videos, &p.episode_id, today_days())?;
-                (next.id == p.next_episode_id).then(|| (p.series_id.clone(), next.id.clone()))
+                (next.id == p.next_episode_id
+                    && modal
+                        .seasons
+                        .iter()
+                        .any(|season| Some(*season) == next.season))
+                .then(|| (p.series_id.clone(), next.id.clone()))
             })
         };
         let Some((series, episode)) = selection else {
@@ -211,7 +216,8 @@ impl Bridge {
         // Cache the latest values before close resets the player properties.
         // The normal close callback finalizes history and torrent/brightness state.
         self.note_player_progress_from_ui();
-        app.invoke_close_player();
+        self.player
+            .with_preserved_fullscreen_on_close(|| app.invoke_close_player());
         // Stop returns a party participant to the room. A valid Next action
         // continues directly into its local source picker instead.
         app.set_party_page_open(false);
@@ -361,8 +367,15 @@ mod tests {
             ..Default::default()
         });
         let close_bridge = bridge.clone();
+        #[cfg(not(target_os = "android"))]
+        let close_app = app.as_weak();
         app.on_close_player(move || {
             close_bridge.player.close();
+            #[cfg(not(target_os = "android"))]
+            assert!(
+                close_app.upgrade().unwrap().window().is_fullscreen(),
+                "native close callback must retain next-episode fullscreen"
+            );
             close_bridge.clear_next_episode_prompt();
             close_bridge.note_player_progress_from_ui();
         });
@@ -438,7 +451,43 @@ mod tests {
         bridge.refresh_next_episode_prompt();
         let current_token = app.get_next_episode_token();
         app.set_episode_filter("no matches".into());
+        app.window().set_fullscreen(true);
+        app.set_is_fullscreen(true);
+        // A stale/missing season mapping must keep the current EOF player.
+        let seasons = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .seasons
+            .clone();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .seasons
+            .clear();
         bridge.choose_next_episode_streams(current_token.as_str());
+        assert!(app.get_player_open());
+        assert!(app.window().is_fullscreen());
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .seasons = seasons;
+        bridge.choose_next_episode_streams(current_token.as_str());
+        assert!(
+            app.window().is_fullscreen(),
+            "the next source picker retains fullscreen"
+        );
         assert!(!app.get_player_open());
         assert!(!app.get_next_episode_visible());
         assert_eq!(app.get_episode_filter(), "");

@@ -643,6 +643,87 @@ fn estimated_buffered_until(
     end.min(duration).min(f32::MAX as f64) as f32
 }
 
+/// A seek can briefly blank mpv's cache properties without discarding cached
+/// packets. Bridge only that transition, never ordinary buffering or readiness.
+#[derive(Clone, Copy)]
+struct SeekBuffer {
+    session: u64,
+    start: f64,
+    end: f64,
+    expires: Instant,
+}
+impl SeekBuffer {
+    fn begin(
+        session: u64,
+        now: Instant,
+        target: f64,
+        position: f64,
+        duration: f64,
+        known_end: f64,
+        cache_state: Option<&str>,
+    ) -> Option<Self> {
+        if !target.is_finite() || target < 0.0 || !duration.is_finite() || duration <= 0.0 {
+            return None;
+        }
+        let fallback = || {
+            (position.is_finite()
+                && position >= 0.0
+                && known_end.is_finite()
+                && target >= position
+                && target < known_end)
+                .then_some((position, known_end))
+        };
+        // Read only on a seek. The documented ranges account for backward
+        // cache too; cache-time alone cannot establish a cached backward span.
+        // https://mpv.io/manual/master/#command-interface-demuxer-cache-state
+        let range = if let Some(raw) = cache_state {
+            if raw.len() > 65536 {
+                return None;
+            }
+            let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+            if let Some(ranges) = value
+                .get("seekable-ranges")
+                .and_then(serde_json::Value::as_array)
+            {
+                ranges
+                    .iter()
+                    .take(64)
+                    .filter_map(|range| {
+                        let start = range.get("start")?.as_f64()?;
+                        let end = range.get("end")?.as_f64()?;
+                        (start.is_finite()
+                            && end.is_finite()
+                            && start >= 0.0
+                            && start <= target
+                            && target < end)
+                            .then_some((start, end))
+                    })
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+            } else {
+                fallback()
+            }
+        } else {
+            fallback()
+        }?;
+        Some(Self {
+            session,
+            start: range.0,
+            end: range.1.min(duration),
+            expires: now + Duration::from_secs(2),
+        })
+    }
+    fn visible(self, session: u64, now: Instant, position: f64, duration: f64) -> Option<f32> {
+        (self.session == session
+            && now < self.expires
+            && position.is_finite()
+            && position >= self.start
+            && position < self.end
+            && duration.is_finite()
+            && duration > 0.0)
+            .then_some(self.end.min(duration).min(f32::MAX as f64) as f32)
+    }
+}
+
 /// Source-local playback telemetry. The cache span is an estimate in seconds,
 /// not a guarantee that all tracks or a particular bitrate can be sustained.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1002,6 +1083,10 @@ struct State {
     playback_fullscreen: AtomicBool,
     #[cfg(not(target_os = "android"))]
     catalog_maximized: AtomicBool,
+    #[cfg(not(target_os = "android"))]
+    preserve_close_window: AtomicBool,
+    #[cfg(not(target_os = "android"))]
+    transition_window_held: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
     native_subtitle_defaults: nova_config::playback_preferences::SubtitleStyle,
     preferences: Mutex<PreferenceSession>,
@@ -1053,6 +1138,7 @@ struct State {
     /// option, with the UI still at 0) mirrors mpv instead of being mistaken
     /// for a scrub and frozen.
     seek_pending: AtomicBool,
+    seek_buffer: Mutex<Option<SeekBuffer>>,
     /// The load timeout / setup error was already reported for this session.
     reported: AtomicBool,
     opened_at: Mutex<Instant>,
@@ -1348,9 +1434,14 @@ impl Player {
             playback_fullscreen: AtomicBool::new(false),
             #[cfg(not(target_os = "android"))]
             catalog_maximized: AtomicBool::new(false),
+            #[cfg(not(target_os = "android"))]
+            preserve_close_window: AtomicBool::new(false),
+            #[cfg(not(target_os = "android"))]
+            transition_window_held: AtomicBool::new(false),
             external_handoff: AtomicBool::new(false),
             allow_external: AtomicBool::new(true),
             seek_pending: AtomicBool::new(false),
+            seek_buffer: Mutex::new(None),
             reported: AtomicBool::new(false),
             opened_at: Mutex::new(Instant::now()),
             app: app.as_weak(),
@@ -1966,6 +2057,7 @@ impl Player {
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
+        *self.state.seek_buffer.lock().unwrap() = None;
         self.state.reported.store(false, Ordering::SeqCst);
         *self.state.opened_at.lock().unwrap() = Instant::now();
 
@@ -2018,6 +2110,10 @@ impl Player {
         if !app.get_player_open() {
             self.restore_playback_fullscreen(&app);
         }
+        #[cfg(not(target_os = "android"))]
+        self.state
+            .transition_window_held
+            .store(false, Ordering::SeqCst);
         app.set_player_open(true);
         app.set_playback_started(false);
         app.set_position(0.0);
@@ -2154,8 +2250,51 @@ impl Player {
 
     /// Seek to `pos` seconds (OSD slider).
     pub fn seek(&self, pos: f32) {
-        if let Some(app) = self.state.app.upgrade() {
-            app.set_buffered_until(0.0);
+        let app = self.state.app.upgrade();
+        let pending = self.state.pending.lock().unwrap().is_some();
+        let source = self.state.preference_source.lock().unwrap().clone();
+        let session = self.state.screenshot_session.load(Ordering::SeqCst);
+        let now = Instant::now();
+        let target = pos.max(0.0) as f64;
+        let grace = app.as_ref().and_then(|app| {
+            if pending || !self.state.started.load(Ordering::SeqCst) {
+                return None;
+            }
+            let engine = self.state.mpv.lock().ok()?;
+            let mpv = engine.as_ref()?;
+            if mpv.get_property::<String>("path").ok().as_deref() != Some(source.as_str()) {
+                return None;
+            }
+            let cache = mpv.get_property::<String>("demuxer-cache-state").ok();
+            let previous = *self.state.seek_buffer.lock().unwrap();
+            if cache.is_none()
+                && let Some(previous) = previous
+            {
+                // Repeated keys can reuse a confirmed backward range, but
+                // cannot prolong missing-telemetry grace indefinitely.
+                return previous
+                    .visible(session, now, target, app.get_duration() as f64)
+                    .map(|_| previous);
+            }
+            SeekBuffer::begin(
+                session,
+                now,
+                target,
+                app.get_position() as f64,
+                app.get_duration() as f64,
+                app.get_buffered_until() as f64,
+                cache.as_deref(),
+            )
+        });
+        *self.state.seek_buffer.lock().unwrap() = grace;
+        if let Some(app) = app {
+            app.set_buffered_until(
+                grace
+                    .and_then(|grace| {
+                        grace.visible(session, now, target, app.get_duration() as f64)
+                    })
+                    .unwrap_or(0.0),
+            );
             app.set_position(pos.max(0.0));
         }
         #[cfg(target_os = "android")]
@@ -2406,9 +2545,22 @@ impl Player {
 
     #[cfg(not(target_os = "android"))]
     fn restore_playback_fullscreen(&self, app: &AppWindow) {
-        self.state
-            .catalog_maximized
-            .store(app.window().is_maximized(), Ordering::SeqCst);
+        if self
+            .state
+            .transition_window_held
+            .swap(false, Ordering::SeqCst)
+        {
+            // The picker still owns the playback window. Preserve its original
+            // catalog geometry, and honor an explicit WM fullscreen exit made
+            // while the next source was being selected.
+            self.state
+                .playback_fullscreen
+                .store(app.window().is_fullscreen(), Ordering::SeqCst);
+        } else {
+            self.state
+                .catalog_maximized
+                .store(app.window().is_maximized(), Ordering::SeqCst);
+        }
         let fullscreen = self.state.playback_fullscreen.load(Ordering::SeqCst);
         app.window().set_fullscreen(fullscreen);
         app.set_is_fullscreen(fullscreen);
@@ -3013,8 +3165,11 @@ impl Player {
         let Some(app) = self.state.app.upgrade() else {
             return false;
         };
+        #[cfg(not(target_os = "android"))]
+        let fullscreen = app.window().is_fullscreen();
+        #[cfg(target_os = "android")]
         let fullscreen = app.get_is_fullscreen() || app.window().is_fullscreen();
-        self.close();
+        self.with_preserved_fullscreen_on_close(|| self.close());
         self.state.source_waiting.store(true, Ordering::SeqCst);
         if fullscreen {
             app.window().set_fullscreen(true);
@@ -3085,6 +3240,42 @@ impl Player {
         }
     }
 
+    /// Run the ordinary authorized close callback during a source/episode
+    /// handoff without briefly restoring the desktop catalog window. Cleanup
+    /// and callback authority stay unchanged; even a panic releases this scope.
+    pub fn with_preserved_fullscreen_on_close(&self, action: impl FnOnce()) {
+        #[cfg(not(target_os = "android"))]
+        {
+            struct Restore<'a>(&'a AtomicBool, bool);
+            impl Drop for Restore<'_> {
+                fn drop(&mut self) {
+                    self.0.store(self.1, Ordering::SeqCst);
+                }
+            }
+            let flag = &self.state.preserve_close_window;
+            let _restore = Restore(flag, flag.swap(true, Ordering::SeqCst));
+            action();
+        }
+        #[cfg(target_os = "android")]
+        action();
+    }
+
+    /// Back/Stop from a handoff picker returns the retained desktop window
+    /// to the catalog. Nested normal-close cleanup inside the scope is ignored.
+    pub fn release_window_transition(&self) {
+        #[cfg(not(target_os = "android"))]
+        if !self.state.preserve_close_window.load(Ordering::SeqCst)
+            && self.state.transition_window_held.load(Ordering::SeqCst)
+            && self
+                .state
+                .app
+                .upgrade()
+                .is_some_and(|app| !app.get_player_open())
+        {
+            self.close();
+        }
+    }
+
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
         #[cfg(target_os = "android")]
@@ -3092,15 +3283,32 @@ impl Player {
         // Capture before leaving fullscreen. Closing an already-closed player
         // must not replace the saved choice with the catalog's window state.
         #[cfg(not(target_os = "android"))]
+        let preserve_window = self.state.preserve_close_window.load(Ordering::SeqCst);
+        #[cfg(target_os = "android")]
+        let preserve_window = false;
+        #[cfg(not(target_os = "android"))]
+        let held_window = if preserve_window {
+            self.state.transition_window_held.load(Ordering::SeqCst)
+        } else {
+            self.state
+                .transition_window_held
+                .swap(false, Ordering::SeqCst)
+        };
+        #[cfg(not(target_os = "android"))]
         let catalog_maximized = self
             .state
             .app
             .upgrade()
-            .filter(|app| app.get_player_open())
+            .filter(|app| app.get_player_open() || held_window)
             .map(|app| {
                 self.state
                     .playback_fullscreen
                     .store(app.window().is_fullscreen(), Ordering::SeqCst);
+                if preserve_window {
+                    self.state
+                        .transition_window_held
+                        .store(true, Ordering::SeqCst);
+                }
                 self.state.catalog_maximized.load(Ordering::SeqCst)
             });
         self.state.source_waiting.store(false, Ordering::SeqCst);
@@ -3136,6 +3344,7 @@ impl Player {
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
+        *self.state.seek_buffer.lock().unwrap() = None;
         self.state.reported.store(false, Ordering::SeqCst);
 
         if let Some(app) = self.state.app.upgrade() {
@@ -3161,12 +3370,12 @@ impl Player {
             app.set_audio_track_label(slint::SharedString::default());
             // Playback fullscreen belongs to this overlay on every platform.
             // Returning to the catalog also restores Android safe-area insets.
-            if app.get_is_fullscreen() || app.window().is_fullscreen() {
+            if !preserve_window && (app.get_is_fullscreen() || app.window().is_fullscreen()) {
                 app.window().set_fullscreen(false);
                 app.set_is_fullscreen(false);
             }
             #[cfg(not(target_os = "android"))]
-            if let Some(maximized) = catalog_maximized {
+            if !preserve_window && let Some(maximized) = catalog_maximized {
                 app.window().set_maximized(maximized);
             }
             app.window().request_redraw();
@@ -3288,19 +3497,50 @@ impl Player {
             let pos = live_pos.unwrap_or(0.0);
             let dur: f64 = mpv.get_property("duration").unwrap_or(0.0);
             let paused = live_paused.unwrap_or(false);
+            let seek_pending = self.state.seek_pending.load(Ordering::SeqCst);
+            let diverged = seek_pending && (app.get_position() as f64 - pos).abs() > 2.0;
             // A queued replacement must not inherit the previous file's
             // cache. The same source ownership check guards track preferences.
             let buffered_until = if !pending_load
                 && mpv.get_property::<String>("path").ok().as_deref()
                     == Some(buffer_source.as_str())
             {
-                estimated_buffered_until(
+                let fresh = estimated_buffered_until(
                     pos,
                     dur,
                     mpv.get_property("demuxer-cache-time").ok(),
                     mpv.get_property("demuxer-cache-duration").ok(),
-                )
+                );
+                let mut grace = self.state.seek_buffer.lock().unwrap();
+                if fresh > 0.0 && !diverged {
+                    *grace = None;
+                    fresh
+                } else {
+                    let display_position = if diverged {
+                        app.get_position() as f64
+                    } else {
+                        pos
+                    };
+                    let display_duration = if dur.is_finite() && dur > 0.0 {
+                        dur
+                    } else {
+                        app.get_duration() as f64
+                    };
+                    let retained = (*grace).and_then(|grace| {
+                        grace.visible(
+                            self.state.screenshot_session.load(Ordering::SeqCst),
+                            Instant::now(),
+                            display_position,
+                            display_duration,
+                        )
+                    });
+                    if retained.is_none() {
+                        *grace = None;
+                    }
+                    retained.unwrap_or(fresh)
+                }
             } else {
+                *self.state.seek_buffer.lock().unwrap() = None;
                 0.0
             };
 
@@ -3316,8 +3556,6 @@ impl Player {
             // below, because freeing/recreating the mpv render context
             // (surface recreation) briefly blanks `time-pos`, which would
             // otherwise trip this guard and strand the reload.
-            let seek_pending = self.state.seek_pending.load(Ordering::SeqCst);
-            let diverged = seek_pending && (app.get_position() as f64 - pos).abs() > 2.0;
             if seek_pending && !diverged {
                 // mpv caught up with the seek: disengage the guard.
                 self.state.seek_pending.store(false, Ordering::SeqCst);
@@ -3915,6 +4153,7 @@ impl Player {
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);
         self.state.hwdec_checked.store(false, Ordering::SeqCst);
+        *self.state.seek_buffer.lock().unwrap() = None;
         *self.state.last_hwdec_log.lock().unwrap() = String::from("<unset>");
         *self.state.opened_at.lock().unwrap() = Instant::now();
         if let Some(app) = self.state.app.upgrade() {
@@ -4098,6 +4337,55 @@ mod tests {
             mpv.get_property::<bool>("pause").unwrap(),
             "background recovery remains paused outside a party"
         );
+    }
+
+    #[test]
+    fn cached_seeks_bridge_only_transient_same_session_ranges() {
+        let now = Instant::now();
+        let ranges =
+            r#"{"seekable-ranges":[{"start":20.0,"end":80.0},{"start":120.0,"end":140.0}]}"#;
+        let forward = SeekBuffer::begin(7, now, 60.0, 50.0, 200.0, 80.0, Some(ranges)).unwrap();
+        let backward = SeekBuffer::begin(7, now, 30.0, 50.0, 200.0, 80.0, Some(ranges)).unwrap();
+        assert_eq!(forward.visible(7, now, 60.0, 200.0), Some(80.0));
+        assert_eq!(
+            backward.visible(7, now + Duration::from_millis(750), 30.0, 200.0),
+            Some(80.0)
+        );
+        assert!(
+            forward.visible(8, now, 60.0, 200.0).is_none(),
+            "replacement source owns a different session"
+        );
+        assert!(
+            forward
+                .visible(7, now + Duration::from_secs(2), 60.0, 200.0)
+                .is_none(),
+            "missing telemetry cannot preserve stale ranges forever"
+        );
+        assert!(forward.visible(7, now, 90.0, 200.0).is_none());
+        assert!(
+            SeekBuffer::begin(7, now, 100.0, 50.0, 200.0, 140.0, Some(ranges)).is_none(),
+            "cache holes must not be painted as buffered"
+        );
+        assert!(SeekBuffer::begin(7, now, 90.0, 50.0, 200.0, 80.0, Some(ranges)).is_none());
+        assert!(
+            SeekBuffer::begin(
+                7,
+                now,
+                60.0,
+                50.0,
+                200.0,
+                80.0,
+                Some(r#"{"seekable-ranges":[]}"#)
+            )
+            .is_none()
+        );
+        assert!(
+            SeekBuffer::begin(7, now, 30.0, 50.0, 200.0, 80.0, None).is_none(),
+            "a forward estimate cannot establish backward cache"
+        );
+        assert!(SeekBuffer::begin(7, now, 60.0, 50.0, 200.0, 80.0, None).is_some());
+        assert!(SeekBuffer::begin(7, now, f64::NAN, 50.0, 200.0, 80.0, None).is_none());
+        assert!(SeekBuffer::begin(7, now, 60.0, 50.0, 200.0, 80.0, Some("invalid")).is_none());
     }
 
     #[test]
@@ -4295,6 +4583,86 @@ mod tests {
             "a windowed choice is also remembered"
         );
         player.close();
+
+        // Exercise the exact synchronous callback boundary used by both
+        // manual and automatic next-episode handoffs. Assert inside the close
+        // callback so a false->true fullscreen flash cannot pass unnoticed.
+        app.window().set_maximized(true);
+        player.set_playback_fullscreen_preference(true);
+        player.restore_playback_fullscreen(&app);
+        app.set_player_open(true);
+        let next_player = player.clone();
+        let next_app = app.as_weak();
+        app.on_close_player(move || {
+            next_player.close();
+            let app = next_app.upgrade().unwrap();
+            assert!(
+                app.window().is_fullscreen(),
+                "next-episode close must never leave fullscreen"
+            );
+        });
+        player.with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+        assert!(!app.get_player_open());
+        assert!(app.get_is_fullscreen());
+        assert!(player.state.transition_window_held.load(Ordering::SeqCst));
+        assert!(player.state.catalog_maximized.load(Ordering::SeqCst));
+        assert!(player.wait_for_source("Resolving stream…"));
+        assert!(
+            app.window().is_fullscreen(),
+            "resolver loading keeps the same window"
+        );
+        player.source_failed("Could not resolve this stream.");
+        assert!(
+            app.window().is_fullscreen(),
+            "a failed next source retains fullscreen"
+        );
+        player.play("https://example.invalid/next", 0.0).unwrap();
+        assert!(app.window().is_fullscreen());
+        player.close();
+        assert!(
+            !app.window().is_fullscreen(),
+            "explicit Close still returns to catalog"
+        );
+        assert!(
+            app.window().is_maximized(),
+            "the original catalog geometry survives the whole handoff"
+        );
+
+        player.set_playback_fullscreen_preference(true);
+        player.restore_playback_fullscreen(&app);
+        app.set_player_open(true);
+        player.with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+        app.window().set_fullscreen(false); // An explicit WM exit in the picker.
+        player
+            .play("https://example.invalid/windowed-next", 0.0)
+            .unwrap();
+        assert!(
+            !app.window().is_fullscreen(),
+            "picker-time fullscreen exit must win"
+        );
+        assert!(!player.playback_fullscreen_preference());
+        player.close();
+        assert!(app.window().is_maximized());
+
+        player.set_playback_fullscreen_preference(true);
+        player.restore_playback_fullscreen(&app);
+        app.set_player_open(true);
+        player.with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+        player.release_window_transition();
+        assert!(
+            !app.window().is_fullscreen(),
+            "Back from a handoff picker returns to catalog geometry"
+        );
+        assert!(app.window().is_maximized());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            player.with_preserved_fullscreen_on_close(|| panic!("interrupted transition"));
+        }));
+        assert!(result.is_err());
+        assert!(
+            !player.state.preserve_close_window.load(Ordering::SeqCst),
+            "panic must release the scoped close policy"
+        );
 
         // Exercise the real startup tick with a local video and null outputs.
         // Loading's paused UI flag must be replaced before the wake callback

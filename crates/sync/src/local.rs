@@ -187,6 +187,66 @@ mod tests {
     }
 
     #[test]
+    fn explicit_same_value_actions_outrank_unsettled_aliases_without_projection_actions() {
+        let mut store = Store::default();
+        store.queue_extra("sync:baseline:progress", Some("{}".into()));
+        let value = |watched, action: &str| {
+            serde_json::json!({
+                "watched":watched, "unwatched_at_secs":if watched {0} else {1},
+                "position_secs":0, "duration_secs":0, "updated_at_secs":1,
+                "manual_watch_action":action
+            })
+            .to_string()
+        };
+        let mut snapshot = vec![
+            ("original".into(), value(true, "initial-watch"), 0),
+            ("canonical".into(), value(true, "initial-watch"), 0),
+        ];
+        prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap();
+        snapshot[1].1 = value(false, "canonical-unwatch");
+        prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap();
+        snapshot[0].1 = value(true, "original-reassert-watch");
+        prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap();
+        let resolved = store.resolved_progress(["original", "canonical"]).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&resolved).unwrap()["watched"],
+            true
+        );
+        let before = store.digest();
+        let projected = vec![
+            ("original".into(), value(true, "original-reassert-watch"), 0),
+            (
+                "canonical".into(),
+                value(true, "original-reassert-watch"),
+                0,
+            ),
+        ];
+        prepare_snapshot(&mut store, 1, "progress", &projected, None, true, false).unwrap();
+        assert_eq!(store.digest(), before);
+        // Canonical's own stored activity is already false with the same
+        // second-level unwatch stamp. The explicit marker must reassert it.
+        snapshot = projected;
+        snapshot[0].1 = value(true, "original-new-watch");
+        prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap();
+        snapshot[1].1 = value(false, "canonical-reassert-unwatch");
+        prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap();
+        let resolved = store.resolved_progress(["original", "canonical"]).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&resolved).unwrap()["watched"],
+            false
+        );
+        let before = store.digest();
+        assert!(
+            !prepare_snapshot(&mut store, 1, "progress", &snapshot, None, false, false).unwrap()
+        );
+        assert_eq!(
+            store.digest(),
+            before,
+            "unchanged checkpoints do not reassert manual intent"
+        );
+    }
+
+    #[test]
     fn snapshot_noops_and_remote_projections_do_not_request_publication() {
         let mut store = Store::default();
         store.queue_extra("sync:baseline:library", Some("{}".into()));

@@ -92,7 +92,11 @@ episodes and owns its initial history union. Membership remains a shared
 title-level action, while watched episodes retain independent field clocks.
 When confirmed native sources already represent an imported series, the account's
 canonical row coordinates the merge without creating another saved title or
-copying history to a second identity. An explicitly existing canonical title is
+copying history to a second identity. This check includes current confirmed
+catalog aliases even when the account also accepts the saved source's native ID;
+the preferred export ID does not limit which proven representations it covers.
+Conflicting parents within the same catalog namespace and stale aliases do not
+establish that relationship. An explicitly existing canonical title is
 retained. Continue Watching and New episodes also collapse existing duplicate
 cards only when their selected episode shares a current confirmed catalog ID;
 all saved entries and history remain intact, and different episodes/seasons or

@@ -116,7 +116,7 @@ pub(super) struct TitleMetadata {
 }
 
 impl<'a> Metadata<'a> {
-    fn new(
+    pub(super) fn new(
         load: impl FnMut(&str, &str) -> (Option<Vec<Video>>, Option<MetaHeader>) + 'a,
         current: impl Fn() -> bool + 'a,
     ) -> Self {
@@ -213,18 +213,51 @@ struct Prepared {
     archive: Vec<watch_history::HistoryEntry>,
     activity_actions: HashMap<(String, String), i32>,
     settings: CacheSettings,
+    aliases: HashMap<String, EpisodeProgress>,
+    alias_patch: HashMap<String, EpisodeProgress>,
 }
 
+#[cfg(test)]
 fn prepare(
-    mut data: Shared,
+    data: Shared,
     view: &View,
     metadata: &Metadata<'_>,
     activity: &HashMap<String, ViewingActivity>,
     new_hidden: &HashMap<String, Vec<String>>,
     hidden: &HashMap<String, u64>,
 ) -> Prepared {
-    let cards = library::prepare_progress_cards(&data, view, metadata, activity);
-    let home = home::prepare_progress_home(&mut data, metadata, activity, new_hidden);
+    prepare_with_aliases(
+        data,
+        view,
+        metadata,
+        activity,
+        new_hidden,
+        hidden,
+        None,
+        HashMap::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_with_aliases(
+    mut data: Shared,
+    view: &View,
+    metadata: &Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+    new_hidden: &HashMap<String, Vec<String>>,
+    hidden: &HashMap<String, u64>,
+    identity: Option<&media_identity::IdentityIndex>,
+    aliases: HashMap<String, EpisodeProgress>,
+) -> Prepared {
+    let groups = if let Some(identity) = identity {
+        library::display_groups_from_index(&data.entries, identity)
+    } else {
+        library::prepare_display_groups(&data.entries, |type_, id| {
+            metadata.episodes(type_, id).as_ref().clone()
+        })
+    };
+    let cards = library::prepare_progress_cards(&data, view, metadata, activity, &groups);
+    let home = home::prepare_progress_home(&mut data, metadata, activity, new_hidden, &groups);
     watch_history::prepare_progress_history(&mut data, metadata, hidden);
     // This map covers filtered-out Library titles as well as visible cards.
     let activity_actions = data
@@ -252,6 +285,10 @@ fn prepare(
         archive: std::mem::take(&mut data.home_history_archive),
         activity_actions,
         settings: std::mem::take(&mut data.cache_settings),
+        // Duplicate the owned writer payload here, rather than clone history
+        // rows while the UI is publishing the accepted projection.
+        alias_patch: aliases.clone(),
+        aliases,
     }
 }
 
@@ -335,11 +372,20 @@ impl Bridge {
                     // Activity reconciliation belongs to the ordered writer, not
                     // to an unguarded full-map write by this derived-data worker.
                     // On failure retain the visible in-memory watch state anyway.
-                    persistence::flush_report();
+                    let committed = match persistence::flush() {
+                        Ok(()) => true,
+                        Err(error) => {
+                            io::record_write_failure(storage::Error::new(
+                                storage::ErrorKind::Transaction,
+                                error,
+                            ));
+                            false
+                        }
+                    };
                     let version = revision();
                     let current =
                         || profiles::is_current(&context) && owner.is_current(generation, version);
-                    let Some(data) = snapshot(&bridge, current) else {
+                    let Some(mut data) = snapshot(&bridge, current) else {
                         if !profiles::is_current(&context) {
                             owner.finish();
                             return;
@@ -359,13 +405,72 @@ impl Bridge {
                         },
                         current,
                     );
+                    let mut titles = data
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.type_ != "movie")
+                        .map(|entry| (entry.type_.clone(), entry.id.clone()))
+                        .collect::<HashSet<_>>();
+                    if let Some(item) = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .filter(|item| item.type_ != "movie")
+                    {
+                        titles.insert((item.type_.clone(), item.id.clone()));
+                    }
+                    let index = media_identity::IdentityIndex::with_progress(
+                        titles.into_iter().map(|(media_type, series_id)| {
+                            media_identity::TitleInventory {
+                                videos: metadata.episodes(&media_type, &series_id).as_ref().clone(),
+                                media_type,
+                                series_id,
+                            }
+                        }),
+                        data.progress
+                            .values()
+                            .map(|row| (row.series_id.clone(), row.episode_id.clone())),
+                    );
+                    if !current() {
+                        continue;
+                    }
+                    let resolved = if committed {
+                        nova_sync::local_store()
+                            .ok()
+                            .map(|store| {
+                                sync::resolve_progress_alias_groups(
+                                    &store.lock().unwrap(),
+                                    &sync::profile_domain(sync::DOMAIN_PROGRESS),
+                                    &index.progress_groups,
+                                )
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
+                    let aliases = resolved
+                        .into_iter()
+                        .filter(|(key, row)| data.progress.get(key) != Some(row))
+                        .collect::<HashMap<_, _>>();
+                    data.progress.extend(aliases.clone());
                     let activity = read_viewing_activity();
                     let new_hidden =
                         read_json::<HashMap<String, Vec<String>>>(NEW_EPISODES_HIDDEN_KEY)
                             .unwrap_or_default();
                     let hidden = read_json::<HashMap<String, u64>>(watch_history::HIDDEN_KEY)
                         .unwrap_or_default();
-                    let prepared = prepare(data, &view, &metadata, &activity, &new_hidden, &hidden);
+                    let prepared = prepare_with_aliases(
+                        data,
+                        &view,
+                        &metadata,
+                        &activity,
+                        &new_hidden,
+                        &hidden,
+                        Some(&index),
+                        aliases,
+                    );
                     if !current() {
                         continue;
                     }
@@ -403,14 +508,32 @@ impl Bridge {
             storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
         }
     }
-    fn publish_progress_projection(&self, prepared: Prepared) {
+    fn publish_progress_projection(&self, mut prepared: Prepared) {
         #[cfg(test)]
         let publish_started = std::time::Instant::now();
+        if !prepared.aliases.is_empty() {
+            // Reserve ordering before exposing the view. The next UI mutation
+            // sees these rows and queues after their baseline projection, so
+            // a stale full-map checkpoint cannot mint a synthetic unwatch.
+            if persistence::try_progress_projection(std::mem::take(&mut prepared.alias_patch))
+                .is_none()
+            {
+                let bridge = self.clone();
+                let context = profiles::capture();
+                slint::Timer::single_shot(std::time::Duration::from_millis(25), move || {
+                    if profiles::is_current(&context) {
+                        profiles::with_context(context, || bridge.request_progress_projection());
+                    }
+                });
+                return;
+            }
+        }
         let action = {
             let mut state = self.shared.lock().unwrap();
             if state.restoring_models {
                 return;
             }
+            state.progress.extend(prepared.aliases);
             state.continue_list = prepared.continuing;
             state.new_episodes_list = prepared.new;
             state.upcoming_list = prepared.upcoming;
@@ -427,6 +550,8 @@ impl Bridge {
                 })
                 .unwrap_or_default()
         };
+        self.refresh_detail_progress_ui();
+        self.refresh_watch_queue_progress();
         if let Some(app) = self.app() {
             app.set_detail_library_activity_action(action);
         }
@@ -597,7 +722,11 @@ mod tests {
                 phase: ViewingPhase::AwaitingReturn,
             },
         )]);
-        let _home = home::prepare_progress_home(&mut state, &metadata, &activity, &HashMap::new());
+        let groups = library::prepare_display_groups(&state.entries, |type_, id| {
+            metadata.episodes(type_, id).as_ref().clone()
+        });
+        let _home =
+            home::prepare_progress_home(&mut state, &metadata, &activity, &HashMap::new(), &groups);
         assert_eq!(state.continue_list.len(), 1);
         assert_eq!(state.continue_list[0].series_id, "resume");
         assert_eq!(state.continue_list[0].episode_id, "e1");
@@ -614,6 +743,7 @@ mod tests {
             },
             &metadata,
             &activity,
+            &groups,
         );
         assert_eq!(
             cards.len(),

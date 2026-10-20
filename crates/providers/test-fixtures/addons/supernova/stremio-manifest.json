@@ -2,7 +2,7 @@
   "id": "nova.supernova",
   "name": "Supernova",
   "logo": "nova-provider://supernova/logo.jpg",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "On-device torrent discovery with optional cached-only TorBox playback. Enable and configure permitted sources first.",
   "types": ["movie", "series"],
   "resources": ["stream"],

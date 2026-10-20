@@ -23,20 +23,23 @@ fn filters(height: u16, codec: VideoCodec, language: &str) -> StreamFilterRules 
         audio_languages: vec![language.into()],
         require_audio_language: true,
         retain_unknown: false,
+        use_preferred_audio_languages: false,
+        ..Default::default()
     }
 }
-fn settings_values(settings: &CacheSettings) -> [(String, String); 2] {
-    [
-        (
-            "smart_collections".into(),
-            serde_json::to_string(&settings.smart_collections).unwrap(),
-        ),
-        (
-            "stream_filters".into(),
-            serde_json::to_string(&settings.stream_filters).unwrap(),
-        ),
-    ]
+fn rule_fields() -> Vec<&'static str> {
+    std::iter::once("smart_collections")
+        .chain(stream_filters::RULE_SCOPES.iter().map(|(key, _)| *key))
+        .collect()
 }
+fn settings_values(settings: &CacheSettings) -> Vec<(String, String)> {
+    let values = stream_filters::settings_value(settings);
+    rule_fields()
+        .into_iter()
+        .map(|field| (field.into(), serde_json::to_string(&values[field]).unwrap()))
+        .collect()
+}
+
 fn read_owned(owner: &profiles::ProfileStore) -> CacheSettings {
     serde_json::from_str(
         &owner
@@ -53,7 +56,7 @@ fn assert_rules(actual: &CacheSettings, expected: &CacheSettings) {
 fn records(domain: &str) -> Vec<(String, nova_sync::Record)> {
     let owner = nova_sync::local_store().unwrap();
     let store = owner.lock().unwrap();
-    ["smart_collections", "stream_filters"]
+    rule_fields()
         .into_iter()
         .map(|field| {
             let mut record = store.record(domain, field).unwrap().clone();
@@ -207,7 +210,7 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
     assert_eq!(profiles::current_id(), alice_id);
     assert_eq!(records(&alice_domain), initial_records);
 
-    for field in ["smart_collections", "stream_filters"] {
+    for field in rule_fields() {
         bridge.set_setting_override(field, true);
     }
     let local = CacheSettings {
@@ -253,10 +256,12 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
         effective.sync_overrides["smart_collections"],
         serde_json::to_value(&shared.smart_collections).unwrap()
     );
-    assert_eq!(
-        effective.sync_overrides["stream_filters"],
-        serde_json::to_value(&shared.stream_filters).unwrap()
-    );
+    for (field, _) in stream_filters::RULE_SCOPES {
+        assert_eq!(
+            effective.sync_overrides[*field],
+            stream_filters::settings_value(&shared)[*field]
+        );
+    }
     assert_eq!(
         records(&alice_domain),
         received_records,
@@ -266,13 +271,15 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
 
     // Disabling the override restores the latest received account value,
     // rather than the older baseline captured when the override was enabled.
-    for field in ["smart_collections", "stream_filters"] {
+    for field in rule_fields() {
         bridge.set_setting_override(field, false);
     }
     let restored = read_owned(&alice_owner);
     assert_rules(&restored, &shared);
     assert!(!restored.sync_overrides.contains_key("smart_collections"));
-    assert!(!restored.sync_overrides.contains_key("stream_filters"));
+    for (field, _) in stream_filters::RULE_SCOPES {
+        assert!(!restored.sync_overrides.contains_key(*field));
+    }
     assert_eq!(records(&alice_domain), received_records);
     bridge.capture_settings();
     bridge.persist_settings();

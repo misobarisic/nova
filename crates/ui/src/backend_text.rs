@@ -127,6 +127,35 @@ pub fn tr(english: &str) -> &str {
         "No smart collections" => "Nema pametnih zbirki",
         "Required audio" => "Obavezan zvuk",
         "Preferred audio" => "Željeni zvuk",
+        "Any resolution" => "Sve rezolucije",
+        "Any size" => "Sve veličine",
+        "Uses preferred audio languages" => "Koristi željene jezike zvuka",
+        "Saved custom languages" => "Spremljeni prilagođeni jezici",
+        "All video codecs" => "Svi videokodeci",
+        "No excluded codecs" => "Nema izuzetih kodeka",
+        "No codec preference" => "Nema prednosti kodeka",
+        "Codec priority" => "Redoslijed kodeka",
+        "Excluded video codecs" => "Izuzeti videokodeci",
+        "Profile and device stream preferences" => "Postavke izvora profila i uređaja",
+        "Managed in Settings → Player → Stream filters." => {
+            "Upravlja se u Postavke → Reprodukcija → Filtri izvora."
+        }
+        "Only preferred video codecs" => "Samo željeni videokodeci",
+        "Audio language" => "Jezik zvuka",
+        "Video codec" => "Videokodek",
+        "Subtitle language" => "Jezik titlova",
+        "Preferred first" => "Željeni prvo",
+        "Reverse preference order" => "Obrnuti redoslijed želja",
+        "Uncached first" => "Nespremljeni prvo",
+        "Cached first" => "Spremljeni prvo",
+        "Single episodes first" => "Pojedinačne epizode prvo",
+        "Season packs first" => "Paketi sezona prvo",
+        "Smallest first" => "Najmanji prvo",
+        "Largest first" => "Najveći prvo",
+        "Lowest first" => "Najniže prvo",
+        "Highest first" => "Najviše prvo",
+        "Fewest first" => "Najmanje prvo",
+        "Most first" => "Najviše prvo",
         "Unknown details kept" => "Nepoznate pojedinosti zadržane",
         "Unknown details hidden" => "Nepoznate pojedinosti skrivene",
         "Watched" => "Pogledano",
@@ -1779,6 +1808,100 @@ pub fn watch_action(episode: &str, continuing: bool) -> String {
 
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    if field == "stream_filters_sort_order" {
+        return serde_json::from_value::<Vec<nova_config::stream_filters::StreamSortRule>>(
+            value.clone(),
+        )
+        .map(|order| stream_sort_summary(&order))
+        .unwrap_or_else(|_| tr("Unsupported value").into());
+    }
+    if matches!(field, "stream_filters_resolution" | "stream_filters_size") {
+        if !value.is_null() && value.as_u64().is_none() {
+            return tr("Unsupported value").into();
+        }
+        return value.as_u64().map_or_else(
+            || {
+                tr(if field == "stream_filters_resolution" {
+                    "Any resolution"
+                } else {
+                    "Any size"
+                })
+                .into()
+            },
+            |limit| {
+                if field == "stream_filters_resolution" {
+                    format!("{limit}p")
+                } else {
+                    stream_size(limit)
+                }
+            },
+        );
+    }
+    if matches!(
+        field,
+        "stream_filters_allowed_codecs"
+            | "stream_filters_excluded_codecs"
+            | "stream_filters_codec_priority"
+    ) {
+        let Ok(codecs) =
+            serde_json::from_value::<Vec<nova_config::stream_filters::VideoCodec>>(value.clone())
+        else {
+            return tr("Unsupported value").into();
+        };
+        return if codecs.is_empty() {
+            tr(match field {
+                "stream_filters_allowed_codecs" => "All video codecs",
+                "stream_filters_excluded_codecs" => "No excluded codecs",
+                _ => "No codec preference",
+            })
+            .into()
+        } else {
+            codecs
+                .into_iter()
+                .map(stream_filter_codec_label)
+                .collect::<Vec<_>>()
+                .join(if field == "stream_filters_codec_priority" {
+                    " → "
+                } else {
+                    ", "
+                })
+        };
+    }
+    if field == "stream_filters_audio" {
+        let Some(inherit) = value
+            .get("use_preferred_audio_languages")
+            .and_then(serde_json::Value::as_bool)
+        else {
+            return tr("Unsupported value").into();
+        };
+        let Some(languages) = value
+            .get("audio_languages")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return tr("Unsupported value").into();
+        };
+        let names = languages
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(nova_config::playback_preferences::language_label)
+            .collect::<Vec<_>>()
+            .join(" → ");
+        return if inherit {
+            if names.is_empty() {
+                tr("Uses preferred audio languages").into()
+            } else {
+                format!(
+                    "{} · {}: {names}",
+                    tr("Uses preferred audio languages"),
+                    tr("Saved custom languages")
+                )
+            }
+        } else if names.is_empty() {
+            tr("Automatic").into()
+        } else {
+            names
+        };
+    }
     if field == "stream_filters" {
         return serde_json::from_value::<nova_config::StreamFilterRules>(value.clone())
             .map(|rules| stream_filter_summary(&rules))
@@ -2114,6 +2237,70 @@ pub fn calendar_week_title(first: (i64, u32, u32), last: (i64, u32, u32)) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_rule_comparisons_show_independent_values_and_order() {
+        with_language(Language::English, || {
+            assert_eq!(
+                setting_sync_value("stream_filters_resolution", &serde_json::Value::Null),
+                "Any resolution"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_resolution", &serde_json::json!(1080)),
+                "1080p"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_resolution", &serde_json::json!("future")),
+                "Unsupported value"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_codec_priority",
+                    &serde_json::json!(["av1", "hevc"])
+                ),
+                "AV1 → HEVC"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_excluded_codecs", &serde_json::json!([])),
+                "No excluded codecs"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_audio",
+                    &serde_json::json!({"use_preferred_audio_languages": true, "audio_languages": []})
+                ),
+                "Uses preferred audio languages"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_require_codec", &serde_json::json!(true)),
+                "On"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_sort_order",
+                    &serde_json::json!([
+                        {"criterion":"codec","direction":"desc"},
+                        {"criterion":"size","direction":"asc"},
+                        {"criterion":"subtitle","direction":"asc"}
+                    ])
+                ),
+                "Video codec: Reverse preference order → Size: Smallest first → Subtitle language: Preferred first"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                setting_sync_value("stream_filters_allowed_codecs", &serde_json::json!([])),
+                "Svi videokodeci"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_audio",
+                    &serde_json::json!({"use_preferred_audio_languages": true, "audio_languages": []})
+                ),
+                "Koristi željene jezike zvuka"
+            );
+        });
+    }
 
     #[test]
     fn watch_history_labels_follow_the_selected_language() {
@@ -2553,8 +2740,84 @@ pub fn stream_rules_hidden(count: usize) -> String {
     }
 }
 
-pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
+fn stream_filter_codec_label(codec: nova_config::stream_filters::VideoCodec) -> &'static str {
     use nova_config::stream_filters::VideoCodec;
+    match codec {
+        VideoCodec::Avc => "H.264",
+        VideoCodec::Hevc => "HEVC",
+        VideoCodec::Av1 => "AV1",
+        VideoCodec::Vp9 => "VP9",
+        VideoCodec::Other => tr("Other video codecs"),
+    }
+}
+
+fn stream_sort_summary(order: &[nova_config::stream_filters::StreamSortRule]) -> String {
+    use nova_config::stream_filters::{SortCriterion, SortDirection};
+    order
+        .iter()
+        .map(|rule| {
+            let criterion = tr(match rule.criterion {
+                SortCriterion::Cached => "Cached availability",
+                SortCriterion::Resolution => "Resolution",
+                SortCriterion::Size => "Size",
+                SortCriterion::SeasonPack => "Season pack",
+                SortCriterion::Seeders => "Reported seeders",
+                SortCriterion::Audio => "Audio language",
+                SortCriterion::Codec => "Video codec",
+                SortCriterion::Subtitle => "Subtitle language",
+            });
+            let ascending = rule.direction == SortDirection::Asc;
+            let direction = tr(match rule.criterion {
+                SortCriterion::Audio | SortCriterion::Codec | SortCriterion::Subtitle => {
+                    if ascending {
+                        "Preferred first"
+                    } else {
+                        "Reverse preference order"
+                    }
+                }
+                SortCriterion::Cached => {
+                    if ascending {
+                        "Uncached first"
+                    } else {
+                        "Cached first"
+                    }
+                }
+                SortCriterion::SeasonPack => {
+                    if ascending {
+                        "Single episodes first"
+                    } else {
+                        "Season packs first"
+                    }
+                }
+                SortCriterion::Size => {
+                    if ascending {
+                        "Smallest first"
+                    } else {
+                        "Largest first"
+                    }
+                }
+                SortCriterion::Resolution => {
+                    if ascending {
+                        "Lowest first"
+                    } else {
+                        "Highest first"
+                    }
+                }
+                SortCriterion::Seeders => {
+                    if ascending {
+                        "Fewest first"
+                    } else {
+                        "Most first"
+                    }
+                }
+            });
+            format!("{criterion}: {direction}")
+        })
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
+pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
     if !rules.enabled {
         return tr("Disabled").into();
     }
@@ -2570,18 +2833,47 @@ pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
             rules
                 .video_codecs
                 .iter()
-                .map(|codec| match codec {
-                    VideoCodec::Avc => "H.264",
-                    VideoCodec::Hevc => "HEVC",
-                    VideoCodec::Av1 => "AV1",
-                    VideoCodec::Vp9 => "VP9",
-                    VideoCodec::Other => tr("Other video codecs"),
-                })
+                .copied()
+                .map(stream_filter_codec_label)
                 .collect::<Vec<_>>()
                 .join(", "),
         );
     }
-    if !rules.audio_languages.is_empty() {
+    if !rules.excluded_video_codecs.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            tr("Excluded video codecs"),
+            rules
+                .excluded_video_codecs
+                .iter()
+                .copied()
+                .map(stream_filter_codec_label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !rules.codec_priority.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            tr("Codec priority"),
+            rules
+                .codec_priority
+                .iter()
+                .copied()
+                .map(stream_filter_codec_label)
+                .collect::<Vec<_>>()
+                .join(" → ")
+        ));
+    }
+    if rules.require_preferred_codec {
+        parts.push(tr("Only preferred video codecs").into());
+    }
+    if rules.use_preferred_audio_languages {
+        parts.push(tr("Uses preferred audio languages").into());
+        if rules.require_audio_language {
+            parts.push(tr("Required audio").into());
+        }
+    } else if !rules.audio_languages.is_empty() {
         let names = rules
             .audio_languages
             .iter()
@@ -2597,6 +2889,15 @@ pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
             })
         ));
     }
+    if !rules.subtitle_languages.is_empty() {
+        let names = rules
+            .subtitle_languages
+            .iter()
+            .map(|code| nova_config::playback_preferences::language_label(code))
+            .collect::<Vec<_>>()
+            .join(" → ");
+        parts.push(format!("{}: {names}", tr("Preferred subtitle languages")));
+    }
     parts.push(
         tr(if rules.retain_unknown {
             "Unknown details kept"
@@ -2605,6 +2906,11 @@ pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
         })
         .into(),
     );
+    parts.push(format!(
+        "{}: {}",
+        tr("Sort order"),
+        stream_sort_summary(&rules.sort_order)
+    ));
     parts.join(" · ")
 }
 

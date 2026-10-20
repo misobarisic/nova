@@ -2,9 +2,10 @@
 //! The UI thread serializes both roles and commands; workers only carry messages.
 use super::*;
 use nova_playback_api::{
-    Completion, MediaIdentity, PeerContext, PlaybackAction, PlaybackCapabilities, PlaybackError,
-    PlaybackOffer, PlaybackPhase, PlaybackRole, PlaybackSnapshot, PlaybackTrack, Request, Response,
-    SessionId,
+    Completion, MAX_REMOTE_BOOKMARKS, MAX_REMOTE_CHAPTERS, MAX_REMOTE_LABEL_BYTES,
+    MAX_REMOTE_NOTE_BYTES, MAX_REMOTE_TRACKS, MediaIdentity, PeerContext, PlaybackAction,
+    PlaybackBookmark, PlaybackCapabilities, PlaybackChapter, PlaybackError, PlaybackOffer,
+    PlaybackPhase, PlaybackRole, PlaybackSnapshot, PlaybackTrack, Request, Response, SessionId,
 };
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -77,6 +78,150 @@ fn remote_episode<'a>(videos: &'a [Video], requested: &str) -> Option<&'a Video>
     matches.next().is_none().then_some(video)
 }
 
+fn remote_entity_id(prefix: char, value: &str) -> String {
+    // Tokens disclose neither addon URLs nor local scene keys. Membership is
+    // rechecked against the receiver's current snapshot before every command.
+    let hash = value.bytes().fold(0xcbf29ce484222325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    });
+    format!("{prefix}{hash:016x}")
+}
+
+fn bounded_tracks(mut rows: Vec<PlaybackTrack>, selected: i32) -> Vec<PlaybackTrack> {
+    if rows.len() > MAX_REMOTE_TRACKS {
+        let selected_row = rows.iter().find(|row| row.id == selected).cloned();
+        rows.truncate(MAX_REMOTE_TRACKS);
+        if let Some(row) = selected_row
+            && !rows.iter().any(|r| r.id == selected)
+        {
+            rows[MAX_REMOTE_TRACKS - 1] = row;
+        }
+    }
+    rows
+}
+
+/// Validate against the one current receiver snapshot. Numeric native track
+/// IDs are intentionally local-only: a delayed controller choice must carry
+/// the opaque membership token advertised for its original source/choice.
+fn validate_remote_action(
+    snapshot: &PlaybackSnapshot,
+    action: PlaybackAction,
+) -> Result<PlaybackAction, PlaybackError> {
+    use PlaybackAction::*;
+    if !action.valid_payload() {
+        return Err(PlaybackError::InvalidRequest);
+    }
+    let caps = &snapshot.capabilities;
+    let supported = match &action {
+        Stop => caps.stop,
+        Resume(_) | CancelResume => caps.resume,
+        NextEpisode { token } | DismissNextEpisode { token } => {
+            caps.next_episode && *token == snapshot.next_episode_token
+        }
+        TogglePause | SetPaused(_) => caps.pause,
+        SeekRelative(_) | SeekAbsolute(_) => caps.seek,
+        SetVolume(_) | VolumeStep(_) | SystemVolumeStep(_) => caps.volume,
+        SetMuted(_) | ToggleMute => caps.mute,
+        SetSpeed(_) | SpeedStep(_) | BeginSpeedPreview | ResetSpeed => caps.speed,
+        EndSpeedPreview => true,
+        SelectAudioTrackToken(_)
+        | SelectSubtitleTrackToken(_)
+        | ResetAudioTrack
+        | ResetSubtitleTrack => caps.tracks,
+        SelectAudioTrack(_) | SelectSubtitleTrack(_) | SelectSecondarySubtitleTrack(_) => false,
+        ToggleFullscreen | SetFullscreen(_) => caps.fullscreen,
+        Screenshot => caps.screenshot,
+        SetDecoder(_) => caps.decoder,
+        SetBrightness(_) | BrightnessStep(_) => caps.brightness,
+        SeekChapter { .. } => caps.chapters,
+        SetSubtitleStyle { .. } | ResetSubtitleStyle => caps.subtitle_style,
+        SelectSecondarySubtitleTrackToken(_) | SetSecondarySubtitlePosition(_) => {
+            caps.secondary_subtitles
+        }
+        SetIntroSkipMode(_) => caps.intro_skip,
+        SkipSegment { token } | DismissSkipSegment { token } => {
+            caps.intro_skip && !snapshot.skip_token.is_empty() && *token == snapshot.skip_token
+        }
+        AddBookmark { .. } | EditBookmark { .. } | DeleteBookmark { .. } | SeekBookmark { .. } => {
+            caps.bookmarks
+        }
+        TryAnotherStream => caps.source_recovery,
+        RetrySubtitleDiscovery | RefreshSubtitleTracks | CancelSubtitleDownload { .. } => {
+            caps.subtitle_discovery
+        }
+    };
+    if !supported {
+        return Err(PlaybackError::Unsupported);
+    }
+    let track = |rows: &[PlaybackTrack], token: &str| {
+        rows.iter()
+            .find(|row| row.token == token)
+            .map(|row| row.id)
+            .ok_or(PlaybackError::InvalidRequest)
+    };
+    match action {
+        SelectAudioTrackToken(token) => {
+            Ok(SelectAudioTrack(track(&snapshot.audio_tracks, &token)?))
+        }
+        SelectSubtitleTrackToken(token) if token == "off" => Ok(SelectSubtitleTrack(-1)),
+        SelectSubtitleTrackToken(token) => Ok(SelectSubtitleTrack(track(
+            &snapshot.subtitle_tracks,
+            &token,
+        )?)),
+        SelectSecondarySubtitleTrackToken(token) if token == "off" => {
+            Ok(SelectSecondarySubtitleTrack(-1))
+        }
+        SelectSecondarySubtitleTrackToken(token) => Ok(SelectSecondarySubtitleTrack(track(
+            &snapshot.secondary_subtitle_tracks,
+            &token,
+        )?)),
+        SeekChapter { ref id } if !snapshot.chapters.iter().any(|row| row.id == *id) => {
+            Err(PlaybackError::NotFound)
+        }
+        EditBookmark { ref id, .. } | DeleteBookmark { ref id } | SeekBookmark { ref id }
+            if !snapshot.bookmarks.iter().any(|row| row.id == *id) =>
+        {
+            Err(PlaybackError::NotFound)
+        }
+        action => Ok(action),
+    }
+}
+
+fn is_lookup_request(request: &Request) -> bool {
+    matches!(request, Request::Lookup(_) | Request::CurrentOffers { .. })
+}
+
+fn semantic_request(request: &Request) -> Option<(&'static str, String, SessionId)> {
+    let Request::Command { session, action } = request else {
+        return None;
+    };
+    use PlaybackAction::*;
+    let (name, id) = match action {
+        SeekChapter { id } => ("chapter", id.clone()),
+        SetSubtitleStyle { control, .. } => ("subtitle_style", control.to_string()),
+        ResetSubtitleStyle => ("subtitle_style_reset", String::new()),
+        SelectSecondarySubtitleTrackToken(_) => ("secondary_subtitle", String::new()),
+        SetSecondarySubtitlePosition(_) => ("secondary_position", String::new()),
+        SetIntroSkipMode(_) => ("intro_mode", String::new()),
+        SkipSegment { token } => ("skip", token.clone()),
+        DismissSkipSegment { token } => ("skip_dismiss", token.clone()),
+        AddBookmark { .. } => ("bookmark_add", String::new()),
+        EditBookmark { id, .. } => ("bookmark_edit", id.clone()),
+        DeleteBookmark { id } => ("bookmark_delete", id.clone()),
+        SeekBookmark { id } => ("bookmark_seek", id.clone()),
+        TryAnotherStream => ("try_another", String::new()),
+        RetrySubtitleDiscovery => ("subtitle_retry", String::new()),
+        RefreshSubtitleTracks => ("subtitle_refresh", String::new()),
+        CancelSubtitleDownload { .. } => ("subtitle_cancel", String::new()),
+        SetDecoder(_) => ("decoder", String::new()),
+        SetBrightness(_) => ("brightness", String::new()),
+        _ => return None,
+    };
+    Some((name, id, *session))
+}
+
+static SESSION_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 static FOREGROUND: AtomicBool = AtomicBool::new(true);
 
 pub(super) fn is_foreground() -> bool {
@@ -133,6 +278,7 @@ struct Offer {
     created: Instant,
     settings_generation: u64,
     addon_generation: u64,
+    retry_session: Option<(SessionId, u64)>,
 }
 
 struct CachedRemoteLookup {
@@ -271,12 +417,14 @@ pub(super) struct State {
     sequence: u64,
     session: Option<SessionId>,
     pub(super) start_context: Option<MediaIdentity>,
+    pub(super) start_retry: Option<playback::RemoteRetry>,
     offers: HashMap<String, Offer>,
     offer_sequence: u64,
     target: String,
     generation: u64,
     snapshot: Option<PlaybackSnapshot>,
     remote_offers: Vec<PlaybackOffer>,
+    current_offers_session: Option<SessionId>,
     selector_lookups: HashMap<String, CachedRemoteLookup>,
     selector_engine: Option<std::sync::Weak<nova_sync::SyncEngine>>,
     visible_offers: Vec<PlaybackOffer>,
@@ -379,6 +527,7 @@ impl State {
         self.lookup_in_flight = false;
         self.snapshot = None;
         self.remote_offers.clear();
+        self.current_offers_session = None;
         self.visible_offers.clear();
         self.visible_media = None;
         self.scene_resume = None;
@@ -443,7 +592,9 @@ impl State {
         self.role != Role::Remote
     }
     pub(super) fn begin(&mut self) {
-        self.sequence = self.sequence.wrapping_add(1);
+        self.sequence = SESSION_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
         self.session = Some(SessionId {
             epoch: *BOOT,
             sequence: self.sequence,
@@ -569,6 +720,18 @@ impl Bridge {
         app.on_remote_action(move |action, value, token| {
             b.remote_ui_action(action.as_str(), value, token.as_str())
         });
+        let b = self.clone();
+        app.on_remote_semantic_action(move |name, value, id, text, session| {
+            b.remote_semantic_action(
+                name.as_str(),
+                value,
+                id.as_str(),
+                text.as_str(),
+                session.as_str(),
+            );
+        });
+        let b = self.clone();
+        app.on_remote_controls_visual_closed(move || b.remote_controls_visual_closed());
         let b = self.clone();
         app.on_remote_stream_picked(move |index| {
             b.remote_stream_selected(index.max(0) as usize);
@@ -704,6 +867,9 @@ impl Bridge {
         let Some(app) = self.app() else {
             return PlaybackSnapshot::default();
         };
+        let skip_token = self.intro_skip_offer_token().unwrap_or_default();
+        let source = self.player.screenshot_session();
+        let source_offers = self.current_playback_identity().is_some();
         let state = self.shared.lock().unwrap();
         // Wait for a local profile choice before exposing its playback state.
         if !state.cache_settings.remote_control_enabled || app.get_profiles_require_selection() {
@@ -715,16 +881,71 @@ impl Bridge {
         let ready = FOREGROUND.load(Ordering::Acquire)
             && remote.role != Role::Remote
             && !state.party.active();
-        let tracks = |model: slint::ModelRc<crate::TrackRow>| {
-            model
+        let tracks = |model: slint::ModelRc<crate::TrackRow>, audio, selected| {
+            let rows = model
                 .iter()
-                .take(64)
-                .map(|row| PlaybackTrack {
-                    id: row.index,
-                    label: remote_display_text(&format!("{} {}", row.title, row.lang), 256),
+                .enumerate()
+                .filter(|(index, row)| *index < MAX_REMOTE_TRACKS || row.index == selected)
+                .map(|(_, row)| {
+                    let online = self
+                        .player
+                        .online_subtitle(row.index)
+                        .map(|s| s.url)
+                        .unwrap_or_default();
+                    PlaybackTrack {
+                        id: row.index,
+                        token: remote_entity_id(
+                            't',
+                            &format!(
+                                "{source}:{audio}:{}:{}:{}:{online}",
+                                row.index, row.title, row.lang
+                            ),
+                        ),
+                        label: remote_display_text(
+                            &format!("{} {}", row.title, row.lang),
+                            MAX_REMOTE_LABEL_BYTES,
+                        )
+                        .replace('\n', " "),
+                    }
                 })
-                .collect()
+                .collect();
+            bounded_tracks(rows, selected)
         };
+        let audio_track = self.player.selected_track_id(true);
+        let subtitle_track = self.player.selected_track_id(false);
+        let secondary_track = app
+            .get_secondary_sub_tracks()
+            .iter()
+            .find(|row| row.selected)
+            .map_or(-1, |row| row.index);
+        let duration = (app.get_duration() as f64).max(0.0);
+        let valid_time = |position: f64| {
+            position.is_finite() && position >= 0.0 && (duration <= 0.0 || position <= duration)
+        };
+        let chapters = app
+            .get_player_chapters()
+            .iter()
+            .filter(|row| valid_time(f64::from(row.position)))
+            .take(MAX_REMOTE_CHAPTERS + 1)
+            .map(|row| PlaybackChapter {
+                id: format!("c{:016x}", f64::from(row.position).to_bits()),
+                label: remote_display_text(row.title.as_str(), MAX_REMOTE_LABEL_BYTES)
+                    .replace('\n', " "),
+                time: f64::from(row.position),
+            })
+            .collect::<Vec<_>>();
+        let bookmarks = app
+            .get_scene_bookmarks()
+            .iter()
+            .filter(|row| valid_time(f64::from(row.position)))
+            .take(MAX_REMOTE_BOOKMARKS + 1)
+            .map(|row| PlaybackBookmark {
+                id: remote_entity_id('b', row.id.as_str()),
+                note: remote_display_text(row.note.as_str(), MAX_REMOTE_NOTE_BYTES)
+                    .replace('\n', " "),
+                time: f64::from(row.position),
+            })
+            .collect::<Vec<_>>();
         #[cfg(target_os = "android")]
         let volume = android_player::player_volume() as f64;
         #[cfg(not(target_os = "android"))]
@@ -737,8 +958,10 @@ impl Bridge {
                 PlaybackRole::Local
             },
             session: remote.session,
-            title: remote_display_text(app.get_player_show_title().as_str(), 512),
-            episode: remote_display_text(app.get_player_episode_title().as_str(), 512),
+            title: remote_display_text(app.get_player_show_title().as_str(), 512)
+                .replace('\n', " "),
+            episode: remote_display_text(app.get_player_episode_title().as_str(), 512)
+                .replace('\n', " "),
             phase: if !active {
                 PlaybackPhase::Idle
             } else if self.player.playback_failed() {
@@ -757,10 +980,35 @@ impl Bridge {
             muted: app.get_muted(),
             speed: self.player.effective_playback_speed() as f64,
             fullscreen: app.get_is_fullscreen(),
-            audio_tracks: tracks(app.get_audio_tracks()),
-            subtitle_tracks: tracks(app.get_sub_tracks()),
-            audio_track: self.player.selected_track_id(true),
-            subtitle_track: self.player.selected_track_id(false),
+            audio_tracks: tracks(app.get_audio_tracks(), true, audio_track),
+            subtitle_tracks: tracks(app.get_sub_tracks(), false, subtitle_track),
+            audio_track,
+            subtitle_track,
+            secondary_subtitle_tracks: tracks(
+                app.get_secondary_sub_tracks(),
+                false,
+                secondary_track,
+            ),
+            secondary_subtitle_track: secondary_track,
+            secondary_subtitle_position: app.get_secondary_subtitle_position_index(),
+            subtitle_style: std::array::from_fn(|i| {
+                app.get_effective_subtitle_style()
+                    .row_data(i)
+                    .unwrap_or_default() as f64
+            }),
+            chapters_truncated: chapters.len() > MAX_REMOTE_CHAPTERS,
+            bookmarks_truncated: bookmarks.len() > MAX_REMOTE_BOOKMARKS,
+            chapters: chapters.into_iter().take(MAX_REMOTE_CHAPTERS).collect(),
+            bookmarks: bookmarks.into_iter().take(MAX_REMOTE_BOOKMARKS).collect(),
+            bookmark_notice: remote_display_text(app.get_scene_bookmark_notice().as_str(), 512)
+                .replace('\n', " "),
+            intro_skip_mode: app.get_intro_skip_override_index(),
+            skip_segment_kind: app.get_skip_segment_kind(),
+            skip_token,
+            subtitle_addon_status: app.get_subtitle_addon_status(),
+            decoder: app.get_decoder_selected().clamp(0, 2),
+            brightness: app.get_player_brightness() as f64,
+            automatic_recovery: app.get_automatic_stream_recovery_visible(),
             resume_prompt: app.get_resume_prompt_visible(),
             next_episode_prompt: app.get_next_episode_visible(),
             next_episode_token: app.get_next_episode_token().to_string(),
@@ -783,7 +1031,8 @@ impl Bridge {
                     media_type: "series".into(),
                     title_id: p.series_id.clone(),
                     episode_id: video.id.clone(),
-                    title: remote_display_text(app.get_player_show_title().as_str(), 512),
+                    title: remote_display_text(app.get_player_show_title().as_str(), 512)
+                        .replace('\n', " "),
                     episode: remote_display_text(&stream_episode_context_label(video), 512),
                 })
             }),
@@ -802,7 +1051,20 @@ impl Bridge {
                 stop: active,
                 resume: app.get_resume_prompt_visible(),
                 next_episode: app.get_next_episode_visible(),
-                decoder: started && cfg!(target_os = "android"),
+                chapters: started && app.get_player_chapters().row_count() > 0,
+                subtitle_style: started,
+                secondary_subtitles: started && source_offers,
+                intro_skip: started,
+                bookmarks: started && source_offers,
+                source_recovery: active && app.get_try_another_stream_available(),
+                source_offers: active && source_offers,
+                subtitle_discovery: started,
+                decoder: started
+                    && cfg!(any(
+                        target_os = "android",
+                        target_os = "windows",
+                        target_os = "linux"
+                    )),
                 brightness: started && cfg!(target_os = "android"),
             },
             revision: remote.sequence,
@@ -850,6 +1112,10 @@ impl Bridge {
             done(Response::Error(PlaybackError::Busy));
             return;
         }
+        if !request.valid_payload() {
+            done(Response::Error(PlaybackError::InvalidRequest));
+            return;
+        }
         match request {
             Request::Snapshot => {
                 let mut state = self.shared.lock().unwrap();
@@ -867,77 +1133,133 @@ impl Bridge {
                 offer_id,
                 expected_session,
             } => done(self.start_remote_offer(&peer, &offer_id, expected_session)),
+            Request::CurrentOffers { session } => {
+                self.lookup_current_remote_streams(peer, session, done)
+            }
             Request::Command { session, action } => {
-                if self.shared.lock().unwrap().remote_playback.session != Some(session) {
+                let snapshot = self.playback_snapshot();
+                if snapshot.session != Some(session) {
                     done(Response::Error(PlaybackError::StaleSession));
                     return;
                 }
-                if !self.playback_snapshot().ready {
+                if !snapshot.ready {
                     done(Response::Error(PlaybackError::Busy));
                     return;
                 }
-                let caps = self.playback_snapshot().capabilities;
-                let supported = match &action {
-                    PlaybackAction::Stop => caps.stop,
-                    PlaybackAction::Resume(_) | PlaybackAction::CancelResume => caps.resume,
-                    PlaybackAction::NextEpisode { token }
-                    | PlaybackAction::DismissNextEpisode { token } => {
-                        caps.next_episode
-                            && self
-                                .app()
-                                .is_some_and(|a| a.get_next_episode_token().as_str() == token)
-                    }
-                    PlaybackAction::TogglePause | PlaybackAction::SetPaused(_) => caps.pause,
-                    PlaybackAction::SeekRelative(_) | PlaybackAction::SeekAbsolute(_) => caps.seek,
-                    PlaybackAction::SetVolume(_)
-                    | PlaybackAction::VolumeStep(_)
-                    | PlaybackAction::SystemVolumeStep(_) => caps.volume,
-                    PlaybackAction::SetMuted(_) | PlaybackAction::ToggleMute => caps.mute,
-                    PlaybackAction::SetSpeed(_)
-                    | PlaybackAction::SpeedStep(_)
-                    | PlaybackAction::BeginSpeedPreview
-                    | PlaybackAction::ResetSpeed => caps.speed,
-                    PlaybackAction::EndSpeedPreview => true,
-                    PlaybackAction::SelectAudioTrack(_)
-                    | PlaybackAction::SelectSubtitleTrack(_)
-                    | PlaybackAction::ResetAudioTrack
-                    | PlaybackAction::ResetSubtitleTrack => caps.tracks,
-                    PlaybackAction::ToggleFullscreen | PlaybackAction::SetFullscreen(_) => {
-                        caps.fullscreen
-                    }
-                    PlaybackAction::Screenshot => caps.screenshot,
-                    PlaybackAction::SetDecoder(_) => caps.decoder,
-                    PlaybackAction::SetBrightness(_) | PlaybackAction::BrightnessStep(_) => {
-                        caps.brightness
-                    }
-                };
-                if !supported {
-                    done(Response::Error(PlaybackError::Unsupported));
-                    return;
-                }
-                // Track and prompt identifiers are meaningful only within this session.
-                if let PlaybackAction::SelectAudioTrack(id)
-                | PlaybackAction::SelectSubtitleTrack(id) = &action
-                {
-                    let snapshot = self.playback_snapshot();
-                    let tracks = if matches!(action, PlaybackAction::SelectAudioTrack(_)) {
-                        snapshot.audio_tracks
-                    } else {
-                        snapshot.subtitle_tracks
-                    };
-                    if *id != -1 && !tracks.iter().any(|track| track.id == *id) {
-                        done(Response::Error(PlaybackError::InvalidRequest));
+                let action = match self.resolve_remote_action(&snapshot, action) {
+                    Ok(action) => action,
+                    Err(error) => {
+                        done(Response::Error(error));
                         return;
                     }
-                }
+                };
                 done(
                     match self.dispatch_playback_action_from(action, Some(&peer)) {
                         Ok(()) => Response::Accepted,
-                        Err(_) => Response::Error(PlaybackError::Unsupported),
+                        Err(_) => Response::Error(PlaybackError::Failed(String::new())),
                     },
                 );
             }
             Request::ReleasePreview => unreachable!("handled before authority check"),
+        }
+    }
+
+    fn resolve_remote_action(
+        &self,
+        snapshot: &PlaybackSnapshot,
+        action: PlaybackAction,
+    ) -> Result<PlaybackAction, PlaybackError> {
+        let action = validate_remote_action(snapshot, action)?;
+        // Scene IDs contain local media keys; only the opaque token crosses
+        // the connection. Resolve it again at acceptance, never by row index.
+        let resolve = |token: &str| {
+            self.app().and_then(|app| {
+                app.get_scene_bookmarks()
+                    .iter()
+                    .find(|row| remote_entity_id('b', row.id.as_str()) == token)
+                    .map(|row| row.id.to_string())
+            })
+        };
+        Ok(match action {
+            PlaybackAction::EditBookmark { id, note } => PlaybackAction::EditBookmark {
+                id: resolve(&id).ok_or(PlaybackError::NotFound)?,
+                note,
+            },
+            PlaybackAction::DeleteBookmark { id } => PlaybackAction::DeleteBookmark {
+                id: resolve(&id).ok_or(PlaybackError::NotFound)?,
+            },
+            PlaybackAction::SeekBookmark { id } => PlaybackAction::SeekBookmark {
+                id: resolve(&id).ok_or(PlaybackError::NotFound)?,
+            },
+            action => action,
+        })
+    }
+
+    fn lookup_current_remote_streams(
+        &self,
+        peer: PeerContext,
+        session: SessionId,
+        done: Completion,
+    ) {
+        let snapshot = self.playback_snapshot();
+        if snapshot.session != Some(session) {
+            done(Response::Error(PlaybackError::StaleSession));
+            return;
+        }
+        if !snapshot.ready || !snapshot.capabilities.source_offers {
+            done(Response::Error(PlaybackError::Unsupported));
+            return;
+        }
+        let Some(media) = self.current_playback_identity() else {
+            done(Response::Error(PlaybackError::NotFound));
+            return;
+        };
+        let source = self.player.screenshot_session();
+        let b = self.clone();
+        let owner = peer.clone();
+        self.lookup_remote_streams(
+            peer,
+            media,
+            Box::new(move |response| {
+                done(b.finish_current_remote_lookup(&owner, session, source, response))
+            }),
+        );
+    }
+
+    /// The lookup can finish after its controller/source has gone away. Only
+    /// these newly allocated offers are retired; unrelated lookups remain valid.
+    fn finish_current_remote_lookup(
+        &self,
+        owner: &PeerContext,
+        session: SessionId,
+        source: u64,
+        response: Response,
+    ) -> Response {
+        let mut state = self.shared.lock().unwrap();
+        let current = owner.is_authorized()
+            && FOREGROUND.load(Ordering::Acquire)
+            && state.cache_settings.remote_control_enabled
+            && !state.party.active()
+            && state.remote_playback.session == Some(session)
+            && self.player.screenshot_session() == source;
+        match response {
+            Response::Offers(offers) => {
+                for offer in &offers {
+                    if current {
+                        if let Some(row) = state.remote_playback.offers.get_mut(&offer.id) {
+                            row.retry_session = Some((session, source));
+                        }
+                    } else {
+                        state.remote_playback.offers.remove(&offer.id);
+                    }
+                }
+                if current {
+                    Response::Offers(offers)
+                } else {
+                    Response::Error(PlaybackError::StaleSession)
+                }
+            }
+            response => response,
         }
     }
 
@@ -1209,20 +1531,23 @@ impl Bridge {
         }
         // Offers belong to this receiver profile. Controller-side caps never
         // remove sources that the target device can use.
-        let rules = self
-            .shared
-            .lock()
-            .unwrap()
-            .cache_settings
-            .stream_filters
-            .clone()
-            .normalized();
+        let rules = self.effective_stream_filter_rules();
         let mut rows = rows
             .into_iter()
-            .filter(|(row, _)| rules.accepts(&row.card.filter_facts))
+            .filter(|(row, _)| {
+                matches!(row.source, StreamSource::Downloaded { .. })
+                    || rules.accepts(&row.card.filter_facts)
+            })
             .collect::<Vec<_>>();
-        if rules.enabled && !rules.audio_languages.is_empty() {
-            rows.sort_by_key(|(row, _)| rules.audio_rank(&row.card.filter_facts));
+        if rules.enabled {
+            rows.sort_by(|(a, _), (b, _)| {
+                usize::from(!matches!(a.source, StreamSource::Downloaded { .. }))
+                    .cmp(&usize::from(!matches!(
+                        b.source,
+                        StreamSource::Downloaded { .. }
+                    )))
+                    .then_with(|| rules.compare(&a.card.filter_facts, &b.card.filter_facts))
+            });
         }
         let mut offers = Vec::new();
         // Receiver-owned completed artifacts stay ahead of addon streams.
@@ -1314,6 +1639,7 @@ impl Bridge {
                 created: Instant::now(),
                 settings_generation,
                 addon_generation,
+                retry_session: None,
             },
         );
         offer
@@ -1325,26 +1651,54 @@ impl Bridge {
         id: &str,
         expected: Option<SessionId>,
     ) -> Response {
+        let stream = match self.accept_remote_offer(peer, id, expected) {
+            Ok(stream) => stream,
+            Err(error) => return Response::Error(error),
+        };
+        self.launch_remote_offer(stream)
+    }
+
+    fn launch_remote_offer(&self, stream: StreamUi) -> Response {
+        self.play_remote_source(stream.source, &stream.display);
+        let snapshot = self.playback_snapshot();
+        if snapshot.session.is_none() {
+            Response::Error(PlaybackError::Failed(String::new()))
+        } else {
+            Response::Snapshot(snapshot)
+        }
+    }
+
+    /// Accept while the old source still owns its timeline/preferences. Native
+    /// launch is a separate step and may fail synchronously on this device.
+    fn accept_remote_offer(
+        &self,
+        peer: &PeerContext,
+        id: &str,
+        expected: Option<SessionId>,
+    ) -> Result<StreamUi, PlaybackError> {
         let offer = {
             let mut state = self.shared.lock().unwrap();
             let r = &state.remote_playback;
             if r.role == Role::Remote {
-                return Response::Error(PlaybackError::Busy);
+                return Err(PlaybackError::Busy);
             }
             if r.session != expected {
-                return Response::Error(PlaybackError::StaleSession);
+                return Err(PlaybackError::StaleSession);
             }
             let Some(offer) = r.offers.get(id) else {
-                return Response::Error(PlaybackError::NotFound);
+                return Err(PlaybackError::NotFound);
             };
+            if offer.retry_session.is_some_and(|(session, source)| {
+                expected != Some(session) || self.player.screenshot_session() != source
+            }) {
+                return Err(PlaybackError::StaleSession);
+            }
             if offer.peer != peer.peer_id
                 || offer.created.elapsed() > Duration::from_secs(300)
                 || offer.settings_generation
                     != nova_providers::plugin_settings::settings_generation()
                 || (!matches!(offer.stream.source, StreamSource::Downloaded { .. })
-                    && !state
-                        .cache_settings
-                        .stream_filters
+                    && !stream_filters::effective_rules(&state.cache_settings)
                         .accepts(&offer.stream.card.filter_facts))
                 || (!offer.stream.owner_url.is_empty()
                     && !state.installed.iter().any(|a| {
@@ -1354,25 +1708,38 @@ impl Bridge {
                             && a.generation == offer.addon_generation
                     }))
             {
-                return Response::Error(PlaybackError::NotFound);
+                return Err(PlaybackError::NotFound);
             }
             state.remote_playback.offers.remove(id).unwrap()
         };
-        // Starting over is explicit compare-and-swap against the observed session.
+        // Capture at acceptance, after lookup latency, while the old source
+        // still owns its playhead and semantic track preferences.
+        let retry = if offer.retry_session.is_some() {
+            let Some(retry) = self.capture_remote_retry() else {
+                return Err(PlaybackError::StaleSession);
+            };
+            Some(retry)
+        } else {
+            None
+        };
         if expected.is_some() {
-            let _ = self.dispatch_playback_action(PlaybackAction::Stop);
+            if retry.is_some() {
+                self.player.with_preserved_fullscreen_on_close(|| {
+                    let _ = self.dispatch_playback_action(PlaybackAction::Stop);
+                });
+            } else {
+                let _ = self.dispatch_playback_action(PlaybackAction::Stop);
+            }
         }
-        if let Some(identity) = offer.stream.choice_id {
+        if let Some(identity) = offer.stream.choice_id.clone() {
             self.last_stream.remember(identity, now_secs());
         }
-        self.shared.lock().unwrap().remote_playback.start_context = Some(offer.media);
-        self.play_remote_source(offer.stream.source, &offer.stream.display);
-        let snapshot = self.playback_snapshot();
-        if snapshot.session.is_none() {
-            Response::Error(PlaybackError::Failed(String::new()))
-        } else {
-            Response::Snapshot(snapshot)
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.remote_playback.start_context = Some(offer.media);
+            state.remote_playback.start_retry = retry;
         }
+        Ok(offer.stream)
     }
 
     fn play_remote_source(&self, source: StreamSource, display: &str) {
@@ -1405,7 +1772,9 @@ impl Bridge {
             StreamSource::Downloaded { job_id, .. } => self.play_download(&job_id),
             StreamSource::Unsupported | StreamSource::ExternalUrl(_) => {}
         }
-        self.shared.lock().unwrap().remote_playback.start_context = None;
+        let mut state = self.shared.lock().unwrap();
+        state.remote_playback.start_context = None;
+        state.remote_playback.start_retry = None;
     }
 
     pub(super) fn remote_disconnect(&self) {
@@ -1433,6 +1802,7 @@ impl Bridge {
             r.control_poll = PeerPoll::default();
             r.interacting_until = None;
             r.remote_offers.clear();
+            r.current_offers_session = None;
             r.visible_offers.clear();
             r.visible_media = None;
             r.scene_resume = None;
@@ -1444,16 +1814,20 @@ impl Bridge {
             app.set_remote_connected(false);
             app.set_remote_loading(false);
             app.set_remote_target_id(SharedString::default());
-            app.set_remote_session(SharedString::default());
             app.set_remote_replacement_token(SharedString::default());
+            if !app.get_remote_controls_visual_retained() {
+                self.clear_remote_controls_visual();
+            }
         }
         if !target.is_empty()
             && let Some(app) = self.app()
         {
             app.set_streams(Rc::new(VecModel::from(Vec::<StreamRow>::new())).into());
-            app.set_remote_offers(
-                Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into(),
-            );
+            if !app.get_remote_controls_visual_retained() {
+                app.set_remote_offers(
+                    Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into(),
+                );
+            }
             app.set_stream_total(0);
             if app.get_stream_selector_open() {
                 let request = self
@@ -1473,6 +1847,41 @@ impl Bridge {
         {
             engine.disconnect_playback(&target);
         }
+    }
+
+    fn remote_controls_visual_closed(&self) {
+        let Some(app) = self.app() else { return };
+        let detached = self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .target
+            .is_empty();
+        if !app.get_remote_controls_open() && detached {
+            self.clear_remote_controls_visual();
+        }
+    }
+
+    fn clear_remote_controls_visual(&self) {
+        let Some(app) = self.app() else { return };
+        app.set_remote_session(SharedString::default());
+        app.set_remote_title(SharedString::default());
+        app.set_remote_episode(SharedString::default());
+        app.set_remote_prompt(SharedString::default());
+        app.set_remote_skip_token(SharedString::default());
+        app.set_remote_audio_tracks(Rc::new(VecModel::from(Vec::<crate::TrackRow>::new())).into());
+        app.set_remote_sub_tracks(Rc::new(VecModel::from(Vec::<crate::TrackRow>::new())).into());
+        app.set_remote_secondary_sub_tracks(
+            Rc::new(VecModel::from(Vec::<crate::TrackRow>::new())).into(),
+        );
+        app.set_remote_chapters(
+            Rc::new(VecModel::from(Vec::<crate::RemoteChapterRow>::new())).into(),
+        );
+        app.set_remote_bookmarks(
+            Rc::new(VecModel::from(Vec::<crate::RemoteBookmarkRow>::new())).into(),
+        );
+        app.set_remote_offers(Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into());
     }
 
     fn open_remote_controls(&self, target: &str) {
@@ -1784,7 +2193,7 @@ impl Bridge {
     }
 
     pub(super) fn remote_stream_selected(&self, index: usize) -> bool {
-        let (target, offer, generation, media) = {
+        let (target, offer, generation, media, retry_session) = {
             let state = self.shared.lock().unwrap();
             let r = &state.remote_playback;
             if r.target.is_empty() {
@@ -1810,6 +2219,8 @@ impl Bridge {
                 (!self.app().is_some_and(|a| a.get_remote_controls_open()))
                     .then(|| r.visible_media.clone())
                     .flatten(),
+                r.current_offers_session
+                    .filter(|_| self.app().is_some_and(|a| a.get_remote_controls_open())),
             )
         };
         let scene = media.and_then(|media| {
@@ -1838,7 +2249,19 @@ impl Bridge {
                     return;
                 }
                 match response {
-                    Ok(Response::Snapshot(snapshot)) if snapshot.ready => {
+                    Ok(Response::Snapshot(snapshot))
+                        if snapshot.ready && snapshot.valid_payload() =>
+                    {
+                        if let Some(session) = retry_session {
+                            if snapshot.session == Some(session) {
+                                b.send_remote_start(offer, Some(session), None);
+                            } else if let Some(app) = b.app() {
+                                app.set_remote_error(
+                                    error_text(&PlaybackError::StaleSession).into(),
+                                );
+                            }
+                            return;
+                        }
                         if snapshot.session.is_some() {
                             let token = format!("{}:{generation}:{offer}", *BOOT);
                             b.shared.lock().unwrap().remote_playback.replacement =
@@ -1968,8 +2391,27 @@ impl Bridge {
             "reset_audio" => PlaybackAction::ResetAudioTrack,
             "reset_subtitle" => PlaybackAction::ResetSubtitleTrack,
             "reset_speed" => PlaybackAction::ResetSpeed,
-            "audio" => PlaybackAction::SelectAudioTrack(value as i32),
-            "subtitle" => PlaybackAction::SelectSubtitleTrack(value as i32),
+            "audio" => {
+                let Some(row) = snapshot
+                    .audio_tracks
+                    .iter()
+                    .find(|row| row.id == value as i32)
+                else {
+                    return;
+                };
+                PlaybackAction::SelectAudioTrackToken(row.token.clone())
+            }
+            "subtitle" if value == -1.0 => PlaybackAction::SelectSubtitleTrackToken("off".into()),
+            "subtitle" => {
+                let Some(row) = snapshot
+                    .subtitle_tracks
+                    .iter()
+                    .find(|row| row.id == value as i32)
+                else {
+                    return;
+                };
+                PlaybackAction::SelectSubtitleTrackToken(row.token.clone())
+            }
             "fullscreen" => PlaybackAction::ToggleFullscreen,
             "screenshot" => PlaybackAction::Screenshot,
             "stop" => PlaybackAction::Stop,
@@ -1991,11 +2433,7 @@ impl Bridge {
                 let lookup_pending = {
                     let state = self.shared.lock().unwrap();
                     state.remote_playback.lookup_in_flight
-                        || state
-                            .remote_playback
-                            .queued
-                            .iter()
-                            .any(|r| matches!(r, Request::Lookup(_)))
+                        || state.remote_playback.queued.iter().any(is_lookup_request)
                 };
                 if lookup_pending {
                     return;
@@ -2016,9 +2454,128 @@ impl Bridge {
             },
             _ => return,
         };
+        self.queue_remote_action(session, action);
+    }
+
+    fn remote_semantic_action(&self, name: &str, value: f32, id: &str, note: &str, token: &str) {
+        if !FOREGROUND.load(Ordering::Acquire) || !value.is_finite() {
+            return;
+        }
+        let Some(snapshot) = self.shared.lock().unwrap().remote_playback.snapshot.clone() else {
+            return;
+        };
+        let Some(session) = snapshot.session else {
+            return;
+        };
+        if token != session_text(Some(session)) {
+            return;
+        }
+        let integer = value.fract() == 0.0;
+        let action = match name {
+            "chapter" => PlaybackAction::SeekChapter { id: id.into() },
+            "subtitle_style" => {
+                let Ok(control) = id.parse::<i32>() else {
+                    return;
+                };
+                PlaybackAction::SetSubtitleStyle {
+                    control,
+                    value: value as f64,
+                }
+            }
+            "subtitle_style_reset" => PlaybackAction::ResetSubtitleStyle,
+            "secondary_subtitle" if value == -1.0 => {
+                PlaybackAction::SelectSecondarySubtitleTrackToken("off".into())
+            }
+            "secondary_subtitle" if integer => {
+                let Some(row) = snapshot
+                    .secondary_subtitle_tracks
+                    .iter()
+                    .find(|row| row.id == value as i32)
+                else {
+                    return;
+                };
+                PlaybackAction::SelectSecondarySubtitleTrackToken(row.token.clone())
+            }
+            "secondary_position" if integer => {
+                PlaybackAction::SetSecondarySubtitlePosition(value as i32)
+            }
+            "intro_mode" if integer => PlaybackAction::SetIntroSkipMode(value as i32),
+            "skip" => PlaybackAction::SkipSegment { token: id.into() },
+            "skip_dismiss" => PlaybackAction::DismissSkipSegment { token: id.into() },
+            "bookmark_add" => PlaybackAction::AddBookmark { note: note.into() },
+            "bookmark_edit" => PlaybackAction::EditBookmark {
+                id: id.into(),
+                note: note.into(),
+            },
+            "bookmark_delete" => PlaybackAction::DeleteBookmark { id: id.into() },
+            "bookmark_seek" => PlaybackAction::SeekBookmark { id: id.into() },
+            "try_another" => PlaybackAction::TryAnotherStream,
+            "subtitle_retry" => PlaybackAction::RetrySubtitleDiscovery,
+            "subtitle_refresh" => PlaybackAction::RefreshSubtitleTracks,
+            "subtitle_cancel" if integer && (0.0..=1.0).contains(&value) => {
+                PlaybackAction::CancelSubtitleDownload {
+                    secondary: value == 1.0,
+                }
+            }
+            "decoder" if integer => PlaybackAction::SetDecoder(value as i32),
+            "brightness" => PlaybackAction::SetBrightness(value as f64),
+            "source_offers" if snapshot.capabilities.source_offers => {
+                let mut state = self.shared.lock().unwrap();
+                let r = &mut state.remote_playback;
+                if r.lookup_in_flight
+                    || r.queued.len() >= 32
+                    || r.queued.iter().any(is_lookup_request)
+                {
+                    return;
+                }
+                r.remote_offers.clear();
+                r.current_offers_session = None;
+                r.queued.push_back(Request::CurrentOffers { session });
+                drop(state);
+                if let Some(app) = self.app() {
+                    app.set_remote_offers(
+                        Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into(),
+                    );
+                }
+                self.remote_tick();
+                return;
+            }
+            _ => return,
+        };
+        if validate_remote_action(&snapshot, action.clone()).is_err() {
+            self.publish_remote_semantic_ack(name, id, session, false);
+            return;
+        }
+        self.queue_remote_action(session, action);
+    }
+
+    fn publish_remote_semantic_ack(&self, name: &str, id: &str, session: SessionId, success: bool) {
+        let Some(app) = self.app() else { return };
+        app.set_remote_semantic_name(name.into());
+        app.set_remote_semantic_id(id.into());
+        app.set_remote_semantic_session(session_text(Some(session)).into());
+        app.set_remote_semantic_success(success);
+        app.set_remote_semantic_notice(if success {
+            SharedString::default()
+        } else {
+            error_text(&PlaybackError::Failed(String::new())).into()
+        });
+        app.set_remote_semantic_revision(app.get_remote_semantic_revision().wrapping_add(1));
+    }
+
+    fn queue_remote_action(&self, session: SessionId, action: PlaybackAction) {
+        if !action.valid_payload() {
+            return;
+        }
         let mut state = self.shared.lock().unwrap();
         // A bounded command queue preserves order without replay on reconnect.
         let r = &mut state.remote_playback;
+        if r.role != Role::Remote
+            || r.target.is_empty()
+            || r.snapshot.as_ref().and_then(|s| s.session) != Some(session)
+        {
+            return;
+        }
         r.interacting_until = Some(Instant::now() + Duration::from_secs(1));
         if matches!(
             action,
@@ -2065,6 +2622,13 @@ impl Bridge {
             r.queued.push_front(Request::Command { session, action });
         } else if r.queued.len() < 32 {
             r.queued.push_back(Request::Command { session, action });
+        } else {
+            let metadata = semantic_request(&Request::Command { session, action });
+            drop(state);
+            if let Some((name, id, session)) = metadata {
+                self.publish_remote_semantic_ack(name, &id, session, false);
+            }
+            return;
         }
         drop(state);
         self.remote_tick();
@@ -2100,6 +2664,31 @@ impl Bridge {
 
     fn apply_remote_snapshot(&self, snapshot: PlaybackSnapshot) {
         let Some(app) = self.app() else { return };
+        let changed = {
+            let state = self.shared.lock().unwrap();
+            let old = state
+                .remote_playback
+                .snapshot
+                .as_ref()
+                .filter(|old| old.session == snapshot.session);
+            (
+                old.is_none_or(|old| {
+                    old.audio_tracks != snapshot.audio_tracks
+                        || old.audio_track != snapshot.audio_track
+                }),
+                old.is_none_or(|old| {
+                    old.subtitle_tracks != snapshot.subtitle_tracks
+                        || old.subtitle_track != snapshot.subtitle_track
+                }),
+                old.is_none_or(|old| {
+                    old.secondary_subtitle_tracks != snapshot.secondary_subtitle_tracks
+                        || old.secondary_subtitle_track != snapshot.secondary_subtitle_track
+                }),
+                old.is_none_or(|old| old.subtitle_style != snapshot.subtitle_style),
+                old.is_none_or(|old| old.chapters != snapshot.chapters),
+                old.is_none_or(|old| old.bookmarks != snapshot.bookmarks),
+            )
+        };
         app.set_remote_loading(false);
         app.set_remote_connected(snapshot.ready);
         app.set_remote_error(SharedString::default());
@@ -2143,10 +2732,86 @@ impl Bridge {
                     .collect::<Vec<_>>(),
             ))
         };
-        app.set_remote_audio_tracks(tracks(&snapshot.audio_tracks, snapshot.audio_track).into());
-        app.set_remote_sub_tracks(
-            tracks(&snapshot.subtitle_tracks, snapshot.subtitle_track).into(),
-        );
+        if changed.0 {
+            app.set_remote_audio_tracks(
+                tracks(&snapshot.audio_tracks, snapshot.audio_track).into(),
+            );
+        }
+        if changed.1 {
+            app.set_remote_sub_tracks(
+                tracks(&snapshot.subtitle_tracks, snapshot.subtitle_track).into(),
+            );
+        }
+        if changed.2 {
+            app.set_remote_secondary_sub_tracks(
+                tracks(
+                    &snapshot.secondary_subtitle_tracks,
+                    snapshot.secondary_subtitle_track,
+                )
+                .into(),
+            );
+        }
+        app.set_remote_secondary_subtitle_position(snapshot.secondary_subtitle_position);
+        if changed.3 {
+            app.set_remote_subtitle_style(
+                Rc::new(VecModel::from(
+                    snapshot.subtitle_style.map(|v| v as f32).to_vec(),
+                ))
+                .into(),
+            );
+        }
+        if changed.4 {
+            app.set_remote_chapters(
+                Rc::new(VecModel::from(
+                    snapshot
+                        .chapters
+                        .iter()
+                        .map(|row| crate::RemoteChapterRow {
+                            id: row.id.clone().into(),
+                            title: row.label.clone().into(),
+                            time: crate::player::format_time(row.time).into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+        }
+        if changed.5 {
+            app.set_remote_bookmarks(
+                Rc::new(VecModel::from(
+                    snapshot
+                        .bookmarks
+                        .iter()
+                        .map(|row| crate::RemoteBookmarkRow {
+                            id: row.id.clone().into(),
+                            note: row.note.clone().into(),
+                            time: crate::player::format_time(row.time).into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+        }
+        app.set_remote_chapters_truncated(snapshot.chapters_truncated);
+        app.set_remote_bookmarks_truncated(snapshot.bookmarks_truncated);
+        app.set_remote_bookmark_notice(snapshot.bookmark_notice.clone().into());
+        app.set_remote_intro_skip_mode(snapshot.intro_skip_mode);
+        app.set_remote_skip_segment_kind(snapshot.skip_segment_kind);
+        app.set_remote_skip_token(snapshot.skip_token.clone().into());
+        app.set_remote_subtitle_addon_status(snapshot.subtitle_addon_status);
+        app.set_remote_decoder(snapshot.decoder);
+        app.set_remote_brightness(snapshot.brightness as f32);
+        app.set_remote_automatic_recovery(snapshot.automatic_recovery);
+        app.set_remote_can_chapters(snapshot.capabilities.chapters);
+        app.set_remote_can_subtitle_style(snapshot.capabilities.subtitle_style);
+        app.set_remote_can_secondary_subtitles(snapshot.capabilities.secondary_subtitles);
+        app.set_remote_can_intro_skip(snapshot.capabilities.intro_skip);
+        app.set_remote_can_bookmarks(snapshot.capabilities.bookmarks);
+        app.set_remote_can_source_recovery(snapshot.capabilities.source_recovery);
+        app.set_remote_can_source_offers(snapshot.capabilities.source_offers);
+        app.set_remote_can_subtitle_discovery(snapshot.capabilities.subtitle_discovery);
+        app.set_remote_can_decoder(snapshot.capabilities.decoder);
+        app.set_remote_can_brightness(snapshot.capabilities.brightness);
         app.set_remote_resume_prompt(snapshot.resume_prompt);
         app.set_remote_prompt(remote_prompt_text(&snapshot).into());
         app.set_remote_prompt_token(if snapshot.resume_prompt {
@@ -2161,10 +2826,12 @@ impl Bridge {
             .as_ref()
             .is_some_and(|old| old.session != snapshot.session)
         {
-            state
-                .remote_playback
-                .queued
-                .retain(|r| !matches!(r, Request::Command { .. } | Request::Lookup(_)));
+            state.remote_playback.queued.retain(|r| {
+                !matches!(
+                    r,
+                    Request::Command { .. } | Request::Lookup(_) | Request::CurrentOffers { .. }
+                )
+            });
             state.remote_playback.remote_offers.clear();
             app.set_remote_offers(
                 Rc::new(VecModel::from(Vec::<crate::RemoteOfferRow>::new())).into(),
@@ -2278,12 +2945,12 @@ impl Bridge {
                 if !r.control_request_due(now) {
                     return;
                 }
-                if r.lookup_in_flight && matches!(r.queued.front(), Some(Request::Lookup(_))) {
+                if r.lookup_in_flight && r.queued.front().is_some_and(is_lookup_request) {
                     return;
                 }
                 let request = r.queued.pop_front().unwrap_or(Request::Snapshot);
                 r.control_poll.attempted = Some(now);
-                let is_lookup = matches!(request, Request::Lookup(_));
+                let is_lookup = is_lookup_request(&request);
                 if matches!(request, Request::Start { .. }) {
                     r.selector_lookups.remove(&r.target);
                 }
@@ -2303,6 +2970,8 @@ impl Bridge {
                     r.snapshot.as_ref().and_then(|s| s.session),
                 )
             };
+            let current_offers = matches!(&request, Request::CurrentOffers { .. });
+            let semantic = semantic_request(&request);
             let started_offer = match &request {
                 Request::Start {
                     offer_id,
@@ -2324,6 +2993,9 @@ impl Bridge {
                     state.remote_playback.scene_resume = None;
                     drop(state);
                     app.set_remote_error(error_text(&PlaybackError::Unavailable).into());
+                    if let Some((name, id, session)) = semantic {
+                        self.publish_remote_semantic_ack(name, &id, session, false);
+                    }
                     return;
                 }
             };
@@ -2336,6 +3008,24 @@ impl Bridge {
                     Err(std::io::Error::other("playback controller backgrounded").into())
                 };
                 let _ = crate::app::profiles::invoke_from_event_loop(move || {
+                    let response = match response {
+                        Ok(Response::Snapshot(snapshot)) if !snapshot.valid_payload() => {
+                            Ok(Response::Error(PlaybackError::InvalidRequest))
+                        }
+                        Ok(Response::Offers(offers))
+                            if offers.len() > REMOTE_OFFER_LIMIT
+                                || offers.iter().any(|o| {
+                                    o.id.is_empty()
+                                        || o.id.len() > 64
+                                        || o.name.len() > 128
+                                        || o.description.len() > 512
+                                        || o.size.len() > 32
+                                }) =>
+                        {
+                            Ok(Response::Error(PlaybackError::InvalidRequest))
+                        }
+                        response => response,
+                    };
                     {
                         let mut state = b.shared.lock().unwrap();
                         if state.remote_playback.generation != generation {
@@ -2400,6 +3090,14 @@ impl Bridge {
                             return;
                         }
                     }
+                    if let Some((name, id, session)) = semantic {
+                        b.publish_remote_semantic_ack(
+                            name,
+                            &id,
+                            session,
+                            matches!(&response, Ok(Response::Accepted | Response::Snapshot(_))),
+                        );
+                    }
                     match response {
                         Ok(Response::Snapshot(snapshot)) => b.apply_remote_snapshot(snapshot),
                         Ok(Response::Offers(offers)) => {
@@ -2418,14 +3116,24 @@ impl Bridge {
                                     .into(),
                                 );
                             }
-                            b.shared.lock().unwrap().remote_playback.remote_offers = offers;
+                            let mut state = b.shared.lock().unwrap();
+                            state.remote_playback.remote_offers = offers;
+                            state.remote_playback.current_offers_session =
+                                if current_offers { lookup_session } else { None };
                         }
                         Ok(Response::Accepted) => {}
                         Ok(Response::Error(error)) => {
                             if let Some(app) = b.app() {
                                 app.set_remote_error(error_text(&error).into());
                             }
-                            if !is_lookup {
+                            if !is_lookup
+                                && matches!(
+                                    error,
+                                    PlaybackError::Unauthorized
+                                        | PlaybackError::StaleSession
+                                        | PlaybackError::Unavailable
+                                )
+                            {
                                 b.shared.lock().unwrap().remote_playback.queued.clear();
                             }
                         }
@@ -2639,6 +3347,139 @@ mod tests {
         assert!(text.len() <= 127);
         assert!(text.is_char_boundary(text.len()));
     }
+    #[test]
+    fn current_entities_are_required_even_when_numeric_ids_are_reused() {
+        let mut snapshot = PlaybackSnapshot {
+            capabilities: PlaybackCapabilities {
+                tracks: true,
+                secondary_subtitles: true,
+                chapters: true,
+                bookmarks: true,
+                intro_skip: true,
+                subtitle_style: true,
+                ..Default::default()
+            },
+            subtitle_tracks: vec![PlaybackTrack {
+                id: -2,
+                token: "new-addon".into(),
+                label: "English".into(),
+            }],
+            secondary_subtitle_tracks: vec![PlaybackTrack {
+                id: 7,
+                token: "new-native".into(),
+                label: "Croatian".into(),
+            }],
+            chapters: vec![PlaybackChapter {
+                id: "chapter-current".into(),
+                label: "Scene".into(),
+                time: 30.0,
+            }],
+            bookmarks: vec![PlaybackBookmark {
+                id: "bookmark-current".into(),
+                note: "Scene".into(),
+                time: 31.0,
+            }],
+            skip_token: "skip-current".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SelectSubtitleTrackToken("new-addon".into())
+            ),
+            Ok(PlaybackAction::SelectSubtitleTrack(-2))
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SelectSubtitleTrackToken("old-addon".into())
+            ),
+            Err(PlaybackError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_remote_action(&snapshot, PlaybackAction::SelectSubtitleTrack(-2)),
+            Err(PlaybackError::Unsupported)
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SelectSecondarySubtitleTrackToken("off".into())
+            ),
+            Ok(PlaybackAction::SelectSecondarySubtitleTrack(-1))
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SeekChapter {
+                    id: "chapter-old".into()
+                }
+            ),
+            Err(PlaybackError::NotFound)
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::EditBookmark {
+                    id: "bookmark-old".into(),
+                    note: "Keep draft".into()
+                }
+            ),
+            Err(PlaybackError::NotFound)
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SkipSegment {
+                    token: "skip-old".into()
+                }
+            ),
+            Err(PlaybackError::Unsupported)
+        );
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::SetSubtitleStyle {
+                    control: 0,
+                    value: f64::INFINITY
+                }
+            ),
+            Err(PlaybackError::InvalidRequest)
+        );
+        snapshot.capabilities.bookmarks = false;
+        assert_eq!(
+            validate_remote_action(
+                &snapshot,
+                PlaybackAction::AddBookmark {
+                    note: "Scene".into()
+                }
+            ),
+            Err(PlaybackError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn bounded_track_lists_retain_the_selected_choice_and_profile_sessions_never_alias() {
+        let rows = (0..100)
+            .map(|id| PlaybackTrack {
+                id,
+                token: format!("t{id}"),
+                label: id.to_string(),
+            })
+            .collect();
+        let rows = bounded_tracks(rows, 99);
+        assert_eq!(rows.len(), MAX_REMOTE_TRACKS);
+        assert_eq!(rows[0].id, 0);
+        assert_eq!(rows.last().unwrap().id, 99);
+        let mut first_profile = State::default();
+        first_profile.begin();
+        let mut second_profile = State::default();
+        second_profile.begin();
+        assert_ne!(first_profile.session, second_profile.session);
+        first_profile.ended();
+        first_profile.begin();
+        assert_ne!(first_profile.session, second_profile.session);
+    }
+
     #[test]
     fn concurrent_lookup_completion_preserves_addon_order_and_completes_once() {
         let row = |addon: &str| {

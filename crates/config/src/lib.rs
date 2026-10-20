@@ -3,6 +3,10 @@
 //! Split out so the media/cache and player crates can read settings and
 //! platform paths without depending on the whole app.
 
+pub mod catalog_grouping;
+pub use catalog_grouping::{
+    CatalogGroupingKey, CatalogGroupingMode, CatalogGroupingOverride, CatalogSurface,
+};
 pub mod playback_preferences;
 pub mod smart_collections;
 pub mod stream_filters;
@@ -701,6 +705,12 @@ macro_rules! cache_settings_type {
     };
 }
 cache_settings_type! {
+    /// Display-only addon catalog grouping; older and new profiles keep original cards.
+    #[serde(default)]
+    pub catalog_grouping_default: CatalogGroupingMode,
+    /// One profile settings field, keyed by exact installation/catalog/surface.
+    #[serde(default, deserialize_with = "catalog_grouping::deserialize_overrides")]
+    pub catalog_grouping_overrides: Vec<CatalogGroupingOverride>,
     /// Profile-owned source rules, shared unless this device overrides the field.
     #[serde(default)]
     pub stream_filters: StreamFilterRules,
@@ -1003,6 +1013,8 @@ const fn default_status_bar_gradient() -> u32 {
 impl Default for CacheSettings {
     fn default() -> Self {
         Self {
+            catalog_grouping_default: CatalogGroupingMode::Original,
+            catalog_grouping_overrides: Vec::new(),
             stream_filters: StreamFilterRules::default(),
             smart_collections: Vec::new(),
             tmdb_api_key: String::new(),

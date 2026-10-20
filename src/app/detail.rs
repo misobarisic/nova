@@ -5,6 +5,32 @@ use std::time::Instant;
 const STREAM_PAGE_SIZE: usize = 25;
 const STREAM_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
+static WATCH_ACTION_BOOT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{:032x}-{:08x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        std::process::id()
+    )
+});
+static WATCH_ACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static WATCH_ACTION_DEVICE: AtomicU64 = AtomicU64::new(0);
+
+pub(super) fn initialize_manual_watch_actions(device: u64) {
+    WATCH_ACTION_DEVICE.store(device, Ordering::Relaxed);
+}
+
+fn next_manual_watch_action() -> String {
+    format!(
+        "{:016x}-{}-{:016x}",
+        WATCH_ACTION_DEVICE.load(Ordering::Relaxed),
+        *WATCH_ACTION_BOOT,
+        WATCH_ACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// The backend guards every activation, including keyboard repeats and a
 /// close/reopen of the selector. UI feedback is only a reflection of this gate.
 #[derive(Default)]
@@ -417,7 +443,7 @@ impl Bridge {
 
     /// Explicit refresh preserves the selected addon while replacing every
     /// source response. Navigation continues to start from All.
-    fn start_stream_search_inner(&self, request_id: String, preserve_filter: bool) {
+    pub(super) fn start_stream_search_inner(&self, request_id: String, preserve_filter: bool) {
         self.publish_stream_refresh_gate();
         if self.remote_output_selected() {
             if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
@@ -518,6 +544,9 @@ impl Bridge {
             app.set_streams_searching(!requested.is_empty());
             app.set_stream_filter(filter as i32);
         }
+        // Settings-driven refetches also need immediate in-flight feedback;
+        // the entry publication above still saw the previous pending state.
+        self.publish_stream_refresh_gate();
         // Show already-downloaded rows for this request immediately, before
         // the first addon answers. Addon streams keep streaming in per addon
         // (see `stream_addon_updated`), pinned below the downloads.
@@ -622,7 +651,7 @@ impl Bridge {
                 .stream_refresh_gate
                 .publication(Instant::now(), context.epoch)
         };
-        app.set_stream_refresh_enabled(ready);
+        app.set_stream_refresh_enabled(ready && !app.get_streams_searching());
         if let Some((wait, generation)) = timer {
             let bridge = self.clone();
             slint::Timer::single_shot(wait, move || {
@@ -2147,6 +2176,9 @@ impl Bridge {
             entry.series_id = series_id.to_string();
             entry.episode_id = episode_id.to_string();
             entry.watched = true;
+            // A second explicit Watch remains an action even if another alias
+            // was just unwatched and this row's projection is still true.
+            entry.manual_watch_action = Some(next_manual_watch_action());
             if let Some(history) = entry.history.as_mut() {
                 history.rewatch = false;
             }
@@ -2154,8 +2186,17 @@ impl Bridge {
             // mesh merge can't mistake the stale unwatch for current intent.
             entry.unwatched_at_secs = 0;
             entry.updated_at_secs = now;
-        } else if let Some(entry) = map.get_mut(&key) {
+        } else {
+            // The other provider's Watch can still be awaiting projection.
+            // Explicit Unwatch must establish its own register even if this
+            // provider has no materialized row yet.
+            let entry = map.entry(key).or_insert_with(|| EpisodeProgress {
+                series_id: series_id.to_string(),
+                episode_id: episode_id.to_string(),
+                ..Default::default()
+            });
             entry.watched = false;
+            entry.manual_watch_action = Some(next_manual_watch_action());
             entry.position_secs = 0.0;
             // Explicit unwatch intent: newer than the other side's state it
             // wins the mesh merge even against a stale `watched`.
@@ -2559,6 +2600,7 @@ impl Bridge {
 
     /// Main thread: go back from an episode's streams to the episode list.
     pub(super) fn episodes_back(&self) {
+        self.player.release_window_transition();
         self.cancel_season_download();
         self.cancel_watch_now();
         let is_episodic = {
@@ -2752,6 +2794,7 @@ impl Bridge {
     /// Back preserves the origin of selection: manual episodes return to
     /// their list, movies to Overview, and Home shortcuts to the root page.
     pub(super) fn stream_selector_back(&self) {
+        self.player.release_window_transition();
         if self.season_download_is_replacement() {
             self.cancel_season_download();
             if let Some(app) = self.app() {
@@ -2943,6 +2986,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_streams_searching(searching);
         }
+        self.publish_stream_refresh_gate();
         if !searching {
             self.season_download_list_ready();
         }
@@ -2982,8 +3026,8 @@ impl Bridge {
                 .filter(|s| filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon))
                 .cloned()
                 .collect();
-            // Cache hits and faster replies must not outrank the user's addon
-            // order. Keep each owner's own ranking while grouping its rows.
+            // Establish a stable tie order independent of response timing.
+            // Universal rules rank the combined list across owners below.
             if !state.stream_owner_order.is_empty() {
                 sort_streams_by_owner(&mut filtered, &state.stream_owner_order);
             } else if filter == 0 {
@@ -3049,14 +3093,7 @@ impl Bridge {
         if !active_torrent_settings().enabled {
             filtered.retain(|stream| !matches!(stream.source, StreamSource::Torrent { .. }));
         }
-        let rules = self
-            .shared
-            .lock()
-            .unwrap()
-            .cache_settings
-            .stream_filters
-            .clone()
-            .normalized();
+        let rules = self.effective_stream_filter_rules();
         let hidden = stream_filters::apply_stream_rules(&mut filtered, &rules);
         if let Some(app) = self.app() {
             app.global::<crate::StreamFiltersBridge>()
@@ -3136,8 +3173,8 @@ impl Bridge {
                 .filter(|_| has_exact)
                 .or(recommended_id.as_deref()),
         );
-        // Explicit language priority wins over a remembered release family;
-        // stable ties keep its established recommendation at the front.
+        // Apply the complete user order after remembered-family promotion,
+        // across every addon. Only true comparator ties retain that promotion.
         stream_filters::rank_stream_rules(&mut displayed, &rules);
         let last_used_index = last_used.as_deref().and_then(|id| {
             displayed.iter().position(|row| {
@@ -3371,6 +3408,7 @@ impl Bridge {
             app.set_stream_total(0);
             app.set_stream_action_open(false);
         }
+        self.publish_stream_refresh_gate();
     }
 
     pub(super) fn stream_picked(&self, index: usize) {
@@ -3406,11 +3444,7 @@ impl Bridge {
         };
         if !matches!(stream.source, StreamSource::Downloaded { .. })
             && !self
-                .shared
-                .lock()
-                .unwrap()
-                .cache_settings
-                .stream_filters
+                .effective_stream_filter_rules()
                 .accepts(&stream.card.filter_facts)
         {
             self.set_stream_hint(Some(StreamHint::Fixed(

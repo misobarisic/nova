@@ -134,6 +134,13 @@ pub struct ProviderStream {
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub subtitles: Vec<ProviderSubtitle>,
+    /// Source-owned advertised facts shared with upstream and app sorting.
+    #[serde(
+        default,
+        rename = "streamFacts",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub stream_facts: Option<nova_config::stream_filters::StreamFacts>,
 }
 
 /// An opaque deferred playback token can only be returned to its owning provider.
@@ -146,6 +153,25 @@ pub struct ProviderStreamResolver {
 impl ProviderStream {
     pub fn validate(&self, provider_id: &str) -> Result<(), ProviderError> {
         let invalid = || ProviderError::InvalidData("invalid provider stream target".into());
+        if self.stream_facts.as_ref().is_some_and(|facts| {
+            facts
+                .height
+                .is_some_and(|height| !(144..=8640).contains(&height))
+                || [&facts.audio_languages, &facts.subtitle_languages]
+                    .iter()
+                    .any(|languages| {
+                        languages.len() > 32
+                            || languages.iter().any(|language| {
+                                language.is_empty()
+                                    || language.len() > 64
+                                    || !language
+                                        .bytes()
+                                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                            })
+                    })
+        }) {
+            return Err(invalid());
+        }
         if usize::from(!self.url.is_empty())
             + usize::from(self.info_hash.is_some())
             + usize::from(self.resolver.is_some())

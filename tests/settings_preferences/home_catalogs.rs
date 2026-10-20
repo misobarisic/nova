@@ -151,3 +151,72 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
 
     slint::run_event_loop().unwrap();
 }
+
+#[test]
+fn home_actions_keep_labeled_remove_and_touch_sized_lucide_reorder_controls() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::home_actions_keep_labeled_remove_and_touch_sized_lucide_reorder_controls"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(13);
+    app.set_settings_detail_open(true);
+    let catalog = |title: &str| nova::HomeCatalogRow {
+        title: title.into(),
+        addon: "Built-in".into(),
+        media_type: "series".into(),
+        builtin: true,
+        enabled: true,
+        available: true,
+        visible: true,
+        ..Default::default()
+    };
+    app.set_home_row_catalog_rows(
+        Rc::new(VecModel::from(vec![
+            catalog("Continue Watching"),
+            catalog("Upcoming"),
+        ]))
+        .into(),
+    );
+    app.set_home_catalog_rows(Rc::new(VecModel::from(vec![catalog("Featured catalog")])).into());
+    app.window().set_size(slint::PhysicalSize::new(390, 1800));
+    app.show().unwrap();
+    for (width, tv) in [(320, false), (390, false), (1280, false), (1280, true)] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window().set_size(slint::PhysicalSize::new(width, 1800));
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, 1800.0),
+            });
+        for _ in 0..5 {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(40));
+        }
+        for label in ["Move up", "Move down", "Remove"] {
+            let controls = ElementHandle::find_by_accessible_label(&app, label)
+                .filter(|item| {
+                    item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+                })
+                .collect::<Vec<_>>();
+            assert!(!controls.is_empty(), "missing {label}");
+            for action in controls {
+                assert!(action.size().height >= if tv { 56.0 } else { 44.0 });
+                assert!(action.absolute_position().x >= 0.0);
+                assert!(action.absolute_position().x + action.size().width <= width as f32 + 1.0);
+            }
+        }
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Remove")
+                .filter(|item| item.accessible_role()
+                    == Some(i_slint_backend_testing::AccessibleRole::Text))
+                .count()
+                >= 3,
+            "configured rows and featured catalog retain visible Remove text"
+        );
+    }
+}

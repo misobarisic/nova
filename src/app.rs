@@ -118,6 +118,8 @@ pub(crate) struct Installed {
 
 struct CatDef {
     id: String,
+    /// Exact installation identity, including its configured path/query.
+    addon_url: String,
     supports_skip: bool,
     genre_options: Vec<String>,
     label: String,
@@ -282,6 +284,7 @@ struct Shared {
     remote_playback: remote_playback::State,
     party: party::State,
     stream_prefetch: stream_prefetch::Cache,
+    stream_preferences: stream_preferences::State,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
     addon_browser: addon_browser::State,
@@ -569,6 +572,10 @@ pub(crate) struct EpisodeProgress {
     /// otherwise watched sticks. Cleared whenever watched is (re)set.
     #[serde(default)]
     unwatched_at_secs: u64,
+    /// An explicit watch action can reaffirm an already-visible state while
+    /// another provider's opposite action is still awaiting projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manual_watch_action: Option<String>,
     /// How many times playback of this episode was opened.
     play_count: u32,
     /// Seconds since the Unix epoch of the last update.
@@ -769,6 +776,7 @@ impl std::ops::Deref for Bridge {
 }
 
 mod about;
+mod activity_sync;
 mod addon_browser;
 mod addon_mgr;
 mod addon_packages;
@@ -788,6 +796,7 @@ mod home;
 mod intro_skip;
 mod last_stream;
 mod library;
+mod media_identity;
 mod next_episode;
 mod onboarding;
 mod page_artwork;
@@ -807,6 +816,8 @@ mod profile_actions_tests;
 mod profile_net;
 mod profile_session;
 mod profiles;
+#[cfg(all(test, feature = "desktop"))]
+mod progress_identity_tests;
 mod progress_projection;
 mod recommendations;
 pub(crate) mod remote_playback;
@@ -817,6 +828,7 @@ mod settings_sync;
 mod similar;
 mod smart_collections;
 mod stream_filters;
+mod stream_preferences;
 mod stream_prefetch;
 mod subtitles;
 mod sync_inspector;

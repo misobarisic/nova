@@ -366,6 +366,7 @@ export component SettingsAddonsModule inherits Window {
                                 logo: row.logo;
                                 initial: row.initial;
                                 on: row.enabled;
+                                refreshing: row.busy;
                                 has_config: row.config_url != "";
                                 kb_focused_row: SettingsBridge.kb_zone == 2 && SettingsContent.kb_ar == i;
                                 kb_active: SettingsBridge.kb_active;

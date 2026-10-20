@@ -9,14 +9,18 @@ use std::{
 };
 
 fn settle(app: &nova::AppWindow) {
-    for _ in 0..10 {
-        for item in ElementQuery::from_root(app)
-            .match_predicate(|_| true)
-            .find_all()
-        {
-            let _ = (item.size(), item.absolute_position());
+    let mut viewport: Option<ElementHandle> = None;
+    for _ in 0..5 {
+        if viewport.as_ref().is_none_or(|item| !item.is_valid()) {
+            viewport = ElementHandle::find_by_element_id(app, "SettingsPage::set_scroll").next();
         }
-        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        if let Some(viewport) = &viewport {
+            let _ = (viewport.size(), viewport.absolute_position());
+        }
+        // Let the factory and the picker's 80ms focus request run across
+        // several frames. Target queries in reveal()/in_form() then force the
+        // relevant leaf geometry, without walking every hidden setting row.
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(40));
     }
 }
 fn key(app: &nova::AppWindow, key: slint::platform::Key) {
@@ -56,17 +60,19 @@ fn in_form(app: &nova::AppWindow, control: &ElementHandle) -> bool {
         && p.y + s.height <= viewport.y + bounds.height - 4.0
 }
 fn control(app: &nova::AppWindow, label: &str) -> Option<ElementHandle> {
-    ElementHandle::find_by_accessible_label(app, label).find(|item| {
-        matches!(
-            item.accessible_role(),
-            Some(
-                AccessibleRole::Checkbox
-                    | AccessibleRole::Combobox
-                    | AccessibleRole::TextInput
-                    | AccessibleRole::Button
+    ElementHandle::find_by_accessible_label(app, label)
+        .filter(|item| {
+            matches!(
+                item.accessible_role(),
+                Some(
+                    AccessibleRole::Checkbox
+                        | AccessibleRole::Combobox
+                        | AccessibleRole::TextInput
+                        | AccessibleRole::Button
+                )
             )
-        )
-    })
+        })
+        .last()
 }
 fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
     for attempt in 0..55 {
@@ -95,6 +101,43 @@ fn click(app: &nova::AppWindow, label: &str) {
     reveal(app, label).mock_single_click(slint::platform::PointerEventButton::Left);
     settle(app);
 }
+fn reveal_scope(app: &nova::AppWindow, key: &str) -> ElementHandle {
+    app.set_settings_scroll_y(0.0);
+    for _ in 0..100 {
+        settle(app);
+        let expected = format!("setting-scope:{key}");
+        let badge = ElementQuery::from_root(app)
+            .match_predicate(move |element| {
+                element.accessible_id().as_deref() == Some(expected.as_str())
+            })
+            .find_first();
+        if let Some(badge) = badge {
+            if in_form(app, &badge) {
+                return badge;
+            }
+            let top = form(app).absolute_position().y + 150.0;
+            app.set_settings_scroll_y(
+                (app.get_settings_scroll_y() + top - badge.absolute_position().y).min(0.0),
+            );
+        } else {
+            scroll_by(app, -180.0);
+        }
+    }
+    let visible = ElementQuery::from_root(app)
+        .match_predicate(|element| {
+            element
+                .accessible_id()
+                .is_some_and(|id| id.starts_with("setting-scope:"))
+        })
+        .find_all()
+        .into_iter()
+        .map(|element| (element.accessible_id(), element.absolute_position()))
+        .collect::<Vec<_>>();
+    panic!(
+        "missing logical scope {key}, scroll={}, visible={visible:?}",
+        app.get_settings_scroll_y()
+    );
+}
 fn type_text(app: &nova::AppWindow, value: &str) {
     for character in value.chars() {
         let text: slint::SharedString = character.to_string().into();
@@ -104,6 +147,32 @@ fn type_text(app: &nova::AppWindow, value: &str) {
             .dispatch_event(WindowEvent::KeyReleased { text });
     }
     settle(app);
+}
+fn seed_sort(app: &nova::AppWindow) {
+    let filters = app.global::<nova::StreamFiltersBridge>();
+    filters.set_sort_order(
+        Rc::new(VecModel::from(
+            [
+                "audio",
+                "codec",
+                "cached",
+                "resolution",
+                "size",
+                "season_pack",
+                "seeders",
+                "subtitle",
+            ]
+            .map(Into::into)
+            .to_vec(),
+        ))
+        .into(),
+    );
+    filters.set_sort_ascending(
+        Rc::new(VecModel::from(vec![
+            true, true, false, false, true, false, false, true,
+        ]))
+        .into(),
+    );
 }
 fn fixture(app: &nova::AppWindow) {
     app.set_animations(false);
@@ -118,6 +187,30 @@ fn fixture(app: &nova::AppWindow) {
     filters.set_audio_languages("ja, en".into());
     filters.set_allow_hevc(true);
     filters.set_retain_unknown(true);
+    seed_sort(app);
+    filters.set_use_preferred_audio_languages(true);
+    filters.set_preferred_audio_languages("Japanese (ja) → English (en)".into());
+    filters.set_language_codes(
+        Rc::new(VecModel::from(vec!["en".into(), "ja".into(), "hr".into()])).into(),
+    );
+    filters.set_language_names(
+        Rc::new(VecModel::from(vec![
+            "English (en)".into(),
+            "Japanese (ja)".into(),
+            "Croatian (hr)".into(),
+        ]))
+        .into(),
+    );
+    filters.set_selected_language_codes(
+        Rc::new(VecModel::from(vec!["ja".into(), "en".into()])).into(),
+    );
+    filters.set_selected_language_names(
+        Rc::new(VecModel::from(vec![
+            "Japanese (ja)".into(),
+            "English (en)".into(),
+        ]))
+        .into(),
+    );
 }
 fn wire_edits(app: &nova::AppWindow) -> Rc<RefCell<Vec<(i32, String)>>> {
     let edits = Rc::new(RefCell::new(Vec::new()));
@@ -140,8 +233,101 @@ fn wire_edits(app: &nova::AppWindow) -> Rc<RefCell<Vec<(i32, String)>>> {
                 8 => f.set_require_audio(value == "true"),
                 9 => f.set_retain_unknown(value == "true"),
                 10 => f.set_allow_other(value == "true"),
+                11 => f.set_block_avc(value == "true"),
+                12 => f.set_block_hevc(value == "true"),
+                13 => f.set_block_av1(value == "true"),
+                14 => f.set_block_vp9(value == "true"),
+                15 => f.set_block_other(value == "true"),
+                16 => {
+                    let (action, codec) = value.split_once(':').unwrap();
+                    let codec = match codec {
+                        "avc" => 0,
+                        "hevc" => 1,
+                        "av1" => 2,
+                        "vp9" => 3,
+                        _ => 4,
+                    };
+                    let mut order = f.get_codec_priority_order().iter().collect::<Vec<_>>();
+                    match action {
+                        "add" if !order.contains(&codec) => order.push(codec),
+                        "remove" => order.retain(|item| *item != codec),
+                        "up" | "down" => {
+                            if let Some(index) = order.iter().position(|item| *item == codec) {
+                                let target = if action == "up" {
+                                    index.saturating_sub(1)
+                                } else {
+                                    (index + 1).min(order.len() - 1)
+                                };
+                                order.swap(index, target);
+                            }
+                        }
+                        _ => {}
+                    }
+                    f.set_codec_priority_order(Rc::new(VecModel::from(order)).into());
+                }
+                17 => f.set_use_preferred_audio_languages(value == "true"),
+                18 => f.set_require_preferred_codec(value == "true"),
                 _ => panic!("unexpected stream filter field"),
             }
+        });
+    let recorded = edits.clone();
+    let weak = app.as_weak();
+    app.global::<nova::StreamFiltersBridge>()
+        .on_language_edited(move |code, action| {
+            recorded.borrow_mut().push((100 + action, code.to_string()));
+            let app = weak.upgrade().unwrap();
+            let filters = app.global::<nova::StreamFiltersBridge>();
+            let mut selected = filters
+                .get_selected_language_codes()
+                .iter()
+                .collect::<Vec<_>>();
+            match action {
+                0 if !selected.contains(&code) => selected.push(code.clone()),
+                1 => selected.retain(|item| item != &code),
+                2 | 3 => {
+                    if let Some(index) = selected.iter().position(|item| item == &code) {
+                        let target = if action == 2 {
+                            index.saturating_sub(1)
+                        } else {
+                            (index + 1).min(selected.len() - 1)
+                        };
+                        selected.swap(index, target);
+                    }
+                }
+                _ => {}
+            }
+            let names = selected
+                .iter()
+                .map(|code| nova_config::playback_preferences::language_label(code).into())
+                .collect::<Vec<_>>();
+            filters.set_selected_language_codes(Rc::new(VecModel::from(selected)).into());
+            filters.set_selected_language_names(Rc::new(VecModel::from(names)).into());
+        });
+    let recorded = edits.clone();
+    let weak = app.as_weak();
+    app.global::<nova::StreamFiltersBridge>()
+        .on_sort_edited(move |criterion, action| {
+            recorded
+                .borrow_mut()
+                .push((200 + action, criterion.to_string()));
+            let app = weak.upgrade().unwrap();
+            let filters = app.global::<nova::StreamFiltersBridge>();
+            let mut order = filters.get_sort_order().iter().collect::<Vec<_>>();
+            let mut ascending = filters.get_sort_ascending().iter().collect::<Vec<_>>();
+            let index = order.iter().position(|item| item == &criterion).unwrap();
+            if action == 2 {
+                ascending[index] = !ascending[index];
+            } else {
+                let target = if action == 0 {
+                    index.saturating_sub(1)
+                } else {
+                    (index + 1).min(order.len() - 1)
+                };
+                order.swap(index, target);
+                ascending.swap(index, target);
+            }
+            filters.set_sort_order(Rc::new(VecModel::from(order)).into());
+            filters.set_sort_ascending(Rc::new(VecModel::from(ascending)).into());
         });
     edits
 }
@@ -194,8 +380,14 @@ fn universal_filters_fit_320_and_390_phones_and_desktop_with_keyboard_and_touch(
             "AV1",
             "VP9",
             "Other video codecs",
-            "Audio language codes",
-            "Apply languages",
+            "Exclude H.264 / AVC",
+            "Exclude H.265 / HEVC",
+            "Exclude AV1",
+            "Exclude VP9",
+            "Exclude other video codecs",
+            "Add codec preference",
+            "Only preferred video codecs",
+            "Use preferred audio languages",
             "Require one of these audio languages",
             "Keep streams with unknown details",
             "Reset",
@@ -215,7 +407,6 @@ fn universal_filters_fit_320_and_390_phones_and_desktop_with_keyboard_and_touch(
         select_filter_row(&app, 1);
         key(&app, slint::platform::Key::RightArrow);
         assert_eq!(edits.borrow().last().unwrap(), &(1, "4".into()));
-        // Real Dropdown options use the same bridge, including a smaller cap.
         click(&app, "Maximum resolution");
         ElementHandle::find_by_element_id(&app, "Dropdown::item_touch")
             .nth(2)
@@ -225,41 +416,141 @@ fn universal_filters_fit_320_and_390_phones_and_desktop_with_keyboard_and_touch(
         assert_eq!(edits.borrow().last().unwrap(), &(1, "2".into()));
         app.global::<nova::StreamFiltersBridge>()
             .set_max_resolution_index(3);
-        app.global::<nova::StreamFiltersBridge>()
-            .set_audio_languages("".into());
-        select_filter_row(&app, 8);
+        click(&app, "Exclude AV1");
+        assert_eq!(edits.borrow().last().unwrap().0, 13);
+        select_filter_row(&app, 13);
         key(&app, slint::platform::Key::Return);
-        let input = reveal(&app, "Audio language codes");
-        assert!(
-            (*app)
-                .global::<nova_ui_shared::SettingsContent>()
-                .get_player_language_input_focused(),
-            "keyboard Enter must focus the ordinary Settings input"
-        );
-        type_text(&app, "ja, en, hr");
-        assert_eq!(input.accessible_value().as_deref(), Some("ja, en, hr"));
+        select_filter_row(&app, 13);
+        key(&app, slint::platform::Key::RightArrow);
         key(&app, slint::platform::Key::Return);
-        assert_eq!(edits.borrow().last().unwrap(), &(7, "ja, en, hr".into()));
-        assert!(
-            !(*app)
-                .global::<nova_ui_shared::SettingsContent>()
-                .get_player_language_input_focused()
+        click(&app, "Move up: H.265 / HEVC");
+        assert_eq!(edits.borrow().last().unwrap(), &(16, "up:hevc".into()));
+        assert_eq!(
+            app.global::<nova::StreamFiltersBridge>()
+                .get_codec_priority_order()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![1, 0]
         );
-        select_filter_row(&app, 10);
+        let content = (*app).global::<nova_ui_shared::SettingsContent>();
+        select_filter_row(&app, content.invoke_kb_stream_filter_require_codec());
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(edits.borrow().last().unwrap().0, 18);
+        if app
+            .global::<nova::StreamFiltersBridge>()
+            .get_use_preferred_audio_languages()
+        {
+            click(&app, "Use preferred audio languages");
+        }
+        select_filter_row(&app, content.invoke_kb_stream_filter_audio_picker());
+        key(&app, slint::platform::Key::Return);
+        let input = reveal(&app, "Search languages");
+        assert!(content.get_player_language_input_focused());
+        type_text(&app, "Croatian");
+        assert_eq!(input.accessible_value().as_deref(), Some("Croatian"));
+        key(&app, slint::platform::Key::Return);
+        assert!(!content.get_player_language_input_focused());
+        click(&app, "Move up: English (en)");
+        assert_eq!(edits.borrow().last().unwrap(), &(102, "en".into()));
+        select_filter_row(&app, content.invoke_kb_stream_filter_require());
         key(&app, slint::platform::Key::Return);
         assert_eq!(edits.borrow().last().unwrap().0, 8);
         click(&app, "Keep streams with unknown details");
         assert_eq!(edits.borrow().last().unwrap().0, 9);
+        for (criterion, label) in [
+            ("audio", "Audio language"),
+            ("codec", "Video codec"),
+            ("cached", "Cached availability"),
+            ("resolution", "Resolution"),
+            ("size", "Size"),
+            ("season_pack", "Season pack"),
+            ("seeders", "Reported seeders"),
+            ("subtitle", "Subtitle language"),
+        ] {
+            let order = app.global::<nova::StreamFiltersBridge>().get_sort_order();
+            let index = order
+                .iter()
+                .position(|item| item.as_str() == criterion)
+                .unwrap();
+            let label = format!(
+                "Move {}: {label}",
+                if index + 1 == order.row_count() {
+                    "up"
+                } else {
+                    "down"
+                }
+            );
+            click(&app, &label);
+            let expected_action = if index + 1 == order.row_count() {
+                200
+            } else {
+                201
+            };
+            assert_eq!(
+                edits.borrow().last().unwrap(),
+                &(expected_action, criterion.into())
+            );
+            let direction = reveal(
+                &app,
+                &format!(
+                    "Sort direction: {}",
+                    content.invoke_stream_filter_sort_label(criterion.into())
+                ),
+            );
+            assert!(direction.size().height >= 44.0 && in_form(&app, &direction));
+        }
+        seed_sort(&app);
+        select_filter_row(&app, content.invoke_kb_stream_filter_sort_start() + 1);
+        content.set_stream_filter_sort_column(0);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(edits.borrow().last().unwrap(), &(200, "codec".into()));
+        assert_eq!(
+            app.global::<nova::StreamFiltersBridge>()
+                .get_sort_order()
+                .row_data(0)
+                .as_deref(),
+            Some("codec")
+        );
+        content.set_stream_filter_sort_column(2);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(edits.borrow().last().unwrap(), &(202, "codec".into()));
+        assert_eq!(
+            app.global::<nova::StreamFiltersBridge>()
+                .get_sort_ascending()
+                .row_data(0),
+            Some(false)
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Reverse preference order")
+                .next()
+                .is_some()
+        );
         let before = resets.get();
-        select_filter_row(&app, 12);
+        select_filter_row(&app, content.invoke_kb_stream_filter_reset());
         key(&app, slint::platform::Key::Return);
         assert_eq!(resets.get(), before + 1);
-        assert_eq!(
-            (*app)
-                .global::<nova_ui_shared::SettingsContent>()
-                .get_stream_filter_language_draft(),
-            ""
-        );
+        // Keep every width's fixture independent of edits above.
+        // Leaving custom mode unmounts its local search field; a resize alone
+        // intentionally retains that query and would append the next input.
+        app.global::<nova::StreamFiltersBridge>()
+            .set_use_preferred_audio_languages(true);
+        app.global::<nova::StreamFiltersBridge>()
+            .set_codec_priority_order(Default::default());
+        (*app)
+            .global::<nova_ui_shared::SettingsContent>()
+            .set_stream_filter_codec_choice(0);
+        app.global::<nova::StreamFiltersBridge>()
+            .set_selected_language_codes(
+                Rc::new(VecModel::from(vec!["ja".into(), "en".into()])).into(),
+            );
+        app.global::<nova::StreamFiltersBridge>()
+            .set_selected_language_names(
+                Rc::new(VecModel::from(vec![
+                    "Japanese (ja)".into(),
+                    "English (en)".into(),
+                ]))
+                .into(),
+            );
     }
 }
 
@@ -275,62 +566,75 @@ fn filter_scope_uses_standard_settings_comparison_and_device_override() {
     let app = nova::AppWindow::new().unwrap();
     fixture(&app);
     app.window().set_size(slint::PhysicalSize::new(390, 844));
-    let rows = Rc::new(VecModel::from(vec![nova::SettingSyncInfo {
-        key: "stream_filters".into(),
-        status: 1,
-        can_override: true,
-        has_shared: true,
-        shared_supported: true,
-        local_value: "1080p · 8 GiB · ja, en".into(),
-        shared_value: "1080p · 8 GiB · ja, en".into(),
-    }]));
+    let keys = [
+        "stream_filters_enabled",
+        "stream_filters_resolution",
+        "stream_filters_size",
+        "stream_filters_allowed_codecs",
+        "stream_filters_excluded_codecs",
+        "stream_filters_codec_priority",
+        "stream_filters_require_codec",
+        "stream_filters_audio",
+        "stream_filters_require_audio",
+        "stream_filters_retain_unknown",
+        "stream_filters_sort_order",
+    ];
+    let rows = Rc::new(VecModel::from(
+        keys.iter()
+            .map(|key| nova::SettingSyncInfo {
+                key: (*key).into(),
+                status: 1,
+                can_override: true,
+                has_shared: true,
+                shared_supported: true,
+                local_value: "Account preference".into(),
+                shared_value: "Account preference".into(),
+            })
+            .collect::<Vec<_>>(),
+    ));
     let sync = app.global::<nova::SettingsSync>();
     sync.set_enabled(true);
     sync.set_rows(rows.clone().into());
-    sync.on_lookup(|_| 0);
+    sync.on_lookup(move |key| {
+        keys.iter()
+            .position(|item| *item == key.as_str())
+            .unwrap_or(0) as i32
+    });
     let overrides = Rc::new(RefCell::new(Vec::new()));
     let recorded = overrides.clone();
     let changed = rows.clone();
     sync.on_override_changed(move |key, enabled| {
         recorded.borrow_mut().push((key.to_string(), enabled));
-        let mut row = changed.row_data(0).unwrap();
+        let index = keys.iter().position(|item| *item == key.as_str()).unwrap();
+        let mut row = changed.row_data(index).unwrap();
         row.status = if enabled { 2 } else { 1 };
-        changed.set_row_data(0, row);
+        changed.set_row_data(index, row);
     });
     app.show().unwrap();
     settle(&app);
-    click(&app, "Use stream rules"); // also proves enabling is an ordinary Settings action
-    reveal(&app, "Use stream rules");
-    let badge = || {
-        ElementQuery::from_root(&app)
-            .match_predicate(|e| {
-                e.accessible_id().as_deref() == Some("setting-scope:stream_filters")
-            })
-            .find_first()
-            .expect("stream_filters scope badge")
-    };
-    badge().mock_single_click(slint::platform::PointerEventButton::Left);
-    settle(&app);
-    assert!(sync.get_open());
-    assert_eq!(sync.get_selected_key(), "stream_filters");
-    ElementHandle::find_by_accessible_label(&app, "Use device override")
-        .last()
-        .unwrap()
-        .mock_single_click(slint::platform::PointerEventButton::Left);
-    settle(&app);
-    assert_eq!(&*overrides.borrow(), &[("stream_filters".into(), true)]);
-    assert!(!sync.get_open());
-    badge().mock_single_click(slint::platform::PointerEventButton::Left);
-    settle(&app);
-    ElementHandle::find_by_accessible_label(&app, "Use synced value")
-        .last()
-        .unwrap()
-        .mock_single_click(slint::platform::PointerEventButton::Left);
-    settle(&app);
-    assert_eq!(
-        overrides.borrow().last(),
-        Some(&("stream_filters".into(), false))
-    );
+    for key in keys {
+        reveal_scope(&app, key).mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert!(sync.get_open());
+        assert_eq!(sync.get_selected_key(), key);
+        ElementHandle::find_by_accessible_label(&app, "Use device override")
+            .last()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(overrides.borrow().last(), Some(&(key.into(), true)));
+        assert!(!sync.get_open());
+        // The longer device-override badge changes its row's layout. Reveal
+        // the same stable key again rather than assuming its old viewport.
+        reveal_scope(&app, key).mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        ElementHandle::find_by_accessible_label(&app, "Use synced value")
+            .last()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(overrides.borrow().last(), Some(&(key.into(), false)));
+    }
 }
 
 #[test]
@@ -348,41 +652,45 @@ fn settings_filter_editor_back_blurs_and_remounts_from_effective_profile_value()
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     app.show().unwrap();
     settle(&app);
-    select_filter_row(&app, 8);
+    click(&app, "Use preferred audio languages");
+    let content = (*app).global::<nova_ui_shared::SettingsContent>();
+    select_filter_row(&app, content.invoke_kb_stream_filter_audio_picker());
     key(&app, slint::platform::Key::Return);
-    let input = reveal(&app, "Audio language codes");
+    let input = reveal(&app, "Search languages");
     assert!(in_form(&app, &input));
-    assert!(
-        (*app)
-            .global::<nova_ui_shared::SettingsContent>()
-            .get_player_language_input_focused()
-    );
-    type_text(&app, ", hr");
+    assert!(content.get_player_language_input_focused());
+    type_text(&app, "Croatian");
     key(&app, slint::platform::Key::Back);
-    assert!(
-        !(*app)
-            .global::<nova_ui_shared::SettingsContent>()
-            .get_player_language_input_focused()
-    );
+    assert!(!content.get_player_language_input_focused());
     assert!(app.get_settings_detail_open());
     assert_eq!(app.get_settings_selected_id(), 5);
-    // Closing the Settings page releases the leaf; a new profile's effective
-    // mirror must seed the next editor instead of resurrecting the old draft.
+    // Factory teardown drops only the local search query; the next profile's
+    // selected model is authoritative when its picker is mounted again.
     app.set_show_settings(false);
     settle(&app);
-    app.global::<nova::StreamFiltersBridge>()
-        .set_audio_languages("de, fr".into());
+    let filters = app.global::<nova::StreamFiltersBridge>();
+    filters.set_selected_language_codes(
+        Rc::new(VecModel::from(vec!["de".into(), "fr".into()])).into(),
+    );
+    filters.set_selected_language_names(
+        Rc::new(VecModel::from(vec![
+            "German (de)".into(),
+            "French (fr)".into(),
+        ]))
+        .into(),
+    );
     app.set_show_settings(true);
     app.set_settings_selected_id(5);
     app.set_settings_detail_open(true);
     settle(&app);
-    let input = reveal(&app, "Audio language codes");
-    assert_eq!(input.accessible_value().as_deref(), Some("de, fr"));
-    assert!(
-        !(*app)
-            .global::<nova_ui_shared::SettingsContent>()
-            .get_player_language_input_focused()
+    assert_eq!(
+        reveal(&app, "Search languages")
+            .accessible_value()
+            .as_deref(),
+        Some("")
     );
+    assert!(reveal(&app, "Move up: French (fr)").size().height >= 44.0);
+    assert!(!content.get_player_language_input_focused());
 }
 
 #[test]
@@ -411,8 +719,10 @@ fn render_universal_filter_previews() {
             let app = weak.upgrade().unwrap();
             let scenes = [
                 (390, 844, 0, "filters-settings-phone"),
-                (390, 844, 8, "filters-settings-phone-audio"),
+                (390, 844, 16, "filters-settings-phone-audio"),
                 (1280, 900, 0, "filters-settings-desktop"),
+                (390, 844, 99, "filters-settings-phone-sort"),
+                (1280, 900, 99, "filters-settings-desktop-sort"),
             ];
             if step.get() % 2 == 0 {
                 let (w, h, row, _) = scenes[step.get() / 2];
@@ -424,6 +734,14 @@ fn render_universal_filter_previews() {
                 app.global::<nova_ui_shared::SettingsStyle>()
                     .set_keyboard_mode(true);
                 settings.set_kb_zone(9);
+                app.global::<nova::StreamFiltersBridge>()
+                    .set_use_preferred_audio_languages(row != 16);
+                let row = if row == 99 {
+                    content.set_stream_filter_sort_column(2);
+                    content.invoke_kb_stream_filter_sort_start()
+                } else {
+                    row
+                };
                 content.set_kb_pr(content.invoke_kb_player_stream_filters_row() + row);
             } else {
                 let (_, _, _, name) = scenes[step.get() / 2];
@@ -439,7 +757,7 @@ fn render_universal_filter_previews() {
                     )
                     .unwrap();
                 }
-                if step.get() == 5 {
+                if step.get() + 1 == scenes.len() * 2 {
                     slint::quit_event_loop().unwrap();
                 }
             }

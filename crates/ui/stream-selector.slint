@@ -168,20 +168,9 @@ component StreamFilterBar inherits HorizontalLayout {
     // this flag can't feed back into the geometry (binding loop).
     property <bool> overflowing: pill_row.width > pill_flick.width + 1px;
 
-    // Desktop chevron slots: fixed geometry whether or not the row
-    // overflows; the buttons fade in only while useful (an `if` here
-    // would resize the viewport and loop with `overflowing` above).
-    // A disabled touch passes taps through, so a faded slot is inert.
-    if !root.touch_menus: PageButton {
-        glyph: 0;
-        name: @tr("Scroll filters left");
-        opacity: root.overflowing && pill_flick.content-x < -0.5px ? 1.0 : 0.0;
-        animate opacity { duration: Anim.hover_fast; }
-        enabled: root.overflowing && pill_flick.content-x < -0.5px;
-        picked => {
-            pill_flick.content-x = Math.min(0px, pill_flick.content-x + pill_flick.width);
-        }
-    }
+    // Both fixed chevron slots trail the rail: its first pill shares the
+    // content edge even without overflow. Stable slot widths prevent an
+    // overflow/viewport feedback loop while their visibility changes.
 
     pill_flick := Flickable {
         horizontal-stretch: 1;
@@ -194,6 +183,7 @@ component StreamFilterBar inherits HorizontalLayout {
         // Explicit width = intrinsic pill row width, so the Flickable
         // scrolls it horizontally instead of squeezing it.
         pill_row := HorizontalLayout {
+            x: 0px; y: 0px;
             width: self.preferred-width;
             height: InterfaceStyle.tv ? 56px : 40px;
             spacing: 8px;
@@ -216,6 +206,17 @@ component StreamFilterBar inherits HorizontalLayout {
                 picked => { root.filter_picked(i); }
                 reveal_requested(x, w) => { root.reveal_pill(x, w); }
             }
+        }
+    }
+
+    if !root.touch_menus: PageButton {
+        glyph: 0;
+        name: @tr("Scroll filters left");
+        opacity: root.overflowing && pill_flick.content-x < -0.5px ? 1.0 : 0.0;
+        animate opacity { duration: Anim.hover_fast; }
+        enabled: root.overflowing && pill_flick.content-x < -0.5px;
+        picked => {
+            pill_flick.content-x = Math.min(0px, pill_flick.content-x + pill_flick.width);
         }
     }
 

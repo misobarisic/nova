@@ -40,6 +40,11 @@ fn stamp(v: &Value) -> u64 {
         .and_then(Value::as_u64)
         .unwrap_or(0)
 }
+fn manual_action(v: &Value) -> Option<&str> {
+    v.get("manual_watch_action")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 128)
+}
 fn candidate(mut data: Value, version: Version) -> Candidate {
     if let Some(map) = data.as_object_mut() {
         map.remove(META);
@@ -179,12 +184,14 @@ pub(crate) fn local(old: Option<&Record>, value: String, version: Version) -> St
     s.play_count = s.play_count.max(count(&c.data));
     let prior_stamp = stamp(&s.activity.data);
     let was_watched = flag(&s.activity.data);
+    let explicit =
+        manual_action(&c.data).is_some_and(|id| Some(id) != manual_action(&s.activity.data));
     if flag(&c.data) {
         s.watched = Some(c.clone());
     }
     if !flag(&c.data)
         && stamp(&c.data) > 0
-        && (old.is_none() || was_watched || stamp(&c.data) != prior_stamp)
+        && (old.is_none() || was_watched || stamp(&c.data) != prior_stamp || explicit)
     {
         s.unwatch = Some(c.clone());
     }

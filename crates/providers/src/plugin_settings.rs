@@ -288,10 +288,23 @@ pub trait PluginSettingsBackend: Send + Sync {
     fn provider_revision(&self, _url: &str) -> Result<Option<String>, ProviderHostError> {
         Ok(Some(String::new()))
     }
+    /// Effective preferences of this owner, including device overrides. This
+    /// invocation input never belongs to a plugin's durable configuration.
+    fn stream_preferences(
+        &self,
+    ) -> Result<Option<nova_config::stream_filters::StreamFilterRules>, ProviderHostError> {
+        Ok(None)
+    }
     fn load_settings(&self) -> Result<Option<String>, ProviderHostError>;
     fn save_settings(&self, raw: &str) -> Result<(), ProviderHostError>;
     fn load_cache(&self) -> Result<Option<String>, ProviderHostError>;
     fn save_cache(&self, raw: &str) -> Result<(), ProviderHostError>;
+}
+
+pub fn stream_preferences()
+-> Result<Option<nova_config::stream_filters::StreamFilterRules>, ProviderHostError> {
+    let backend = service().lock().unwrap().backend.clone();
+    backend.map_or(Ok(None), |backend| backend.stream_preferences())
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct CacheEntry {
@@ -1153,10 +1166,16 @@ mod tests {
         cache: Mutex<Option<String>>,
         cache_writes: std::sync::atomic::AtomicUsize,
         fail: std::sync::atomic::AtomicBool,
+        preferences: Mutex<Option<nova_config::StreamFilterRules>>,
     }
     impl PluginSettingsBackend for Memory {
         fn owner_id(&self) -> Option<String> {
             self.owner.clone()
+        }
+        fn stream_preferences(
+            &self,
+        ) -> Result<Option<nova_config::StreamFilterRules>, ProviderHostError> {
+            Ok(self.preferences.lock().unwrap().clone())
         }
         fn load_settings(&self) -> Result<Option<String>, ProviderHostError> {
             Ok(self.settings.lock().unwrap().clone())
@@ -1234,6 +1253,23 @@ mod tests {
         // Memory entries share validation and fingerprints, but do not touch
         // either durable projection, even when the backend cannot write.
         crate::runtime::exercise_memory_cache_runtime();
+        crate::runtime::exercise_stream_preference_cache_runtime();
+        *backend.preferences.lock().unwrap() = Some(nova_config::StreamFilterRules {
+            enabled: true,
+            max_height: Some(1080),
+            ..Default::default()
+        });
+        let changed = backend.clone();
+        crate::registry::exercise_stream_preference_staleness(Arc::new(move || {
+            changed
+                .preferences
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .max_height = Some(720);
+        }));
+        *backend.preferences.lock().unwrap() = None;
         let epoch = settings_generation();
         let disk_cache = backend.cache.lock().unwrap().clone();
         backend

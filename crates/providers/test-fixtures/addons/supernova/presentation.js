@@ -14,7 +14,7 @@
       /\b(?:CAM(?:RIP)?|HDCAM)\b/i.test(text) ? "CAM" : /\b(?:TELESYNC|TS)\b/i.test(text) ? "TS" :
       /\b(?:TELECINE|HDTC|TC)\b/i.test(text) ? "TC" : /\bWEB\b/i.test(text) ? "WEB" : null;
     const codec = S.releaseVideoCodec(text);
-    const video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1"}[codec] : /\bXviD\b/i.test(text) ? "XviD" : null;
+    const video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1",vp9:"VP9",other:"Other"}[codec] : /\bXviD\b/i.test(text) ? "XviD" : null;
     const group = text.replace(/\.(?:mkv|mp4|avi|m4v|mov|ts|webm)$/i,"").match(/-([A-Za-z][A-Za-z0-9]{1,31})$/);
     const bracket = text.match(/^\s*\[([A-Za-z][A-Za-z0-9 _-]{1,31})\]/);
     const releaseGroup = group && !/^(?:DL|RIP|HD|AAC|DDP|AVC|HEVC|AV1)$/i.test(group[1]) ? group[1] : bracket && !S.releaseLanguages(bracket[1]).length && !/\b(?:multi|dual|audio|subs?|\d+p)\b/i.test(bracket[1]) ? bracket[1] : null;
@@ -46,7 +46,7 @@
     const metadata = Object.fromEntries(Object.keys(release).map(key=>[key,release[key] || file[key]]));
     const hasCodec = Object.prototype.hasOwnProperty.call(evidence,"videoCodec");
     const codec = hasCodec ? evidence.videoCodec : S.releaseVideoCodec([record.title,basename(fileName)]);
-    metadata.video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1"}[codec] : hasCodec ? "Codec unknown" : /\bXviD\b/i.test(record.title + " " + basename(fileName)) ? "XviD" : null;
+    metadata.video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1",vp9:"VP9",other:"Other"}[codec] : hasCodec ? "Codec unknown" : /\bXviD\b/i.test(record.title + " " + basename(fileName)) ? "XviD" : null;
     if (Object.prototype.hasOwnProperty.call(evidence,"releaseSource")) metadata.source=evidence.releaseSource;
     const resolution = Object.prototype.hasOwnProperty.call(evidence,"resolution") ? evidence.resolution : S.resolution(record.title) || S.resolution(basename(fileName));
     const video = [metadata.source,metadata.video].filter(Boolean).map(display);
@@ -59,11 +59,15 @@
       "🔎 " + provenance + peers,languages.length || evidence.audioLanguages ? "🌐 Audio: " + (languages.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
       subtitles.length || evidence.subtitleLanguages ? "💬 Subtitles: " + (subtitles.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
       record.title !== basename(fileName) ? "🗂️ " + display(record.title) : null,"📁 " + fileLabel].filter(Boolean);
-    return {
+    const row = {
       id:`${record.infoHash}:${record.fileIdx === null || record.fileIdx === undefined ? "unknown" : record.fileIdx}:${torbox ? "torbox" : "p2p"}`,
       title:`${torbox ? "[TB⚡] Supernova" : "Supernova P2P"}${resolution ? " " + resolution + "p" : ""}`,
       description:lines.join("\n"),source:provenance,seeders:torbox ? null : record.seeders,size:record.sizeBytes,
       ...(torbox ? {resolver:{provider_id:"supernova",token:rawToken}} : {info_hash:record.infoHash,file_idx:record.fileIdx}),
     };
+    row.streamFacts={height:resolution,bytes:S.number(record.sizeBytes),codec:codec || null,audio_languages:languages,
+      subtitle_languages:subtitles,cached:torbox,season_pack:S.pack(record.title) === null ? null : !!S.pack(record.title),seeders:S.number(row.seeders)};
+    S.preferenceFacts.set(row,row.streamFacts);
+    return row;
   };
 })();

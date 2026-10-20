@@ -99,6 +99,27 @@ pub(super) struct RetryContext {
     context: PlaybackContext,
     modal_token: Arc<()>,
 }
+/// Receiver-owned replacement context; never serialized or sent to a controller.
+pub(super) struct RemoteRetry {
+    context: PlaybackContext,
+}
+#[cfg(test)]
+impl RemoteRetry {
+    pub(super) fn retry_state(
+        &self,
+    ) -> (
+        Option<f64>,
+        bool,
+        Option<nova_config::playback_preferences::SessionPreferences>,
+    ) {
+        (
+            self.context.history_resume,
+            self.context.bookmark_resume,
+            self.context.retry_preferences.clone(),
+        )
+    }
+}
+
 pub(super) struct BookmarkResume {
     identity: nova_playback_api::MediaIdentity,
     position: f64,
@@ -259,6 +280,32 @@ impl Bridge {
         });
     }
 
+    pub(super) fn capture_remote_retry(&self) -> Option<RemoteRetry> {
+        let app = self.app()?;
+        let preferences = self.player.retry_preferences();
+        let mut context = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()?
+            .context
+            .clone();
+        let position = if app.get_playback_started() {
+            app.get_position() as f64
+        } else {
+            context.history_resume.unwrap_or(0.0)
+        };
+        if position.is_finite() {
+            context.history_resume = Some(position.max(0.0));
+        }
+        if app.get_playback_started() || context.retry_preferences.is_none() {
+            context.retry_preferences = Some(preferences);
+        }
+        context.bookmark_resume = true; // Explicit recovery seeks never ask the ordinary resume question.
+        Some(RemoteRetry { context })
+    }
+
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
         if !self
             .shared
@@ -273,43 +320,57 @@ impl Bridge {
         }
         let (retry, bookmark, selected_stream) = {
             let mut state = self.shared.lock().unwrap();
-            let retry = state
-                .playback_tools
-                .pending_retry
-                .take()
-                .or_else(|| state.playback_tools.failed_retry.clone())
-                .or_else(|| {
+            if state.remote_playback.start_context.is_some() {
+                // Receiver-owned starts cannot inherit an unrelated Detail
+                // opening's retry, scene seek, or last clicked source row.
+                (
                     state
-                        .playback_intent
-                        .as_ref()
-                        .filter(|intent| intent.context.bookmark_resume)
-                        .and_then(|intent| {
-                            Some(RetryContext {
-                                context: intent.context.clone(),
-                                modal_token: intent.modal_token.clone()?,
+                        .remote_playback
+                        .start_retry
+                        .take()
+                        .map(|retry| retry.context),
+                    None,
+                    None,
+                )
+            } else {
+                let retry = state
+                    .playback_tools
+                    .pending_retry
+                    .take()
+                    .or_else(|| state.playback_tools.failed_retry.clone())
+                    .or_else(|| {
+                        state
+                            .playback_intent
+                            .as_ref()
+                            .filter(|intent| intent.context.bookmark_resume)
+                            .and_then(|intent| {
+                                Some(RetryContext {
+                                    context: intent.context.clone(),
+                                    modal_token: intent.modal_token.clone()?,
+                                })
                             })
-                        })
-                });
-            let retry = retry
-                .filter(|retry| {
-                    state
-                        .modal_item
-                        .as_ref()
-                        .is_some_and(|modal| retry.matches(modal))
-                })
-                .map(|retry| retry.context);
-            let bookmark = state
-                .playback_tools
-                .bookmark_resume
-                .take()
-                .filter(|bookmark| {
-                    state
-                        .modal_item
-                        .as_ref()
-                        .is_some_and(|modal| bookmark.matches(modal))
-                });
-            let selected_stream = state.playback_tools.pending_stream_selection.take();
-            (retry, bookmark, selected_stream)
+                    });
+                let retry = retry
+                    .filter(|retry| {
+                        state
+                            .modal_item
+                            .as_ref()
+                            .is_some_and(|modal| retry.matches(modal))
+                    })
+                    .map(|retry| retry.context);
+                let bookmark = state
+                    .playback_tools
+                    .bookmark_resume
+                    .take()
+                    .filter(|bookmark| {
+                        state
+                            .modal_item
+                            .as_ref()
+                            .is_some_and(|modal| bookmark.matches(modal))
+                    });
+                let selected_stream = state.playback_tools.pending_stream_selection.take();
+                (retry, bookmark, selected_stream)
+            }
         };
         self.persist_outgoing_playback();
         self.finish_playback_request();
@@ -1347,6 +1408,7 @@ impl Bridge {
         };
         if let Some(map) = map {
             write_progress_map(&map);
+            self.request_progress_projection();
         }
         nova_sync::flush_local_sync();
         self.stremio_checkpoint();
@@ -1916,6 +1978,7 @@ impl Bridge {
                     nova_sync::playback_checkpoint(|| write_progress_map(&map));
                 }
             }
+            self.request_progress_projection();
             if newly_watched {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
@@ -1973,9 +2036,8 @@ impl Bridge {
             }
             // Closing reveals Home again without a navigation callback. Rebuild
             // its derived episode cards after finalizing the saved position.
-            self.apply_episode_rows();
-            self.apply_season_cards();
-            self.refresh_library_progress_ui();
+            self.refresh_detail_progress_ui();
+            self.request_progress_projection();
         }
     }
 
@@ -3477,7 +3539,80 @@ mod retry_regressions {
             .unwrap_or_default()
             .is_empty()
         );
+        let local_context = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .unwrap()
+            .context
+            .clone();
+        let modal_token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
         bridge.player.close();
         bridge.finish_playback_request();
+        // A receiver can be started while Detail still owns a failed local
+        // retry/bookmark selection. Neither a current-media replacement nor
+        // a fresh detached Start may consume that modal's context.
+        for recovering in [true, false] {
+            let remote_context = PlaybackContext {
+                media_type: "series".into(),
+                media_id: "receiver-series".into(),
+                request_id: "receiver-episode".into(),
+                is_episode: true,
+                history_resume: Some(321.25),
+                retry_preferences: Some(prefs.clone()),
+                bookmark_resume: true,
+                ..Default::default()
+            };
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.playback_tools.pending_retry = Some(RetryContext {
+                    context: local_context.clone(),
+                    modal_token: modal_token.clone(),
+                });
+                state.playback_tools.bookmark_resume = Some(BookmarkResume {
+                    identity: nova_playback_api::MediaIdentity {
+                        media_type: "movie".into(),
+                        title_id: "movie".into(),
+                        episode_id: "movie".into(),
+                        ..Default::default()
+                    },
+                    position: 444.0,
+                    modal_token: modal_token.clone(),
+                });
+                state.playback_tools.pending_stream_selection =
+                    Some(SelectedStream::from_row(&row("local-row")));
+                state.remote_playback.start_context = Some(nova_playback_api::MediaIdentity {
+                    media_type: "series".into(),
+                    title_id: "receiver-series".into(),
+                    episode_id: "receiver-episode".into(),
+                    ..Default::default()
+                });
+                state.remote_playback.start_retry = recovering.then_some(RemoteRetry {
+                    context: remote_context,
+                });
+            }
+            let request = bridge.begin_playback_request();
+            assert!(request.is_current());
+            let state = bridge.shared.lock().unwrap();
+            let intent = state.playback_intent.as_ref().unwrap();
+            assert!(intent.detached);
+            assert_eq!(intent.context.media_id, "receiver-series");
+            assert_eq!(intent.context.request_id, "receiver-episode");
+            assert_eq!(intent.context.history_resume, recovering.then_some(321.25));
+            assert!(intent.context.selected_stream.is_none());
+            assert_eq!(intent.context.bookmark_resume, recovering);
+            drop(state);
+            bridge.finish_playback_request();
+        }
     }
 }

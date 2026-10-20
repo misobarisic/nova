@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "supernova",
   "name": "Supernova",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "entry": "index.js",
   "permissions": {
     "domains": [
@@ -31,6 +31,7 @@
   },
   "capabilities": {
     "contextualStreams": true,
+    "streamPreferences": true,
     "deferredStreams": true
   },
   "configuration": [
@@ -182,7 +183,7 @@
         },
         {
           "value": "seeders",
-          "label": "Reported seeders"
+          "label": "Number of seeds"
         },
         {
           "value": "language",

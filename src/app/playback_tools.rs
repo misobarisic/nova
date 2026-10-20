@@ -163,6 +163,30 @@ impl Bridge {
         false
     }
 
+    /// Resolve only a chapter currently advertised by the active native source.
+    pub(super) fn chapter_position(&self, id: &str) -> Option<f64> {
+        let app = self.app()?;
+        app.get_player_chapters().iter().find_map(|row| {
+            let position = f64::from(row.position);
+            (position.is_finite()
+                && position >= 0.0
+                && format!("c{:016x}", position.to_bits()) == id)
+                .then_some(position)
+        })
+    }
+
+    /// The ID is meaningful only inside this title's current bookmark list.
+    pub(super) fn scene_bookmark_position(&self, id: &str) -> Option<f64> {
+        let key = identity_key(&self.current_playback_identity()?);
+        let values = load_bookmarks().ok()?;
+        values.get(&key)?.iter().find_map(|bookmark| {
+            (bookmark.position.is_finite()
+                && bookmark.position >= 0.0
+                && scene_id(&key, bookmark) == id)
+                .then_some(bookmark.position)
+        })
+    }
+
     pub(super) fn add_scene_bookmark(&self, note: &str) -> bool {
         let Some(app) = self
             .app()

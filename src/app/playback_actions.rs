@@ -143,6 +143,7 @@ impl Bridge {
                 self.take_player_screenshot();
             }
             PlaybackAction::Stop => {
+                self.player.release_window_transition();
                 let pending = self.shared.lock().unwrap().playback_intent.is_some();
                 if app.get_player_open() || app.get_resume_prompt_visible() || pending {
                     self.note_player_progress_from_ui();
@@ -154,6 +155,79 @@ impl Bridge {
             PlaybackAction::CancelResume => self.cancel_resume_prompt(),
             PlaybackAction::NextEpisode { token } => self.choose_next_episode_streams(&token),
             PlaybackAction::DismissNextEpisode { token } => self.dismiss_next_episode(&token),
+            PlaybackAction::SeekChapter { id } => {
+                let position = self.chapter_position(&id).ok_or("Chapter changed")?;
+                self.execute_playback_action(PlaybackAction::SeekAbsolute(position))?;
+            }
+            PlaybackAction::SetSubtitleStyle { control, value } => {
+                if !(PlaybackAction::SetSubtitleStyle { control, value }).valid_payload() {
+                    return Err("Invalid subtitle style".into());
+                }
+                self.edit_subtitle_style(control, value as f32, false);
+            }
+            PlaybackAction::ResetSubtitleStyle => self.restore_playback_default(3),
+            PlaybackAction::SelectSecondarySubtitleTrack(id) => {
+                self.pick_secondary_playback_track(id)
+            }
+            PlaybackAction::SetSecondarySubtitlePosition(index) => {
+                self.change_secondary_subtitle_position(index)
+            }
+            PlaybackAction::SetIntroSkipMode(index) => self.change_intro_skip_mode(index),
+            PlaybackAction::SkipSegment { ref token }
+            | PlaybackAction::DismissSkipSegment { ref token } => {
+                if self.intro_skip_offer_token().as_deref() != Some(token.as_str()) {
+                    return Err("Skip segment changed".into());
+                }
+                if matches!(action, PlaybackAction::SkipSegment { .. }) {
+                    self.skip_current_segment();
+                } else {
+                    self.dismiss_current_segment();
+                }
+            }
+            PlaybackAction::AddBookmark { note } => {
+                if !self.add_scene_bookmark(&note) {
+                    return Err("Could not save bookmark".into());
+                }
+            }
+            PlaybackAction::EditBookmark { id, note } => {
+                if !self.edit_scene_bookmark(&id, &note) {
+                    return Err("Could not save bookmark".into());
+                }
+            }
+            PlaybackAction::DeleteBookmark { id } => {
+                if !self.delete_scene_bookmark(&id) {
+                    return Err("Could not delete bookmark".into());
+                }
+            }
+            PlaybackAction::SeekBookmark { id } => {
+                let position = self
+                    .scene_bookmark_position(&id)
+                    .ok_or("Bookmark changed")?;
+                self.execute_playback_action(PlaybackAction::SeekAbsolute(position))?;
+            }
+            PlaybackAction::TryAnotherStream => {
+                if !app.get_try_another_stream_available() {
+                    return Err("No alternate stream".into());
+                }
+                self.try_another_stream();
+            }
+            PlaybackAction::RetrySubtitleDiscovery => self.retry_addon_subtitles(),
+            PlaybackAction::RefreshSubtitleTracks => {
+                self.player.refresh_tracks();
+                self.retry_addon_subtitles();
+            }
+            PlaybackAction::CancelSubtitleDownload { secondary } => {
+                if secondary {
+                    self.cancel_secondary_subtitle_download();
+                } else {
+                    self.cancel_subtitle_download();
+                }
+            }
+            PlaybackAction::SelectAudioTrackToken(_)
+            | PlaybackAction::SelectSubtitleTrackToken(_)
+            | PlaybackAction::SelectSecondarySubtitleTrackToken(_) => {
+                return Err("Unresolved remote track".into());
+            }
             PlaybackAction::SetDecoder(index) => {
                 if !(0..=2).contains(&index) {
                     return Err("Invalid decoder".into());

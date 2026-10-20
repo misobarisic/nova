@@ -14,6 +14,49 @@ packaging = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(packaging)
 
 
+def binary_manifest(*, utf8=True, enabled=False, resource_id=0x010104EA, duplicates=1, value_type=0x12):
+    """Small compiled XML fixture, including both Android string encodings."""
+    strings = ["manifest", "application", packaging.ANDROID_NAMESPACE,
+               "extractNativeLibs", "android", "long string " * 24]
+
+    def encode_length(length, byte):
+        if byte:
+            return bytes((length,)) if length < 0x80 else bytes((0x80 | (length >> 8), length & 0xFF))
+        return struct.pack("<H", length) if length < 0x8000 else struct.pack("<HH", 0x8000 | (length >> 16), length & 0xFFFF)
+
+    offsets, encoded = [], bytearray()
+    for text in strings:
+        offsets.append(len(encoded))
+        units = len(text.encode("utf-16-le")) // 2
+        if utf8:
+            data = text.encode()
+            encoded += encode_length(units, True) + encode_length(len(data), True) + data + b"\0"
+        else:
+            encoded += encode_length(units, False) + text.encode("utf-16-le") + b"\0\0"
+    encoded += bytes((-len(encoded)) % 4)
+    string_start = 28 + 4 * len(strings)
+    pool = struct.pack("<HHI5I", 1, 28, string_start + len(encoded), len(strings), 0,
+                       0x100 if utf8 else 0, string_start, 0)
+    pool += struct.pack(f"<{len(offsets)}I", *offsets) + encoded
+    resources = struct.pack("<HHI4I", 0x180, 8, 24, 0, 0, 0, resource_id)
+
+    def node(kind, data):
+        return struct.pack("<HHIII", kind, 16, 16 + len(data), 1, packaging.NO_INDEX) + data
+
+    def start(name, attributes=b""):
+        return node(0x102, struct.pack("<II6H", packaging.NO_INDEX, name, 20, 20,
+                                      len(attributes) // 20, 0, 0, 0) + attributes)
+
+    attribute = struct.pack("<IIIHBBI", 2, 3, packaging.NO_INDEX, 8, 0, value_type,
+                            packaging.NO_INDEX if enabled else 0)
+    content = pool + resources + node(0x100, struct.pack("<II", 4, 2))
+    content += start(0) + start(1, attribute * duplicates)
+    content += node(0x103, struct.pack("<II", packaging.NO_INDEX, 1))
+    content += node(0x103, struct.pack("<II", packaging.NO_INDEX, 0))
+    content += node(0x101, struct.pack("<II", 4, 2))
+    return struct.pack("<HHI", 3, 8, 8 + len(content)) + content
+
+
 class AndroidPackagingTests(unittest.TestCase):
     def test_native_manifest_requires_explicit_direct_loading(self):
         manifest = Path(__file__).resolve().parents[2] / "Cargo.toml"
@@ -27,6 +70,35 @@ class AndroidPackagingTests(unittest.TestCase):
                 packaging.verify_native_manifest(f"    A: android:extractNativeLibs(0x010104ea)={value}\n")
         with self.assertRaisesRegex(RuntimeError, "extractNativeLibs"):
             packaging.verify_native_manifest("E: application\n")
+
+    def test_universal_manifest_requires_explicit_extraction(self):
+        for value in ("(type 0x12)0xffffffff", "(type 0x12)0x1", "true"):
+            packaging.verify_native_manifest(
+                f"    A: android:extractNativeLibs(0x010104ea)={value}\n",
+                extract_native_libs=True,
+            )
+        for tree in ("E: application\n", "A: android:extractNativeLibs=false\n",
+                     "A: android:extractNativeLibs=(type 0x12)0x0\n"):
+            with self.assertRaisesRegex(RuntimeError, "extractNativeLibs=true"):
+                packaging.verify_native_manifest(tree, extract_native_libs=True)
+
+    def test_compiled_manifest_patch_preserves_every_other_byte(self):
+        for utf8 in (True, False):
+            with self.subTest(utf8=utf8):
+                original = binary_manifest(utf8=utf8)
+                changed = packaging.set_extract_native_libs(original, True)
+                self.assertEqual(changed, binary_manifest(utf8=utf8, enabled=True))
+                self.assertEqual(sum(a != b for a, b in zip(original, changed)), 4)
+                self.assertEqual(packaging.set_extract_native_libs(changed, False), original)
+                self.assertEqual(packaging.set_extract_native_libs(changed, True), changed)
+
+    def test_compiled_manifest_patch_rejects_ambiguous_or_malformed_attributes(self):
+        for manifest in (b"", b"<manifest/>", binary_manifest()[:-1],
+                         binary_manifest(resource_id=0x010104EB),
+                         binary_manifest(duplicates=0), binary_manifest(duplicates=2),
+                         binary_manifest(value_type=0x10)):
+            with self.subTest(manifest=manifest[:8]), self.assertRaises(RuntimeError):
+                packaging.set_extract_native_libs(manifest, True)
 
     def test_native_storage_and_actual_16k_data_alignment_are_both_required(self):
         aligned = self.root / "aligned.apk"
@@ -49,6 +121,9 @@ class AndroidPackagingTests(unittest.TestCase):
             apk.writestr("lib/arm64-v8a/libnova.so", b"native payload", compress_type=ZIP_DEFLATED)
         with self.assertRaisesRegex(RuntimeError, "is compressed"):
             packaging.verify_native_layout(compressed)
+        packaging.verify_native_layout(compressed, extract_native_libs=True)
+        with self.assertRaisesRegex(RuntimeError, "not compressed"):
+            packaging.verify_native_layout(aligned, extract_native_libs=True)
         empty = self.root / "empty.apk"
         with ZipFile(empty, "w"):
             pass
@@ -75,6 +150,7 @@ class AndroidPackagingTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.source = self.root / "source.apk"
         with ZipFile(self.source, "w") as apk:
+            apk.writestr("AndroidManifest.xml", binary_manifest(), compress_type=ZIP_DEFLATED)
             apk.writestr("classes.dex", b"shared bytecode", compress_type=ZIP_DEFLATED)
             apk.writestr("META-INF/NOTICE", b"keep license notices")
             for name in ("MANIFEST.MF", "CERT.SF", "CERT.RSA"):
@@ -123,8 +199,9 @@ class AndroidPackagingTests(unittest.TestCase):
         for suffix, abis in packaging.VARIANTS.items():
             with self.subTest(suffix=suffix):
                 output = self.root / f"Nova-Android{suffix}-test.apk"
-                packaging.filter_apk(self.source, output, abis)
-                packaging.verify_payload(self.source, output, abis)
+                extract = suffix == "-universal"
+                packaging.filter_apk(self.source, output, abis, extract_native_libs=extract)
+                packaging.verify_payload(self.source, output, abis, extract_native_libs=extract)
                 with ZipFile(output) as apk:
                     self.assertEqual(apk.read("classes.dex"), b"shared bytecode")
                     self.assertEqual(apk.read("META-INF/NOTICE"), b"keep license notices")
@@ -133,6 +210,32 @@ class AndroidPackagingTests(unittest.TestCase):
                         {name for name in apk.namelist() if name.startswith("lib/")},
                         {f"lib/{abi}/{lib}" for abi in abis for lib in packaging.NATIVE_LIBRARIES},
                     )
+                    self.assertEqual(apk.read("AndroidManifest.xml"), binary_manifest(enabled=extract))
+                    self.assertTrue(all(apk.getinfo(name).compress_type == (ZIP_DEFLATED if extract else ZIP_STORED)
+                                        for name in apk.namelist() if packaging.native_entry(name)))
+
+    def test_universal_verification_allows_only_the_intended_transformations(self):
+        universal = self.root / "universal.apk"
+        packaging.filter_apk(self.source, universal, packaging.ABIS, extract_native_libs=True)
+        packaging.verify_payload(self.source, universal, packaging.ABIS, extract_native_libs=True)
+        packaging.verify_native_layout(universal, extract_native_libs=True)
+        for name, compression, data in (
+            ("AndroidManifest.xml", ZIP_DEFLATED, binary_manifest()),
+            ("classes.dex", ZIP_STORED, b"shared bytecode"),
+            ("META-INF/NOTICE", ZIP_STORED, b"changed notice"),
+        ):
+            with self.subTest(entry=name):
+                broken = self.root / "changed-universal.apk"
+
+                def corrupt(entry, old_data):
+                    if entry.filename == name:
+                        entry.compress_type = compression
+                        return entry, data
+                    return entry, old_data
+
+                self.rewrite(universal, broken, corrupt)
+                with self.assertRaisesRegex(RuntimeError, "Packaging changed"):
+                    packaging.verify_payload(self.source, broken, packaging.ABIS, extract_native_libs=True)
 
     def rewrite(self, source, destination, transform):
         with ZipFile(source) as original, ZipFile(destination, "w") as changed:

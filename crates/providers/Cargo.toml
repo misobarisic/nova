@@ -9,6 +9,7 @@ description = "Normalized media providers and the installed JavaScript package r
 zip = { version = "2", default-features = false, features = ["deflate"] }
 semver = "1"
 addons = { path = "../addons", default-features = false }
+nova-config = { path = "../config" }
 aws-lc-rs = "1.18"
 base64 = "0.22"
 percent-encoding = "2"

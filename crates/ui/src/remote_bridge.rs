@@ -4,6 +4,8 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     let bridge = app.global::<nova_ui_shared::RemoteBridge>();
     crate::forward_app_callbacks!(app, &bridge; recover_focus;
         on_action => invoke_remote_bridge_action(arg0, arg1, arg2),
+        on_semantic_action => invoke_remote_bridge_semantic_action(arg0, arg1, arg2, arg3, arg4),
+        on_controls_visual_closed => invoke_remote_bridge_controls_visual_closed(),
         on_device_refresh => invoke_remote_bridge_device_refresh(),
         on_device_open => invoke_remote_bridge_device_open(arg0),
         on_device_selected => invoke_remote_bridge_device_selected(arg0),

@@ -368,6 +368,7 @@ pub(crate) fn enrich_metadata_with_budget(
     let key = cache_key(snapshot.revision, caller_url, &request);
     let state = crate::host::session_state();
     if let Some(result) = cached_result(state.as_ref(), &key) {
+        remember_catalog_grouping(caller_url, &result);
         return result;
     }
     let fallback = state
@@ -402,6 +403,7 @@ pub(crate) fn enrich_metadata_with_budget(
     }
     result.inventory_revision = snapshot.revision;
     cache_result(state.as_ref(), &key, &result);
+    remember_catalog_grouping(caller_url, &result);
     result
 }
 
@@ -2507,4 +2509,167 @@ mod tests {
         assert!(operation.fetch("https://example/other").is_none());
         assert_eq!(transport.calls.lock().unwrap().len(), 2);
     }
+}
+
+fn remember_catalog_grouping(caller_url: &str, result: &EnrichmentResult) {
+    let source = crate::catalog_grouping::SourceIdentity {
+        addon_url: caller_url.into(),
+        media_type: result.details.media.media_type.clone(),
+        id: result.details.media.source_id.clone(),
+    };
+    if let Some(evidence) = crate::catalog_grouping::evidence_from_broker(&source, result) {
+        crate::catalog_grouping::remember_evidence(
+            &source,
+            result.inventory_revision,
+            Some(evidence),
+        );
+    }
+}
+
+pub(crate) fn resolve_catalog_grouping_evidence(
+    source: &crate::catalog_grouping::SourceIdentity,
+    mode: nova_config::CatalogGroupingMode,
+    revision: u64,
+) -> crate::catalog_grouping::GroupingLookup {
+    use crate::catalog_grouping::{GroupingLookup, GroupingLookupStatus as Status};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    static IN_FLIGHT: OnceLock<Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity)>>> =
+        OnceLock::new();
+    let response = |evidence, status| GroupingLookup { evidence, status };
+    if mode == nova_config::CatalogGroupingMode::Original {
+        return response(None, Status::Original);
+    }
+    if revision != metadata_revision() {
+        return response(None, Status::Stale);
+    }
+    if let Some(evidence) = crate::catalog_grouping::cached_evidence(source, revision) {
+        let status = if evidence.is_some() {
+            Status::Confirmed
+        } else {
+            Status::Unconfirmed
+        };
+        return response(evidence, status);
+    }
+    if !matches!(source.media_type.as_str(), "series" | "anime") || source.id.is_empty() {
+        return response(None, Status::Unconfirmed);
+    }
+    let jobs = IN_FLIGHT.get_or_init(Default::default);
+    let job = (revision, source.clone());
+    {
+        let mut jobs = jobs.lock().unwrap();
+        if jobs.contains(&job) || ACTIVE.load(Ordering::Relaxed) >= 2 {
+            return response(None, Status::Deferred);
+        }
+        jobs.insert(job.clone());
+        ACTIVE.fetch_add(1, Ordering::Relaxed);
+    }
+    struct Guard<'a> {
+        jobs: &'a Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity)>>,
+        job: (u64, crate::catalog_grouping::SourceIdentity),
+        active: &'a AtomicUsize,
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            self.jobs.lock().unwrap().remove(&self.job);
+            self.active.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+    let _guard = Guard {
+        jobs,
+        job,
+        active: &ACTIVE,
+    };
+    let inventory = snapshot().lock().unwrap().clone();
+    let Some(transport) = transport().lock().unwrap().clone() else {
+        return response(None, Status::Deferred);
+    };
+    let global_id = crate::ExternalId::parse(&source.id).is_some()
+        || crate::catalog_grouping::ParentIdentity::parse(&source.id).is_some()
+        || source.id.strip_prefix("kitsu:").is_some_and(|id| {
+            !id.is_empty()
+                && id.bytes().all(|byte| byte.is_ascii_digit())
+                && id
+                    .parse::<u32>()
+                    .is_ok_and(|id| id > 0 && id <= i32::MAX as u32)
+        });
+    let mut endpoints: Vec<_> = inventory
+        .addons
+        .iter()
+        .filter(|addon| {
+            (addon.url == source.addon_url || global_id)
+                && addon
+                    .manifest
+                    .accepts("meta", &source.media_type, &source.id)
+        })
+        .collect();
+    endpoints.sort_by_key(|addon| addon.url != source.addon_url);
+    let started = Instant::now();
+    let budget = Duration::from_secs(2);
+    let _nested = NestedGuard::new();
+    let mut evidence = None;
+    let mut conflicting = false;
+    for installed in endpoints.into_iter().take(2) {
+        let Some(remaining) = budget.checked_sub(started.elapsed()) else {
+            break;
+        };
+        let Ok(addon) = addons::Addon::new(&installed.url) else {
+            continue;
+        };
+        let Ok(bytes) = transport.fetch(
+            &addon.meta_url(&source.media_type, &source.id),
+            remaining,
+            RESPONSE_LIMIT,
+        ) else {
+            continue;
+        };
+        if bytes.len() > RESPONSE_LIMIT {
+            continue;
+        }
+        let Some(found) =
+            crate::catalog_grouping::evidence_from_response(source, &bytes, &installed.url)
+        else {
+            continue;
+        };
+        if let Some(previous) = &evidence {
+            let previous: &crate::catalog_grouping::GroupingEvidence = previous;
+            let combined: Vec<_> = previous.parents.iter().chain(&found.parents).collect();
+            let mut namespaces = BTreeMap::new();
+            if combined.iter().any(|p| {
+                let namespace = match p {
+                    crate::catalog_grouping::ParentIdentity::ImdbSeries(_) => 0,
+                    crate::catalog_grouping::ParentIdentity::TmdbTv(_) => 1,
+                    crate::catalog_grouping::ParentIdentity::TvdbSeries(_) => 2,
+                };
+                namespaces
+                    .insert(namespace, *p)
+                    .is_some_and(|old| old != *p)
+            }) || previous.season != found.season
+            {
+                conflicting = true;
+                break;
+            }
+            let mut merged = previous.clone();
+            merged.parents.extend(found.parents);
+            merged.parents.sort();
+            merged.parents.dedup();
+            merged.proofs.extend(found.proofs);
+            evidence = Some(merged);
+        } else {
+            evidence = Some(found);
+        }
+    }
+    if revision != metadata_revision() {
+        return response(None, Status::Stale);
+    }
+    if conflicting {
+        evidence = None;
+    }
+    crate::catalog_grouping::remember_evidence(source, revision, evidence.clone());
+    let status = if evidence.is_some() {
+        Status::Confirmed
+    } else {
+        Status::Unconfirmed
+    };
+    response(evidence, status)
 }

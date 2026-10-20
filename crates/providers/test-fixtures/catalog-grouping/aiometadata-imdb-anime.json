@@ -1,0 +1,16 @@
+{
+  "catalog": {"metas": [
+    {"id":"kitsu:111","type":"anime","name":"Source season one","poster":"https://images.example/first.jpg"},
+    {"id":"mal:222","type":"anime","name":"Source season two","poster":"https://images.example/second.jpg"}
+  ]},
+  "details": [
+    {"meta":{"id":"kitsu:111","type":"anime","name":"Source season one","_imdbId":"tt1234567","_kitsuId":"111","videos":[
+      {"id":"tt1234567:1:1","season":1,"episode":1,"title":"Native first episode"},
+      {"id":"tt1234567:1:2","season":1,"episode":2,"title":"Native second episode"}
+    ]}},
+    {"meta":{"id":"mal:222","type":"anime","name":"Source season two","_imdbId":"tt1234567","_malId":"222","videos":[
+      {"id":"tt1234567:2:1","season":1,"episode":1,"imdb_id":"tt1234567","imdbSeason":2,"imdbEpisode":1,"title":"Native first episode"},
+      {"id":"tt1234567:2:2","season":1,"episode":2,"imdb_id":"tt1234567","imdbSeason":2,"imdbEpisode":2,"title":"Native second episode"}
+    ]}}
+  ]
+}

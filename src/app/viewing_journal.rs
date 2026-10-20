@@ -8,14 +8,29 @@ use nova_ui_shared::{JournalBridge, JournalMonthRow, JournalSessionRow, JournalT
 use std::collections::BTreeMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const PREFIX: &str = "viewing_journal:v1:";
+pub(super) const PREFIX: &str = "viewing_journal:v1:";
 const CHECKPOINT_SECONDS: f64 = 15.0;
 const LOAD_RETRY_DELAY: Duration = Duration::from_secs(5);
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-static WRITER: Mutex<()> = Mutex::new(());
+// Final checkpoints serialize only with projections of the same owner. A
+// background archive for another profile must not hold up local Stop.
+type WriterRefs = HashMap<String, std::sync::Weak<Mutex<()>>>;
+static WRITERS: LazyLock<Mutex<WriterRefs>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(super) fn writer(owner: &profiles::ProfileStore) -> Arc<Mutex<()>> {
+    let mut writers = WRITERS.lock().unwrap();
+    writers.retain(|_, writer| writer.strong_count() > 0);
+    let key = owner.domain(activity_sync::STATS);
+    if let Some(writer) = writers.get(&key).and_then(std::sync::Weak::upgrade) {
+        return writer;
+    }
+    let writer = Arc::new(Mutex::new(()));
+    writers.insert(key, Arc::downgrade(&writer));
+    writer
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ViewingSession {
+pub(super) struct ViewingSession {
     id: String,
     media_type: String,
     title_id: String,
@@ -77,6 +92,7 @@ pub(super) struct JournalTracker {
     retry_at: Option<Instant>,
     rows: BTreeMap<String, ViewingSession>,
     error: bool,
+    sync_generation: u64,
 }
 
 fn unique_id() -> String {
@@ -85,7 +101,8 @@ fn unique_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!(
-        "{nanos:x}-{:x}-{:x}",
+        "{:x}-{nanos:x}-{:x}-{:x}",
+        nova_sync::local_device().unwrap_or(u64::from(std::process::id())),
         std::process::id(),
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     )
@@ -138,10 +155,47 @@ fn load(owner: &profiles::ProfileStore) -> Result<(BTreeMap<String, ViewingSessi
     Ok((result, unreadable))
 }
 
+pub(super) fn validate_session(key: &str, raw: &str) -> nova_sync::Result<String> {
+    let row: ViewingSession = serde_json::from_str(raw)?;
+    if key.strip_prefix(PREFIX) != Some(row.id.as_str())
+        || row.id.is_empty()
+        || row.id.len() > 256
+        || !row.watched_seconds.is_finite()
+        || row.watched_seconds < 0.0
+        || row
+            .months
+            .values()
+            .chain(row.days.values())
+            .any(|seconds| !seconds.is_finite() || *seconds < 0.0)
+    {
+        return Err(storage::Error::new(
+            storage::ErrorKind::Schema,
+            "invalid synced viewing session",
+        )
+        .into());
+    }
+    Ok(row.id)
+}
+
+pub(super) fn session_can_replace(old: &str, new: &str) -> nova_sync::Result<bool> {
+    let old: ViewingSession = serde_json::from_str(old)?;
+    let new: ViewingSession = serde_json::from_str(new)?;
+    Ok(session_can_replace_rows(&old, &new))
+}
+
+fn session_can_replace_rows(old: &ViewingSession, new: &ViewingSession) -> bool {
+    !(old.watched_seconds > new.watched_seconds
+        || (old.title_completed_at.is_some() && new.title_completed_at.is_none())
+        || (old.watched_seconds == new.watched_seconds
+            && old.ended_at.is_some()
+            && new.ended_at.is_none()))
+}
+
 fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
     // Independent checkpoints may arrive on different workers. Never let a
     // delayed one overwrite a newer duration or a completed/finalized row.
-    let _serial = WRITER.lock().unwrap();
+    let writer = writer(owner);
+    let _serial = writer.lock().unwrap();
     let key = format!("{PREFIX}{}", row.id);
     let prior = match owner.read(&key) {
         Ok(Some(raw)) => match serde_json::from_str::<ViewingSession>(&raw) {
@@ -168,8 +222,8 @@ fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
     }
     match serde_json::to_string(row) {
         Ok(raw) => {
-            if let Err(error) = owner.write(&key, &raw) {
-                storage::report(error);
+            if let Err(error) = activity_sync::persist_session(owner, &key, &raw) {
+                storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
             }
         }
         Err(error) => tracing::warn!(%error, "viewing journal serialization failed"),
@@ -233,7 +287,13 @@ impl JournalTracker {
                 // while a transient storage read was failing. Their in-memory
                 // facts are newer than any persisted copy of the same ID.
                 for (id, row) in rows {
-                    self.rows.entry(id).or_insert(row);
+                    if self
+                        .rows
+                        .get(&id)
+                        .is_none_or(|old| session_can_replace_rows(old, &row))
+                    {
+                        self.rows.insert(id, row);
+                    }
                 }
                 self.loaded = true;
                 self.retry_at = None;
@@ -395,6 +455,87 @@ impl JournalTracker {
 }
 
 impl Bridge {
+    pub(super) fn reload_synced_viewing_journal(&self) {
+        let bridge = self.clone();
+        let owner = profiles::ProfileStore::capture();
+        let generation = {
+            let mut state = self.shared.lock().unwrap();
+            state.viewing_journal.sync_generation =
+                state.viewing_journal.sync_generation.wrapping_add(1);
+            state.viewing_journal.sync_generation
+        };
+        // Session archives can be large. Decode them outside the UI lock and
+        // preserve newer active/checkpoint state if playback advances meanwhile.
+        profiles::thread::spawn(move || {
+            let deleted = match activity_sync::project_sessions(&owner) {
+                Ok(deleted) => deleted,
+                Err(error) => {
+                    storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+                    return;
+                }
+            };
+            let loaded = load(&owner);
+            let _ = profiles::invoke_from_event_loop(move || {
+                if bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .viewing_journal
+                    .sync_generation
+                    != generation
+                {
+                    return;
+                }
+                if let Ok((rows, unreadable)) = loaded {
+                    let mut state = bridge.shared.lock().unwrap();
+                    let tracker = &mut state.viewing_journal;
+                    for id in &deleted {
+                        tracker.rows.remove(id);
+                    }
+                    if tracker
+                        .active
+                        .as_ref()
+                        .is_some_and(|active| deleted.contains(&active.row.id))
+                    {
+                        tracker.active = None;
+                    }
+                    for (id, row) in rows {
+                        if tracker
+                            .rows
+                            .get(&id)
+                            .is_none_or(|old| session_can_replace_rows(old, &row))
+                        {
+                            tracker.rows.insert(id, row);
+                        }
+                    }
+                    if let Some(active) = &tracker.active
+                        && active.row.watched_seconds > 0.0
+                    {
+                        tracker
+                            .rows
+                            .insert(active.row.id.clone(), active.row.clone());
+                    }
+                    tracker.loaded = true;
+                    tracker.error = unreadable;
+                    tracker.retry_at = None;
+                    tracker.reconcile_active_history();
+                    drop(state);
+                    if bridge
+                        .app()
+                        .is_some_and(|app| app.global::<JournalBridge>().get_open())
+                    {
+                        bridge.refresh_viewing_journal();
+                    }
+                } else {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.viewing_journal.loaded = false;
+                    state.viewing_journal.error = true;
+                    state.viewing_journal.retry_at = Some(Instant::now() + LOAD_RETRY_DELAY);
+                }
+            });
+        });
+    }
+
     pub(super) fn setup_viewing_journal(&self) {
         let Some(app) = self.app() else { return };
         let journal = app.global::<JournalBridge>();

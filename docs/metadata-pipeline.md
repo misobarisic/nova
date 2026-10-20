@@ -30,6 +30,30 @@ separate Python image request received HTTP 403, while Nova's transport
 succeeded; that probe failure does not establish an image authentication
 problem in the app. No site-specific image transport was added.
 
+## Catalog presentation evidence
+
+`crates/providers/src/catalog_grouping.rs` keeps catalog grouping separate from
+Library/progress equivalence and tracker identities. Owned previews retain their
+original IDs, addon installation and order. Confirmed parent relationships can
+form Series groups; Season groups require canonical season proof. Complete
+mapped episode partitions can create reversible virtual season cards while
+retaining the native episode IDs. Relative source season numbers, title text,
+and ordinary external-ID aliases alone do not establish these relationships.
+
+The source-shaped fixtures in `test-fixtures/catalog-grouping` document
+AIOMetadata's canonical IMDb episode IDs/triples. Native-only responses without
+parent evidence remain ungrouped. The optional `novaCatalogGrouping` extension
+is distinguished from those existing addon fields. Conflicts, ambiguous
+episodes, specials and incomplete partitions do not produce guessed groups.
+
+A separate local `catalog_grouping_evidence:v1` cache stores envelope version 2
+evidence, capped at 128 entries / 512 KiB, with seven-day positive and 30-second
+negative TTLs. Source ownership and metadata inventory revision participate in
+its keys. The exact-ID resolver permits two concurrent lookups, at most two
+accepting endpoints per request, a two-second total timeout and 2 MiB body cap.
+Original mode does not initiate catalog-grouping network requests. Derived
+evidence is not synced; only the grouping preferences use settings sync.
+
 ## Android cards after library sync
 
 Sync shares artwork URLs, not image files or decoded buffers. Blank Android

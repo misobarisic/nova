@@ -398,8 +398,46 @@ pub(super) fn represented_by_native(
         && locals.iter().any(|local| {
             outbound_identity(local, descriptors).is_ok_and(|(media_type, id)| {
                 id == remote.id() && media_type == remote.media_type()
-            })
+            }) || (local.media_type != "movie"
+                && remote.media_type() == "series"
+                && supported(descriptors, "series", remote.id())
+                && confirmed_parent_matches(local, remote.id()))
         })
+}
+
+/// Export preference is not an identity boundary: an account may accept both
+/// Kitsu and IMDb while the saved Kitsu source also proves the IMDb parent.
+/// Compare within one namespace so split Kitsu seasons do not conflict with
+/// their shared IMDb series; competing parents in that namespace still reject.
+fn confirmed_parent_matches(local: &LocalTitle, target: &str) -> bool {
+    let namespace = |id: &str| {
+        if matches!(
+            nova_providers::ExternalId::parse(id),
+            Some(nova_providers::ExternalId::Imdb(_))
+        ) {
+            Some("imdb")
+        } else {
+            id.strip_prefix("kitsu:")
+                .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+                .map(|_| "kitsu")
+        }
+    };
+    let Some(target_namespace) = namespace(target) else {
+        return false;
+    };
+    if namespace(&local.id) == Some(target_namespace) && local.id != target {
+        return false;
+    }
+    let mut parents: Vec<_> = local
+        .videos
+        .iter()
+        .flat_map(confirmed_episode_stream_ids)
+        .filter_map(|alias| episode_parent(&alias).map(str::to_owned))
+        .filter(|parent| namespace(parent) == Some(target_namespace))
+        .collect();
+    parents.sort();
+    parents.dedup();
+    matches!(parents.as_slice(), [parent] if parent == target)
 }
 
 fn local_match<'a>(
@@ -590,6 +628,63 @@ mod tests {
             &LibraryItem::new("tt100", "Same title", "movie", 1),
             &[],
             &descriptors()
+        ));
+    }
+
+    #[test]
+    fn canonical_import_checks_proven_aliases_even_when_native_id_is_supported() {
+        let descriptors = vec![json!({
+            "transportUrl":"https://metadata.example/manifest.json",
+            "manifest":{"id":"example","name":"Metadata","version":"1.0.0",
+                "resources":[{"name":"meta","types":["series"],"idPrefixes":["tt","kitsu:"]}]}
+        })];
+        let native = LocalTitle {
+            media_type: "series".into(),
+            id: "kitsu:10".into(),
+            videos: vec![
+                episode("kitsu:10:1", &["kitsu:10:1", "tt100:1:1"]),
+                episode("kitsu:20:1", &["kitsu:20:1", "tt100:2:1"]),
+            ],
+        };
+        let remote = LibraryItem::new("tt100", "Same title", "series", 1);
+        assert_eq!(
+            outbound_identity(&native, &descriptors).unwrap(),
+            ("series".into(), "kitsu:10".into()),
+            "the source keeps its existing export preference and playback IDs"
+        );
+        assert!(represented_by_native(
+            &remote,
+            std::slice::from_ref(&native),
+            &descriptors
+        ));
+        for videos in [
+            vec![episode("kitsu:10:1", &[])],
+            vec![episode("kitsu:10:1", &["tt100:1:1", "tt200:1:1"])],
+            vec![{
+                let mut stale = episode("kitsu:10:1", &["tt100:1:1"]);
+                stale.extra.insert(
+                    "novaMetadataRevision".into(),
+                    json!(nova_providers::metadata_revision().wrapping_add(1)),
+                );
+                stale
+            }],
+        ] {
+            assert!(!represented_by_native(
+                &remote,
+                &[LocalTitle {
+                    videos,
+                    ..native.clone()
+                }],
+                &descriptors
+            ));
+        }
+        assert!(!represented_by_native(
+            &remote,
+            &[LocalTitle {
+                id: "tt200".into(),
+                ..native
+            }],
+            &descriptors
         ));
     }
 

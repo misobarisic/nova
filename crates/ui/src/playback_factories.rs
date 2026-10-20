@@ -25,6 +25,8 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_volume_step => invoke_player_bridge_volume_step(arg0),
             on_playback_speed_preview_end => invoke_player_bridge_playback_speed_preview_end(),
             on_seek => invoke_player_bridge_seek(arg0),
+            on_seek_chapter => invoke_player_bridge_seek_chapter(arg0),
+            on_seek_scene_bookmark => invoke_player_bridge_seek_scene_bookmark(arg0),
             on_close_player => invoke_player_bridge_close_player(),
             on_take_screenshot => invoke_player_bridge_take_screenshot(),
             on_set_volume => invoke_player_bridge_set_volume(arg0),

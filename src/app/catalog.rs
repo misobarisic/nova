@@ -224,7 +224,7 @@ impl Bridge {
                 state
                     .installed
                     .iter()
-                    .filter(|a| a.enabled && a.label == cat.addon_label)
+                    .filter(|a| a.enabled && a.url == cat.addon_url)
                     .map(|a| a.url.clone())
                     .collect()
             } else if state.chosen_addon < state.installed.len() {
@@ -281,9 +281,8 @@ impl Bridge {
 
         let bridge = self.clone();
         crate::web_log(&format!(
-            "nova: loading catalog (skip={skip}, append={append}) from {} url(s): {:?}",
-            fetch_urls.len(),
-            fetch_urls
+            "nova: loading catalog (skip={skip}, append={append}) from {} addon(s)",
+            fetch_urls.len()
         ));
         if fetch_urls.is_empty() {
             let bridge2 = bridge.clone();
@@ -2444,7 +2443,11 @@ pub(crate) fn browsable_catalogs(manifest: &Manifest) -> impl Iterator<Item = &a
     })
 }
 
-pub(crate) fn build_type_defs(manifest: &Manifest, addon_label: &str) -> Vec<TypeDef> {
+pub(crate) fn build_type_defs(
+    manifest: &Manifest,
+    addon_label: &str,
+    addon_url: &str,
+) -> Vec<TypeDef> {
     use std::collections::HashMap;
 
     let mut by_type: HashMap<String, Vec<&addons::Catalog>> = HashMap::new();
@@ -2486,6 +2489,7 @@ pub(crate) fn build_type_defs(manifest: &Manifest, addon_label: &str) -> Vec<Typ
                     };
                     CatDef {
                         id: c.id.clone(),
+                        addon_url: addon_url.into(),
                         supports_skip: c.supports_extra("skip"),
                         genre_options: catalog_genres(c),
                         label,
@@ -2513,7 +2517,7 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
         .collect();
 
     // Collect all (type, catalog, addon_label) triples.
-    type MergedCatalog = (String, String, bool, Vec<String>, String);
+    type MergedCatalog = (String, String, bool, Vec<String>, String, String);
     let mut by_type: HashMap<String, Vec<MergedCatalog>> = HashMap::new();
     for inst in &active {
         for cat in browsable_catalogs(&inst.manifest) {
@@ -2523,6 +2527,7 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
                 cat.supports_extra("skip"),
                 catalog_genres(cat),
                 inst.label.clone(),
+                inst.url.clone(),
             ));
         }
     }
@@ -2548,10 +2553,11 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
             let cats = by_type.get(&type_)?;
             let catalogs: Vec<CatDef> = cats
                 .iter()
-                .map(|(id, name, skip, genres, addon)| {
+                .map(|(id, name, skip, genres, addon, owner)| {
                     let label = format!("{addon} — {name}");
                     CatDef {
                         id: id.clone(),
+                        addon_url: owner.clone(),
                         supports_skip: *skip,
                         genre_options: genres.clone(),
                         label,
@@ -2684,6 +2690,7 @@ mod tests {
                 catalogs: vec![
                     CatDef {
                         id: "first".into(),
+                        addon_url: String::new(),
                         label: "First".into(),
                         addon_label: String::new(),
                         genre_options: vec![],
@@ -2691,6 +2698,7 @@ mod tests {
                     },
                     CatDef {
                         id: "second".into(),
+                        addon_url: String::new(),
                         label: "Second".into(),
                         addon_label: String::new(),
                         genre_options: vec!["Drama".into()],
@@ -2992,9 +3000,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["optional", "browse"]
         );
-        assert!(build_type_defs(&addons[1].manifest, "Search only").is_empty());
-        assert!(build_type_defs(&addons[5].manifest, "Metadata").is_empty());
-        let single = build_type_defs(&addons[2].manifest, "Optional search");
+        assert!(build_type_defs(&addons[1].manifest, "Search only", &addons[1].url).is_empty());
+        assert!(build_type_defs(&addons[5].manifest, "Metadata", &addons[5].url).is_empty());
+        let single = build_type_defs(&addons[2].manifest, "Optional search", &addons[2].url);
         assert_eq!(single.len(), 1);
         assert_eq!(single[0].catalogs[0].id, "optional");
         assert_eq!(
@@ -3009,7 +3017,8 @@ mod tests {
         assert!(
             !build_type_defs(
                 &installed(true, vec![catalog("movie", "genre", vec![genre])]).manifest,
-                "Genres"
+                "Genres",
+                "https://example.invalid"
             )
             .is_empty(),
             "a selectable required genre still permits browsing"
@@ -3403,6 +3412,7 @@ mod tests {
     fn catalog_display_prefix_is_optional_without_changing_identity() {
         let mut cat = CatDef {
             id: "popular".into(),
+            addon_url: "https://example.invalid".into(),
             label: "Addon A — Popular".into(),
             addon_label: "Addon A".into(),
             supports_skip: true,

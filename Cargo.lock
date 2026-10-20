@@ -5412,6 +5412,7 @@ dependencies = [
  "addons",
  "aws-lc-rs",
  "base64 0.22.1",
+ "nova-config",
  "percent-encoding",
  "quick-xml 0.42.0",
  "regex",

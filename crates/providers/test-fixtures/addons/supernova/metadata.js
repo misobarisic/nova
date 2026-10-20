@@ -12,7 +12,7 @@
     const list=(values,valid)=>Array.isArray(values) && values.length<=32 && values.every(valid) && new Set(values).size===values.length;
     return metadata.source==="AnimeTosho" && typeof metadata.fileName==="string" && metadata.fileName.length>0 && metadata.fileName.length<=2048 && S.number(metadata.fileSize)>0 &&
       list(metadata.audioLanguages,value=>languages.has(value)) && list(metadata.subtitleLanguages,value=>languages.has(value)) &&
-      [null,"avc","hevc","av1"].includes(metadata.videoCodec) && list(metadata.audioCodecs,value=>Object.values(audioCodecs).includes(value)) &&
+      [null,"avc","hevc","av1","vp9","other"].includes(metadata.videoCodec) && list(metadata.audioCodecs,value=>Object.values(audioCodecs).includes(value)) &&
       list(metadata.audioChannels,value=>typeof value==="string" && /^(?:[1-9]\d? channels|[1-9]\.[01])$/.test(value));
   };
   // The torrent hash proves membership; a unique basename and exact size prove
@@ -28,7 +28,7 @@
     const streams=file.info.ffprobe.streams;
     if (!Array.isArray(streams) || !streams.length || streams.length>128) return null;
     const audio=streams.filter(stream=>stream && stream.codec_type==="audio"),subtitles=streams.filter(stream=>stream && stream.codec_type==="subtitle");
-    const video=streams.filter(stream=>stream && stream.codec_type==="video" && !(stream.disposition && stream.disposition.attached_pic)).map(stream=>({h264:"avc",hevc:"hevc",av1:"av1"})[stream.codec_name]);
+    const video=streams.filter(stream=>stream && stream.codec_type==="video" && !(stream.disposition && stream.disposition.attached_pic)).map(stream=>({h264:"avc",hevc:"hevc",av1:"av1",vp9:"vp9"})[stream.codec_name] || (typeof stream.codec_name==="string" && stream.codec_name ? "other" : null));
     const metadata={source:"AnimeTosho",fileName:target.fileName,fileSize:target.sizeBytes,
       audioLanguages:unique(audio.map(stream=>language(stream.tags && stream.tags.language))),subtitleLanguages:unique(subtitles.map(stream=>language(stream.tags && stream.tags.language))),
       videoCodec:video.length>0 && video.every(codec=>codec && codec===video[0]) ? video[0] : null,audioCodecs:unique(audio.map(stream=>audioCodecs[stream.codec_name])),

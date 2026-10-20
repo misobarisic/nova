@@ -178,7 +178,7 @@ export component ViewingJournalPage inherits Rectangle {
                     for entry in JournalBridge.sessions: JournalSession { entry: entry; narrow: root.narrow; }
                     if JournalBridge.session_count > 100: Text { text: @tr("Showing the latest 100 sessions. Totals include your full journal."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
                 }
-                Text { text: @tr("Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                Text { text: @tr("Viewing sessions sync between devices using this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
                 Rectangle { height: 8px; }
             }
         }

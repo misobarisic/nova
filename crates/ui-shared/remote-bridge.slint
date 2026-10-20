@@ -1,5 +1,8 @@
 import { RemoteOfferRow, RemoteDeviceRow, TrackRow } from "../ui/types.slint";
 
+export struct RemoteChapterRow { id: string, title: string, time: string }
+export struct RemoteBookmarkRow { id: string, note: string, time: string }
+
 // Receiver snapshots only; this bridge never holds a video surface or source URL.
 export global RemoteBridge {
     // UI-owned picker captures the session so a stale row cannot change a replacement.
@@ -14,6 +17,10 @@ export global RemoteBridge {
     in-out property <bool> has_ready_devices;
     in-out property <[RemoteOfferRow]> offers;
     in-out property <bool> controls_open;
+    // Rendering lifetime only; this never grants controller/session authority.
+    in-out property <bool> controls_visual_retained;
+    in-out property <string> menu_page;
+    in-out property <int> back_request;
     in-out property <bool> devices_open;
     in-out property <string> target_id;
     in-out property <string> target_name;
@@ -48,7 +55,40 @@ export global RemoteBridge {
     in-out property <bool> can_fullscreen;
     in-out property <[TrackRow]> audio_tracks;
     in-out property <[TrackRow]> sub_tracks;
+    in-out property <[RemoteChapterRow]> chapters;
+    in-out property <bool> chapters_truncated;
+    in-out property <bool> bookmarks_truncated;
+    in-out property <[RemoteBookmarkRow]> bookmarks;
+    in-out property <[TrackRow]> secondary_sub_tracks;
+    in-out property <int> secondary_subtitle_position;
+    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0];
+    in-out property <int> intro_skip_mode: -1;
+    in-out property <int> skip_segment_kind;
+    in-out property <string> skip_token;
+    in-out property <string> bookmark_notice;
+    in-out property <int> subtitle_addon_status;
+    in-out property <int> decoder;
+    in-out property <float> brightness;
+    in-out property <bool> automatic_recovery;
+    in-out property <bool> can_chapters;
+    in-out property <bool> can_subtitle_style;
+    in-out property <bool> can_secondary_subtitles;
+    in-out property <bool> can_intro_skip;
+    in-out property <bool> can_bookmarks;
+    in-out property <bool> can_source_recovery;
+    in-out property <bool> can_source_offers;
+    in-out property <bool> can_subtitle_discovery;
+    in-out property <bool> can_decoder;
+    in-out property <bool> can_brightness;
+    in-out property <int> semantic_revision;
+    in-out property <string> semantic_name;
+    in-out property <string> semantic_id;
+    in-out property <string> semantic_session;
+    in-out property <bool> semantic_success;
+    in-out property <string> semantic_notice;
     callback action(string, float, string);
+    callback semantic_action(string, float, string, string, string);
+    callback controls_visual_closed();
     callback device_refresh();
     callback device_open(string);
     callback device_selected(string);

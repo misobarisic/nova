@@ -417,9 +417,9 @@ impl Bridge {
                 })
                 .cloned()
                 .collect();
-            stream_filters::apply_stream_rules(&mut rows, &state.cache_settings.stream_filters);
-            let rows =
-                stream_filters::preferred_stream_rules(&rows, &state.cache_settings.stream_filters);
+            let rules = stream_filters::effective_rules(&state.cache_settings);
+            stream_filters::apply_stream_rules(&mut rows, &rules);
+            let rows = stream_filters::preferred_stream_rules(&rows, &rules);
             plan.primary
                 .as_ref()
                 .and_then(|p| recommended_stream(rows, None, p))
@@ -477,9 +477,7 @@ impl Bridge {
             if !plan.current(&state) || plan.review {
                 return;
             }
-            if !state
-                .cache_settings
-                .stream_filters
+            if !stream_filters::effective_rules(&state.cache_settings)
                 .accepts(&row.card.filter_facts)
             {
                 drop(state);
@@ -526,9 +524,7 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             state.season_download.as_ref().is_none_or(|plan| {
                 plan.selected.iter().all(|row| {
-                    state
-                        .cache_settings
-                        .stream_filters
+                    stream_filters::effective_rules(&state.cache_settings)
                         .accepts(&row.card.filter_facts)
                 })
             })

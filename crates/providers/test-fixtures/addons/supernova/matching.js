@@ -146,13 +146,15 @@
   };
   S.SORT_DEFAULT = ["cached","resolution","size","pack","seeders","language","codec","subtitle"].map(key=>({key,direction:"desc"}));
   S.sortOrder = settings => {
+    if (settings.streamPreferences) return settings.streamPreferences.sort_order || [];
     const order = settings["sort.order"];
     const valid = Array.isArray(order) && order.length >= 5 && order.length <= S.SORT_DEFAULT.length &&
       new Set(order.map(item=>item && item.key)).size === order.length &&
       order.every(item=>item && S.SORT_DEFAULT.some(known=>known.key === item.key) && ["asc","desc"].includes(item.direction)) &&
       S.SORT_DEFAULT.slice(0,5).every(known=>order.some(item=>item.key === known.key));
     // Adding criteria must not discard a saved permutation or its directions.
-    return valid ? [...order,...S.SORT_DEFAULT.filter(known=>!order.some(item=>item.key === known.key))] : S.SORT_DEFAULT;
+    const resolved=valid ? [...order,...S.SORT_DEFAULT.filter(known=>!order.some(item=>item.key === known.key))] : S.SORT_DEFAULT;
+    return resolved;
   };
   const releaseLanguages = {
     en:"eng|english", ja:"jpn|japanese", hr:"hrv|croatian", de:"deu|ger|german",
@@ -165,18 +167,27 @@
     vi:"vie|vietnamese", id:"ind|indonesian"
   };
   const languageAliases = Object.values(releaseLanguages).join("|");
+  // Each lookup may rank hundreds of records across several source waves.
+  // Compile the Unicode patterns once, rather than once per row/language.
+  const languagePatterns = new Map(Object.entries(releaseLanguages).map(([code,aliases])=>[code,
+    new RegExp("(?:^|[^\\p{L}\\p{N}])(" + aliases + ")(?=$|[^\\p{L}\\p{N}])", "giu")]));
+  const languageList = "[ ._:-]*(?:[/,;+&][ ._:-]*(?:" + languageAliases + ")[ ._:-]*)*";
+  const audioSuffixPattern = new RegExp("^" + languageList + "audio\\b", "i");
+  const subtitleSuffixPattern = new RegExp("^" + languageList + "(?:subs?|subtitles?)\\b", "i");
+  const subtitlePrefixPattern = new RegExp("\\b(?:subs?|subtitles?)[ ._:-]*(?:(?:" + languageAliases + ")[ ._:-]*[/,;+&][ ._:-]*)*$", "i");
   const languageClaims = (text,subtitle) => {
     const labels = String(text || "").normalize("NFKC");
+    if (!labels) return [];
     return Object.keys(releaseLanguages).filter(code=>{
-      const pattern = new RegExp("(?:^|[^\\p{L}\\p{N}])(" + releaseLanguages[code] + ")(?=$|[^\\p{L}\\p{N}])", "giu");
+      const pattern = languagePatterns.get(code);
+      pattern.lastIndex=0;
       let match;
       while ((match = pattern.exec(labels))) {
         const before = labels.slice(0,pattern.lastIndex - match[1].length).split(/[\[\]\n|]/).pop();
         const after = labels.slice(pattern.lastIndex);
-        const list = "[ ._:-]*(?:[/,;+&][ ._:-]*(?:" + languageAliases + ")[ ._:-]*)*";
-        const audioSuffix = new RegExp("^" + list + "audio\\b", "i").test(after);
-        const subtitleSuffix = new RegExp("^" + list + "(?:subs?|subtitles?)\\b", "i").test(after);
-        const subtitlePrefix = new RegExp("\\b(?:subs?|subtitles?)[ ._:-]*(?:(?:" + languageAliases + ")[ ._:-]*[/,;+&][ ._:-]*)*$", "i").test(before);
+        const audioSuffix = audioSuffixPattern.test(after);
+        const subtitleSuffix = subtitleSuffixPattern.test(after);
+        const subtitlePrefix = subtitlePrefixPattern.test(before);
         const isSubtitle = !audioSuffix && (subtitleSuffix || subtitlePrefix);
         // Generic release language labels remain audio hints; subtitles need an
         // explicit subtitle marker, and unnamed Multi-Subs proves no language.
@@ -205,15 +216,18 @@
   };
   const displayedLanguages = line => Object.keys(releaseLanguages).filter(code=>
     new RegExp("(?:^|[^\\p{L}\\p{N}])(?:" + code + "|" + releaseLanguages[code] + ")(?=$|[^\\p{L}\\p{N}])", "iu").test(line));
+  const releaseCodecPatterns = [["avc","h[ .]?264|x264|avc"],["hevc","h[ .]?265|x265|hevc"],["av1","av1"],["vp9","vp[ -]?9"],["other","vp[ -]?8|mpeg[ -]?2|mpeg[ -]?4 visual|xvid|divx|h[ .]?263|vc[ -]?1|wmv3|prores"]]
+    .map(([codec,pattern])=>[codec,new RegExp("(?:^|[^\\p{L}\\p{N}])(?:" + pattern + ")(?=$|[^\\p{L}\\p{N}])", "iu")]);
   S.releaseVideoCodec = text => {
     const codecs = new Set();
     for (const value of Array.isArray(text) ? text : [text]) {
       const original = String(value || "").normalize("NFKC");
+      if (!original) continue;
       // Leading bracket groups and trailing release groups are identities,
       // rather than codec metadata (a group may itself contain "AV1").
       const labels = (stripGroup(original) || original).replace(/-[\p{L}\p{N}]+\s*$/u, "");
-      for (const [codec,pattern] of [["avc","h[ .]?264|x264|avc"],["hevc","h[ .]?265|x265|hevc"],["av1","av1"]]) {
-        if (new RegExp("(?:^|[^\\p{L}\\p{N}])(?:" + pattern + ")(?=$|[^\\p{L}\\p{N}])", "iu").test(labels)) codecs.add(codec);
+      for (const [codec,pattern] of releaseCodecPatterns) {
+        if (pattern.test(labels)) codecs.add(codec);
       }
     }
     // Conflicting title/file labels cannot establish a codec preference.
@@ -232,6 +246,53 @@
     if (match) return Number(match[1]);
     return /\b(?:4k|uhd)\b/i.test(title || "") ? 2160 : /\b8k\b/i.test(title || "") ? 4320 : null;
   };
+  const recordFactSnapshots = new WeakMap();
+  S.recordFacts = record => {
+    // Discovery merges replace evidence/probe objects. Proof and peer upgrades
+    // mutate the listed scalars; every input is part of this dirty signature.
+    const inputs=[record.title,record.fileName,record.fileIdx,record.sizeBytes,record.seeders,record.sourceMetadata,record.trackMetadata];
+    const prior=recordFactSnapshots.get(record);
+    if (prior && inputs.every((value,index)=>value===prior.inputs[index])) return prior.facts;
+    const tracks=S.validTrackMetadata(record.trackMetadata) && record.trackMetadata.fileName===record.fileName && record.trackMetadata.fileSize===record.sizeBytes ? record.trackMetadata : null;
+    const metadata=S.recordMetadata(record,tracks), texts=[record.title,record.fileName || ""];
+    const pack=S.pack(record.title);
+    const facts={
+      height:Object.prototype.hasOwnProperty.call(metadata,"resolution") ? metadata.resolution : texts.map(S.resolution).find(Boolean) || null,
+      // Before file proof this can be a season-pack total, not episode bytes.
+      bytes:S.number(record.fileIdx) === null ? null : S.number(record.sizeBytes),
+      codec:Object.prototype.hasOwnProperty.call(metadata,"videoCodec") ? metadata.videoCodec : S.releaseVideoCodec(texts),
+      audio_languages:Array.isArray(metadata.audioLanguages) ? metadata.audioLanguages : [...new Set(texts.flatMap(S.releaseLanguages))],
+      subtitle_languages:Array.isArray(metadata.subtitleLanguages) ? metadata.subtitleLanguages : [...new Set(texts.flatMap(S.releaseSubtitleLanguages))],
+      cached:null,season_pack:pack === null ? null : !!pack,seeders:S.number(record.seeders),
+    };
+    recordFactSnapshots.set(record,{inputs,facts});
+    return facts;
+  };
+  S.rowFacts = row => {
+    if (S.preferenceFacts.has(row)) return S.preferenceFacts.get(row);
+    if (row.streamFacts) return row.streamFacts;
+    const token=row.resolver && typeof row.resolver.token==="string" ? S.json(row.resolver.token) : null;
+    const lines=String(row.description || "").split("\n"),release=lines.find(line=>line.startsWith("🗂️ ")),filename=lines.find(line=>line.startsWith("📁 "));
+    const title=token && token.title || (release ? release.slice("🗂️ ".length) : filename ? filename.slice(3) : "");
+    const fileName=token && token.fileName || "";
+    const video=lines.find(line=>line.startsWith("🎞️ ")) || "";
+    const codecLabel=video.split(" · ").map(value=>value.replace(/^🎞️ /,"")).find(label=>["AVC","HEVC","AV1","VP9","Other"].includes(label));
+    const audio=lines.find(line=>line.startsWith("🌐 ")),subtitles=lines.find(line=>line.startsWith("💬 "));
+    const facts={height:S.resolution(row.title) || S.resolution(title),bytes:S.number(row.size),
+      codec:/\bCodec unknown\b/i.test(video) ? null : codecLabel ? {AVC:"avc",HEVC:"hevc",AV1:"av1",VP9:"vp9",Other:"other"}[codecLabel] : S.releaseVideoCodec([title,fileName]),
+      audio_languages:audio ? displayedLanguages(audio) : [...new Set([title,fileName].flatMap(S.releaseLanguages))],
+      subtitle_languages:subtitles ? displayedLanguages(subtitles) : [...new Set([title,fileName].flatMap(S.releaseSubtitleLanguages))],
+      cached:!!row.resolver,season_pack:S.pack(title) === null ? null : !!S.pack(title),seeders:S.number(row.seeders)};
+    S.preferenceFacts.set(row,facts);
+    return facts;
+  };
+  S.validPreferenceFacts = facts => !!facts && typeof facts==="object" && !Array.isArray(facts)
+    && Object.keys(facts).every(key=>["height","bytes","codec","audio_languages","subtitle_languages","cached","season_pack","seeders"].includes(key))
+    && (facts.height===null || Number.isInteger(facts.height) && facts.height>=144 && facts.height<=8640)
+    && (facts.bytes===null || S.number(facts.bytes)!==null) && (facts.seeders===null || S.number(facts.seeders)!==null)
+    && [null,"avc","hevc","av1","vp9","other"].includes(facts.codec)
+    && [null,true,false].includes(facts.cached) && [null,true,false].includes(facts.season_pack)
+    && [facts.audio_languages,facts.subtitle_languages].every(list=>Array.isArray(list) && list.length<=32 && list.every(code=>typeof code==="string" && code.length<=64 && /^[a-z\d-]+$/i.test(code)));
   S.pack = title => {
     if (typeof title !== "string" || !title.trim()) return null;
     return /\b(?:batch|complete|collection|season[ ._-]*pack)\b|\b(?:S\d{1,2}[ ._-]*E\d{1,4}[ ._-]*[-~+&,][ ._-]*(?:E)?\d|episodes?[ ._-]*\d+[ ._-]*[-~][ ._-]*\d+)/i.test(title)
@@ -260,6 +321,12 @@
     };
   };
   S.sortRows = (rows,settings) => {
+    if (settings.streamPreferences) {
+      rows=rows.filter(row=>S.acceptPreferences(S.rowFacts(row),settings,true));
+      // The host owns every criterion and direction. Addon-local preferences
+      // must not reappear as hidden secondary ranking when shared metrics tie.
+      return S.sortByPreferences(rows,settings,S.rowFacts,row=>row.id);
+    }
     const order = S.sortOrder(settings);
     const preferenceKeys = {language:"language.prefs",subtitle:"subtitle.prefs",codec:"codec.prefs"};
     const facts = new Map();
@@ -301,6 +368,17 @@
     return rows.sort((a,b)=>S.sortCompare(a,b,order,metrics,row=>row.id));
   };
   S.rank = (records, settings) => {
+    if (settings.streamPreferences) {
+      // Facts include language/codec parsing. Only native-policy operations
+      // need that work, and filtering/comparison share one snapshot per row.
+      const snapshots=new Map();
+      const facts=record=>{
+        if (!snapshots.has(record)) snapshots.set(record,S.recordFacts(record));
+        return snapshots.get(record);
+      };
+      records=records.filter(record=>S.acceptPreferences(facts(record),settings,false));
+      return S.sortByPreferences(records,settings,facts,record=>`${record.infoHash}:${record.fileIdx === null || record.fileIdx === undefined ? "unknown" : record.fileIdx}`);
+    }
     const quality = settings["quality.preferred"] || "1080p";
     const qualityPattern = quality === "any" ? null : new RegExp("\\b" + quality + "\\b", "i");
     const preferred = new Map(records.map(record=>[record,!qualityPattern || qualityPattern.test(record.title) || String(S.recordMetadata(record).resolution)+"p"===quality]));

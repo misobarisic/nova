@@ -45,17 +45,115 @@ pub enum PlaybackAction {
     Stop,
     Resume(bool),
     CancelResume,
-    NextEpisode { token: String },
-    DismissNextEpisode { token: String },
+    NextEpisode {
+        token: String,
+    },
+    DismissNextEpisode {
+        token: String,
+    },
     SetDecoder(i32),
     SetBrightness(f64),
     BrightnessStep(f64),
+    SeekChapter {
+        id: String,
+    },
+    SetSubtitleStyle {
+        control: i32,
+        value: f64,
+    },
+    ResetSubtitleStyle,
+    SelectSecondarySubtitleTrack(i32),
+    SetSecondarySubtitlePosition(i32),
+    SetIntroSkipMode(i32),
+    SkipSegment {
+        token: String,
+    },
+    DismissSkipSegment {
+        token: String,
+    },
+    AddBookmark {
+        note: String,
+    },
+    EditBookmark {
+        id: String,
+        note: String,
+    },
+    DeleteBookmark {
+        id: String,
+    },
+    SeekBookmark {
+        id: String,
+    },
+    TryAnotherStream,
+    RetrySubtitleDiscovery,
+    RefreshSubtitleTracks,
+    CancelSubtitleDownload {
+        secondary: bool,
+    },
+    /// Wire-only selections bind a displayed choice, not a reusable native ID.
+    SelectAudioTrackToken(String),
+    SelectSubtitleTrackToken(String),
+    SelectSecondarySubtitleTrackToken(String),
+}
+
+impl PlaybackAction {
+    pub fn valid_payload(&self) -> bool {
+        let id = |id: &str| !id.is_empty() && id.len() <= 4096 && !id.chars().any(char::is_control);
+        let note = |note: &str| {
+            note.len() <= MAX_REMOTE_NOTE_BYTES
+                && note.chars().count() <= 280
+                && !note.chars().any(char::is_control)
+        };
+        let range = |value: f64, low, high| value.is_finite() && (low..=high).contains(&value);
+        match self {
+            Self::SeekRelative(value) => range(*value, -86400.0, 86400.0),
+            Self::SeekAbsolute(value) => range(*value, 0.0, 365.0 * 86400.0),
+            Self::SetVolume(value) => range(*value, 0.0, 100.0),
+            Self::VolumeStep(value) => range(*value, -100.0, 100.0),
+            Self::SystemVolumeStep(value) | Self::SpeedStep(value) => (-1..=1).contains(value),
+            Self::SetSpeed(value) => range(*value, 0.5, 2.0),
+            Self::SetBrightness(value) => range(*value, 0.05, 1.0),
+            Self::BrightnessStep(value) => range(*value, -1.0, 1.0),
+            Self::SetDecoder(value) | Self::SetSecondarySubtitlePosition(value) => {
+                (0..=2).contains(value)
+            }
+            Self::SetIntroSkipMode(value) => (-1..=2).contains(value),
+            Self::SetSubtitleStyle { control, value } => match control {
+                0 => range(*value, -60.0, 60.0),
+                1 => range(*value, 16.0, 100.0),
+                2 => range(*value, 0.0, 200.0),
+                3 => range(*value, 0.0, 100.0),
+                4 => range(*value, 0.0, 10.0),
+                5 => range(*value, 0.0, 2.0) && value.fract() == 0.0,
+                6 => matches!(*value, 0.0 | 1.0),
+                _ => false,
+            },
+            Self::SeekChapter { id: value }
+            | Self::DeleteBookmark { id: value }
+            | Self::SeekBookmark { id: value }
+            | Self::SkipSegment { token: value }
+            | Self::DismissSkipSegment { token: value }
+            | Self::SelectAudioTrackToken(value)
+            | Self::SelectSubtitleTrackToken(value)
+            | Self::SelectSecondarySubtitleTrackToken(value) => id(value),
+            Self::NextEpisode { token } | Self::DismissNextEpisode { token } => id(token),
+            Self::AddBookmark { note: value } => note(value),
+            Self::EditBookmark {
+                id: value,
+                note: text,
+            } => id(value) && note(text),
+            _ => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Request {
     Snapshot,
     Lookup(MediaIdentity),
+    CurrentOffers {
+        session: SessionId,
+    },
     Start {
         offer_id: String,
         expected_session: Option<SessionId>,
@@ -66,6 +164,26 @@ pub enum Request {
     },
     /// Also dispatched locally when a controller connection is lost.
     ReleasePreview,
+}
+
+impl Request {
+    /// Semantic bounds are checked before a request can enter the replay cache.
+    pub fn valid_payload(&self) -> bool {
+        match self {
+            Self::Command { action, .. } => action.valid_payload(),
+            Self::Start { offer_id, .. } => {
+                !offer_id.is_empty() && offer_id.len() <= MAX_REMOTE_ID_BYTES
+            }
+            Self::Lookup(media) => {
+                media.title_id.len() <= 1024
+                    && media.episode_id.len() <= 1024
+                    && media.media_type.len() <= 16
+                    && media.title.len() <= 512
+                    && media.episode.len() <= 512
+            }
+            _ => true,
+        }
+    }
 }
 
 // Keep the public callback contract ergonomic; the 256 KiB transport bound
@@ -125,13 +243,42 @@ pub struct PlaybackCapabilities {
     pub next_episode: bool,
     pub decoder: bool,
     pub brightness: bool,
+    pub chapters: bool,
+    pub subtitle_style: bool,
+    pub secondary_subtitles: bool,
+    pub intro_skip: bool,
+    pub bookmarks: bool,
+    pub source_recovery: bool,
+    pub source_offers: bool,
+    pub subtitle_discovery: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaybackTrack {
     pub id: i32,
+    pub token: String,
     pub label: String,
 }
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackChapter {
+    pub id: String,
+    pub label: String,
+    pub time: f64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackBookmark {
+    pub id: String,
+    pub note: String,
+    pub time: f64,
+}
+
+pub const MAX_REMOTE_TRACKS: usize = 64;
+pub const MAX_REMOTE_CHAPTERS: usize = 128;
+pub const MAX_REMOTE_BOOKMARKS: usize = 128;
+pub const MAX_REMOTE_LABEL_BYTES: usize = 192;
+pub const MAX_REMOTE_NOTE_BYTES: usize = 1120;
+pub const MAX_REMOTE_ID_BYTES: usize = 64;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSnapshot {
@@ -153,6 +300,22 @@ pub struct PlaybackSnapshot {
     pub subtitle_tracks: Vec<PlaybackTrack>,
     pub audio_track: i32,
     pub subtitle_track: i32,
+    pub secondary_subtitle_tracks: Vec<PlaybackTrack>,
+    pub secondary_subtitle_track: i32,
+    pub secondary_subtitle_position: i32,
+    pub subtitle_style: [f64; 7],
+    pub chapters: Vec<PlaybackChapter>,
+    pub bookmarks: Vec<PlaybackBookmark>,
+    pub chapters_truncated: bool,
+    pub bookmarks_truncated: bool,
+    pub bookmark_notice: String,
+    pub intro_skip_mode: i32,
+    pub skip_segment_kind: i32,
+    pub skip_token: String,
+    pub subtitle_addon_status: i32,
+    pub decoder: i32,
+    pub brightness: f64,
+    pub automatic_recovery: bool,
     pub resume_prompt: bool,
     pub next_episode_prompt: bool,
     pub next_episode_token: String,
@@ -162,6 +325,62 @@ pub struct PlaybackSnapshot {
     pub screenshot_failed: bool,
     pub capabilities: PlaybackCapabilities,
     pub revision: u64,
+}
+
+impl PlaybackSnapshot {
+    pub fn valid_payload(&self) -> bool {
+        let id = |id: &str| {
+            !id.is_empty() && id.len() <= MAX_REMOTE_ID_BYTES && !id.chars().any(char::is_control)
+        };
+        let label = |s: &str, max| s.len() <= max && !s.chars().any(char::is_control);
+        let tracks = |rows: &[PlaybackTrack]| {
+            rows.len() <= MAX_REMOTE_TRACKS
+                && rows
+                    .iter()
+                    .all(|r| id(&r.token) && label(&r.label, MAX_REMOTE_LABEL_BYTES))
+        };
+        let time = |value: f64| value.is_finite() && (0.0..=365.0 * 86400.0).contains(&value);
+        label(&self.title, 512)
+            && label(&self.episode, 512)
+            && time(self.time)
+            && time(self.duration)
+            && self.volume.is_finite()
+            && (0.0..=100.0).contains(&self.volume)
+            && self.speed.is_finite()
+            && (0.0..=2.0).contains(&self.speed)
+            && self.brightness.is_finite()
+            && (0.0..=1.0).contains(&self.brightness)
+            && tracks(&self.audio_tracks)
+            && tracks(&self.subtitle_tracks)
+            && tracks(&self.secondary_subtitle_tracks)
+            && self.chapters.len() <= MAX_REMOTE_CHAPTERS
+            && self.chapters.iter().all(|r| {
+                id(&r.id)
+                    && label(&r.label, MAX_REMOTE_LABEL_BYTES)
+                    && time(r.time)
+                    && (self.duration <= 0.0 || r.time <= self.duration)
+            })
+            && self.bookmarks.len() <= MAX_REMOTE_BOOKMARKS
+            && self.bookmarks.iter().all(|r| {
+                id(&r.id)
+                    && label(&r.note, MAX_REMOTE_NOTE_BYTES)
+                    && time(r.time)
+                    && (self.duration <= 0.0 || r.time <= self.duration)
+            })
+            && self.subtitle_style.iter().all(|v| v.is_finite())
+            && (0..=2).contains(&self.secondary_subtitle_position)
+            && (-1..=2).contains(&self.intro_skip_mode)
+            && (0..=2).contains(&self.skip_segment_kind)
+            && (0..=4).contains(&self.subtitle_addon_status)
+            && (0..=2).contains(&self.decoder)
+            && (self.skip_token.is_empty() || id(&self.skip_token))
+            && label(&self.bookmark_notice, 512)
+            && self.next_episode_token.len() <= 4096
+            && self
+                .next_episode_media
+                .as_ref()
+                .is_none_or(|media| Request::Lookup(media.clone()).valid_payload())
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

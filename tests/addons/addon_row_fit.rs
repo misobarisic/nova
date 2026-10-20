@@ -357,3 +357,85 @@ fn render_addon_card_icon_previews() {
     );
     slint::run_event_loop().unwrap();
 }
+
+#[test]
+fn refresh_busy_state_disables_duplicate_actions_even_with_reduced_motion() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::refresh_busy_state_disables_duplicate_actions_even_with_reduced_motion"
+    )) {
+        return;
+    }
+    use slint::Model;
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(390, 1800));
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(0);
+    app.set_settings_detail_open(true);
+    app.set_cinemeta_installed(true);
+    let rows = Rc::new(VecModel::from(vec![nova::AddonRow {
+        label: "Example addon".into(),
+        initial: "E".into(),
+        enabled: true,
+        ..Default::default()
+    }]));
+    app.set_addon_rows(rows.clone().into());
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let recorded = calls.clone();
+    app.on_addon_refresh(move |_| recorded.set(recorded.get() + 1));
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..5 {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(40));
+        }
+    };
+    settle();
+    let refresh = ElementHandle::find_by_accessible_label(&app, "Refresh")
+        .find(|item| {
+            item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+        })
+        .unwrap();
+    let click = |item: &ElementHandle| {
+        let p = item.absolute_position();
+        let size = item.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+        for event in [
+            slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+            slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+    };
+    click(&refresh);
+    assert_eq!(calls.get(), 1);
+    let mut row = rows.row_data(0).unwrap();
+    row.busy = true;
+    rows.set_row_data(0, row);
+    for motion in [true, false] {
+        app.global::<nova::Anim>().set_enabled(motion);
+        app.global::<nova::Anim>().set_transitions(motion);
+        settle();
+        // This is the same delegate: asynchronous refresh must update it in
+        // place, retaining keyboard/Back focus rather than rebuilding the card.
+        assert_eq!(refresh.accessible_label().as_deref(), Some("Refreshing…"));
+        assert_eq!(refresh.accessible_enabled(), Some(false));
+        click(&refresh);
+        assert_eq!(calls.get(), 1);
+    }
+    let mut row = rows.row_data(0).unwrap();
+    row.busy = false;
+    rows.set_row_data(0, row);
+    settle();
+    assert_eq!(refresh.accessible_label().as_deref(), Some("Refresh"));
+    assert_eq!(refresh.accessible_enabled(), Some(true));
+    click(&refresh);
+    assert_eq!(calls.get(), 2);
+}

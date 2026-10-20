@@ -35,6 +35,7 @@ pub(crate) fn metadata_cache_key(key: &str) -> bool {
         || matches!(
             key,
             "provider_metadata_cache:v1"
+                | "catalog_grouping_evidence:v1"
                 | "plugin_cache:v1"
                 | "home:showcase:v1"
                 | "tracking:catalog_cache:v1"
@@ -157,6 +158,19 @@ impl nova_providers::MetadataCache for ProviderMetadataCache {
     }
     fn save(&self, value: &str) -> Result<(), nova_providers::ProviderHostError> {
         storage::try_set_cached_str("provider_metadata_cache:v1", value)
+            .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
+    }
+}
+
+/// Catalog relationships are derived device-local evidence, not user settings.
+pub(super) struct CatalogGroupingCache;
+impl nova_providers::MetadataCache for CatalogGroupingCache {
+    fn load(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
+        storage::try_get_str("catalog_grouping_evidence:v1")
+            .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
+    }
+    fn save(&self, value: &str) -> Result<(), nova_providers::ProviderHostError> {
+        storage::try_set_cached_str("catalog_grouping_evidence:v1", value)
             .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
     }
 }

@@ -1,4 +1,5 @@
 import { SettingsBridge } from "settings-bridge.slint";
+import { StreamFiltersBridge } from "stream-filters-bridge.slint";
 
 // Submenu factories and shell-local state share the window globals bundle.
 // Backend values remain in SettingsBridge; this state resets on shell creation.
@@ -45,6 +46,9 @@ export global SettingsContent {
     in-out property <int> kb_hr: 0;
     in-out property <int> kb_pr: 0;
     in-out property <string> stream_filter_language_draft;
+    in-out property <int> stream_filter_codec_choice;
+    in-out property <int> stream_filter_priority_column;
+    in-out property <int> stream_filter_sort_column;
     in-out property <int> kb_theme: 0;
     in-out property <int> kb_tr: 0;
     in-out property <bool> player_language_input_focused: false;
@@ -81,6 +85,31 @@ export global SettingsContent {
         }
         return SettingsBridge.is_android ? 2 : 3;
     }
+    public pure function stream_filter_codec_key(codec: int) -> string {
+        return codec == 0 ? "avc" : codec == 1 ? "hevc" : codec == 2 ? "av1" : codec == 3 ? "vp9" : "other";
+    }
+    public pure function stream_filter_codec_label(codec: int) -> string {
+        return codec == 0 ? "H.264 / AVC" : codec == 1 ? "H.265 / HEVC" : codec == 2 ? "AV1" : codec == 3 ? "VP9" : @tr("Other video codecs");
+    }
+    public pure function kb_stream_filter_require_codec() -> int { return 14 + StreamFiltersBridge.codec_priority_order.length; }
+    public pure function kb_stream_filter_audio_source() -> int { return SettingsContent.kb_stream_filter_require_codec() + 1; }
+    public pure function kb_stream_filter_audio_picker() -> int { return SettingsContent.kb_stream_filter_audio_source() + 1; }
+    public pure function kb_stream_filter_require() -> int { return SettingsContent.kb_stream_filter_audio_source() + (StreamFiltersBridge.use_preferred_audio_languages ? 1 : 2); }
+    public pure function kb_stream_filter_unknown() -> int { return SettingsContent.kb_stream_filter_require() + 1; }
+    public pure function kb_stream_filter_sort_start() -> int { return SettingsContent.kb_stream_filter_unknown() + 1; }
+    public pure function kb_stream_filter_reset() -> int { return SettingsContent.kb_stream_filter_sort_start() + StreamFiltersBridge.sort_order.length; }
+    public pure function kb_stream_filter_count() -> int { return SettingsContent.kb_stream_filter_reset() + 1; }
+    public pure function stream_filter_sort_label(criterion: string) -> string {
+        return criterion == "cached" ? @tr("Cached availability") : criterion == "resolution" ? @tr("Resolution") : criterion == "size" ? @tr("Size") : criterion == "season_pack" ? @tr("Season pack") : criterion == "seeders" ? @tr("Reported seeders") : criterion == "audio" ? @tr("Audio language") : criterion == "codec" ? @tr("Video codec") : @tr("Subtitle language");
+    }
+    public pure function stream_filter_sort_direction(criterion: string, ascending: bool) -> string {
+        if criterion == "audio" || criterion == "codec" || criterion == "subtitle" { return ascending ? @tr("Preferred first") : @tr("Reverse preference order"); }
+        if criterion == "cached" { return ascending ? @tr("Uncached first") : @tr("Cached first"); }
+        if criterion == "season_pack" { return ascending ? @tr("Single episodes first") : @tr("Season packs first"); }
+        if criterion == "size" { return ascending ? @tr("Smallest first") : @tr("Largest first"); }
+        if criterion == "resolution" { return ascending ? @tr("Lowest first") : @tr("Highest first"); }
+        return ascending ? @tr("Fewest first") : @tr("Most first");
+    }
 
     public function reset_state() {
         SettingsContent.detail_sticky_top = 0px;
@@ -105,6 +134,9 @@ export global SettingsContent {
         SettingsContent.kb_hr = 0;
         SettingsContent.kb_pr = 0;
         SettingsContent.stream_filter_language_draft = "";
+        SettingsContent.stream_filter_codec_choice = 0;
+        SettingsContent.stream_filter_priority_column = 0;
+        SettingsContent.stream_filter_sort_column = 0;
         SettingsContent.kb_theme = 0;
         SettingsContent.kb_tr = 0;
         SettingsContent.player_language_input_focused = false;

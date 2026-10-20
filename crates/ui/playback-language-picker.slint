@@ -78,6 +78,10 @@ export component PlaybackLanguagePicker inherits Rectangle {
                 keyboard-mode: root.keyboard-mode;
                 text <=> root.query;
                 placeholder-text: @tr("Search languages");
+                accessible-role: text-input;
+                accessible-label: @tr("Search languages");
+                accessible-value <=> self.text;
+                accessible-action-set-value(value) => { self.text = value; root.search(value, root.subtitle); }
                 focus_changed(focused) => { root.focus_changed(focused); }
                 edited(text) => {
                     root.current-index = -1;
@@ -146,8 +150,12 @@ export component PlaybackLanguagePicker inherits Rectangle {
 
     edit_timer := Timer {
         interval: 80ms;
-        running: root.edit-requested;
-        triggered => { search_field.focus(); }
+        running: false;
+        triggered => { self.stop(); search_field.focus(); }
     }
+    // Focus once per edit request. A repeating timer steals focus back from
+    // the language list's TV reorder controls every eighty milliseconds.
+    changed edit-requested => { if root.edit-requested { edit_timer.start(); } else { edit_timer.stop(); } }
+    init => { if root.edit-requested { edit_timer.start(); } }
 
 }

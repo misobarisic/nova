@@ -215,6 +215,9 @@ export component AddonRowCard inherits Rectangle {
     in property <string> initial;
     in property <bool> tinted;
     in property <bool> on;
+    in property <bool> refreshing;
+    private property <bool> refresh_motion: root.refreshing && Anim.enabled && Anim.transitions && Anim.hover;
+    out property <angle> refresh_rotation: root.refresh_motion ? Math.mod(animation-tick(), 900ms) / 900ms * 360deg : 0deg;
     in property <bool> has_config;
     in property <bool> kb_focused_row;
     in property <bool> kb_active;
@@ -273,12 +276,13 @@ export component AddonRowCard inherits Rectangle {
                 }
             }
             AddonIconButton {
-                name: @tr("Refresh"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
-                clicked => { root.refresh(); }
+                name: root.refreshing ? @tr("Refreshing…") : @tr("Refresh"); enabled: !root.refreshing; focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
+                clicked => { if !root.refreshing { root.refresh(); } }
                 Image {
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                     width: 24px; height: 24px; image-fit: contain;
                     source: @image-url("../../assets/icons/addons/refresh-cw.svg");
+                    transform-rotation: root.refresh_rotation;
                     colorize: Theme.current.text_settings;
                 }
             }

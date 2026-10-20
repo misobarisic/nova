@@ -243,6 +243,10 @@ pub fn provider_settings_schema(url: &str) -> Option<Vec<crate::plugin_settings:
     (!source.plugin.configuration.is_empty()).then(|| source.plugin.configuration.clone())
 }
 
+pub fn provider_uses_stream_preferences(url: &str) -> bool {
+    installed_provider(url).is_some_and(|source| source.plugin.capabilities.stream_preferences)
+}
+
 pub fn supports_provider_configuration(url: &str) -> bool {
     supports_capability_config(url) || provider_settings_schema(url).is_some()
 }
@@ -458,12 +462,90 @@ struct StreamsPublisherHost {
     provider: Arc<JsProvider>,
     on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
 }
+
+#[cfg(test)]
+pub(crate) fn exercise_stream_preference_staleness(change: Arc<dyn Fn() + Send + Sync>) {
+    let original_preferences = crate::plugin_settings::stream_preferences().unwrap();
+    assert!(original_preferences.is_some());
+    struct ChangingHost(Arc<dyn Fn() + Send + Sync>);
+    impl ProviderHost for ChangingHost {
+        fn get(
+            &self,
+            _: &str,
+            _: &std::collections::BTreeMap<String, String>,
+        ) -> Result<crate::HttpResponse, ProviderHostError> {
+            (self.0)();
+            Ok(crate::HttpResponse {
+                status: 200,
+                ..Default::default()
+            })
+        }
+        fn storage_get(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn storage_set(&self, _: &str, _: &str) -> Result<(), ProviderHostError> {
+            Ok(())
+        }
+        fn log(&self, _: &str) {}
+    }
+    let manifest: PluginManifest = serde_json::from_value(json!({
+        "formatVersion":1,"id":"policy-fixture","name":"Fixture","version":"1","entry":"fixture.js","permissions":{"domains":["example.com"]},"capabilities":{"streamPreferences":true}
+    })).unwrap();
+    let addon: Manifest = serde_json::from_value(json!({"id":"policy-fixture","name":"Fixture","version":"1","resources":["stream"],"types":["movie"],"catalogs":[]})).unwrap();
+    let provider = Arc::new(JsProvider::new(
+        manifest,
+        addon,
+        r#"globalThis.novaProvider={handle(){
+        nova.http.request(JSON.stringify({url:'https://example.com/policy',method:'GET'}));
+        nova.streams.publish('[]');return {streams:[]};
+    }}"#,
+    ));
+    let generation = crate::plugin_settings::settings_generation();
+    let publications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = publications.clone();
+    let host = Arc::new(StreamsPublisherHost {
+        inner: Arc::new(ChangingHost(change.clone())),
+        provider: provider.clone(),
+        on_progress: Arc::new(move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }),
+    });
+    assert!(
+        provider.call(host, json!({"op":"lookupStreams"})).is_err(),
+        "an old context must not complete after preferences change"
+    );
+    assert_ne!(
+        original_preferences,
+        crate::plugin_settings::stream_preferences().unwrap(),
+        "the real HTTP callback must have changed policy during the invocation"
+    );
+    assert_eq!(
+        publications.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "stale progressive rows must not publish"
+    );
+    assert_eq!(
+        generation,
+        crate::plugin_settings::settings_generation(),
+        "policy authority is independent of plugin credential generations"
+    );
+    assert!(
+        provider
+            .call(
+                Arc::new(ChangingHost(change)),
+                json!({"op":"resolveStream"})
+            )
+            .is_ok(),
+        "preference edits must not revoke an already selected resolver operation"
+    );
+}
+
 impl ProviderHost for StreamsPublisherHost {
     fn cancelled(&self) -> bool {
         self.inner.cancelled() || !self.provider.streams_configuration_current()
     }
     fn publish_streams(&self, raw: &str) -> Result<(), ProviderHostError> {
-        if self.cancelled() {
+        if self.cancelled() || !self.provider.stream_preferences_current() {
             return Err(ProviderHostError(
                 "provider stream publication cancelled".into(),
             ));
@@ -481,7 +563,7 @@ impl ProviderHost for StreamsPublisherHost {
             .map_err(|error| ProviderHostError(error.to_string()))?;
         let bytes = serde_json::to_vec(&response)
             .map_err(|_| ProviderHostError("invalid provider stream snapshot".into()))?;
-        if self.cancelled() {
+        if self.cancelled() || !self.provider.stream_preferences_current() {
             return Err(ProviderHostError(
                 "provider stream publication cancelled".into(),
             ));
@@ -527,6 +609,172 @@ impl ProviderHost for StreamsPublisherHost {
     }
 }
 
+fn legacy_stream_preferences(
+    settings: &mut Value,
+    preferences: &nova_config::stream_filters::StreamFilterRules,
+) {
+    // Old packages have no native limit/exclusion support. The app still
+    // applies the complete policy; these ephemeral compatible values prevent
+    // obsolete plugin preferences from selecting a conflicting candidate pool.
+    settings["quality.preferred"] = json!("any");
+    settings["language.prefs"] = if preferences.enabled {
+        json!(preferences.audio_languages)
+    } else {
+        json!([])
+    };
+    settings["codec.prefs"] = if preferences.enabled {
+        json!(
+            preferences
+                .codec_priority
+                .iter()
+                .filter(|codec| matches!(
+                    codec,
+                    nova_config::stream_filters::VideoCodec::Avc
+                        | nova_config::stream_filters::VideoCodec::Hevc
+                        | nova_config::stream_filters::VideoCodec::Av1
+                ))
+                .collect::<Vec<_>>()
+        )
+    } else {
+        json!([])
+    };
+    settings["subtitle.prefs"] = if preferences.enabled {
+        json!(preferences.subtitle_languages)
+    } else {
+        json!([])
+    };
+    use nova_config::stream_filters::{SortCriterion, SortDirection};
+    settings["sort.order"] = json!(
+        preferences
+            .sort_order
+            .iter()
+            .map(|rule| {
+                let key = match rule.criterion {
+                    SortCriterion::Cached => "cached",
+                    SortCriterion::Resolution => "resolution",
+                    SortCriterion::Size => "size",
+                    SortCriterion::SeasonPack => "pack",
+                    SortCriterion::Seeders => "seeders",
+                    SortCriterion::Audio => "language",
+                    SortCriterion::Codec => "codec",
+                    SortCriterion::Subtitle => "subtitle",
+                };
+                // Legacy Supernova uses negative preference indices, whereas shared
+                // policy uses ascending zero-based ranks. Preserve the same direction.
+                let ascending = rule.direction == SortDirection::Asc;
+                let ascending = if matches!(
+                    rule.criterion,
+                    SortCriterion::Audio | SortCriterion::Codec | SortCriterion::Subtitle
+                ) {
+                    !ascending
+                } else {
+                    ascending
+                };
+                json!({"key":key,"direction":if ascending { "asc" } else { "desc" }})
+            })
+            .collect::<Vec<_>>()
+    );
+}
+
+#[cfg(test)]
+mod stream_preference_tests {
+    use super::*;
+    #[test]
+    fn legacy_overlay_neutralizes_duplicate_controls_and_preserves_source_credentials() {
+        let original = json!({"quality.preferred":"2160p","language.prefs":["fr"],"codec.prefs":["av1"],"torbox.apiKey":"private-fixture-key","sources.nyaa":true,"subtitle.prefs":["hr"],"sort.order":[{"key":"cached","direction":"desc"},{"key":"language","direction":"asc"},{"key":"codec","direction":"asc"}]});
+        let mut values = original.clone();
+        legacy_stream_preferences(&mut values, &nova_config::StreamFilterRules::default());
+        assert_eq!(values["quality.preferred"], "any");
+        assert_eq!(values["language.prefs"], json!([]));
+        assert_eq!(values["codec.prefs"], json!([]));
+        assert_eq!(values["subtitle.prefs"], json!([]));
+        for key in ["torbox.apiKey", "sources.nyaa"] {
+            assert_eq!(values[key], original[key]);
+        }
+        let mut rules = nova_config::StreamFilterRules {
+            enabled: true,
+            audio_languages: vec!["ja".into(), "en".into()],
+            codec_priority: vec![
+                nova_config::stream_filters::VideoCodec::Hevc,
+                nova_config::stream_filters::VideoCodec::Vp9,
+            ],
+            subtitle_languages: vec!["hr".into(), "en".into()],
+            ..Default::default()
+        };
+        legacy_stream_preferences(&mut values, &rules);
+        assert_eq!(values["language.prefs"], json!(["ja", "en"]));
+        assert_eq!(values["codec.prefs"], json!(["hevc"]));
+        assert_eq!(values["subtitle.prefs"], json!(["hr", "en"]));
+        assert_eq!(
+            values["sort.order"][0],
+            json!({"key":"language","direction":"desc"})
+        );
+        assert_eq!(
+            values["sort.order"][1],
+            json!({"key":"codec","direction":"desc"})
+        );
+        use nova_config::stream_filters::{SortCriterion, SortDirection};
+        let index = rules
+            .sort_order
+            .iter()
+            .position(|rule| rule.criterion == SortCriterion::Seeders)
+            .unwrap();
+        let mut seeders = rules.sort_order.remove(index);
+        seeders.direction = SortDirection::Asc;
+        rules.sort_order.insert(0, seeders);
+        legacy_stream_preferences(&mut values, &rules);
+        assert_eq!(
+            values["sort.order"][0],
+            json!({"key":"seeders","direction":"asc"})
+        );
+        let index = rules
+            .sort_order
+            .iter()
+            .position(|rule| rule.criterion == SortCriterion::Codec)
+            .unwrap();
+        let mut codec = rules.sort_order.remove(index);
+        codec.direction = SortDirection::Desc;
+        rules.sort_order.insert(0, codec);
+        legacy_stream_preferences(&mut values, &rules);
+        assert_eq!(
+            values["sort.order"][0],
+            json!({"key":"codec","direction":"asc"}),
+            "negative legacy preference ranks require inverted direction"
+        );
+        assert!(
+            values["sort.order"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["key"] == "pack")
+        );
+        assert_eq!(
+            original["quality.preferred"], "2160p",
+            "invocation overlay is separate from durable settings"
+        );
+    }
+
+    #[test]
+    fn structured_stream_facts_survive_the_provider_protocol_with_unknowns_intact() {
+        let facts = json!({"height":null,"bytes":800000000,"codec":null,"audio_languages":["ja","en"],"cached":true,"season_pack":true,"seeders":null,"subtitle_languages":["hr"]});
+        let stream: ProviderStream = serde_json::from_value(json!({"id":"facts","title":"Proved row","url":"https://example.com/movie.mkv","streamFacts":facts})).unwrap();
+        let result = stream_to_stremio(&stream, "fixture").unwrap();
+        assert_eq!(
+            result["behaviorHints"]["streamFacts"], facts,
+            "unknown codec/height/peer count must not be reconstructed from labels downstream"
+        );
+        let addon_stream: addons::Stream = serde_json::from_value(result).unwrap();
+        assert_eq!(addon_stream.extra["behaviorHints"]["streamFacts"], facts);
+        let mut invalid = stream;
+        invalid.stream_facts.as_mut().unwrap().audio_languages =
+            vec!["https://example.com/private".into()];
+        assert!(
+            stream_to_stremio(&invalid, "fixture").is_err(),
+            "facts accept bounded language identifiers, not arbitrary source payloads"
+        );
+    }
+}
+
 struct JsProvider {
     descriptor: ProviderDescriptor,
     runtime: PluginRuntime,
@@ -535,10 +783,28 @@ struct JsProvider {
     track_settings: bool,
     secret_keys: Vec<String>,
     playback_credentials: Vec<crate::runtime::EphemeralPlaybackCredential>,
+    stream_preferences: Result<Option<nova_config::stream_filters::StreamFilterRules>, String>,
+    native_stream_preferences: bool,
 }
 
 impl JsProvider {
+    fn stream_preferences_current(&self) -> bool {
+        self.stream_preferences.as_ref().is_ok_and(|preferences| {
+            preferences.as_ref().is_none_or(|preferences| {
+                crate::plugin_settings::stream_preferences()
+                    .is_ok_and(|current| current.as_ref() == Some(preferences))
+            })
+        })
+    }
     fn new(manifest: PluginManifest, addon: Manifest, source: &str) -> Self {
+        // Older Supernova packages ignore the context but can still consume
+        // compatible language/codec settings without persisting duplicate values.
+        let stream_preferences =
+            if manifest.capabilities.stream_preferences || manifest.id == "supernova" {
+                crate::plugin_settings::stream_preferences().map_err(|error| error.to_string())
+            } else {
+                Ok(None)
+            };
         let settings =
             crate::plugin_settings::settings_snapshot(&manifest.id, &manifest.configuration)
                 .map_err(|e| e.to_string());
@@ -550,6 +816,8 @@ impl JsProvider {
             .map(|field| field.key.clone())
             .collect();
         Self {
+            native_stream_preferences: manifest.capabilities.stream_preferences,
+            stream_preferences,
             settings,
             track_settings,
             secret_keys,
@@ -585,9 +853,21 @@ impl JsProvider {
             .settings
             .as_ref()
             .map_err(|error| ProviderError::Host(error.clone()))?;
+        // Filters own stream discovery, not a previously selected resolver or
+        // background download. Editing language/codec preferences must not
+        // revoke a playable selection whose source/credential authority holds.
+        let uses_preferences = matches!(request["op"].as_str(), Some("lookupStreams" | "streams"));
+        let preferences = if uses_preferences {
+            self.stream_preferences
+                .as_ref()
+                .map_err(|error| ProviderError::Host(error.clone()))?
+        } else {
+            &None
+        };
         let current = || {
-            !self.track_settings
-                || settings.generation == crate::plugin_settings::settings_generation()
+            (!self.track_settings
+                || settings.generation == crate::plugin_settings::settings_generation())
+                && (!uses_preferences || self.stream_preferences_current())
         };
         if !current() {
             return Err(ProviderError::Host("provider settings changed".into()));
@@ -595,6 +875,12 @@ impl JsProvider {
         request["config"] = serde_json::to_value(self.config).expect("capabilities serialize");
         request["settings"] = json!(settings.values);
         request["settingsGeneration"] = json!(settings.generation);
+        if let Some(preferences) = preferences {
+            request["streamPreferences"] = json!(preferences);
+            if !self.native_stream_preferences {
+                legacy_stream_preferences(&mut request["settings"], preferences);
+            }
+        }
         let value = self.runtime.invoke(host, &request)?;
         if !current() {
             return Err(ProviderError::Host("provider settings changed".into()));
@@ -1013,6 +1299,9 @@ fn stream_to_stremio(stream: &ProviderStream, provider_id: &str) -> Result<Value
     });
     if !stream.url.is_empty() {
         result["url"] = json!(stream.url);
+    }
+    if let Some(facts) = &stream.stream_facts {
+        result["behaviorHints"]["streamFacts"] = json!(facts);
     }
     if let Some(hash) = &stream.info_hash {
         result["infoHash"] = json!(hash.to_ascii_lowercase());

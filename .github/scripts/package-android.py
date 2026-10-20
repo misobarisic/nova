@@ -3,11 +3,12 @@
 import copy
 import os
 import re
+import struct
 import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 ABIS = {"arm64-v8a", "armeabi-v7a", "x86_64"}
 NATIVE_LIBRARIES = (
@@ -16,6 +17,118 @@ NATIVE_LIBRARIES = (
 )
 ABI_ELF = {"arm64-v8a": (2, 183), "armeabi-v7a": (1, 40), "x86_64": (2, 62)}
 VARIANTS = {"-universal": ABIS, **{f"-{abi}": {abi} for abi in sorted(ABIS)}}
+ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android"
+EXTRACT_NATIVE_LIBS_ID = 0x010104EA
+NO_INDEX = 0xFFFFFFFF
+
+
+def set_extract_native_libs(manifest, enabled):
+    """Change only the compiled application boolean, without rebuilding resources.
+
+    The release source deliberately supports direct loading. Its universal
+    derivative instead extracts compressed libraries. Matching the binary XML
+    element, namespace and resource ID avoids patching an unrelated integer or
+    string, and preserves every other manifest attribute byte-for-byte.
+    """
+    def fail():
+        raise RuntimeError("Invalid or unsupported compiled AndroidManifest.xml")
+
+    def chunks():
+        if len(manifest) < 8:
+            fail()
+        kind, header_size, size = struct.unpack_from("<HHI", manifest)
+        if kind != 0x0003 or header_size != 8 or size != len(manifest):
+            fail()
+        offset = header_size
+        while offset < size:
+            if offset + 8 > size:
+                fail()
+            kind, header, length = struct.unpack_from("<HHI", manifest, offset)
+            if header < 8 or length < header or offset + length > size:
+                fail()
+            yield kind, offset, header, length
+            offset += length
+
+    def strings(offset, header, length):
+        if header < 28:
+            fail()
+        count, styles, flags, start, style_start = struct.unpack_from("<IIIII", manifest, offset + 8)
+        end = style_start or length
+        if header + (count + styles) * 4 > start or not start <= end <= length:
+            fail()
+        pool = manifest[offset + start:offset + end]
+
+        def read_length(position, utf8):
+            unit, marker = (1, 0x80) if utf8 else (2, 0x8000)
+            if position + unit > len(pool):
+                fail()
+            value = int.from_bytes(pool[position:position + unit], "little")
+            position += unit
+            if value & marker:
+                if position + unit > len(pool):
+                    fail()
+                value = ((value & (marker - 1)) << (8 if utf8 else 16)) | int.from_bytes(pool[position:position + unit], "little")
+                position += unit
+            return value, position
+
+        result = []
+        for index in range(count):
+            position = struct.unpack_from("<I", manifest, offset + header + index * 4)[0]
+            utf8 = bool(flags & 0x100)
+            size, position = read_length(position, utf8)
+            if utf8:
+                size, position = read_length(position, True)
+            else:
+                size *= 2
+            terminator = 1 if utf8 else 2
+            if position + size + terminator > len(pool) or any(pool[position + size:position + size + terminator]):
+                fail()
+            try:
+                result.append(pool[position:position + size].decode("utf-8" if utf8 else "utf-16-le"))
+            except UnicodeError:
+                fail()
+        return result
+
+    pool, resource_ids, matches = None, None, []
+    for kind, offset, header, length in chunks():
+        if kind == 0x0001:
+            if pool is not None:
+                fail()
+            pool = strings(offset, header, length)
+        elif kind == 0x0180:
+            if resource_ids is not None or header != 8 or (length - header) % 4:
+                fail()
+            resource_ids = struct.unpack_from(f"<{(length - header) // 4}I", manifest, offset + header)
+        elif kind == 0x0102:
+            if pool is None or resource_ids is None or header < 16 or length < header + 20:
+                fail()
+            extension = offset + header
+            namespace, name, attr_start, attr_size, count = struct.unpack_from("<IIHHH", manifest, extension)
+            if name >= len(pool) or attr_start < 20 or attr_size < 20 or header + attr_start + attr_size * count > length:
+                fail()
+            if namespace != NO_INDEX or pool[name] != "application":
+                continue
+            for index in range(count):
+                attribute = extension + attr_start + index * attr_size
+                namespace, name, raw, value_size, reserved, value_type, value = struct.unpack_from("<IIIHBBI", manifest, attribute)
+                if name >= len(pool) or namespace != NO_INDEX and namespace >= len(pool):
+                    fail()
+                if name < len(resource_ids) and resource_ids[name] == EXTRACT_NATIVE_LIBS_ID:
+                    if namespace == NO_INDEX or pool[namespace] != ANDROID_NAMESPACE or pool[name] != "extractNativeLibs" or value_size != 8 or reserved != 0 or value_type != 0x12:
+                        fail()
+                    matches.append(attribute)
+    if len(matches) != 1:
+        raise RuntimeError("APK must have exactly one compiled application android:extractNativeLibs boolean")
+    result = bytearray(manifest)
+    # Remove a textual raw value if present; the canonical typed boolean is
+    # authoritative, including for aapt's post-signing inspection.
+    struct.pack_into("<I", result, matches[0] + 8, NO_INDEX)
+    struct.pack_into("<I", result, matches[0] + 16, NO_INDEX if enabled else 0)
+    return bytes(result)
+
+
+def native_entry(name):
+    return name.startswith("lib/") and name.endswith(".so")
 
 
 def verify_version(badging, expected_version):
@@ -67,7 +180,7 @@ def check_abis(entries, expected):
         raise RuntimeError(f"APK missing native libraries: {sorted(missing)}")
 
 
-def filter_apk(source, output, abis):
+def filter_apk(source, output, abis, *, extract_native_libs=False):
     # Rebuilding the ZIP also removes the APK v2/v3 signing block. Old JAR
     # signatures are removed explicitly; license files under META-INF stay.
     with ZipFile(source) as original, ZipFile(output, "w") as result:
@@ -75,6 +188,8 @@ def filter_apk(source, output, abis):
         entries = original.infolist()
         if len({entry.filename for entry in entries}) != len(entries):
             raise RuntimeError("Source APK has duplicate ZIP entries")
+        if extract_native_libs and not any(entry.filename == "AndroidManifest.xml" for entry in entries):
+            raise RuntimeError("Source APK has no compiled AndroidManifest.xml")
         check_abis([entry.filename for entry in entries], ABIS)
         # Validate the packaged bytes rather than a checkout of nova-vendor:
         # swapped ABI directories otherwise pass filename checks and fail on-device.
@@ -91,10 +206,16 @@ def filter_apk(source, output, abis):
                     raise RuntimeError(f"APK native library has wrong architecture: {name}")
         for entry in entries:
             if keep_entry(entry.filename, abis):
-                result.writestr(copy.copy(entry), original.read(entry))
+                data = original.read(entry)
+                copied = copy.copy(entry)
+                if extract_native_libs and entry.filename == "AndroidManifest.xml":
+                    data = set_extract_native_libs(data, True)
+                if extract_native_libs and native_entry(entry.filename):
+                    copied.compress_type = ZIP_DEFLATED
+                result.writestr(copied, data, compresslevel=9 if extract_native_libs and native_entry(entry.filename) else None)
 
 
-def verify_payload(source, result, abis):
+def verify_payload(source, result, abis, *, extract_native_libs=False):
     with ZipFile(source) as original, ZipFile(result) as packaged:
         expected = {
             entry.filename: entry
@@ -112,23 +233,30 @@ def verify_payload(source, result, abis):
             raise RuntimeError("Packaging changed the APK payload entry set")
         check_abis(actual, abis)
         for name, entry in expected.items():
-            if original.read(entry) != packaged.read(actual[name]):
+            expected_data = original.read(entry)
+            if extract_native_libs and name == "AndroidManifest.xml":
+                expected_data = set_extract_native_libs(expected_data, True)
+            if expected_data != packaged.read(actual[name]):
                 raise RuntimeError(f"Packaging changed payload bytes: {name}")
-            if entry.compress_type != actual[name].compress_type:
+            compression = ZIP_DEFLATED if extract_native_libs and native_entry(name) else entry.compress_type
+            if compression != actual[name].compress_type:
                 raise RuntimeError(f"Packaging changed compression: {name}")
 
 
 
-def verify_native_layout(path):
+def verify_native_layout(path, *, extract_native_libs=False):
     # zipalign alone ignores compressed entries. Verify storage AND actual local
     # data offsets, including extra fields (central-directory offsets are not
     # the mmap address). 16 KiB boundaries also satisfy 4 KiB devices.
     with ZipFile(path) as apk, Path(path).open("rb") as raw:
-        libraries = [entry for entry in apk.infolist()
-                     if entry.filename.startswith("lib/") and entry.filename.endswith(".so")]
+        libraries = [entry for entry in apk.infolist() if native_entry(entry.filename)]
         if not libraries:
             raise RuntimeError("APK has no native libraries")
         for entry in libraries:
+            if extract_native_libs:
+                if entry.compress_type != ZIP_DEFLATED:
+                    raise RuntimeError(f"Universal APK native library is not compressed: {entry.filename}")
+                continue
             if entry.compress_type != ZIP_STORED:
                 raise RuntimeError(f"APK native library is compressed: {entry.filename}")
             raw.seek(entry.header_offset)
@@ -142,13 +270,14 @@ def verify_native_layout(path):
                 raise RuntimeError(f"APK native library is not 16 KiB aligned: {entry.filename}")
 
 
-def verify_native_manifest(tree):
+def verify_native_manifest(tree, *, extract_native_libs=False):
     # aapt dump xmltree exposes the binary manifest boolean, not Cargo metadata.
+    boolean = r"(?:true|0xffffffff|0x1)" if extract_native_libs else r"(?:false|0x0)"
     if not re.search(
         r"^\s*A: android:extractNativeLibs(?:\(0x[0-9a-fA-F]+\))?="
-        r"(?:\(type 0x12\))?(?:false|0x0)\s*$", tree, re.MULTILINE,
+        rf"(?:\(type 0x12\))?{boolean}\s*$", tree, re.MULTILINE,
     ):
-        raise RuntimeError("APK must declare android:extractNativeLibs=false")
+        raise RuntimeError(f"APK must declare android:extractNativeLibs={str(extract_native_libs).lower()}")
 
 
 def signing_key(manifest, profile="release"):
@@ -209,9 +338,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="nova-apk-") as temporary:
         work = Path(temporary)
         for suffix, abis in VARIANTS.items():
+            extract_native_libs = suffix == "-universal"
             unsigned, aligned = work / "unsigned.apk", work / "aligned.apk"
             output = dist / f"Nova-Android{suffix}-{tag}.apk"
-            filter_apk(source, unsigned, abis)
+            filter_apk(source, unsigned, abis, extract_native_libs=extract_native_libs)
             # Align before signing; editing a signed APK invalidates its signature.
             run(zipalign, "-P", "16", "-f", "4", unsigned, aligned)
             run(
@@ -222,12 +352,13 @@ def main():
             run(zipalign, "-c", "-P", "16", "4", output)
             if signer_certificates(apksigner, output) != original_signers:
                 raise RuntimeError(f"Signing certificate changed for {output}")
-            verify_payload(source, output, abis)
-            verify_native_layout(output)
+            verify_payload(source, output, abis, extract_native_libs=extract_native_libs)
+            verify_native_layout(output, extract_native_libs=extract_native_libs)
             verify_native_manifest(run(
                 tools / "aapt", "dump", "xmltree", output, "AndroidManifest.xml",
-            ))
-            print(f"Verified {output}: {', '.join(sorted(abis))}")
+            ), extract_native_libs=extract_native_libs)
+            mode = "compressed/extracted" if extract_native_libs else "stored/direct-loaded"
+            print(f"Verified {output}: {', '.join(sorted(abis))} · {mode}")
     print(f"Packaged all {len(VARIANTS)} APKs from one universal build")
 
 

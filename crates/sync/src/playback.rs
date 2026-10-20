@@ -15,12 +15,12 @@ use nova_playback_api::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{Semaphore, watch};
 
-pub const ALPN: &[u8] = b"nova/playback/2";
+pub const ALPN: &[u8] = b"nova/playback/3";
 const MAX_FRAME: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MEMBERSHIP_POLL: Duration = Duration::from_millis(100);
 pub(crate) fn request_timeout(request: &Request) -> Duration {
-    if matches!(request, Request::Lookup(_)) {
+    if matches!(request, Request::Lookup(_) | Request::CurrentOffers { .. }) {
         Duration::from_secs(90)
     } else {
         TIMEOUT
@@ -273,6 +273,9 @@ impl PlaybackService {
             return Response::Error(PlaybackError::Unauthorized);
         }
         if wire.id == 0 || wire.epoch == 0 {
+            return Response::Error(PlaybackError::InvalidRequest);
+        }
+        if !wire.request.valid_payload() {
             return Response::Error(PlaybackError::InvalidRequest);
         }
         let mut receiver;
@@ -695,6 +698,115 @@ mod tests {
         };
         assert_eq!(offers.len(), 256);
         assert!(offers.iter().all(|offer| offer.size == "s".repeat(32)));
+    }
+
+    #[test]
+    fn expanded_snapshot_is_bounded_and_semantic_commands_roundtrip() {
+        use nova_playback_api::*;
+        let track = PlaybackTrack {
+            id: i32::MAX,
+            token: "t".repeat(MAX_REMOTE_ID_BYTES),
+            label: "l".repeat(MAX_REMOTE_LABEL_BYTES),
+        };
+        let snapshot = PlaybackSnapshot {
+            title: "t".repeat(512),
+            episode: "e".repeat(512),
+            duration: 100.0,
+            audio_tracks: vec![track.clone(); MAX_REMOTE_TRACKS],
+            subtitle_tracks: vec![track.clone(); MAX_REMOTE_TRACKS],
+            secondary_subtitle_tracks: vec![track; MAX_REMOTE_TRACKS],
+            chapters: vec![
+                PlaybackChapter {
+                    id: "c".repeat(MAX_REMOTE_ID_BYTES),
+                    label: "l".repeat(MAX_REMOTE_LABEL_BYTES),
+                    time: 50.0
+                };
+                MAX_REMOTE_CHAPTERS
+            ],
+            bookmarks: vec![
+                PlaybackBookmark {
+                    id: "b".repeat(MAX_REMOTE_ID_BYTES),
+                    note: "n".repeat(MAX_REMOTE_NOTE_BYTES),
+                    time: 50.0
+                };
+                MAX_REMOTE_BOOKMARKS
+            ],
+            bookmark_notice: "n".repeat(512),
+            next_episode_token: "n".repeat(4096),
+            next_episode_media: Some(MediaIdentity {
+                media_type: "series".into(),
+                title_id: "i".repeat(1024),
+                episode_id: "i".repeat(1024),
+                title: "t".repeat(512),
+                episode: "e".repeat(512),
+            }),
+            ..Default::default()
+        };
+        assert!(snapshot.valid_payload());
+        let response = WireResponse {
+            epoch: u64::MAX,
+            id: u64::MAX,
+            response: Response::Snapshot(snapshot.clone()),
+        };
+        let bytes = postcard::to_allocvec(&response).unwrap();
+        assert!(bytes.len() <= MAX_FRAME, "{} bytes", bytes.len());
+        let decoded: WireResponse = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.response, Response::Snapshot(snapshot.clone()));
+        let mut oversized = snapshot;
+        oversized.bookmarks.push(PlaybackBookmark::default());
+        assert!(!oversized.valid_payload());
+        let session = SessionId {
+            epoch: 42,
+            sequence: 9,
+        };
+        for action in [
+            PlaybackAction::SeekChapter { id: "c123".into() },
+            PlaybackAction::SetSubtitleStyle {
+                control: 0,
+                value: -1.7,
+            },
+            PlaybackAction::SelectSecondarySubtitleTrackToken("t123".into()),
+            PlaybackAction::EditBookmark {
+                id: "b123".into(),
+                note: "A scene".into(),
+            },
+            PlaybackAction::SkipSegment {
+                token: "s123".into(),
+            },
+            PlaybackAction::CancelSubtitleDownload { secondary: true },
+        ] {
+            assert!(action.valid_payload());
+            let request = wire(7, Request::Command { session, action });
+            let decoded: WireRequest =
+                postcard::from_bytes(&postcard::to_allocvec(&request).unwrap()).unwrap();
+            assert_eq!(decoded.request, request.request);
+        }
+        assert!(
+            !PlaybackAction::SetSubtitleStyle {
+                control: 7,
+                value: 1.0
+            }
+            .valid_payload()
+        );
+        assert!(
+            !PlaybackAction::SetSubtitleStyle {
+                control: 0,
+                value: f64::NAN
+            }
+            .valid_payload()
+        );
+        assert!(
+            !PlaybackAction::AddBookmark {
+                note: "x".repeat(281)
+            }
+            .valid_payload()
+        );
+        assert!(!PlaybackAction::SetSpeed(3.0).valid_payload());
+        assert_eq!(ALPN, b"nova/playback/3");
+        assert_eq!(
+            request_timeout(&Request::CurrentOffers { session }),
+            Duration::from_secs(90)
+        );
     }
 
     fn test_service(peers: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>) -> PlaybackService {

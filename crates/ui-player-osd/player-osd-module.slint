@@ -84,6 +84,8 @@ export component PlayerOsdModule inherits Window {
         header_geometry_changed(bottom) => { PlayerOsdBridge.header_bottom = bottom; }
         toggle_pause() => { PlayerOsdBridge.toggle_pause(); }
         seek(v) => { PlayerOsdBridge.seek(v); }
+        seek_chapter(v) => { PlayerOsdBridge.seek_chapter(v); }
+        seek_scene_bookmark(id) => { PlayerOsdBridge.seek_scene_bookmark(id); }
         seek_relative(v) => { PlayerOsdBridge.seek_relative(v); }
         close_player() => { PlayerOsdBridge.close_player(); }
         take_screenshot() => { PlayerOsdBridge.take_screenshot(); }

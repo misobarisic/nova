@@ -9,11 +9,177 @@ use nova_config::stream_filters::{
 pub(super) const RESOLUTIONS: [u16; 7] = [0, 480, 720, 1080, 1440, 2160, 4320];
 const SIZES_GIB: [u64; 9] = [0, 1, 2, 4, 8, 16, 32, 64, 128];
 
+/// Virtual account fields retain the nested local rules object. Audio source
+/// and custom order form one coherent value; other choices sync independently.
+pub(super) const RULE_SCOPES: &[(&str, &[&str])] = &[
+    ("stream_filters_enabled", &["enabled"]),
+    ("stream_filters_resolution", &["max_height"]),
+    ("stream_filters_size", &["max_bytes"]),
+    ("stream_filters_allowed_codecs", &["video_codecs"]),
+    ("stream_filters_excluded_codecs", &["excluded_video_codecs"]),
+    ("stream_filters_codec_priority", &["codec_priority"]),
+    ("stream_filters_sort_order", &["sort_order"]),
+    (
+        "stream_filters_audio",
+        &["audio_languages", "use_preferred_audio_languages"],
+    ),
+    ("stream_filters_require_audio", &["require_audio_language"]),
+    ("stream_filters_require_codec", &["require_preferred_codec"]),
+    ("stream_filters_retain_unknown", &["retain_unknown"]),
+];
+
+pub(super) fn scope_fields(key: &str) -> Option<&'static [&'static str]> {
+    RULE_SCOPES
+        .iter()
+        .find(|(scope, _)| *scope == key)
+        .map(|(_, fields)| *fields)
+}
+
+pub(super) fn scope_value(rules: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
+    let fields = scope_fields(key)?;
+    if fields.len() == 1 {
+        return rules.get(fields[0]).cloned();
+    }
+    let mut audio = serde_json::Map::new();
+    audio.insert(
+        "audio_languages".into(),
+        rules.get("audio_languages")?.clone(),
+    );
+    audio.insert(
+        "use_preferred_audio_languages".into(),
+        rules
+            .get("use_preferred_audio_languages")
+            .cloned()
+            .unwrap_or_else(|| {
+                serde_json::Value::Bool(
+                    rules
+                        .get("audio_languages")
+                        .and_then(serde_json::Value::as_array)
+                        .is_none_or(Vec::is_empty),
+                )
+            }),
+    );
+    Some(serde_json::Value::Object(audio))
+}
+
+pub(super) fn flatten_settings(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(rules) = map.remove("stream_filters") {
+        for (key, _) in RULE_SCOPES {
+            if let Some(value) = scope_value(&rules, key) {
+                map.entry((*key).to_owned()).or_insert(value);
+            }
+        }
+    }
+}
+
+pub(super) fn settings_value(settings: &CacheSettings) -> serde_json::Value {
+    let mut value = serde_json::to_value(settings).unwrap_or_default();
+    flatten_settings(&mut value);
+    value
+}
+
+pub(super) fn settings_from_value(
+    mut value: serde_json::Value,
+) -> Result<CacheSettings, serde_json::Error> {
+    if let Some(map) = value.as_object_mut() {
+        let mut rules = serde_json::to_value(StreamFilterRules::default()).unwrap();
+        for (key, fields) in RULE_SCOPES {
+            if let Some(value) = map.remove(*key) {
+                if fields.len() == 1 {
+                    rules[fields[0]] = value;
+                } else {
+                    for field in *fields {
+                        // Missing coupled fields are invalid, not a reset.
+                        rules[*field] = value
+                            .get(*field)
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                    }
+                }
+            }
+        }
+        map.insert("stream_filters".into(), rules);
+    }
+    serde_json::from_value(value)
+}
+
+pub(super) fn migrate_overrides(settings: &mut CacheSettings) {
+    if let Some(legacy) = settings.sync_overrides.get("stream_filters").cloned()
+        && let Ok(rules) = serde_json::from_value::<StreamFilterRules>(legacy)
+    {
+        let rules = serde_json::to_value(rules).unwrap();
+        for (key, _) in RULE_SCOPES {
+            if let Some(value) = scope_value(&rules, key) {
+                settings
+                    .sync_overrides
+                    .entry((*key).into())
+                    .or_insert(value);
+            }
+        }
+        settings.sync_overrides.remove("stream_filters");
+    }
+}
+
+pub(super) fn effective_rules(settings: &CacheSettings) -> StreamFilterRules {
+    settings.stream_filters.resolved_with_subtitles(
+        &settings.default_audio_language,
+        &settings.default_subtitle_language,
+    )
+}
+
+fn codec_code(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::Avc => "avc",
+        VideoCodec::Hevc => "hevc",
+        VideoCodec::Av1 => "av1",
+        VideoCodec::Vp9 => "vp9",
+        VideoCodec::Other => "other",
+    }
+}
+fn codec_value(value: &str) -> Option<VideoCodec> {
+    if value.trim() == "other" {
+        Some(VideoCodec::Other)
+    } else {
+        VideoCodec::parse(value)
+    }
+}
+
 /// Structured, explicitly audio/video-owned addon metadata wins over release
 /// text. No URL/credential parsing and no guessing languages from subtitle rows.
 pub(super) fn stream_facts(stream: &addons::Stream) -> StreamFacts {
     let extra = &stream.extra;
     let hints = extra.get("behaviorHints");
+    let canonical = extra
+        .get("streamFacts")
+        .or_else(|| hints.and_then(|hints| hints.get("streamFacts")));
+    // Providers can publish the exact evidence used by their candidate sort,
+    // avoiding disagreement caused by formatting or reparsing their display text.
+    if let Some(canonical) = canonical
+        && let Ok(mut canonical) = serde_json::from_value::<StreamFacts>(canonical.clone())
+    {
+        canonical.height = canonical
+            .height
+            .filter(|height| (144..=8640).contains(height));
+        canonical.bytes = canonical.bytes.filter(|bytes| *bytes > 0);
+        canonical.audio_languages = canonical
+            .audio_languages
+            .iter()
+            .take(32)
+            .filter_map(|value| audio_language(value))
+            .collect();
+        canonical.subtitle_languages = canonical
+            .subtitle_languages
+            .iter()
+            .take(32)
+            .filter_map(|value| audio_language(value))
+            .collect();
+        // Unknown fields in this explicit evidence object stay unknown; do not
+        // turn a provider's null codec/cache claim into a guess from its label.
+        return canonical;
+    }
     let filename = hints
         .and_then(|hints| hints.get("filename"))
         .and_then(serde_json::Value::as_str)
@@ -112,6 +278,59 @@ pub(super) fn stream_facts(stream: &addons::Stream) -> StreamFacts {
             facts.audio_languages = languages;
         }
     }
+    let boolean = |value: &serde_json::Value| {
+        value.as_bool().or_else(|| match value.as_str()? {
+            "true" | "yes" => Some(true),
+            "false" | "no" => Some(false),
+            _ => None,
+        })
+    };
+    if let Some(cached) = value(&["cached", "isCached", "is_cached"]).and_then(boolean) {
+        facts.cached = Some(cached);
+    }
+    if let Some(pack) = value(&["seasonPack", "season_pack", "isSeasonPack"]).and_then(boolean) {
+        facts.season_pack = Some(pack);
+    }
+    if let Some(seeders) = value(&["seeders", "seedCount", "seed_count"]).and_then(number) {
+        facts.seeders = Some(seeders);
+    }
+    let languages = |value: &serde_json::Value| {
+        let values = match value {
+            serde_json::Value::Array(values) => values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .take(32)
+                .collect::<Vec<_>>(),
+            serde_json::Value::String(value) => {
+                value.split([',', '/', ';', ' ']).take(32).collect()
+            }
+            _ => Vec::new(),
+        };
+        values
+            .into_iter()
+            .filter_map(audio_language)
+            .fold(Vec::new(), |mut list, language| {
+                if !list.contains(&language) {
+                    list.push(language);
+                }
+                list
+            })
+    };
+    if let Some(subtitles) = value(&[
+        "subtitleLanguages",
+        "subtitleLanguage",
+        "subtitle_languages",
+    ]) {
+        facts.subtitle_languages = languages(subtitles);
+    } else {
+        for subtitle in stream.subtitles.iter().take(32) {
+            if let Some(language) = subtitle.lang.as_deref().and_then(audio_language)
+                && !facts.subtitle_languages.contains(&language)
+            {
+                facts.subtitle_languages.push(language);
+            }
+        }
+    }
     facts
 }
 
@@ -131,42 +350,48 @@ pub(super) fn apply_stream_rules(rows: &mut Vec<StreamUi>, rules: &StreamFilterR
 }
 
 pub(super) fn rank_stream_rules(rows: &mut [StreamUi], rules: &StreamFilterRules) {
-    if rules.enabled && !rules.audio_languages.is_empty() {
-        rows.sort_by_key(|row| {
-            (
-                usize::from(!matches!(row.source, StreamSource::Downloaded { .. })),
-                rules.audio_rank(&row.card.filter_facts),
-            )
+    if rules.enabled {
+        rows.sort_by(|a, b| {
+            usize::from(!matches!(a.source, StreamSource::Downloaded { .. }))
+                .cmp(&usize::from(!matches!(
+                    b.source,
+                    StreamSource::Downloaded { .. }
+                )))
+                .then_with(|| rules.compare(&a.card.filter_facts, &b.card.filter_facts))
         });
     }
 }
 
-/// Automatic decisions cannot outrank an explicitly preferred audio language
-/// with a remembered release family. The ordinary picker still shows all valid
-/// fallback languages unless the viewer chose to require a match.
+/// A remembered release family can choose only within the best complete sort
+/// bucket. It cannot override a higher-priority criterion chosen by the viewer.
 pub(super) fn preferred_stream_rules<'a>(
     rows: &'a [StreamUi],
     rules: &StreamFilterRules,
 ) -> &'a [StreamUi] {
-    if !rules.enabled || rules.audio_languages.is_empty() {
+    if !rules.enabled {
         return rows;
     }
     let Some(first) = rows.first() else {
         return rows;
     };
     let offline = matches!(first.source, StreamSource::Downloaded { .. });
-    let rank = rules.audio_rank(&first.card.filter_facts);
     let count = rows
         .iter()
         .take_while(|row| {
             matches!(row.source, StreamSource::Downloaded { .. }) == offline
-                && rules.audio_rank(&row.card.filter_facts) == rank
+                && rules
+                    .compare(&first.card.filter_facts, &row.card.filter_facts)
+                    .is_eq()
         })
         .count();
     &rows[..count]
 }
 
 impl Bridge {
+    pub(super) fn effective_stream_filter_rules(&self) -> StreamFilterRules {
+        effective_rules(&self.shared.lock().unwrap().cache_settings)
+    }
+
     pub(super) fn wire_stream_filters(&self) {
         let Some(app) = self.app() else {
             return;
@@ -176,6 +401,16 @@ impl Bridge {
         filters.on_edited(move |field, value| b.edit_stream_filter_rule(field, value.as_str()));
         let b = self.clone();
         filters.on_reset(move || b.store_stream_filter_rules(StreamFilterRules::default()));
+        let b = self.clone();
+        filters.on_sort_edited(move |criterion, action| {
+            b.edit_stream_sort(criterion.as_str(), action)
+        });
+        let b = self.clone();
+        filters.on_language_search(move |query| b.filter_stream_audio_languages(query.as_str()));
+        let b = self.clone();
+        filters.on_language_edited(move |code, action| {
+            b.edit_stream_audio_language(code.as_str(), action)
+        });
         self.refresh_stream_filter_settings();
     }
 
@@ -193,6 +428,26 @@ impl Bridge {
             .normalized();
         let bridge = app.global::<StreamFiltersBridge>();
         bridge.set_enabled(rules.enabled);
+        bridge.set_sort_order(
+            Rc::new(VecModel::from(
+                rules
+                    .sort_order
+                    .iter()
+                    .map(|rule| SharedString::from(rule.criterion.key()))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        bridge.set_sort_ascending(
+            Rc::new(VecModel::from(
+                rules
+                    .sort_order
+                    .iter()
+                    .map(|rule| rule.direction == nova_config::stream_filters::SortDirection::Asc)
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
         bridge.set_max_resolution_index(
             RESOLUTIONS
                 .iter()
@@ -224,9 +479,155 @@ impl Bridge {
         bridge.set_allow_av1(rules.video_codecs.contains(&VideoCodec::Av1));
         bridge.set_allow_vp9(rules.video_codecs.contains(&VideoCodec::Vp9));
         bridge.set_allow_other(rules.video_codecs.contains(&VideoCodec::Other));
+        bridge.set_block_avc(rules.excluded_video_codecs.contains(&VideoCodec::Avc));
+        bridge.set_block_hevc(rules.excluded_video_codecs.contains(&VideoCodec::Hevc));
+        bridge.set_block_av1(rules.excluded_video_codecs.contains(&VideoCodec::Av1));
+        bridge.set_block_vp9(rules.excluded_video_codecs.contains(&VideoCodec::Vp9));
+        bridge.set_block_other(rules.excluded_video_codecs.contains(&VideoCodec::Other));
+        bridge.set_codec_priority(
+            rules
+                .codec_priority
+                .iter()
+                .map(|codec| codec_code(*codec))
+                .collect::<Vec<_>>()
+                .join(",")
+                .into(),
+        );
+        let order = rules
+            .codec_priority
+            .iter()
+            .map(|codec| match codec {
+                VideoCodec::Avc => 0,
+                VideoCodec::Hevc => 1,
+                VideoCodec::Av1 => 2,
+                VideoCodec::Vp9 => 3,
+                VideoCodec::Other => 4,
+            })
+            .collect::<Vec<i32>>();
+        bridge.set_codec_priority_order(Rc::new(VecModel::from(order)).into());
+        bridge.set_use_preferred_audio_languages(rules.use_preferred_audio_languages);
+        let inherited = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .default_audio_language
+            .clone();
+        let label = nova_config::playback_preferences::language_preferences(&inherited)
+            .iter()
+            .map(|code| nova_config::playback_preferences::language_label(code))
+            .collect::<Vec<_>>()
+            .join(" → ");
+        bridge.set_preferred_audio_languages(if label.is_empty() {
+            text::tr("Automatic").into()
+        } else {
+            label.into()
+        });
         bridge.set_audio_languages(rules.audio_languages.join(", ").into());
+        self.filter_stream_audio_languages("");
         bridge.set_require_audio(rules.require_audio_language);
+        bridge.set_require_preferred_codec(rules.require_preferred_codec);
         bridge.set_retain_unknown(rules.retain_unknown);
+    }
+
+    fn filter_stream_audio_languages(&self, query: &str) {
+        let Some(app) = self.app() else { return };
+        let bridge = app.global::<StreamFiltersBridge>();
+        let choices = nova_config::playback_preferences::language_choices(query);
+        let model = |items: Vec<SharedString>| -> slint::ModelRc<SharedString> {
+            Rc::new(VecModel::from(items)).into()
+        };
+        bridge.set_language_codes(model(
+            choices
+                .iter()
+                .map(|(code, _)| code.clone().into())
+                .collect(),
+        ));
+        bridge.set_language_names(model(
+            choices.into_iter().map(|(_, name)| name.into()).collect(),
+        ));
+        let selected = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .stream_filters
+            .clone()
+            .normalized()
+            .audio_languages;
+        bridge.set_selected_language_codes(model(
+            selected.iter().map(|code| code.clone().into()).collect(),
+        ));
+        bridge.set_selected_language_names(model(
+            selected
+                .iter()
+                .map(|code| nova_config::playback_preferences::language_label(code).into())
+                .collect(),
+        ));
+    }
+
+    fn edit_stream_audio_language(&self, code: &str, action: i32) {
+        let Some(code) = nova_config::playback_preferences::normalize_language(code) else {
+            return;
+        };
+        let mut rules = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .stream_filters
+            .clone()
+            .normalized();
+        let index = rules
+            .audio_languages
+            .iter()
+            .position(|value| *value == code);
+        match (action, index) {
+            (0, None) if rules.audio_languages.len() < 16 => rules.audio_languages.push(code),
+            (1, Some(index)) => {
+                rules.audio_languages.remove(index);
+            }
+            (2, Some(index)) if index > 0 => rules.audio_languages.swap(index, index - 1),
+            (3, Some(index)) if index + 1 < rules.audio_languages.len() => {
+                rules.audio_languages.swap(index, index + 1)
+            }
+            _ => return,
+        }
+        rules.use_preferred_audio_languages = false;
+        self.store_stream_filter_rules(rules);
+    }
+
+    fn edit_stream_sort(&self, criterion: &str, action: i32) {
+        let mut rules = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .stream_filters
+            .clone()
+            .normalized();
+        let Some(index) = rules
+            .sort_order
+            .iter()
+            .position(|rule| rule.criterion.key() == criterion)
+        else {
+            return;
+        };
+        match action {
+            0 if index > 0 => rules.sort_order.swap(index, index - 1),
+            1 if index + 1 < rules.sort_order.len() => rules.sort_order.swap(index, index + 1),
+            2 => {
+                use nova_config::stream_filters::SortDirection;
+                rules.sort_order[index].direction =
+                    if rules.sort_order[index].direction == SortDirection::Asc {
+                        SortDirection::Desc
+                    } else {
+                        SortDirection::Asc
+                    };
+            }
+            _ => return,
+        }
+        self.store_stream_filter_rules(rules);
     }
 
     fn edit_stream_filter_rule(&self, field: i32, value: &str) {
@@ -290,7 +691,57 @@ impl Bridge {
                     return;
                 };
                 rules.audio_languages = languages;
+                rules.use_preferred_audio_languages = false;
             }
+            11..=15 => {
+                let codec = [
+                    VideoCodec::Avc,
+                    VideoCodec::Hevc,
+                    VideoCodec::Av1,
+                    VideoCodec::Vp9,
+                    VideoCodec::Other,
+                ][(field - 11) as usize];
+                rules.excluded_video_codecs.retain(|value| *value != codec);
+                if boolean {
+                    rules.excluded_video_codecs.push(codec);
+                }
+            }
+            16 => {
+                if let Some((action, code)) = value.split_once(':') {
+                    let Some(codec) = codec_value(code) else {
+                        return;
+                    };
+                    let index = rules
+                        .codec_priority
+                        .iter()
+                        .position(|value| *value == codec);
+                    match (action, index) {
+                        ("add", None) => rules.codec_priority.push(codec),
+                        ("remove", Some(index)) => {
+                            rules.codec_priority.remove(index);
+                        }
+                        ("up", Some(index)) if index > 0 => {
+                            rules.codec_priority.swap(index, index - 1)
+                        }
+                        ("down", Some(index)) if index + 1 < rules.codec_priority.len() => {
+                            rules.codec_priority.swap(index, index + 1)
+                        }
+                        _ => return,
+                    }
+                } else {
+                    let Some(priority) = value
+                        .split(',')
+                        .filter(|value| !value.trim().is_empty())
+                        .map(codec_value)
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        return;
+                    };
+                    rules.codec_priority = priority;
+                }
+            }
+            17 => rules.use_preferred_audio_languages = boolean,
+            18 => rules.require_preferred_codec = boolean,
             8 => rules.require_audio_language = boolean,
             9 => rules.retain_unknown = boolean,
             _ => return,
@@ -302,20 +753,32 @@ impl Bridge {
         if !writable_key("settings") {
             return;
         }
-        allow_setting_field("stream_filters");
-        let settings = {
+        let (settings, changed) = {
             let mut state = self.shared.lock().unwrap();
+            migrate_overrides(&mut state.cache_settings);
+            let before = serde_json::to_value(&state.cache_settings.stream_filters).unwrap();
+            let after = serde_json::to_value(&rules).unwrap();
+            let changed = RULE_SCOPES
+                .iter()
+                .filter_map(|(key, _)| {
+                    (scope_value(&before, key) != scope_value(&after, key)).then_some(*key)
+                })
+                .collect::<Vec<_>>();
             state.cache_settings.stream_filters = rules;
-            state.cache_settings.clone()
+            (state.cache_settings.clone(), changed)
         };
         set_active_cache_settings(settings.clone());
-        notify_setting_choice("stream_filters", &settings);
+        for field in changed {
+            allow_setting_field(field);
+            notify_setting_choice(field, &settings);
+        }
         write_settings(&settings);
         if let Some(app) = self.app() {
             app.global::<StreamFiltersBridge>().set_notice("".into());
         }
         self.refresh_stream_filter_settings();
         self.refresh_setting_sync();
+        self.refresh_stream_preferences_policy();
         self.apply_stream_filter();
     }
 }
@@ -323,6 +786,107 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_sort_crosses_addon_groups_and_only_true_ties_keep_source_order() {
+        use nova_config::stream_filters::{SortCriterion, SortDirection};
+        let row = |id: &str, addon: &str, language: &str, seeds| StreamUi {
+            id: id.into(),
+            choice_id: Some(id.into()),
+            owner_url: addon.into(),
+            addon: addon.into(),
+            display: id.into(),
+            source: StreamSource::Url(format!("https://example.test/{id}")),
+            download: None,
+            card: StreamCardText {
+                filter_facts: StreamFacts {
+                    audio_languages: vec![language.into()],
+                    codec: Some(VideoCodec::Av1),
+                    seeders: seeds,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+        let mut rules = StreamFilterRules {
+            enabled: true,
+            audio_languages: vec!["ja".into(), "en".into()],
+            codec_priority: vec![VideoCodec::Av1],
+            use_preferred_audio_languages: false,
+            ..Default::default()
+        };
+        let mut rows = vec![
+            row("early-en", "first-addon", "en", Some(200)),
+            row("late-ja", "later-addon", "ja", Some(100)),
+            row("late-ja-tie", "later-addon", "ja", Some(100)),
+            row("unknown-seeds", "first-addon", "ja", None),
+        ];
+        apply_stream_rules(&mut rows, &rules);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["late-ja", "late-ja-tie", "unknown-seeds", "early-en"]
+        );
+        assert_eq!(preferred_stream_rules(&rows, &rules).len(), 2);
+        let index = rules
+            .sort_order
+            .iter()
+            .position(|rule| rule.criterion == SortCriterion::Seeders)
+            .unwrap();
+        let seeders = rules.sort_order.remove(index);
+        rules.sort_order.insert(0, seeders);
+        rank_stream_rules(&mut rows, &rules);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["early-en", "late-ja", "late-ja-tie", "unknown-seeds"]
+        );
+        rules.sort_order[0].direction = SortDirection::Asc;
+        rank_stream_rules(&mut rows, &rules);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["late-ja", "late-ja-tie", "early-en", "unknown-seeds"]
+        );
+        let mut download = row("download", "offline", "en", None);
+        download.source = StreamSource::Downloaded {
+            job_id: "job".into(),
+            path: PathBuf::from("episode.mkv"),
+        };
+        rows.push(download);
+        rules.excluded_video_codecs = vec![VideoCodec::Av1];
+        apply_stream_rules(&mut rows, &rules);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].id, "download",
+            "completed artifacts remain pinned and accessible"
+        );
+    }
+
+    #[test]
+    fn canonical_provider_facts_stay_identical_instead_of_guessing_from_presentation() {
+        let stream = addons::Stream {
+            name: Some("2160p x265".into()),
+            description: Some(
+                "Cached: yes\nSeason pack: yes\nSeeders: 900\nAudio: English\nSubtitles: Japanese"
+                    .into(),
+            ),
+            extra: HashMap::from([(
+                "behaviorHints".into(),
+                serde_json::json!({"streamFacts": {
+                    "height": 1080, "bytes": 123456789, "codec": null, "cached": null,
+                    "season_pack": false, "seeders": 0, "audio_languages": ["hr"], "subtitle_languages": ["en"]
+                }}),
+            )]),
+            ..Default::default()
+        };
+        let facts = stream_facts(&stream);
+        assert_eq!(facts.height, Some(1080));
+        assert_eq!(facts.bytes, Some(123456789));
+        assert_eq!(facts.codec, None);
+        assert_eq!(facts.cached, None);
+        assert_eq!(facts.season_pack, Some(false));
+        assert_eq!(facts.seeders, Some(0));
+        assert_eq!(facts.audio_languages, ["hr"]);
+        assert_eq!(facts.subtitle_languages, ["en"]);
+    }
+
     #[test]
     fn structured_facts_override_conflicting_release_text_and_subtitles_are_not_audio() {
         let stream = addons::Stream {

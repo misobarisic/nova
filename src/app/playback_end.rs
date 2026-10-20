@@ -24,6 +24,13 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) fn invalidate_stream_preferences(&mut self) {
+        // Drop the attempt ticket so replies selected under old rules cannot
+        // revive its preview. Keep EOF timing and explicit dismissal intact.
+        self.automatic = None;
+        self.automatic_attempted = false;
+    }
+
     fn observe(&mut self, session: Option<Session>, ended: bool, eligible: bool, now: Instant) {
         if self.session != session {
             *self = Self {
@@ -67,6 +74,7 @@ struct Automatic {
     ticket: Arc<()>,
     next: Video,
     settings: u64,
+    rules: nova_config::stream_filters::StreamFilterRules,
     owners: Vec<(String, u64)>,
     rows: Vec<Vec<StreamUi>>,
     pending: usize,
@@ -300,12 +308,16 @@ impl Bridge {
         if self.remote_receiver_playback() || self.remote_output_selected() {
             return false;
         }
+        let rules = self.effective_stream_filter_rules();
+        if rules != automatic.rules {
+            return false;
+        }
         if automatic.candidate.as_ref().is_some_and(|row| {
             automatic_choice_with_rules(
                 std::slice::from_ref(row),
                 None,
                 active_torrent_settings().enabled,
-                &self.shared.lock().unwrap().cache_settings.stream_filters,
+                &rules,
             )
             .is_none()
         }) {
@@ -404,7 +416,7 @@ impl Bridge {
                 &rows,
                 preference.as_ref(),
                 active_torrent_settings().enabled,
-                &self.shared.lock().unwrap().cache_settings.stream_filters,
+                &self.effective_stream_filter_rules(),
             );
             if automatic_value.candidate.is_some() {
                 automatic_value.since = Some(now);
@@ -466,10 +478,12 @@ impl Bridge {
         };
         let ticket = Arc::new(());
         let settings = nova_providers::plugin_settings::settings_generation();
+        let rules = self.effective_stream_filter_rules();
         self.shared.lock().unwrap().playback_end.automatic = Some(Automatic {
             ticket: ticket.clone(),
             next: next.clone(),
             settings,
+            rules,
             owners,
             rows: vec![Vec::new(); urls.len()],
             pending: urls.len(),
@@ -567,7 +581,7 @@ impl Bridge {
             std::slice::from_ref(&row),
             None,
             active_torrent_settings().enabled,
-            &self.shared.lock().unwrap().cache_settings.stream_filters,
+            &self.effective_stream_filter_rules(),
         )
         .is_none()
         {
@@ -596,7 +610,8 @@ impl Bridge {
             return;
         }
         self.note_player_progress_from_ui();
-        app.invoke_close_player();
+        self.player
+            .with_preserved_fullscreen_on_close(|| app.invoke_close_player());
         self.clear_streams();
         // Re-enter the ordinary episode/stream path with a verified candidate.
         // No resolver URL, headers or torrent work is activated by discovery.
@@ -884,6 +899,7 @@ mod tests {
                 ticket: Arc::new(()),
                 next: Video::default(),
                 settings: 0,
+                rules: Default::default(),
                 owners: vec![],
                 rows: vec![],
                 pending: 0,

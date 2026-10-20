@@ -3,7 +3,7 @@
   const S = globalThis.Supernova;
   const lookupStreams = request => {
     const lookup = request.lookup;
-    const settings = request.settings || {};
+    const settings = S.withStreamPreferences(request.settings || {},request.streamPreferences);
     if (!lookup || !["movie","series"].includes(lookup.mediaType) || !lookup.title || !lookup.mediaId) return [];
     if (lookup.mediaType === "series" && !(Number.isInteger(lookup.season) && lookup.season > 0 && Number.isInteger(lookup.episode) && lookup.episode > 0)) return [];
     const enabled = Object.keys(S.sources).filter(id => settings["sources." + id] === true);
@@ -24,7 +24,8 @@
       return !value || typeof value !== "object" || Object.values(value).every(safeValue);
     };
     const validRow = row => {
-      if (!only(row,["id","title","description","source","seeders","size","info_hash","file_idx","resolver"]) || !text(row.id,256) || !text(row.title,1024) || !text(row.description,4096) || !text(row.source,512) || !(row.seeders === null || S.number(row.seeders) !== null) || !(row.size === null || S.number(row.size) !== null) || !safeValue(row)) return false;
+      if (!only(row,["id","title","description","source","seeders","size","info_hash","file_idx","resolver","streamFacts"]) || !text(row.id,256) || !text(row.title,1024) || !text(row.description,4096) || !text(row.source,512) || !(row.seeders === null || S.number(row.seeders) !== null) || !(row.size === null || S.number(row.size) !== null) || !safeValue(row)) return false;
+      if (row.streamFacts !== undefined && !S.validPreferenceFacts(row.streamFacts)) return false;
       if (row.resolver !== undefined) {
         if (row.info_hash !== undefined || row.file_idx !== undefined || !only(row.resolver,["provider_id","token"]) || row.resolver.provider_id !== "supernova" || !text(row.resolver.token,8192)) return false;
         const token = S.json(row.resolver.token);
@@ -84,7 +85,7 @@
       const ranked = records || [];
       torbox = S.sortRows([...availableRows.values()],settings);
       const direct = settings["playback.mode"] === "cached" ? [] : ranked.filter(record => S.number(record.fileIdx) !== null).map(record => S.row(record,false));
-      const rows = S.sortRows([...torbox.map(row=>({...row})),...direct],settings).slice(0,S.MAX);
+      const rows = S.sortRows([...torbox.map(S.copyRow),...direct],settings).slice(0,S.MAX);
       if (discoveryCacheHit) for (const row of rows) if (!row.resolver) row.description = S.cachedDiscoveryDescription(row.description);
       return rows;
     };

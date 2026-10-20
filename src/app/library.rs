@@ -1,8 +1,192 @@
 //! My Library: entries, categories and persistence.
+use super::media_identity::{IdentityIndex, TitleInventory, TitleKey};
 use super::posters::LibraryPosterRequest;
 use super::*;
 
+/// Presentation-only groups. The earliest saved physical source remains the
+/// representative, independently of filters, sort order and sync arrival order.
+/// Unknown legacy dates sort first; typed native IDs break every date tie.
+#[derive(Default)]
+pub(super) struct LibraryDisplayGroups {
+    representatives: HashMap<TitleKey, TitleKey>,
+    members: HashMap<TitleKey, Vec<TitleKey>>,
+}
+
+impl LibraryDisplayGroups {
+    fn from_index(mut identities: Vec<(TitleKey, u64)>, index: &IdentityIndex) -> Self {
+        identities.sort_by(|left, right| (left.1, &left.0).cmp(&(right.1, &right.0)));
+        let mut result = Self::default();
+        let mut representatives = Vec::<TitleKey>::new();
+        for (key, _) in identities {
+            let representative = representatives
+                .iter()
+                .find(|candidate| index.equivalent_titles(candidate, &key))
+                .cloned()
+                .unwrap_or_else(|| {
+                    representatives.push(key.clone());
+                    key.clone()
+                });
+            result
+                .members
+                .entry(representative.clone())
+                .or_default()
+                .push(key.clone());
+            result.representatives.insert(key, representative);
+        }
+        result
+    }
+
+    pub(super) fn is_representative(&self, type_: &str, id: &str) -> bool {
+        let key = (type_.to_owned(), id.to_owned());
+        self.representatives
+            .get(&key)
+            .is_none_or(|representative| *representative == key)
+    }
+
+    fn representative(&self, type_: &str, id: &str) -> TitleKey {
+        let key = (type_.to_owned(), id.to_owned());
+        self.representatives.get(&key).cloned().unwrap_or(key)
+    }
+
+    fn members(&self, type_: &str, id: &str) -> Vec<TitleKey> {
+        let representative = self.representative(type_, id);
+        self.members
+            .get(&representative)
+            .cloned()
+            .unwrap_or_else(|| vec![representative])
+    }
+
+    fn matching_query(&self, all: &[LibraryCandidate], needle: &str) -> HashSet<TitleKey> {
+        all.iter()
+            .filter(|candidate| candidate.name.to_lowercase().contains(needle))
+            .map(|candidate| self.representative(&candidate.type_, &candidate.id))
+            .collect()
+    }
+
+    fn project_candidates(
+        &self,
+        candidates: Vec<LibraryCandidate>,
+        all: &[LibraryCandidate],
+    ) -> Vec<LibraryCandidate> {
+        let matching: HashSet<_> = candidates
+            .iter()
+            .map(|candidate| self.representative(&candidate.type_, &candidate.id))
+            .collect();
+        all.iter()
+            .filter(|candidate| {
+                self.is_representative(&candidate.type_, &candidate.id)
+                    && matching.contains(&(candidate.type_.clone(), candidate.id.clone()))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+pub(super) fn display_groups_from_index(
+    entries: &[LibraryEntry],
+    index: &IdentityIndex,
+) -> LibraryDisplayGroups {
+    LibraryDisplayGroups::from_index(
+        entries
+            .iter()
+            .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+            .collect(),
+        index,
+    )
+}
+
+pub(super) fn prepare_display_groups(
+    entries: &[LibraryEntry],
+    mut episodes: impl FnMut(&str, &str) -> Vec<Video>,
+) -> LibraryDisplayGroups {
+    let identities = entries
+        .iter()
+        .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+        .collect::<Vec<_>>();
+    display_groups_for_identities(identities, None, &mut episodes)
+}
+
+fn display_groups_for_identities(
+    identities: Vec<(TitleKey, u64)>,
+    modal: Option<&TitleKey>,
+    episodes: &mut impl FnMut(&str, &str) -> Vec<Video>,
+) -> LibraryDisplayGroups {
+    // A currently open third source may prove the connection between two
+    // saved inventories. It contributes evidence, never a saved/display member.
+    let additional = modal.filter(|modal| !identities.iter().any(|(key, _)| key == *modal));
+    let inventories = identities
+        .iter()
+        .map(|(key, _)| key)
+        .chain(additional)
+        .filter(|(type_, _)| matches!(type_.as_str(), "series" | "anime"))
+        .map(|(media_type, series_id)| TitleInventory {
+            media_type: media_type.clone(),
+            series_id: series_id.clone(),
+            videos: episodes(media_type, series_id),
+        });
+    let index = IdentityIndex::new(inventories);
+    LibraryDisplayGroups::from_index(identities, &index)
+}
+
+type DisplayGroupsCache = (
+    (String, u64),
+    u64,
+    Vec<(TitleKey, u64)>,
+    Option<TitleKey>,
+    Arc<LibraryDisplayGroups>,
+);
+thread_local! {
+    // This compact index owns no metadata or physical Library records. Its
+    // revision already changes on Library, metadata and profile-affecting I/O.
+    static DISPLAY_GROUPS: std::cell::RefCell<Option<DisplayGroupsCache>> = const { std::cell::RefCell::new(None) };
+}
+
 impl Bridge {
+    pub(super) fn library_display_groups(&self) -> Arc<LibraryDisplayGroups> {
+        let (identities, modal) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state
+                    .entries
+                    .iter()
+                    .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+                    .collect::<Vec<_>>(),
+                state
+                    .modal_item
+                    .as_ref()
+                    .map(|item| (item.type_.clone(), item.id.clone())),
+            )
+        };
+        let context = profiles::capture();
+        let profile = (context.id.clone(), context.epoch);
+        let revision = progress_projection::revision();
+        if let Some(groups) = DISPLAY_GROUPS.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .filter(|(owner, version, keys, proof, _)| {
+                    owner == &profile
+                        && *version == revision
+                        && keys == &identities
+                        && proof == &modal
+                })
+                .map(|(_, _, _, _, groups)| groups.clone())
+        }) {
+            return groups;
+        }
+        let groups = Arc::new(display_groups_for_identities(
+            identities.clone(),
+            modal.as_ref(),
+            &mut |type_, id| read_episodes_cache_for(type_, id).unwrap_or_default(),
+        ));
+        if profiles::is_current(&context) && progress_projection::revision() == revision {
+            DISPLAY_GROUPS.with(|cache| {
+                *cache.borrow_mut() = Some((profile, revision, identities, modal, groups.clone()))
+            });
+        }
+        groups
+    }
+
     pub(super) fn library_contains(&self, id: &str) -> bool {
         self.shared
             .lock()
@@ -54,6 +238,16 @@ impl Bridge {
                 .map(|(index, entry)| LibraryIdentitySnapshot::new(index, entry))
                 .collect::<Vec<_>>()
         };
+        let groups = self.library_display_groups();
+        let all_candidates = {
+            let state = self.shared.lock().unwrap();
+            state
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
+                .collect::<Vec<_>>()
+        };
         let activity = read_viewing_activity();
         let dynamic_filter = !filter.is_empty()
             && BUILTIN_FILTERS.contains(&filter.as_str())
@@ -61,9 +255,10 @@ impl Bridge {
             && filter != "Dropped";
         let options = LibraryViewOptions {
             filter: &filter,
-            needle: query.trim().to_lowercase(),
+            needle: String::new(),
             sort,
         };
+        let query_matches = groups.matching_query(&all_candidates, &query.trim().to_lowercase());
         let mut candidates = Vec::new();
         for identity in identities {
             let episodes = ((dynamic_filter && identity.watch_status == WatchStatus::Auto)
@@ -94,6 +289,9 @@ impl Bridge {
             }) {
                 continue;
             }
+            if !query_matches.contains(&groups.representative(&entry.type_, &entry.id)) {
+                continue;
+            }
             if let Some(candidate) = project_library_candidate(
                 entry,
                 identity.index,
@@ -105,7 +303,10 @@ impl Bridge {
                 candidates.push(candidate);
             }
         }
-        order_library_candidates(candidates, options.sort)
+        order_library_candidates(
+            groups.project_candidates(candidates, &all_candidates),
+            options.sort,
+        )
     }
 
     pub(super) fn library_view_changed(&self) {
@@ -476,10 +677,11 @@ impl Bridge {
                 return;
             }
         }
+        let groups = currently_in.then(|| self.library_display_groups());
         {
             let mut state = self.shared.lock().unwrap();
-            if currently_in {
-                remove_library_entry(&mut state.entries, &id);
+            if let Some(groups) = groups {
+                remove_display_group(&mut state.entries, &groups, &type_, &id);
             } else {
                 upsert_library(
                     &mut state.entries,
@@ -696,24 +898,26 @@ impl Bridge {
     /// index is into the filtered grid and resolves through the same ordered
     /// candidate projection used to render the model.
     pub(super) fn remove_library_at(&self, index: usize) {
-        let selected = self.current_library_entry(index).map(|entry| entry.id);
-        let removed_id = {
-            let mut state = self.shared.lock().unwrap();
-            let id = selected.filter(|id| state.entries.iter().any(|entry| entry.id == *id));
-            if let Some(id) = id.as_deref() {
-                remove_library_entry(&mut state.entries, id);
-            }
-            id
+        let Some(selected) = self.current_library_entry(index) else {
+            return;
         };
-        if removed_id.is_none() {
+        let groups = self.library_display_groups();
+        let removed = {
+            let mut state = self.shared.lock().unwrap();
+            remove_display_group(&mut state.entries, &groups, &selected.type_, &selected.id)
+        };
+        if removed.is_empty() {
             return;
         }
         if let Some(app) = self.app() {
-            let open_id = {
-                let state = self.shared.lock().unwrap();
-                state.modal_item.as_ref().map(|m| m.id.clone())
-            };
-            if open_id == removed_id {
+            let open = self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .map(|item| (item.type_.clone(), item.id.clone()));
+            if open.is_some_and(|key| removed.contains(&key)) {
                 app.set_in_library(false);
             }
         }
@@ -958,59 +1162,54 @@ impl Bridge {
     }
 
     pub(super) fn toggle_entry_category(&self, cat_name: &str) {
-        let (entry_id, current_cats) = {
-            let state = self.shared.lock().unwrap();
-            match state.modal_item.as_ref() {
-                Some(m) => {
-                    let entry = state.entries.iter().find(|e| e.id == m.id);
-                    (
-                        m.id.clone(),
-                        entry.map(|e| e.categories.clone()).unwrap_or_default(),
-                    )
-                }
-                None => return,
-            }
-        };
-        let mut new_cats = current_cats;
-        if new_cats.iter().any(|c| c == cat_name) {
-            new_cats.retain(|c| c != cat_name);
-        } else {
-            new_cats.push(cat_name.to_string());
-        }
+        let key = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|item| (item.type_.clone(), item.id.clone()));
+        let Some((type_, id)) = key else { return };
+        let groups = self.library_display_groups();
         {
             let mut state = self.shared.lock().unwrap();
-            set_entry_categories(&mut state.entries, &entry_id, new_cats);
-            write_persisted_library(&state.entries);
+            toggle_display_group_category(&mut state.entries, &groups, &type_, &id, cat_name);
         }
+        self.persist_library();
         self.apply_library_to_ui();
-        // Refresh modal_category_flags in the detail modal.
         self.sync_modal_category_flags();
     }
 
     pub(super) fn sync_modal_category_flags(&self) {
-        let (entry_id, all_cats) = {
+        let (key, all_cats) = {
             let state = self.shared.lock().unwrap();
-            match state.modal_item.as_ref() {
-                Some(m) => (m.id.clone(), state.cache_settings.categories.clone()),
-                None => return,
-            }
+            let Some(item) = state.modal_item.as_ref() else {
+                return;
+            };
+            (
+                (item.type_.clone(), item.id.clone()),
+                state.cache_settings.categories.clone(),
+            )
         };
-        let entry_cats = {
+        let groups = self.library_display_groups();
+        let members = groups
+            .members(&key.0, &key.1)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let flags = {
             let state = self.shared.lock().unwrap();
-            state
-                .entries
+            all_cats
                 .iter()
-                .find(|e| e.id == entry_id)
-                .map(|e| e.categories.clone())
-                .unwrap_or_default()
+                .map(|category| {
+                    state.entries.iter().any(|entry| {
+                        members.contains(&(entry.type_.clone(), entry.id.clone()))
+                            && entry.categories.contains(category)
+                    })
+                })
+                .collect::<Vec<_>>()
         };
-        let flags: Vec<bool> = all_cats
-            .iter()
-            .map(|c| entry_cats.iter().any(|ec| ec == c))
-            .collect();
         if let Some(app) = self.app() {
-            let count = flags.iter().filter(|f| **f).count() as i32;
-            app.set_selected_category_count(count);
+            app.set_selected_category_count(flags.iter().filter(|flag| **flag).count() as i32);
             app.set_modal_category_flags(Rc::new(VecModel::from(flags)).into());
         }
     }
@@ -1109,6 +1308,59 @@ pub(crate) fn upsert_library(entries: &mut Vec<LibraryEntry>, entry: LibraryEntr
         true
     }
 }
+fn remove_display_group(
+    entries: &mut Vec<LibraryEntry>,
+    groups: &LibraryDisplayGroups,
+    type_: &str,
+    id: &str,
+) -> Vec<TitleKey> {
+    let members = groups
+        .members(type_, id)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut removed = Vec::new();
+    entries.retain(|entry| {
+        let key = (entry.type_.clone(), entry.id.clone());
+        if members.contains(&key) {
+            removed.push(key);
+            false
+        } else {
+            true
+        }
+    });
+    removed
+}
+
+fn toggle_display_group_category(
+    entries: &mut [LibraryEntry],
+    groups: &LibraryDisplayGroups,
+    type_: &str,
+    id: &str,
+    category: &str,
+) {
+    let members = groups
+        .members(type_, id)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let selected = entries.iter().any(|entry| {
+        members.contains(&(entry.type_.clone(), entry.id.clone()))
+            && entry.categories.iter().any(|value| value == category)
+    });
+    for entry in entries
+        .iter_mut()
+        .filter(|entry| members.contains(&(entry.type_.clone(), entry.id.clone())))
+    {
+        let id = entry.id.clone();
+        let mut categories = entry.categories.clone();
+        if selected {
+            categories.retain(|value| value != category);
+        } else {
+            categories.push(category.into());
+        }
+        set_entry_categories(std::slice::from_mut(entry), &id, categories);
+    }
+}
+
 /// Remove an entry by `id`. Returns true when something was removed.
 pub(crate) fn remove_library_entry(entries: &mut Vec<LibraryEntry>, id: &str) -> bool {
     let before = entries.len();
@@ -1249,17 +1501,28 @@ pub(super) fn prepare_progress_cards(
     view: &super::progress_projection::View,
     metadata: &super::progress_projection::Metadata<'_>,
     activity: &HashMap<String, ViewingActivity>,
+    groups: &LibraryDisplayGroups,
 ) -> Vec<LibraryCardSnapshot> {
     let options = LibraryViewOptions {
         filter: &view.filter,
-        needle: view.query.trim().to_lowercase(),
+        needle: String::new(),
         sort: view.sort,
     };
+    let all = state
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
+        .collect::<Vec<_>>();
+    let query_matches = groups.matching_query(&all, &view.query.trim().to_lowercase());
     let candidates = state
         .entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
+            if !query_matches.contains(&groups.representative(&entry.type_, &entry.id)) {
+                return None;
+            }
             let cached = metadata.title(&entry.type_, &entry.id);
             let episodes = cached
                 .episodes
@@ -1287,7 +1550,7 @@ pub(super) fn prepare_progress_cards(
             )
         })
         .collect();
-    order_library_candidates(candidates, options.sort)
+    order_library_candidates(groups.project_candidates(candidates, &all), options.sort)
         .iter()
         .filter_map(|candidate| {
             project_library_card(
@@ -1567,6 +1830,235 @@ fn builtin_filter_label(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grouped_identity_fixture() -> (Vec<LibraryEntry>, HashMap<String, Vec<Video>>) {
+        let mut entries: Vec<LibraryEntry> = serde_json::from_value(serde_json::json!([
+            {"id":"tt100", "type_":"series", "name":"Canonical show", "added_at_secs":2, "categories":["Anime"], "genres":["Fantasy"]},
+            {"id":"kitsu:42", "type_":"series", "name":"Native show", "added_at_secs":1, "categories":["Drama"]},
+            {"id":"season-one", "type_":"series", "name":"Partial season", "added_at_secs":3},
+            {"id":"unproven", "type_":"series", "name":"Native show", "added_at_secs":4}
+        ])).unwrap();
+        entries[0].poster_url = "canonical-poster".into();
+        entries[1].poster_url = "native-poster".into();
+        let videos: Vec<Video> = (1..=2)
+            .map(|episode| {
+                serde_json::from_value(serde_json::json!({
+                    "id":format!("kitsu:42:{episode}"), "season":1, "episode":episode,
+                    "released": if episode == 1 { "2020-01-01" } else { "2099-01-01" },
+                    "novaStreamIds":[format!("tt100:1:{episode}")],
+                    "novaMetadataRevision":nova_providers::metadata_revision()
+                }))
+                .unwrap()
+            })
+            .collect();
+        let inventories = HashMap::from([
+            ("tt100".into(), videos.clone()),
+            ("kitsu:42".into(), videos.clone()),
+            ("season-one".into(), vec![videos[0].clone()]),
+            (
+                "unproven".into(),
+                vec![Video {
+                    id: "private-episode".into(),
+                    ..Default::default()
+                }],
+            ),
+        ]);
+        (entries, inventories)
+    }
+
+    #[test]
+    fn modal_inventory_bridges_ui_and_worker_proof_without_becoming_a_saved_member() {
+        let video = |id: &str, aliases: &[&str]| {
+            serde_json::from_value::<Video>(serde_json::json!({
+            "id":id,"novaStreamIds":aliases,"novaMetadataRevision":nova_providers::metadata_revision()
+        })).unwrap()
+        };
+        let inventories = HashMap::from([
+            ("native-a", vec![video("episode-a", &["kitsu:42:1"])]),
+            ("native-b", vec![video("episode-b", &["tt100:1:1"])]),
+            ("modal", vec![video("bridge", &["kitsu:42:1", "tt100:1:1"])]),
+        ]);
+        let identities = vec![
+            (("series".into(), "native-a".into()), 1),
+            (("series".into(), "native-b".into()), 2),
+        ];
+        let mut load = |_: &str, id: &str| inventories[id].clone();
+        let without = display_groups_for_identities(identities.clone(), None, &mut load);
+        assert!(without.is_representative("series", "native-b"));
+        let modal = ("series".into(), "modal".into());
+        let with = display_groups_for_identities(identities.clone(), Some(&modal), &mut load);
+        assert!(!with.is_representative("series", "native-b"));
+        assert_eq!(with.members("series", "native-a").len(), 2);
+        assert!(
+            !with.representatives.contains_key(&modal),
+            "proof-only modal is never added to Library"
+        );
+        let index = IdentityIndex::new(
+            identities
+                .iter()
+                .map(|(key, _)| key)
+                .chain(std::iter::once(&modal))
+                .map(|(media_type, id)| TitleInventory {
+                    media_type: media_type.clone(),
+                    series_id: id.clone(),
+                    videos: load(media_type, id),
+                }),
+        );
+        let worker = LibraryDisplayGroups::from_index(identities, &index);
+        assert_eq!(with.representatives, worker.representatives);
+    }
+
+    #[test]
+    fn exact_title_groups_keep_native_actions_union_filters_and_remove_all_physical_members() {
+        let (entries, inventories) = grouped_identity_fixture();
+        let groups = prepare_display_groups(&entries, |_, id| {
+            inventories.get(id).cloned().unwrap_or_default()
+        });
+        let all = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
+            .collect::<Vec<_>>();
+        let collapsed = groups.project_candidates(all.clone(), &all);
+        let ids = collapsed
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["kitsu:42", "season-one", "unproven"]);
+        let selected = selected_library_entry(&entries, &collapsed[0]).unwrap();
+        assert_eq!(
+            selected.id, "kitsu:42",
+            "actions retain the original native addon request ID"
+        );
+        assert_eq!(selected.poster_url, "native-poster");
+        let options = LibraryViewOptions {
+            filter: "Anime",
+            needle: String::new(),
+            sort: 0,
+        };
+        let members = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                project_library_candidate(
+                    entry,
+                    index,
+                    None,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &options,
+                )
+            })
+            .collect();
+        let filtered = groups.project_candidates(members, &all);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].id, "kitsu:42",
+            "category membership on an alias must not change the shown source"
+        );
+        assert!(
+            groups
+                .matching_query(&all, "native")
+                .contains(&groups.representative("series", "tt100"))
+        );
+        let mut reversed = entries.clone();
+        reversed.reverse();
+        let reordered = prepare_display_groups(&reversed, |_, id| {
+            inventories.get(id).cloned().unwrap_or_default()
+        });
+        assert_eq!(
+            groups.representative("series", "tt100"),
+            reordered.representative("series", "tt100")
+        );
+        let mut changed = entries.clone();
+        toggle_display_group_category(&mut changed, &groups, "series", "kitsu:42", "Anime");
+        assert!(
+            changed
+                .iter()
+                .all(|entry| !entry.categories.iter().any(|category| category == "Anime"))
+        );
+        assert_eq!(changed[1].categories, ["Drama"]);
+        toggle_display_group_category(&mut changed, &groups, "series", "kitsu:42", "Favorites");
+        assert!(changed[..2].iter().all(|entry| {
+            entry
+                .categories
+                .iter()
+                .any(|category| category == "Favorites")
+        }));
+        assert!(changed[2..].iter().all(|entry| entry.categories.is_empty()));
+        let removed = remove_display_group(&mut changed, &groups, "series", "kitsu:42");
+        assert_eq!(removed.len(), 2);
+        assert_eq!(
+            changed
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["season-one", "unproven"]
+        );
+        assert_eq!(
+            entries.len(),
+            4,
+            "presentation and category actions never rewrite source identities"
+        );
+    }
+
+    #[test]
+    fn worker_library_and_home_use_the_same_exact_title_representative() {
+        let (entries, inventories) = grouped_identity_fixture();
+        let groups = prepare_display_groups(&entries, |_, id| {
+            inventories.get(id).cloned().unwrap_or_default()
+        });
+        let metadata = progress_projection::Metadata::new(
+            |_, id| (inventories.get(id).cloned(), None),
+            || true,
+        );
+        let mut state = Shared {
+            entries,
+            ..Default::default()
+        };
+        let view = progress_projection::View {
+            filter: "Anime".into(),
+            query: "Native".into(),
+            smart: Some(nova_config::SmartCollection {
+                genre: "Fantasy".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cards = prepare_progress_cards(&state, &view, &metadata, &HashMap::new(), &groups);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].id, "kitsu:42");
+        assert_eq!(cards[0].poster_url, "native-poster");
+        for id in ["kitsu:42", "tt100"] {
+            state.progress.insert(
+                progress_map_key(id, "kitsu:42:1"),
+                EpisodeProgress {
+                    series_id: id.into(),
+                    episode_id: "kitsu:42:1".into(),
+                    watched: true,
+                    updated_at_secs: 10,
+                    ..Default::default()
+                },
+            );
+        }
+        let original_progress = state.progress.clone();
+        let _home = super::super::home::prepare_progress_home(
+            &mut state,
+            &metadata,
+            &HashMap::new(),
+            &HashMap::new(),
+            &groups,
+        );
+        assert_eq!(state.upcoming_list.len(), 1);
+        assert_eq!(state.upcoming_list[0].series_id, "kitsu:42");
+        assert_eq!(state.upcoming_list[0].episode_id, "kitsu:42:2");
+        assert_eq!(state.entries.len(), 4);
+        assert_eq!(
+            serde_json::to_value(&state.progress).unwrap(),
+            serde_json::to_value(&original_progress).unwrap(),
+            "display grouping cannot create progress actions"
+        );
+    }
 
     #[test]
     fn movie_completion_without_episode_metadata_matches_cards_and_filters() {

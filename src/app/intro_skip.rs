@@ -48,6 +48,28 @@ impl Session {
         })
     }
 
+    fn offer_token(&self, session: u64, position: f64) -> Option<String> {
+        if session == 0 || self.native == 0 {
+            return None;
+        }
+        let segment = &self.segments[self.active(position)?];
+        // Bind the prompt to its source and exact timing evidence. A token can
+        // survive ordinary playback inside the interval, but never a new cut.
+        Some(format!(
+            "skip:{:016x}",
+            nova_config::fnv1a(
+                format!(
+                    "{session}:{}:{}:{:016x}:{:016x}",
+                    self.native,
+                    segment.kind,
+                    segment.start.to_bits(),
+                    segment.end.to_bits()
+                )
+                .as_bytes()
+            )
+        ))
+    }
+
     fn dismiss(&mut self, position: f64) {
         if let Some(index) = self.active(position) {
             self.segments[index].dismissed = true;
@@ -628,6 +650,28 @@ impl Bridge {
         }
     }
 
+    pub(super) fn intro_skip_offer_token(&self) -> Option<String> {
+        let app = self.app()?;
+        if !self.intro_skip_eligible(&app) {
+            return None;
+        }
+        let global = self.shared.lock().unwrap().cache_settings.intro_skip_mode;
+        if self.player.intro_skip_mode(global) == nova_config::IntroSkipMode::Off {
+            return None;
+        }
+        let native = self.player.screenshot_session();
+        let state = self.shared.lock().unwrap();
+        let target = state.playback.as_ref()?;
+        if target.intro_skip.native != native
+            || !compatible_duration(target.intro_skip.duration, app.get_duration() as f64)
+        {
+            return None;
+        }
+        target
+            .intro_skip
+            .offer_token(target.session, app.get_position() as f64)
+    }
+
     pub(super) fn skip_current_segment(&self) {
         let Some(app) = self.app() else { return };
         let global = self.shared.lock().unwrap().cache_settings.intro_skip_mode;
@@ -661,7 +705,7 @@ impl Bridge {
 
     pub(super) fn dismiss_current_segment(&self) {
         let Some(app) = self.app() else { return };
-        if !self.intro_skip_eligible(&app) {
+        if self.intro_skip_offer_token().is_none() {
             return;
         }
         let native = self.player.screenshot_session();
@@ -688,6 +732,36 @@ mod tests {
             episode: 1,
         }
     }
+    #[test]
+    fn prompt_tokens_bind_source_session_and_exact_active_evidence() {
+        let mut session = Session {
+            native: 8,
+            segments: vec![Segment {
+                kind: 1,
+                start: 10.0,
+                end: 90.0,
+                consumed: false,
+                dismissed: false,
+                confidence_percent: None,
+            }],
+            ..Session::default()
+        };
+        let token = session.offer_token(4, 20.0).unwrap();
+        assert_eq!(session.offer_token(4, 30.0).as_ref(), Some(&token));
+        assert_ne!(session.offer_token(5, 20.0).as_ref(), Some(&token));
+        session.native += 1;
+        assert_ne!(session.offer_token(4, 20.0).as_ref(), Some(&token));
+        session.native -= 1;
+        session.segments[0].end += 0.1;
+        assert_ne!(session.offer_token(4, 20.0).as_ref(), Some(&token));
+        assert!(session.offer_token(4, 9.0).is_none());
+        assert!(session.offer_token(4, 100.0).is_none());
+        assert!(session.offer_token(4, f64::NAN).is_none());
+        assert!(session.offer_token(0, 20.0).is_none());
+        session.dismiss(20.0);
+        assert!(session.offer_token(4, 20.0).is_none());
+    }
+
     #[test]
     fn timing_requires_matching_cut_and_excludes_story_mixed_openings() {
         let bytes = br#"{"found":true,"results":[{"skipType":"op","episodeLength":1444,"interval":{"startTime":30,"endTime":120}},{"skipType":"mixed-op","episodeLength":1444,"interval":{"startTime":180,"endTime":220}}]}"#;

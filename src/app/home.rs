@@ -1739,6 +1739,7 @@ impl Bridge {
         // the grid bounded no matter how many series carry progress.
         const CONTINUE_MAX: usize = 20;
         self.migrate_viewing_activity();
+        let groups = self.library_display_groups();
         // Capture typed positions and the latest record per library identity.
         // The history map stays borrowed while indexing; only the selected
         // latest records are copied for the later cache pass.
@@ -1760,7 +1761,9 @@ impl Bridge {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    e.watch_status == WatchStatus::Auto && latest_refs.contains_key(e.id.as_str())
+                    e.watch_status == WatchStatus::Auto
+                        && latest_refs.contains_key(e.id.as_str())
+                        && groups.is_representative(&e.type_, &e.id)
                 })
                 .map(|(index, entry)| HomeLibraryIdentity {
                     index,
@@ -2216,6 +2219,7 @@ impl Bridge {
     /// check (unknown schedule). Air-date ascending, capped so Home stays
     /// a quick glance.
     pub(super) fn rebuild_upcoming_list(&self) {
+        let groups = self.library_display_groups();
         const UPCOMING_MAX: usize = 20;
         let identities: Vec<HomeLibraryIdentity> = {
             let state = self.shared.lock().unwrap();
@@ -2223,7 +2227,11 @@ impl Bridge {
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| e.type_ != "movie" && e.watch_status == WatchStatus::Auto)
+                .filter(|(_, e)| {
+                    e.type_ != "movie"
+                        && e.watch_status == WatchStatus::Auto
+                        && groups.is_representative(&e.type_, &e.id)
+                })
                 .map(|(index, e)| HomeLibraryIdentity {
                     index,
                     type_: e.type_.clone(),
@@ -4287,6 +4295,7 @@ mod tests {
             play_count: 1,
             updated_at_secs: updated,
             history: None,
+            manual_watch_action: None,
         }
     }
 
@@ -4980,6 +4989,7 @@ pub(super) fn prepare_progress_home(
     metadata: &super::progress_projection::Metadata<'_>,
     activity: &HashMap<String, ViewingActivity>,
     new_hidden: &HashMap<String, Vec<String>>,
+    groups: &super::library::LibraryDisplayGroups,
 ) -> PreparedProgressHome {
     const MAX: usize = 20;
     let today = today_days();
@@ -4996,11 +5006,9 @@ pub(super) fn prepare_progress_home(
     let mut new = Vec::new();
     let mut upcoming = Vec::new();
     let mut aliases = HashMap::new();
-    for e in state
-        .entries
-        .iter()
-        .filter(|e| e.watch_status == WatchStatus::Auto)
-    {
+    for e in state.entries.iter().filter(|e| {
+        e.watch_status == WatchStatus::Auto && groups.is_representative(&e.type_, &e.id)
+    }) {
         let cached = metadata.episode_data(&e.type_, &e.id);
         let videos = cached.as_deref().map(Vec::as_slice).unwrap_or_default();
         let watched = |v: &Video| {

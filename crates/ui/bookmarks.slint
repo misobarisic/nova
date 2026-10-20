@@ -257,7 +257,7 @@ export component BookmarksPage inherits Rectangle {
                         touch := ControlTouchArea { enabled: root.active && !root.detail && !root.returning; mouse-cursor: pointer; clicked => { root.enter_title(row.id, index); } }
                     }
                 }
-                Text { text: @tr("Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                Text { text: @tr("Bookmarks and notes sync between devices using this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
             }
         }
         if root.detail: TouchArea {
@@ -387,7 +387,7 @@ export component BookmarksPage inherits Rectangle {
                             }
                         }
                     }
-                    Text { text: @tr("Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                    Text { text: @tr("Bookmarks and notes sync between devices using this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
                 }
             }
         }

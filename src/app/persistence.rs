@@ -33,7 +33,7 @@ fn register_for(owner: &profiles::ProfileStore) {
 enum Snapshot {
     Library(Vec<LibraryEntry>),
     Progress(HashMap<String, EpisodeProgress>, bool),
-    External(Box<ExternalPatch>, mpsc::Sender<Result<(), String>>),
+    External(Box<ExternalPatch>, mpsc::Sender<Result<(), String>>, bool),
 }
 
 /// A remote materialization changes only these records. Resolve it against
@@ -57,10 +57,10 @@ impl ExternalPatch {
         self.library.is_none() && self.progress.is_empty()
     }
 
-    fn save(&self, owner: &profiles::ProfileStore) -> Result<(), String> {
+    fn save(&self, owner: &profiles::ProfileStore, projection: bool) -> Result<(), String> {
         // Origin is thread-local: recreate both guards on the actual writer.
         let _applying = sync::ApplyingGuard::new();
-        let _external = stremio_events::ExternalGuard::new();
+        let _external = (!projection).then(stremio_events::ExternalGuard::new);
         if let Some(edit) = &self.library {
             let mut entries: Vec<LibraryEntry> = owner
                 .read("library")
@@ -110,7 +110,7 @@ impl Snapshot {
         let (key, raw) = match self {
             Self::Library(entries) => ("library", serde_json::to_string(entries)),
             Self::Progress(map, _) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map)),
-            Self::External(patch, _) => return patch.save(owner),
+            Self::External(patch, _, projection) => return patch.save(owner, *projection),
         };
         let raw = raw.map_err(|error| error.to_string())?;
         let save = || {
@@ -264,7 +264,7 @@ impl Worker {
                     .unwrap_or_else(|_| {
                         Err("persistence worker panicked; pending saves retained".into())
                     });
-                    if let Snapshot::External(_, done) = &snapshot {
+                    if let Snapshot::External(_, done, _) = &snapshot {
                         let _ = done.send(result.clone());
                     }
                     let mut state = worker.state.lock().unwrap();
@@ -312,6 +312,11 @@ impl Drop for Worker {
 }
 pub(super) fn start() -> Option<Worker> {
     register_collections();
+    // Resolve the stable device prefix during startup, never while a watched
+    // gesture holds Shared. The boot/sequence suffix also covers no-writer tests.
+    if let Ok(device) = nova_sync::local_device() {
+        detail::initialize_manual_watch_actions(device);
+    }
     match Worker::spawn(|owner, snapshot| {
         snapshot.save(owner).inspect_err(|error| {
             io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
@@ -353,6 +358,24 @@ pub(super) fn failed() -> bool {
 /// Stremio worker retry preparation; accepted jobs remain ordered with manual
 /// edits, and only their background completion acknowledges delivery.
 pub(super) fn try_external(patch: ExternalPatch) -> Option<mpsc::Receiver<Result<(), String>>> {
+    try_patch(patch, false)
+}
+
+/// Alias materialization advances only the local raw view/baseline. Unlike an
+/// imported external user action, it must never allocate fresh sync clocks.
+pub(super) fn try_progress_projection(
+    progress: HashMap<String, EpisodeProgress>,
+) -> Option<mpsc::Receiver<Result<(), String>>> {
+    try_patch(
+        ExternalPatch {
+            progress,
+            ..Default::default()
+        },
+        true,
+    )
+}
+
+fn try_patch(patch: ExternalPatch, projection: bool) -> Option<mpsc::Receiver<Result<(), String>>> {
     // Without the ordered writer there is nowhere to retain a failed save.
     // Leave Shared untouched and delivery pending rather than launch a
     // one-shot write whose failure could later look like a successful no-op.
@@ -367,7 +390,7 @@ pub(super) fn try_external(patch: ExternalPatch) -> Option<mpsc::Receiver<Result
     state.pending.push_back((
         sequence,
         profiles::ProfileStore::capture(),
-        Snapshot::External(Box::new(patch), done),
+        Snapshot::External(Box::new(patch), done, projection),
     ));
     queue.changed.notify_all();
     Some(receipt)
@@ -428,7 +451,7 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
                     base = Some(entries.clone());
                     break;
                 }
-                Snapshot::External(patch, _) => edits.extend(patch.library.iter().cloned()),
+                Snapshot::External(patch, _, _) => edits.extend(patch.library.iter().cloned()),
                 _ => {}
             }
         }
@@ -461,7 +484,7 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
                     base = Some(map.clone());
                     break;
                 }
-                Snapshot::External(patch, _) if !patch.progress.is_empty() => {
+                Snapshot::External(patch, _, _) if !patch.progress.is_empty() => {
                     edits.push(patch.progress.clone())
                 }
                 _ => {}

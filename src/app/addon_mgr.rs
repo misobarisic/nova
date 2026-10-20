@@ -549,6 +549,7 @@ impl Bridge {
                 return;
             }
         };
+        self.publish_addon_refresh_state();
         let bridge = self.clone();
         crate::web_log("nova: refreshing addon manifest");
         net::fetch_bytes(manifest_url, move |result| {
@@ -561,11 +562,13 @@ impl Bridge {
                         Ok(manifest) => bridge.refresh_ok(base, manifest),
                         Err(_) => {
                             bridge.shared.lock().unwrap().refreshing.remove(&base);
+                            bridge.publish_addon_refresh_state();
                             crate::web_log("nova: invalid refreshed addon manifest");
                         }
                     },
                     Err(_) => {
                         bridge.shared.lock().unwrap().refreshing.remove(&base);
+                        bridge.publish_addon_refresh_state();
                         crate::web_log("nova: addon refresh request failed");
                     }
                 }
@@ -724,7 +727,8 @@ impl Bridge {
         } else if state.chosen_addon < addon_count {
             let manifest = &state.installed[state.chosen_addon].manifest;
             let label = state.installed[state.chosen_addon].label.clone();
-            state.type_defs = build_type_defs(manifest, &label);
+            state.type_defs =
+                build_type_defs(manifest, &label, &state.installed[state.chosen_addon].url);
         }
         state.chosen_type = 0;
         state.chosen_catalog = 0;
@@ -937,6 +941,21 @@ impl Bridge {
         installed_index_for_url(&self.shared.lock().unwrap().installed, url.as_str())
     }
 
+    /// Keep each refresh animation on its existing card instead of rebuilding
+    /// the list, losing focus and restarting unrelated card state.
+    fn publish_addon_refresh_state(&self) {
+        let Some(app) = self.app() else { return };
+        let refreshing = self.shared.lock().unwrap().refreshing.clone();
+        let rows = app.get_addon_rows();
+        for (index, mut row) in rows.iter().enumerate() {
+            let busy = refreshing.contains(row.url.as_str());
+            if row.busy != busy {
+                row.busy = busy;
+                rows.set_row_data(index, row);
+            }
+        }
+    }
+
     /// Mirror matching installed addons, including disabled ones, to Settings.
     pub(super) fn apply_addon_rows(&self) {
         self.apply_addon_browser_rows();
@@ -969,10 +988,8 @@ impl Bridge {
         );
         let query = app.get_addon_search_text().trim().to_lowercase();
         let filter = app.get_addon_capability_filter();
-        let rows = self
-            .shared
-            .lock()
-            .unwrap()
+        let shared = self.shared.lock().unwrap();
+        let rows = shared
             .installed
             .iter()
             .filter(|a| addon_matches(a, &query, filter))
@@ -996,6 +1013,7 @@ impl Bridge {
                     .unwrap_or_default(),
                 url: SharedString::from(&a.url),
                 enabled: a.enabled,
+                busy: shared.refreshing.contains(&a.url),
                 config_url: SharedString::from(Self::addon_config_url(a)),
                 capabilities: SharedString::from(
                     match nova_providers::provider_capabilities(&a.url) {
@@ -1013,6 +1031,7 @@ impl Bridge {
                 ),
             })
             .collect::<Vec<_>>();
+        drop(shared);
         app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
         for url in logo_requests {
             let bridge = self.clone();

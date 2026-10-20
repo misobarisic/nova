@@ -1,10 +1,12 @@
-import { RemoteBridge, Theme, SettingsStyle, InterfaceStyle } from "@NovaUiShared";
+import { RemoteBridge, Theme, SettingsStyle, InterfaceStyle, SubtitleStyle } from "@NovaUiShared";
 import { PillButton, MiniSlider } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
 import { MenuRow } from "player-menu-row.slint";
 import { SessionPanel, SessionTransportButton, SessionStatus } from "session-controls.slint";
 import { IcDisplay } from "icons.slint";
+import { SubtitleControls } from "subtitle-controls.slint";
+import { SearchField } from "searchfield.slint";
 
 // A preview belongs to the session at press time. Every release path uses that
 // captured identity, so reconnecting or replacing playback cannot reset a new session.
@@ -51,9 +53,266 @@ component RemoteSpeedHold inherits Rectangle {
     opacity: root.enabled ? 1 : 0.45;
 }
 
+// Native row focus and TV selection share the same reveal path.
+component RemoteToolRow inherits MenuRow {
+    in property <int> slot;
+    in property <int> current;
+    focused: InterfaceStyle.tv && root.slot == root.current;
+    private property <bool> owns-focus: root.focused && root.enabled;
+    changed owns-focus => { if root.owns-focus { self.focus(); } }
+    init => { if root.owns-focus { self.focus(); } }
+}
+
+// A grouped receiver menu. Every dispatch carries the current confirmed session;
+// closing the visual surface disables all commands without discarding its image.
+component RemoteToolsSurface inherits Rectangle {
+    in property <bool> active;
+    private property <bool> ready: root.active && RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
+    private property <int> selected: -1;
+    private property <string> page: RemoteBridge.menu_page;
+    private property <string> editing_id;
+    private property <string> draft;
+    private property <bool> pending;
+    private property <int> pending_revision;
+    private property <string> pending_session;
+    private property <string> pending_name;
+    private property <string> pending_id;
+    private property <int> editor_generation;
+    private property <int> pending_generation;
+    private property <string> notice;
+    private property <string> session: RemoteBridge.session;
+    changed session => { root.pending = false; root.editor_generation += 1; root.draft = ""; root.notice = ""; }
+    private property <int> revision: RemoteBridge.semantic_revision;
+    changed revision => {
+        if root.pending && root.revision > root.pending_revision
+            && RemoteBridge.semantic_session == root.pending_session
+            && RemoteBridge.semantic_name == root.pending_name
+            && RemoteBridge.semantic_id == root.pending_id {
+            root.pending = false;
+            root.notice = RemoteBridge.semantic_notice;
+            if RemoteBridge.semantic_success && root.page == "bookmark-editor" && root.editor_generation == root.pending_generation {
+                root.draft = ""; RemoteBridge.menu_page = "bookmarks";
+            }
+        }
+    }
+    changed page => { root.selected = -1; menu_scroll.content-y = 0px; if root.page != "" { menu_focus.focus(); } }
+    function send(name: string, value: float, id: string, text: string) {
+        if root.ready { RemoteBridge.semantic_action(name, value, id, text, RemoteBridge.session); }
+    }
+    function edit(id: string, note: string) {
+        root.editing_id = id; root.draft = note; root.editor_generation += 1; root.notice = "";
+        RemoteBridge.menu_page = "bookmark-editor";
+    }
+    function save(text: string) {
+        if root.ready && !root.pending {
+            root.pending_revision = RemoteBridge.semantic_revision;
+            root.pending_id = root.editing_id; root.pending_generation = root.editor_generation;
+            root.pending_session = RemoteBridge.session;
+            root.pending_name = root.editing_id == "" ? "bookmark_add" : "bookmark_edit";
+            root.pending = true; root.notice = "";
+            root.send(root.pending_name, 0, root.editing_id, text);
+        }
+    }
+    public function go_back() {
+        if !root.active { return; }
+        if root.page == "bookmark-editor" { root.editor_generation += 1; root.draft = ""; RemoteBridge.menu_page = "bookmarks"; }
+        else if root.page == "tools" { RemoteBridge.menu_page = ""; }
+        else { RemoteBridge.menu_page = "tools"; }
+    }
+    function reveal(y: length, h: length) {
+        let top = y - menu_scroll.absolute-position.y;
+        if top < 0px { menu_scroll.content-y -= top; }
+        else if top + h > menu_scroll.visible-height { menu_scroll.content-y -= top + h - menu_scroll.visible-height; }
+    }
+    pure function count() -> int {
+        return root.page == "tools" ? 7 : root.page == "chapters" ? RemoteBridge.chapters.length
+            : root.page == "secondary" ? RemoteBridge.secondary_sub_tracks.length + 4
+            : root.page == "intro" ? 6 : root.page == "bookmarks" ? 1 + RemoteBridge.bookmarks.length * 3
+            : root.page == "recovery" ? 6 : root.page == "device" ? 4 : root.page == "appearance" ? 8 : 3;
+    }
+    pure function available(i: int) -> bool {
+        return root.page == "intro" ? (i >= 2 || RemoteBridge.skip_token != "")
+            : root.page == "recovery" ? (i == 0 ? RemoteBridge.can_source_recovery : i == 1 ? RemoteBridge.can_source_offers : RemoteBridge.can_subtitle_discovery)
+            : root.page == "device" ? (i == 3 ? RemoteBridge.can_brightness : RemoteBridge.can_decoder)
+            : root.page != "tools" || (i == 0 ? RemoteBridge.can_chapters : i == 1 ? RemoteBridge.can_subtitle_style
+            : i == 2 ? RemoteBridge.can_secondary_subtitles : i == 3 ? RemoteBridge.can_intro_skip
+            : i == 4 ? RemoteBridge.can_bookmarks : i == 5 ? RemoteBridge.can_source_recovery || RemoteBridge.can_source_offers || RemoteBridge.can_subtitle_discovery
+            : RemoteBridge.can_decoder || RemoteBridge.can_brightness);
+    }
+    private property <int> next_index;
+    function move(direction: int) {
+        SettingsStyle.keyboard-mode = true;
+        root.next_index = root.selected + direction;
+        // Seven capability groups are the only sparse page. Fixed scans avoid
+        // focusing a hidden/disabled group on a receiver with fewer controls.
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() && !root.available(root.next_index) { root.next_index += direction; }
+        if root.next_index >= 0 && root.next_index < root.count() { root.selected = root.next_index; }
+    }
+    background: Theme.current.artwork_canvas;
+    menu_focus := FocusScope {
+        width: 100%; height: 100%; enabled: root.active;
+        key-pressed(e) => {
+            if e.text == Key.Back || e.text == Key.Escape || (e.text == Key.Backspace && root.page != "bookmark-editor") { if !e.repeat { root.go_back(); } accept }
+            else if InterfaceStyle.tv && root.page == "appearance" && root.selected >= 0 && root.selected < 5 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.send("subtitle_style", RemoteBridge.subtitle_style[root.selected] + (e.text == Key.LeftArrow ? -1 : 1) * SubtitleStyle.step(root.selected), root.selected == 0 ? "0" : root.selected == 1 ? "1" : root.selected == 2 ? "2" : root.selected == 3 ? "3" : "4", ""); accept
+            } else if InterfaceStyle.tv && root.page == "appearance" && (root.selected == 5 || root.selected == 6) && (e.text == Key.Return || e.text == " ") {
+                if !e.repeat { root.send("subtitle_style", root.selected == 5 ? Math.mod(RemoteBridge.subtitle_style[5] + 1, 3) : (RemoteBridge.subtitle_style[6] >= 0.5 ? 0 : 1), root.selected == 5 ? "5" : "6", ""); } accept
+            } else if InterfaceStyle.tv && root.page == "device" && root.selected == 3 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.send("brightness", RemoteBridge.brightness + (e.text == Key.LeftArrow ? -0.05 : 0.05), "", ""); accept
+            } else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) { root.move(e.text == Key.UpArrow ? -1 : 1); accept }
+            else { reject }
+        }
+        menu_scroll := ScrollView {
+            x: Math.max(0px, (root.width - 760px) / 2); width: Math.min(760px, root.width); height: 100%;
+            content-width: self.visible-width;
+            menu_col := VerticalLayout {
+                width: 100%; padding: 4px; spacing: 12px; alignment: start;
+                PageHeader {
+                    title: root.page == "tools" ? @tr("Playback tools") : root.page == "chapters" ? @tr("Chapters")
+                        : root.page == "appearance" ? @tr("Subtitle appearance") : root.page == "secondary" ? @tr("Secondary subtitles")
+                        : root.page == "intro" ? @tr("Intros and credits") : root.page == "bookmarks" ? @tr("Scene bookmarks")
+                        : root.page == "bookmark-editor" ? (root.editing_id == "" ? @tr("Add bookmark") : @tr("Edit note"))
+                        : root.page == "recovery" ? @tr("Sources and online subtitles") : @tr("Device playback");
+                    subtitle: RemoteBridge.target_name; show-back: true; narrow: root.width < 700px;
+                    back => { root.go_back(); }
+                }
+                if root.page == "tools": SessionPanel {
+                    VerticalLayout { padding: 4px; spacing: 0px; alignment: start;
+                        for label[i] in [@tr("Chapters"), @tr("Subtitle appearance"), @tr("Secondary subtitles"), @tr("Intros and credits"), @tr("Scene bookmarks"), @tr("Sources and online subtitles"), @tr("Device playback")]: VerticalLayout {
+                            spacing: 0px; vertical-stretch: 0;
+                            if root.available(i): RemoteToolRow {
+                            slot: i; current: root.selected; label: label; enabled: root.ready && root.available(i); submenu: true;
+                            icon: i == 0 ? @image-url("../../assets/icons/player/list-video.svg") : i == 1 ? @image-url("../../assets/icons/player/sliders-horizontal.svg")
+                                : i == 2 ? @image-url("../../assets/icons/player/captions.svg") : i == 3 ? @image-url("../../assets/icons/player/skip-forward.svg")
+                                : i == 4 ? @image-url("../../assets/icons/player/bookmark.svg") : i == 5 ? @image-url("../../assets/icons/player/refresh-cw.svg") : @image-url("../../assets/icons/player/cpu.svg");
+                            activate => { RemoteBridge.menu_page = i == 0 ? "chapters" : i == 1 ? "appearance" : i == 2 ? "secondary" : i == 3 ? "intro" : i == 4 ? "bookmarks" : i == 5 ? "recovery" : "device"; }
+                            reveal(y, h) => { root.reveal(y, h); }
+                            }
+                        }
+                    }
+                }
+                if root.page == "chapters": SessionPanel {
+                    VerticalLayout { padding: 8px; spacing: 4px; alignment: start;
+                        if RemoteBridge.chapters.length == 0: Text { text: @tr("No chapters available."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                        for chapter[i] in RemoteBridge.chapters: RemoteToolRow {
+                            slot: i; current: root.selected; label: chapter.title; value: chapter.time; icon: @image-url("../../assets/icons/player/list-video.svg");
+                            enabled: root.ready && RemoteBridge.can_chapters; activate => { root.send("chapter", 0, chapter.id, ""); }
+                            reveal(y, h) => { root.reveal(y, h); }
+                        }
+                        if RemoteBridge.chapters_truncated: Text { text: @tr("Showing the first 128 chapters."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    }
+                }
+                if root.page == "appearance": SessionPanel {
+                    VerticalLayout { padding: 16px; spacing: 12px; alignment: start;
+                        SubtitleControls {
+                            values: RemoteBridge.subtitle_style; focused_idx: root.active && InterfaceStyle.tv ? root.selected : -1;
+                            edited(field, value) => { if RemoteBridge.can_subtitle_style { root.send("subtitle_style", value, field == 0 ? "0" : field == 1 ? "1" : field == 2 ? "2" : field == 3 ? "3" : field == 4 ? "4" : field == 5 ? "5" : "6", ""); } }
+                            reveal(y, h) => { root.reveal(y, h); }
+                        }
+                        RemoteToolRow { slot: 7; current: root.selected; label: @tr("Reset subtitle appearance"); enabled: root.ready && RemoteBridge.can_subtitle_style; activate => { root.send("subtitle_style_reset", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                    }
+                }
+                if root.page == "secondary": SessionPanel {
+                    VerticalLayout { padding: 8px; spacing: 4px; alignment: start;
+                        RemoteToolRow { slot: 0; current: root.selected; label: @tr("Off"); enabled: root.ready && RemoteBridge.can_secondary_subtitles; activate => { root.send("secondary_subtitle", -1, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        for track[i] in RemoteBridge.secondary_sub_tracks: RemoteToolRow {
+                            slot: i + 1; current: root.selected; label: track.title + (track.lang != "" ? " · " + track.lang : ""); value: track.codec; selected: track.selected;
+                            enabled: root.ready && RemoteBridge.can_secondary_subtitles; activate => { root.send("secondary_subtitle", track.index, "", ""); } reveal(y,h) => { root.reveal(y,h); }
+                        }
+                        Text { text: @tr("Secondary subtitle position"); color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; }
+                        for label[i] in [@tr("Top"), @tr("Middle"), @tr("Bottom")]: RemoteToolRow {
+                            slot: RemoteBridge.secondary_sub_tracks.length + 1 + i; current: root.selected; label: label; selected: RemoteBridge.secondary_subtitle_position == i;
+                            enabled: root.ready && RemoteBridge.can_secondary_subtitles; activate => { root.send("secondary_position", i, "", ""); } reveal(y,h) => { root.reveal(y,h); }
+                        }
+                    }
+                }
+                if root.page == "intro": SessionPanel {
+                    VerticalLayout { padding: 8px; spacing: 4px; alignment: start;
+                        RemoteToolRow { slot: 0; current: root.selected; label: @tr("Skip current segment"); enabled: root.ready && RemoteBridge.can_intro_skip && RemoteBridge.skip_token != ""; activate => { root.send("skip", 0, RemoteBridge.skip_token, ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 1; current: root.selected; label: @tr("Dismiss skip"); enabled: root.ready && RemoteBridge.can_intro_skip && RemoteBridge.skip_token != ""; activate => { root.send("skip_dismiss", 0, RemoteBridge.skip_token, ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        for label[i] in [@tr("Use global default"), @tr("Off"), @tr("Ask"), @tr("Automatic")]: RemoteToolRow {
+                            slot: i + 2; current: root.selected; label: label; selected: RemoteBridge.intro_skip_mode == i - 1;
+                            enabled: root.ready && RemoteBridge.can_intro_skip; activate => { root.send("intro_mode", i - 1, "", ""); } reveal(y,h) => { root.reveal(y,h); }
+                        }
+                    }
+                }
+                if root.page == "bookmarks": VerticalLayout {
+                    spacing: 10px; alignment: start;
+                    RemoteToolRow { slot: 0; current: root.selected; label: @tr("Add bookmark"); icon: @image-url("../../assets/icons/player/bookmark.svg"); enabled: root.ready && RemoteBridge.can_bookmarks; activate => { root.edit("", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                    if RemoteBridge.semantic_session == RemoteBridge.session && !RemoteBridge.semantic_success && RemoteBridge.semantic_notice != "": Text { text: RemoteBridge.semantic_notice; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
+                    if RemoteBridge.bookmark_notice != "": Text { text: RemoteBridge.bookmark_notice; color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    for bookmark[i] in RemoteBridge.bookmarks: SessionPanel {
+                        VerticalLayout { padding: 10px; spacing: 4px; alignment: start;
+                            Text { text: bookmark.time; color: Theme.current.text_bright; font-weight: 700; }
+                            if bookmark.note != "": Text { text: bookmark.note; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
+                            RemoteToolRow { slot: i * 3 + 1; current: root.selected; label: @tr("Play scene"); icon: @image-url("../../assets/icons/player/play.svg"); enabled: root.ready && RemoteBridge.can_bookmarks; activate => { root.send("bookmark_seek", 0, bookmark.id, ""); } reveal(y,h) => { root.reveal(y,h); } }
+                            RemoteToolRow { slot: i * 3 + 2; current: root.selected; label: @tr("Edit note"); icon: @image-url("../../assets/icons/player/pencil.svg"); enabled: root.ready && RemoteBridge.can_bookmarks; activate => { root.edit(bookmark.id, bookmark.note); } reveal(y,h) => { root.reveal(y,h); } }
+                            RemoteToolRow { slot: i * 3 + 3; current: root.selected; label: @tr("Delete"); icon: @image-url("../../assets/icons/player/trash.svg"); enabled: root.ready && RemoteBridge.can_bookmarks; activate => { root.send("bookmark_delete", 0, bookmark.id, ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        }
+                    }
+                    if RemoteBridge.bookmarks_truncated: Text { text: @tr("Showing the first 128 bookmarks."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                }
+                if root.page == "bookmark-editor": SessionPanel {
+                    VerticalLayout { padding: 16px; spacing: 10px; alignment: start;
+                        remote_note := SearchField {
+                            accessible-role: text-input; accessible-label: @tr("Bookmark note"); accessible-value: root.draft;
+                            text <=> root.draft; roomy: true; enabled: root.ready && !root.pending;
+                            init => { if root.active { self.focus_at_end(); } }
+                            placeholder-text: @tr("Bookmark note"); accepted(text) => { root.draft = text; root.save(text); }
+                        }
+                        if root.notice != "": Text { text: root.notice; color: Theme.current.text_destructive; wrap: word-wrap; min-width: 0px; }
+                        if root.pending: Text { text: @tr("Waiting for device…"); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                        RemoteToolRow { slot: 0; current: root.selected; label: @tr("Save note"); icon: @image-url("../../assets/icons/player/check.svg"); enabled: root.ready && !root.pending; activate => { root.draft = remote_note.full-text; root.save(root.draft); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 1; current: root.selected; label: @tr("Clear note"); icon: @image-url("../../assets/icons/player/eraser.svg"); enabled: root.ready && !root.pending; activate => { root.save(""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 2; current: root.selected; label: @tr("Cancel"); icon: @image-url("../../assets/icons/player/x.svg"); enabled: root.active; activate => { root.go_back(); } reveal(y,h) => { root.reveal(y,h); } }
+                    }
+                }
+                if root.page == "recovery": SessionPanel {
+                    VerticalLayout { padding: 8px; spacing: 4px; alignment: start;
+                        if RemoteBridge.can_subtitle_discovery: Text {
+                            text: RemoteBridge.subtitle_addon_status == 1 ? @tr("Searching online subtitles…") : RemoteBridge.subtitle_addon_status == 2 ? @tr("Downloading subtitles…") : RemoteBridge.subtitle_addon_status == 3 ? @tr("No online subtitles found.") : RemoteBridge.subtitle_addon_status == 4 ? @tr("Online subtitle search failed.") : @tr("Online subtitles ready.");
+                            color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px;
+                        }
+                        RemoteToolRow { slot: 0; current: root.selected; label: @tr("Try another source"); icon: @image-url("../../assets/icons/player/refresh-cw.svg"); enabled: root.ready && RemoteBridge.can_source_recovery; activate => { root.send("try_another", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 1; current: root.selected; label: @tr("Choose a stream"); enabled: root.ready && RemoteBridge.can_source_offers; activate => { root.send("source_offers", 0, "", ""); RemoteBridge.menu_page = ""; } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 2; current: root.selected; label: @tr("Search online subtitles"); enabled: root.ready && RemoteBridge.can_subtitle_discovery; activate => { root.send("subtitle_retry", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 3; current: root.selected; label: @tr("Cancel primary subtitle search"); enabled: root.ready && RemoteBridge.can_subtitle_discovery; activate => { root.send("subtitle_cancel", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 4; current: root.selected; label: @tr("Cancel secondary subtitle search"); enabled: root.ready && RemoteBridge.can_subtitle_discovery; activate => { root.send("subtitle_cancel", 1, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 5; current: root.selected; label: @tr("Refresh subtitle tracks"); enabled: root.ready && RemoteBridge.can_subtitle_discovery; activate => { root.send("subtitle_refresh", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                    }
+                }
+                if root.page == "device": SessionPanel {
+                    VerticalLayout { padding: 12px; spacing: 12px; alignment: start;
+                        for label[i] in ["HW+", "HW", "SW"]: RemoteToolRow {
+                            slot: i; current: root.selected; label: label; value: i == 0 ? @tr("zero-copy") : i == 1 ? @tr("copy-back") : @tr("software"); selected: RemoteBridge.decoder == i;
+                            enabled: root.ready && RemoteBridge.can_decoder; activate => { root.send("decoder", i, "", ""); } reveal(y,h) => { root.reveal(y,h); }
+                        }
+                        MiniSlider { name: @tr("Brightness"); minimum: 0; maximum: 1; value: RemoteBridge.brightness; focused: InterfaceStyle.tv && root.selected == 3; enabled: root.ready && RemoteBridge.can_brightness; changed(value) => { root.send("brightness", value, "", ""); } }
+                    }
+                }
+            }
+        }
+    }
+    if !root.active: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+}
+
 // This surface receives metadata and controls only. It has no player overlay,
 // video image, decoder, URL or local playback state.
 export component RemoteControlsPage inherits Rectangle {
+    private property <int> back_request: RemoteBridge.back_request;
+    changed back_request => { root.go_back(); }
+    in property <bool> active: true;
+    public function go_back() {
+        if !root.active { return; }
+        if RemoteBridge.menu_page != "" { tools.go_back(); }
+        else if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; }
+        else { RemoteBridge.device_close(); }
+    }
     in property <length> safe-top;
     in property <length> safe-bottom;
     in property <length> safe-left;
@@ -61,15 +320,28 @@ export component RemoteControlsPage inherits Rectangle {
     private property <bool> wide: !InterfaceStyle.tv && root.width - root.safe-left - root.safe-right >= 900px;
     property <bool> speed_expanded: false;
     property <bool> more_expanded: false;
-    private property <bool> ready: RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
-    changed ready => { if InterfaceStyle.tv { root.tv-index = -1; focus.focus(); } }
+    private property <bool> has_tools: RemoteBridge.can_chapters || RemoteBridge.can_subtitle_style
+        || RemoteBridge.can_secondary_subtitles || RemoteBridge.can_intro_skip || RemoteBridge.can_bookmarks
+        || RemoteBridge.can_source_recovery || RemoteBridge.can_source_offers || RemoteBridge.can_subtitle_discovery
+        || RemoteBridge.can_decoder || RemoteBridge.can_brightness;
+    changed has_tools => {
+        if root.active && !root.has_tools {
+            RemoteBridge.menu_page = "";
+            root.tv-index = Math.min(root.tv-index, 16 + RemoteBridge.offers.length);
+        }
+    }
+    private property <bool> ready: root.active && RemoteBridge.menu_page == "" && RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
+    changed ready => { if root.ready && InterfaceStyle.tv { root.tv-index = -1; focus.focus(); } }
     background: Theme.current.artwork_canvas;
     function action(name: string, value: float) { if root.ready { RemoteBridge.action(name, value, RemoteBridge.session); } }
     property <int> tv-track: 0;
     private property <int> track_picker: RemoteBridge.track_picker;
-    changed track_picker => { if root.track_picker == 0 { focus.focus(); } }
+    changed track_picker => { if root.active && root.track_picker == 0 && RemoteBridge.menu_page == "" { focus.focus(); } }
+    private property <string> tools_page: RemoteBridge.menu_page;
+    changed tools_page => { if root.active && root.tools_page == "" { focus.focus(); } }
     private property <string> current_session: RemoteBridge.session;
-    changed current_session => { RemoteBridge.track_picker = 0; }
+    changed current_session => { RemoteBridge.track_picker = 0; RemoteBridge.menu_page = ""; }
+    changed active => { if root.active { RemoteBridge.track_picker = 0; RemoteBridge.menu_page = ""; focus.focus(); } }
     function open_tracks(kind: int) {
         if root.ready && RemoteBridge.can_tracks {
             root.tv-track = 0;
@@ -113,6 +385,7 @@ export component RemoteControlsPage inherits Rectangle {
             if root.tv-index < 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
             if root.tv-index < 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
             if root.tv-index < 17 && RemoteBridge.offers.length > 0 { root.tv-index = 17; focus.focus(); return; }
+            if root.ready && root.has_tools && root.tv-index < 17 + RemoteBridge.offers.length { root.tv-index = 17 + RemoteBridge.offers.length; return; }
         }
         if direction < 0 {
             if root.tv-index > 17 { root.tv-index -= 1; focus.focus(); return; }
@@ -137,11 +410,11 @@ export component RemoteControlsPage inherits Rectangle {
     }
     property <int> tv-index: -1;
     focus := FocusScope {
-        enabled: RemoteBridge.replacement_token == "" && RemoteBridge.track_picker == 0; width: 100%; height: 100%; init => { self.focus(); }
+        enabled: root.active && RemoteBridge.menu_page == "" && RemoteBridge.replacement_token == "" && RemoteBridge.track_picker == 0; width: 100%; height: 100%; init => { self.focus(); }
         key-pressed(e) => {
             if !InterfaceStyle.tv && !self.has-focus { reject }
-            else if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.device_close(); } accept }
-            else if InterfaceStyle.tv && root.tv-index >= 17 && (e.text == Key.Return || e.text == " ") {
+            else if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { root.go_back(); } accept }
+            else if InterfaceStyle.tv && root.tv-index >= 17 && root.tv-index < 17 + RemoteBridge.offers.length && (e.text == Key.Return || e.text == " ") {
                 if !e.repeat && root.tv-index - 17 < RemoteBridge.offers.length { RemoteBridge.stream_picked(root.tv-index - 17); } accept
             }
             else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow) { root.tv_move(e.text == Key.UpArrow || e.text == Key.LeftArrow ? -1 : 1); accept }
@@ -164,7 +437,7 @@ export component RemoteControlsPage inherits Rectangle {
                 controls_header := PageHeader {
                     min-width: 0px; title: @tr("Controls"); subtitle: RemoteBridge.target_name;
                     narrow: root.width < 700px; show-back: true;
-                    back => { RemoteBridge.device_close(); }
+                    back => { root.go_back(); }
                 }
                 controls_body := GridLayout {
                     spacing: 16px;
@@ -284,6 +557,17 @@ export component RemoteControlsPage inherits Rectangle {
                         changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
                         init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } width: Math.min(240px, controls_scroll.visible-width); enabled: root.ready && RemoteBridge.can_speed; }
                 }
+                if root.has_tools: SessionPanel {
+                    VerticalLayout { padding: 4px;
+                        tools_launcher := MenuRow {
+                            property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 17 + RemoteBridge.offers.length;
+                            changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                            label: @tr("Playback tools"); icon: @image-url("../../assets/icons/player/sliders-horizontal.svg"); submenu: true;
+                            enabled: root.ready;
+                            activate => { RemoteBridge.menu_page = "tools"; }
+                        }
+                    }
+                }
                 // Keep Stop apart from ordinary transport and volume actions.
                 HorizontalLayout { alignment: center;
                     stop_button := PillButton {
@@ -322,8 +606,9 @@ export component RemoteControlsPage inherits Rectangle {
     }
     if RemoteBridge.track_picker != 0: Rectangle {
         width: 100%; height: 100%; background: Theme.current.scrim_shadow;
-        TouchArea { clicked => { RemoteBridge.track_picker = 0; } }
+        TouchArea { enabled: root.active; clicked => { RemoteBridge.track_picker = 0; } }
         picker_focus := FocusScope {
+            enabled: root.active;
             width: 100%; height: 100%; init => { self.focus(); }
             key-pressed(e) => {
                 if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
@@ -366,11 +651,21 @@ export component RemoteControlsPage inherits Rectangle {
                         icon_kind: RemoteBridge.track_picker == 1 ? 1 : 2; selected: track.selected;
                         activate => { root.pick_track(track.index); }
                     }
-                    PillButton { focused: InterfaceStyle.tv && root.tv-track == (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks.length + 1 : RemoteBridge.sub_tracks.length + 2); label: @tr("Cancel"); clicked => { RemoteBridge.track_picker = 0; } }
+                    PillButton { enabled: root.active; focused: InterfaceStyle.tv && root.tv-track == (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks.length + 1 : RemoteBridge.sub_tracks.length + 2); label: @tr("Cancel"); clicked => { RemoteBridge.track_picker = 0; } }
                 }
             }
         }
     }
+
+    if RemoteBridge.menu_page != "": Rectangle { width: 100%; height: 100%; background: Theme.current.artwork_canvas; }
+    tools := RemoteToolsSurface {
+        visible: RemoteBridge.menu_page != "";
+        active: root.active && RemoteBridge.menu_page != "";
+        x: root.safe-left + 18px; y: root.safe-top + 18px;
+        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+        height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+    }
+    if !root.active: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
 
 }
 

@@ -446,18 +446,28 @@ fn continuous_controls_preserve_intervening_command_order() {
             module_path!(),
             "::continuous_controls_preserve_intervening_command_order"
         ),
-        |Fixture { app: _, bridge }| {
+        |Fixture { app, bridge }| {
             let session = SessionId {
                 epoch: 7,
                 sequence: 1,
             };
             let token = session_text(Some(session));
+            app.set_remote_controls_open(true);
             {
                 let mut state = bridge.shared.lock().unwrap();
                 state.remote_playback.role = Role::Remote;
+                state.remote_playback.target = "selected-receiver".into();
                 state.remote_playback.snapshot = Some(PlaybackSnapshot {
                     session: Some(session),
                     ready: true,
+                    phase: PlaybackPhase::Playing,
+                    capabilities: PlaybackCapabilities {
+                        seek: true,
+                        speed: true,
+                        volume: true,
+                        stop: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 });
             }
@@ -521,27 +531,47 @@ fn continuous_controls_coalesce_and_unsent_preview_cannot_survive_release() {
             module_path!(),
             "::continuous_controls_coalesce_and_unsent_preview_cannot_survive_release"
         ),
-        |Fixture { app: _, bridge }| {
+        |Fixture { app, bridge }| {
             let session = SessionId {
                 epoch: 7,
                 sequence: 1,
             };
             let token = session_text(Some(session));
+            app.set_remote_controls_open(true);
             {
                 let mut state = bridge.shared.lock().unwrap();
                 state.remote_playback.role = Role::Remote;
+                state.remote_playback.target = "selected-receiver".into();
                 state.remote_playback.snapshot = Some(PlaybackSnapshot {
                     session: Some(session),
                     ready: true,
+                    phase: PlaybackPhase::Playing,
+                    capabilities: PlaybackCapabilities {
+                        seek: true,
+                        speed: true,
+                        volume: true,
+                        stop: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 });
             }
             for volume in 0..500 {
-                bridge.remote_ui_action("volume", volume as f32, &token);
+                bridge.remote_ui_action("volume", (volume % 101) as f32, &token);
             }
             assert_eq!(
                 bridge.shared.lock().unwrap().remote_playback.queued.len(),
                 1
+            );
+            assert!(
+                matches!(
+                    bridge.shared.lock().unwrap().remote_playback.queued.back(),
+                    Some(Request::Command {
+                        action: PlaybackAction::SetVolume(95.0),
+                        ..
+                    })
+                ),
+                "the last valid slider value must survive coalescing"
             );
             bridge.remote_ui_action("speed_preview", 2.0, &token);
             bridge.remote_ui_action("speed_preview_end", 0.0, &token);
@@ -654,8 +684,19 @@ fn reopened_controller_reclaims_preview_before_old_cleanup() {
                         action: PlaybackAction::BeginSpeedPreview
                     }
                 ),
-                Response::Error(PlaybackError::Unsupported)
+                // A supported action rejected by the dispatcher returns a
+                // sanitized execution failure, never its local error details.
+                Response::Error(PlaybackError::Failed(String::new()))
             );
+            {
+                let state = bridge.shared.lock().unwrap();
+                assert_eq!(
+                    state.remote_playback.preview_owner.as_deref(),
+                    Some("controller")
+                );
+                assert_eq!(state.remote_playback.preview_connection, 20);
+                assert_eq!(bridge.player.effective_playback_speed(), 1.3);
+            }
             assert_eq!(
                 receive(
                     &bridge,
@@ -1471,6 +1512,374 @@ fn background_ticks_do_not_start_device_discovery() {
                 "background discovery must not even rewrite the model"
             );
             playback_foreground(true);
+        },
+    );
+}
+
+#[test]
+fn semantic_commands_require_current_membership_and_retained_exit_has_no_authority() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::semantic_commands_require_current_membership_and_retained_exit_has_no_authority"
+        ),
+        |Fixture { app, bridge }| {
+            bridge.wire_remote_playback();
+            bridge.shared.lock().unwrap().remote_playback.begin();
+            app.set_player_open(true);
+            app.set_playback_started(true);
+            app.set_duration(100.0);
+            app.set_player_chapters(
+                Rc::new(VecModel::from(vec![crate::ChapterRow {
+                    title: "Scene".into(),
+                    position: 30.0,
+                }]))
+                .into(),
+            );
+            let snapshot = bridge.playback_snapshot();
+            assert!(snapshot.valid_payload());
+            let session = snapshot.session.unwrap();
+            let chapter = snapshot.chapters[0].id.clone();
+            let request = |session, id| Request::Command {
+                session,
+                action: PlaybackAction::SeekChapter { id },
+            };
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("revoked", 1, false),
+                    request(session, chapter.clone())
+                ),
+                Response::Error(PlaybackError::Unauthorized)
+            );
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    request(
+                        SessionId {
+                            sequence: session.sequence + 1,
+                            ..session
+                        },
+                        chapter.clone()
+                    )
+                ),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            app.set_player_chapters(Default::default());
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    request(session, chapter)
+                ),
+                Response::Error(PlaybackError::Unsupported)
+            );
+            // Storage/identity failure must not be acknowledged as a saved draft.
+            assert!(
+                bridge
+                    .dispatch_playback_action(PlaybackAction::AddBookmark {
+                        note: "Keep my draft".into()
+                    })
+                    .is_err()
+            );
+            app.set_player_open(false);
+            app.set_remote_title("Retained scene".into());
+            app.set_remote_session("old-session".into());
+            app.set_remote_controls_open(true);
+            app.set_remote_controls_visual_retained(true);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.remote_playback.role = Role::Remote;
+                state.remote_playback.target = "paired-device".into();
+                state.remote_playback.snapshot = Some(snapshot);
+            }
+            bridge.remote_disconnect();
+            assert!(!app.get_remote_connected());
+            assert!(!app.get_remote_controls_open());
+            assert_eq!(app.get_remote_title(), "Retained scene");
+            assert_eq!(app.get_remote_session(), "old-session");
+            bridge.queue_remote_action(session, PlaybackAction::TogglePause);
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .queued
+                    .is_empty()
+            );
+            // An exit completion cannot erase a reopened controller's fresh data.
+            app.set_remote_controls_open(true);
+            app.invoke_remote_controls_visual_closed();
+            assert_eq!(app.get_remote_title(), "Retained scene");
+            app.set_remote_controls_open(false);
+            app.invoke_remote_controls_visual_closed();
+            assert!(app.get_remote_title().is_empty());
+            assert!(app.get_remote_session().is_empty());
+        },
+    );
+}
+
+#[test]
+fn current_offers_are_source_bound_and_capture_recovery_at_start_acceptance() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::current_offers_are_source_bound_and_capture_recovery_at_start_acceptance"
+        ),
+        |Fixture { app, bridge }| {
+            use nova_config::playback_preferences::{
+                SessionPreferences, TitlePreferences, TrackChoice, TrackDescriptor, TrackKind,
+            };
+            let media = MediaIdentity {
+                media_type: "series".into(),
+                title_id: "movie-id".into(),
+                episode_id: "movie-id".into(),
+                title: "Receiver series".into(),
+                episode: "Episode one".into(),
+            };
+            let prefs = SessionPreferences::from_settings(
+                &CacheSettings::default(),
+                TitlePreferences {
+                    audio: Some(TrackChoice::Track(TrackDescriptor {
+                        language: Some("ja".into()),
+                        kind: Some(TrackKind::Normal),
+                        title: None,
+                    })),
+                    subtitles: Some(TrackChoice::Off),
+                    speed: Some(1.1),
+                    ..Default::default()
+                },
+            );
+            // The testing backend cannot install a video renderer. This still
+            // initializes the native preference/source ownership exactly as a
+            // queued load does, without networking or launching an external app.
+            let _ = bridge.player.play_with_preferences(
+                "https://example.invalid/current",
+                0.0,
+                &[],
+                &[],
+                prefs.clone(),
+            );
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.remote_playback.start_context = Some(media.clone());
+                state.cache_settings.episode_start_behavior = EpisodeStartBehavior::Ask;
+                state.progress.insert(
+                    progress_map_key(&media.title_id, &media.episode_id),
+                    EpisodeProgress {
+                        series_id: media.title_id.clone(),
+                        episode_id: media.episode_id.clone(),
+                        position_secs: 300.0,
+                        duration_secs: 1200.0,
+                        ..Default::default()
+                    },
+                );
+            }
+            let initial = bridge.begin_playback_request();
+            app.set_player_open(true);
+            app.set_playback_started(true);
+            app.set_duration(1200.0);
+            app.set_position(50.0);
+            let session = bridge.playback_snapshot().session.unwrap();
+            let source = bridge.player.screenshot_session();
+            let owner = peer("controller", 7, true);
+            let make_offer = || {
+                let offer = retain_offer(&bridge);
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .offers
+                    .get_mut(&offer.id)
+                    .unwrap()
+                    .media = media.clone();
+                offer
+            };
+            let offered = make_offer();
+            assert_eq!(
+                bridge.finish_current_remote_lookup(
+                    &owner,
+                    session,
+                    source,
+                    Response::Offers(vec![offered.clone()])
+                ),
+                Response::Offers(vec![offered.clone()])
+            );
+            assert!(initial.is_current());
+            assert!(app.get_player_open());
+            assert_eq!(app.get_position(), 50.0);
+            // Canceling the chooser is a presentation action, with no Stop or
+            // source mutation. The next offer can be accepted at a later playhead.
+            assert_eq!(bridge.player.screenshot_session(), source);
+            assert_eq!(bridge.playback_snapshot().session, Some(session));
+            let unrelated = make_offer();
+            let old_session = SessionId {
+                sequence: session.sequence.wrapping_add(1),
+                ..session
+            };
+            assert_eq!(
+                bridge.finish_current_remote_lookup(
+                    &owner,
+                    old_session,
+                    source,
+                    Response::Offers(vec![unrelated.clone()])
+                ),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            assert!(
+                !bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .offers
+                    .contains_key(&unrelated.id)
+            );
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .offers
+                    .contains_key(&offered.id)
+            );
+            let late_source = make_offer();
+            let _ = bridge.player.play_with_preferences(
+                "https://example.invalid/recovered",
+                50.0,
+                &[],
+                &[],
+                prefs,
+            );
+            let recovered_source = bridge.player.screenshot_session();
+            assert_ne!(recovered_source, source);
+            app.set_playback_started(true);
+            assert_eq!(
+                bridge.finish_current_remote_lookup(
+                    &owner,
+                    session,
+                    source,
+                    Response::Offers(vec![late_source.clone()])
+                ),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            assert!(
+                !bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .offers
+                    .contains_key(&late_source.id)
+            );
+            // Acceptance also rechecks source ownership, even if the logical
+            // session has not yet changed (for example during native recovery).
+            assert_eq!(
+                bridge.start_remote_offer(&owner, &offered.id, Some(session)),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            assert!(initial.is_current());
+            assert!(app.get_player_open());
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .remote_playback
+                .offers
+                .get_mut(&offered.id)
+                .unwrap()
+                .retry_session = Some((session, recovered_source));
+            assert_eq!(
+                bridge.start_remote_offer(&owner, &offered.id, Some(old_session)),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            // Both user intent and playback advance while the chooser is open.
+            // The receiver must snapshot these latest values when Start arrives.
+            bridge.player.set_title_speed(1.35);
+            bridge.player.set_title_subtitle_style_value(0, 2.25);
+            let latest = bridge.player.retry_preferences();
+            app.set_position(97.25);
+            // Exercise the same acceptance phase used by Start, before this
+            // headless backend's native launch failure clears receiver state.
+            assert!(matches!(
+                bridge.accept_remote_offer(
+                    &peer("another-controller", 7, true),
+                    &offered.id,
+                    Some(session)
+                ),
+                Err(PlaybackError::NotFound)
+            ));
+            assert!(initial.is_current());
+            let stream = bridge
+                .accept_remote_offer(&owner, &offered.id, Some(session))
+                .unwrap();
+            assert!(!initial.is_current());
+            {
+                let state = bridge.shared.lock().unwrap();
+                assert_eq!(state.remote_playback.start_context.as_ref(), Some(&media));
+                let (position, explicit_recovery, preferences) = state
+                    .remote_playback
+                    .start_retry
+                    .as_ref()
+                    .expect("accepted replacement captures receiver context")
+                    .retry_state();
+                assert_eq!(position, Some(97.25));
+                assert!(
+                    explicit_recovery,
+                    "recovery must bypass ordinary Ask semantics"
+                );
+                let preferences =
+                    preferences.expect("capture latest semantic preferences at acceptance");
+                assert_eq!(preferences.title.audio, latest.title.audio);
+                assert_eq!(preferences.title.subtitles, latest.title.subtitles);
+                assert_eq!(preferences.title.speed, latest.title.speed);
+                assert_eq!(
+                    preferences.title.subtitle_style,
+                    latest.title.subtitle_style
+                );
+                assert_eq!(preferences.title.intro_skip, latest.title.intro_skip);
+                assert_eq!(preferences.audio_language, latest.audio_language);
+                assert_eq!(preferences.subtitle_language, latest.subtitle_language);
+                assert_eq!(preferences.default_speed, latest.default_speed);
+                assert_eq!(
+                    preferences.default_subtitle_style,
+                    latest.default_subtitle_style
+                );
+                assert!(!state.remote_playback.offers.contains_key(&offered.id));
+            }
+            let accepted_source = bridge.player.screenshot_session();
+            // Launch the actual accepted source: this backend cannot install a
+            // video rendering notifier, so success would be a false fixture.
+            assert_eq!(
+                bridge.launch_remote_offer(stream),
+                Response::Error(PlaybackError::Failed(String::new()))
+            );
+            assert_ne!(
+                bridge.player.screenshot_session(),
+                accepted_source,
+                "native launch is reached rather than diverted to Ask"
+            );
+            assert!(!app.get_resume_prompt_visible());
+            let state = bridge.shared.lock().unwrap();
+            assert!(state.pending_resume_stream.is_none());
+            assert!(state.remote_playback.start_context.is_none());
+            assert!(state.remote_playback.start_retry.is_none());
+            assert!(
+                state.remote_playback.session.is_none(),
+                "failed native launch cannot leave a fictitious live receiver session"
+            );
+            drop(state);
+            let actual = bridge.player.retry_preferences();
+            assert_eq!(actual.title.audio, latest.title.audio);
+            assert_eq!(actual.title.subtitles, latest.title.subtitles);
+            assert_eq!(actual.title.speed, latest.title.speed);
+            assert_eq!(actual.title.subtitle_style, latest.title.subtitle_style);
+            assert_eq!(actual.audio_language, latest.audio_language);
+            assert_eq!(actual.subtitle_language, latest.subtitle_language);
         },
     );
 }

@@ -3754,8 +3754,8 @@ msgstr "Nedavna gledanja"
 msgid "Showing the latest 100 sessions. Totals include your full journal."
 msgstr "Prikazuje se posljednjih 100 gledanja. Ukupni podaci uključuju cijeli dnevnik."
 
-msgid "Recorded on this device for this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."
-msgstr "Zabilježeno na ovom uređaju za ovaj profil. Datumi su u UTC-u. Vrijeme uključuje aktivnu reprodukciju bez pauza, učitavanja i preskakanja. Gledanje je dovršeno na 90% filma ili epizode. Datum gledanja do kraja zahtijeva sve poznate objavljene epizode."
+msgid "Viewing sessions sync between devices using this profile. Dates use UTC. Time counts active playback, excluding pauses, buffering and seek jumps. A completion means reaching 90% of a movie or episode. Caught up dates require all known released episodes to be watched."
+msgstr "Sesije gledanja sinkroniziraju se između uređaja koji koriste ovaj profil. Datumi su u UTC-u. Vrijeme uključuje aktivnu reprodukciju bez pauza, učitavanja i preskakanja. Gledanje je dovršeno na 90% filma ili epizode. Datum gledanja do kraja zahtijeva sve poznate objavljene epizode."
 
 msgid "Watch queue"
 msgstr "Red gledanja"
@@ -4170,8 +4170,8 @@ msgstr "Izbrišite bilješku"
 msgid "Editing saved bookmark"
 msgstr "Uređivanje spremljene oznake"
 
-msgid "Saved on this device for this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."
-msgstr "Spremljeno na ovom uređaju za ovaj profil. Datumi označavaju dodavanje oznaka i koriste UTC. Starije oznake možda nemaju zabilježen datum dodavanja."
+msgid "Bookmarks and notes sync between devices using this profile. Dates show when bookmarks were added, in UTC. Older bookmarks may have no recorded added date."
+msgstr "Oznake i bilješke sinkroniziraju se između uređaja koji koriste ovaj profil. Datumi označavaju dodavanje oznaka i koriste UTC. Starije oznake možda nemaju zabilježen datum dodavanja."
 
 msgid "Return to saved scenes and notes"
 msgstr "Vratite se spremljenim scenama i bilješkama"
@@ -4243,3 +4243,213 @@ msgstr "Uključeno"
 
 msgid "Powered by TMDB"
 msgstr "Podaci: TMDB"
+
+msgid "These rules apply to every addon. Each preference can sync or stay on this device."
+msgstr "Ova pravila vrijede za sve dodatke. Svaka se postavka može sinkronizirati ili ostati na ovom uređaju."
+
+msgid "Limits"
+msgstr "Ograničenja"
+
+msgid "Video codecs"
+msgstr "Videokodeci"
+
+msgid "Excluded video codecs"
+msgstr "Izuzeti videokodeci"
+
+msgid "Excluded codecs stay hidden even when they are also allowed."
+msgstr "Izuzeti kodeci ostaju skriveni čak i kada su istodobno dopušteni."
+
+msgid "Exclude H.264 / AVC"
+msgstr "Izuzmite H.264 / AVC"
+
+msgid "Exclude H.265 / HEVC"
+msgstr "Izuzmite H.265 / HEVC"
+
+msgid "Exclude AV1"
+msgstr "Izuzmite AV1"
+
+msgid "Exclude VP9"
+msgstr "Izuzmite VP9"
+
+msgid "Exclude other video codecs"
+msgstr "Izuzmite ostale videokodeke"
+
+msgid "Audio language preference comes first, then this codec order. Unlisted codecs keep their existing order."
+msgstr "Jezici zvuka imaju prednost, a zatim vrijedi ovaj redoslijed kodeka. Nenavedeni kodeci zadržavaju postojeći redoslijed."
+
+msgid "Add codec preference"
+msgstr "Dodajte željeni kodek"
+
+msgid "No codec preference"
+msgstr "Nema prednosti kodeka"
+
+msgid "Only preferred video codecs"
+msgstr "Samo željeni videokodeci"
+
+msgid "Hide streams with other advertised video codecs. An empty preference list allows every codec."
+msgstr "Sakrijte izvore s drugim navedenim videokodecima. Prazan popis željenih kodeka dopušta sve kodeke."
+
+msgid "Audio languages"
+msgstr "Jezici zvuka"
+
+msgid "Use preferred audio languages"
+msgstr "Koristite željene jezike zvuka"
+
+msgid "Follow Preferred audio languages."
+msgstr "Slijedite postavku Željeni jezici zvuka."
+
+msgid "Custom audio languages"
+msgstr "Prilagođeni jezici zvuka"
+
+msgid "Search and add languages in preference order. Changes apply immediately."
+msgstr "Pretražite i dodajte jezike po željenom redoslijedu. Promjene se primjenjuju odmah."
+
+msgid "Add language"
+msgstr "Dodajte jezik"
+
+msgid "Hide streams with other advertised audio languages. An empty preference list allows every language."
+msgstr "Sakrijte izvore s drugim navedenim jezicima zvuka. Prazan popis željenih jezika dopušta sve jezike."
+
+msgid "Unknown details"
+msgstr "Nepoznate pojedinosti"
+
+msgid "Keep offers whose resolution, size, codec or audio languages are not advertised."
+msgstr "Zadržite izvore koji ne navode rezoluciju, veličinu, kodek ili jezike zvuka."
+
+msgid "Profile and device stream preferences"
+msgstr "Postavke izvora profila i uređaja"
+
+msgid "Managed in Settings → Player → Stream filters."
+msgstr "Upravlja se u Postavke → Reprodukcija → Filtri izvora."
+
+msgid "Use this preference order when sorting by Video codec. Unlisted codecs keep their existing order."
+msgstr "Koristite ovaj redoslijed želja pri sortiranju po videokodeku. Nenavedeni kodeci zadržavaju postojeći redoslijed."
+
+msgid "Move any criterion, including audio and codec, to set its priority. Unknown values always stay last."
+msgstr "Pomaknite bilo koji kriterij, uključujući zvuk i kodek, kako biste mu odredili prioritet. Nepoznate vrijednosti uvijek ostaju posljednje."
+
+msgid "Uses Preferred subtitle languages."
+msgstr "Koristi postavku Željeni jezici titlova."
+
+msgid "Sort direction"
+msgstr "Smjer sortiranja"
+
+msgid "Video codec"
+msgstr "Videokodek"
+
+msgid "Subtitle language"
+msgstr "Jezik titlova"
+
+msgid "Preferred first"
+msgstr "Željeni prvo"
+
+msgid "Reverse preference order"
+msgstr "Obrnuti redoslijed želja"
+
+msgid "Uncached first"
+msgstr "Nespremljeni prvo"
+
+msgid "Cached first"
+msgstr "Spremljeni prvo"
+
+msgid "Single episodes first"
+msgstr "Pojedinačne epizode prvo"
+
+msgid "Season packs first"
+msgstr "Paketi sezona prvo"
+
+msgid "Smallest first"
+msgstr "Najmanji prvo"
+
+msgid "Largest first"
+msgstr "Najveći prvo"
+
+msgid "Lowest first"
+msgstr "Najniže prvo"
+
+msgid "Highest first"
+msgstr "Najviše prvo"
+
+msgid "Fewest first"
+msgstr "Najmanje prvo"
+
+msgid "Most first"
+msgstr "Najviše prvo"
+
+msgid "Playback tools"
+msgstr "Alati reprodukcije"
+
+msgid "Subtitle appearance"
+msgstr "Izgled titlova"
+
+msgid "Secondary subtitles"
+msgstr "Sekundarni titlovi"
+
+msgid "Intros and credits"
+msgstr "Uvodne i odjavne špice"
+
+msgid "Sources and online subtitles"
+msgstr "Izvori i mrežni titlovi"
+
+msgid "Device playback"
+msgstr "Reprodukcija na uređaju"
+
+msgid "No chapters available."
+msgstr "Nema dostupnih poglavlja."
+
+msgid "Showing the first 128 chapters."
+msgstr "Prikazuje se prvih 128 poglavlja."
+
+msgid "Showing the first 128 bookmarks."
+msgstr "Prikazuje se prvih 128 oznaka."
+
+msgid "Reset subtitle appearance"
+msgstr "Vrati zadani izgled titlova"
+
+msgid "Secondary subtitle position"
+msgstr "Položaj sekundarnih titlova"
+
+msgid "Middle"
+msgstr "Sredina"
+
+msgid "Skip current segment"
+msgstr "Preskoči trenutačni segment"
+
+msgid "Dismiss skip"
+msgstr "Zatvori preskakanje"
+
+msgid "Waiting for device…"
+msgstr "Čekanje uređaja…"
+
+msgid "Search online subtitles"
+msgstr "Pretraži mrežne titlove"
+
+msgid "Cancel primary subtitle search"
+msgstr "Otkaži pretragu primarnih titlova"
+
+msgid "Cancel secondary subtitle search"
+msgstr "Otkaži pretragu sekundarnih titlova"
+
+msgid "Software decoding"
+msgstr "Softversko dekodiranje"
+
+msgid "Refreshing…"
+msgstr "Osvježavanje…"
+
+msgid "Searching online subtitles…"
+msgstr "Pretraživanje mrežnih titlova…"
+
+msgid "Downloading subtitles…"
+msgstr "Preuzimanje titlova…"
+
+msgid "No online subtitles found."
+msgstr "Nisu pronađeni mrežni titlovi."
+
+msgid "Online subtitle search failed."
+msgstr "Pretraga mrežnih titlova nije uspjela."
+
+msgid "Online subtitles ready."
+msgstr "Mrežni titlovi su spremni."
+
+msgid "Refresh subtitle tracks"
+msgstr "Osvježi zapise titlova"

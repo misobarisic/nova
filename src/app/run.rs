@@ -183,6 +183,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         app.set_more_open(true);
     }
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
+    nova_providers::catalog_grouping::set_catalog_grouping_cache(Arc::new(
+        io::CatalogGroupingCache,
+    ));
     if let Err(error) = nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
         plugin_settings::Backend::new(),
     )) {
@@ -1192,6 +1195,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = b.dispatch_playback_action(PlaybackAction::SeekAbsolute(position as f64));
     });
     let b = bridge.clone();
+    app.on_seek_chapter(move |position| {
+        let id = format!("c{:016x}", f64::from(position).to_bits());
+        let _ = b.dispatch_playback_action(PlaybackAction::SeekChapter { id });
+    });
+    let b = bridge.clone();
+    app.on_seek_scene_bookmark(move |id| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SeekBookmark { id: id.to_string() });
+    });
+    let b = bridge.clone();
     app.on_seek_relative(move |delta| {
         let _ = b.dispatch_playback_action(PlaybackAction::SeekRelative(delta as f64));
     });
@@ -1200,11 +1212,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = b.dispatch_playback_action(PlaybackAction::Stop);
     });
     let b = bridge.clone();
-    app.on_intro_skip_mode_changed(move |index| b.change_intro_skip_mode(index));
+    app.on_intro_skip_mode_changed(move |index| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SetIntroSkipMode(index));
+    });
     let b = bridge.clone();
-    app.on_skip_segment(move || b.skip_current_segment());
+    app.on_skip_segment(move || {
+        if let Some(token) = b.intro_skip_offer_token() {
+            let _ = b.dispatch_playback_action(PlaybackAction::SkipSegment { token });
+        }
+    });
     let b = bridge.clone();
-    app.on_dismiss_skip_segment(move || b.dismiss_current_segment());
+    app.on_dismiss_skip_segment(move || {
+        if let Some(token) = b.intro_skip_offer_token() {
+            let _ = b.dispatch_playback_action(PlaybackAction::DismissSkipSegment { token });
+        }
+    });
     let b = bridge.clone();
     app.on_next_episode_streams(move |token| {
         let _ = b.dispatch_playback_action(PlaybackAction::NextEpisode {
@@ -1258,7 +1280,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         save_subtitle_defaults();
     });
     let b = bridge.clone();
-    app.on_subtitle_style_changed(move |index, value| b.edit_subtitle_style(index, value, false));
+    app.on_subtitle_style_changed(move |control, value| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SetSubtitleStyle {
+            control,
+            value: value as f64,
+        });
+    });
     let b = bridge.clone();
     app.on_playback_speed_changed(move |speed| {
         let _ = b.dispatch_playback_action(PlaybackAction::SetSpeed(speed as f64));
@@ -1285,32 +1312,48 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let b = bridge.clone();
     app.on_restore_playback_default(move |control| {
-        if control == 3 || control == 4 {
-            b.restore_playback_default(control);
-            return;
-        }
         let action = match control {
             0 => PlaybackAction::ResetAudioTrack,
             1 => PlaybackAction::ResetSubtitleTrack,
             2 => PlaybackAction::ResetSpeed,
+            3 => PlaybackAction::ResetSubtitleStyle,
+            4 => PlaybackAction::SetIntroSkipMode(-1),
             _ => return,
         };
         let _ = b.dispatch_playback_action(action);
     });
 
     let b = bridge.clone();
-    app.on_pick_secondary_sub_track(move |id| b.pick_secondary_playback_track(id));
+    app.on_pick_secondary_sub_track(move |id| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SelectSecondarySubtitleTrack(id));
+    });
     let b = bridge.clone();
-    app.on_add_scene_bookmark(move |note| b.add_scene_bookmark(&note));
+    app.on_add_scene_bookmark(move |note| {
+        b.dispatch_playback_action(PlaybackAction::AddBookmark {
+            note: note.to_string(),
+        })
+        .is_ok()
+    });
     let b = bridge.clone();
-    app.on_delete_scene_bookmark(move |id| b.delete_scene_bookmark(id.as_str()));
+    app.on_delete_scene_bookmark(move |id| {
+        b.dispatch_playback_action(PlaybackAction::DeleteBookmark { id: id.to_string() })
+            .is_ok()
+    });
     let b = bridge.clone();
-    app.on_edit_scene_bookmark(move |id, note| b.edit_scene_bookmark(id.as_str(), note.as_str()));
+    app.on_edit_scene_bookmark(move |id, note| {
+        b.dispatch_playback_action(PlaybackAction::EditBookmark {
+            id: id.to_string(),
+            note: note.to_string(),
+        })
+        .is_ok()
+    });
     let b = bridge.clone();
-    app.on_try_another_stream(move || b.try_another_stream());
+    app.on_try_another_stream(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::TryAnotherStream);
+    });
     let b = bridge.clone();
     app.on_secondary_subtitle_position_changed(move |index| {
-        b.change_secondary_subtitle_position(index)
+        let _ = b.dispatch_playback_action(PlaybackAction::SetSecondarySubtitlePosition(index));
     });
 
     // Transient rate preview (press-and-hold 2×): session only, never stored.
@@ -1395,9 +1438,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_tracks_popup_opened(move |kind| {
-        b.player.refresh_tracks();
         if kind == 2 {
-            b.retry_addon_subtitles();
+            let _ = b.dispatch_playback_action(PlaybackAction::RefreshSubtitleTracks);
+        } else {
+            b.player.refresh_tracks();
         }
     });
 

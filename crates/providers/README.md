@@ -56,12 +56,26 @@ reusing both successful and rejected proofs across progressive batch snapshots. 
 capped at 50 rows.
 
 Sort order offers cached status, resolution, size, season packs, Number of seeds
-(reported seed counts), preferred audio language, subtitle language and video
-codec, with movable priority and independent high/low direction. Unknown values
-stay last; stable IDs break ties. Combined TorBox/P2P snapshots sort before the
-50-row cap. Preferred quality still biases the bounded candidate inspection
-pool; the explicit sort order controls the final visible list. `sort.order` is
+(reported seed counts) and subtitle language, with movable priority and
+independent high/low direction. Capable Supernova packages inherit Nova's
+effective profile/device stream filters, language/codec preferences and sort order.
+The same Rust policy filters discovery candidates and proved TorBox/P2P rows,
+then compares every configured criterion before the 50-row cap. Cached status,
+resolution, size, season packs, seeds, audio, codec and subtitle language can all
+move in the shared order with independent direction; addon-local sorting does
+not add hidden secondary criteria. Audio before codec is the default only.
+Unknown candidates can reach file inspection; final rows obey the selected
+unknown-metadata policy. Audio and codec requirements are independent, and
+explicit codec exclusions win. The addon configuration replaces duplicate
+quality/language/codec/sort controls with a read-only Settings reference and
+current policy summary; credentials, sources, minimum seeds and playback mode
+remain addon-owned. Unknown values stay last; stable IDs break ties.
+`sort.order` is
 one ordinary persisted and synced plugin field, with no separate storage key.
+Older Supernova packages receive compatible shared sort order/directions,
+audio/subtitle/codec preferences and neutral quality values only in the
+invocation snapshot; the app still enforces complete
+rules. Hosts without the new capability retain the package's legacy controls.
 Search metadata is cached locally for a day; partial failures and empty results
 get a short retry TTL, and empty failed searches are not cached. Source access
 can change or fail independently; no anti-bot bypass or background catalog exists.
@@ -204,6 +218,8 @@ Removal disables a source while preserving its URL; account removal explicitly
 clears its declared secret before disabling it. One secret per item is supported. The generic `sort-order` field type validates a
 complete unique priority list and applies move/direction actions against the
 latest snapshot before persisting the whole field. Valid legacy orders retain their existing priorities/directions and append new criteria. The generic `ordered-choices` field supports Add/Up/Down/Remove for a unique subset of predefined choices; Supernova uses audio languages (`language.prefs`, retained legacy key), subtitle languages (`subtitle.prefs`) and video codecs (`codec.prefs`), all neutral when empty. Empty/missing evidence stays last. Explicit audio and subtitle labels are parsed separately; generic Multi/Dual/Subs categories never invent a track language.
+Legacy language/codec/sort values remain stored for older hosts; capable Supernova
+invocations use Nova's shared preferences instead, without rewriting those keys.
 Supernova uses these generic lists for torrent sources and debrid providers;
 TorBox is the sole predefined debrid provider initially. Existing flat keys and
 sync records are unchanged.
@@ -290,6 +306,44 @@ show path and native episode number; expiring server tokens are fetched only
 at playback time. Descriptors/catalogs come from the addon manifest.
 `capabilities.contextualStreams` enables the contextual `resolve/series/...`
 transport, rather than app code checking a particular provider name.
+`capabilities.streamPreferences` opts a source into an immutable
+`request.streamPreferences` containing resolved `StreamFilterRules`. The app
+supplies the owning profile's effective device overrides, including unsaved
+active UI edits; retained requests cannot inherit another owner's preferences.
+The registry rejects changed-policy final and progressive responses. This
+context is ephemeral and never enters synced plugin configuration. Runtime
+disk and memory cache keys include the effective policy; unrelated addons keep
+their existing cache namespace. Source code can pass evidence-backed facts to
+the shared policy without reproducing its filtering semantics:
+
+```js
+const facts = JSON.stringify({height:1080,bytes:800000000,codec:"hevc",audio_languages:["ja","en"],subtitle_languages:["hr"],cached:true,season_pack:false,seeders:null});
+nova.streamPreferences.accepts(facts, false); // candidate; allow missing facts until inspection
+nova.streamPreferences.accepts(facts, true);  // final stream; enforce retain_unknown
+nova.streamPreferences.compare(facts, otherFacts); // negative / zero / positive, complete shared sort
+JSON.parse(nova.streamPreferences.sort(JSON.stringify([
+    {id:"stable-source-id",facts:JSON.parse(facts)},
+]))); // ordered source indices; shared Rust comparison and stable ID ties
+```
+
+The batch sort parses each facts object once and retains exact `u64` values in
+Rust throughout comparison. It accepts at most 4096 rows, 2 MiB of input and
+8192-byte nonempty IDs; malformed or oversized inputs return a JSON error.
+Supernova uses this batch operation, compiles release-language/codec patterns
+once per invocation, and reuses candidate facts across discovery waves until
+title/file proof, peer count, source evidence or selected-file probe inputs
+change. New file identities cannot inherit the previous file's probe facts.
+Unknown values remain last
+in either direction. An absent context leaves
+standalone/older-host configuration behavior unchanged. Supernova applies these
+checks before its bounded inspection pool and final result cap; VP9 and Other
+codec evidence remain known so exclusions cannot silently become unknown.
+Normalized provider rows may include typed `streamFacts`; the registry validates
+bounded language identifiers and resolution, then forwards the object unchanged
+as `behaviorHints.streamFacts`. Supernova uses the same object for upstream
+comparison and app sorting, preserving explicit unknowns without reparsing
+display text. Cached availability is the verified TorBox state, with no invented
+peer count; discovery leaves availability and unproved episode bytes unknown.
 `capabilities.configurableCapabilities` opts an installed source into the local
 configuration sheet. It must implement `manifest` with the unfiltered source
 manifest and `config: { streams, metadata }`, and gate exposed actions using

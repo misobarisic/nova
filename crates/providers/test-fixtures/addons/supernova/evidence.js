@@ -16,7 +16,7 @@
   const languagePattern = new RegExp("\\b(?:"+Object.values(aliases).join("|")+")\\b","gi");
   const languageMap = new Map(Object.entries(aliases).flatMap(([code,names])=>names.split("|").map(name=>[name,code])));
   const videoPatterns = [["avc",/\b(?:avc|h[ .-]?264|x264|mpeg[ -]?4 avc)\b/gi],["hevc",/\b(?:hevc|h[ .-]?265|x265)\b/gi],["av1",/\bav1\b/gi],
-    ["unsupported",/\b(?:vp[ -]?[89]|mpeg[ -]?2|mpeg[ -]?4 visual|xvid|divx)\b/gi]];
+    ["vp9",/\bvp[ -]?9\b/gi],["other",/\b(?:vp[ -]?8|mpeg[ -]?2|mpeg[ -]?4 visual|xvid|divx|h[ .-]?263|vc[ -]?1|wmv3|prores)\b/gi]];
   const audioPatterns = [["E-AC-3",/\b(?:e[ .-]?ac[ .-]?3|ddp|dd\+)\b/gi],["AC-3",/\b(?:ac[ .-]?3|dd)\b/gi],
     ["TrueHD",/\btrue[ .-]?hd\b/gi],["DTS",/\bdts(?:[ .-]?hd(?:[ .-]?ma)?)?\b/gi],
     ["AAC",/\baac(?:[ .-]?lc)?\b/gi],["FLAC",/\bflac\b/gi],["MP3",/\bmp3\b/gi],
@@ -36,7 +36,7 @@
     return list("audioLanguages",item=>languageMap.has(item) && languageMap.get(item)===item) &&
       list("subtitleLanguages",item=>languageMap.has(item) && languageMap.get(item)===item) &&
       list("audioCodecs",item=>audioPatterns.some(([codec])=>codec===item)) && list("audioChannels",channelValid) &&
-      (!own(value,"videoCodec") || [null,"avc","hevc","av1"].includes(value.videoCodec)) &&
+      (!own(value,"videoCodec") || [null,"avc","hevc","av1","vp9","other"].includes(value.videoCodec)) &&
       (!own(value,"resolution") || value.resolution===null || resolutions.has(value.resolution)) &&
       (!own(value,"releaseSource") || value.releaseSource===null || sources.has(value.releaseSource));
   };
@@ -108,7 +108,7 @@
     const evidence={};
     if (kind==="video" || kind==="spec") {
       const codecs=matches(text,videoPatterns);
-      if (codecs.length) evidence.videoCodec=codecs.length===1 && codecs[0]!=="unsupported" ? codecs[0] : null;
+      if (codecs.length) evidence.videoCodec=codecs.length===1 ? codecs[0] : null;
       const heights=[...text.matchAll(/\b(360|480|576|720|1080|1440|2160|4320)[pi]\b/gi)].map(match=>Number(match[1]));
       for (const match of text.matchAll(/\b\d{3,5}\s*[x×]\s*(360|480|576|720|1080|1440|2160|4320)\b/gi)) heights.push(Number(match[1]));
       if (/\b(?:4k|uhd)\b/i.test(text)) heights.push(2160);

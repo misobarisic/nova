@@ -365,6 +365,7 @@ impl Bridge {
         self.refresh_cache_disk_usage();
         self.apply_category_rows();
         self.refresh_stream_filter_settings();
+        self.refresh_stream_preferences_policy();
         self.refresh_smart_collections();
         if let Some(app) = self.app() {
             if app.get_stream_selector_open() {
@@ -512,6 +513,8 @@ impl Bridge {
         let settings = {
             let state = self.shared.lock().unwrap();
             CacheSettings {
+                catalog_grouping_default: state.cache_settings.catalog_grouping_default,
+                catalog_grouping_overrides: state.cache_settings.catalog_grouping_overrides.clone(),
                 stream_filters: state.cache_settings.stream_filters.clone(),
                 smart_collections: state.cache_settings.smart_collections.clone(),
                 tmdb_api_key: app.get_tmdb_api_key().trim().to_owned(),
@@ -647,6 +650,9 @@ impl Bridge {
         }
         self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         set_active_cache_settings(settings.clone());
+        if self.refresh_stream_preferences_policy() {
+            self.refresh_stream_filter_settings();
+        }
         self.invalidate_home_pending_logo();
         if !applying() {
             self.player.update_playback_defaults(&settings);
@@ -1172,6 +1178,7 @@ impl Bridge {
     }
 
     pub(super) fn modal_closed(&self) {
+        self.player.release_window_transition();
         self.cancel_season_download();
         self.remote_disconnect();
         self.cancel_pending_for_navigation();

@@ -53,6 +53,12 @@ fn controls_require_confirmed_session_and_back_only_detaches() {
     app.set_remote_can_pause(true);
     app.window().show().unwrap();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Playback tools")
+            .next()
+            .is_none(),
+        "legacy-only receivers must not offer an empty tools menu"
+    );
     let actions = Rc::new(RefCell::new(Vec::new()));
     let recorded = actions.clone();
     app.on_remote_action(move |action, value, token| {
@@ -539,4 +545,239 @@ fn track_picker_dispatches_only_its_confirmed_session_and_back_closes_picker_fir
     assert_eq!(actions.borrow().len(), 1);
     key(&app, slint::platform::Key::Escape);
     assert!(detached.get());
+}
+
+fn settle_remote() {
+    for _ in 0..5 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(40));
+    }
+}
+
+#[test]
+fn grouped_tools_route_semantic_actions_and_bookmark_drafts_wait_for_matching_ack() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::grouped_tools_route_semantic_actions_and_bookmark_drafts_wait_for_matching_ack"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 1800));
+    app.set_remote_controls_open(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("receiver-a".into());
+    app.set_remote_can_chapters(true);
+    app.set_remote_can_bookmarks(true);
+    app.set_remote_can_secondary_subtitles(true);
+    app.set_remote_chapters(
+        Rc::new(slint::VecModel::from(vec![nova::RemoteChapterRow {
+            id: "chapter-stable".into(),
+            title: "Opening scene".into(),
+            time: "00:42".into(),
+        }]))
+        .into(),
+    );
+    app.set_remote_bookmarks(
+        Rc::new(slint::VecModel::from(vec![nova::RemoteBookmarkRow {
+            id: "bookmark-stable".into(),
+            note: "Keep this note".into(),
+            time: "03:21".into(),
+        }]))
+        .into(),
+    );
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let recorded = calls.clone();
+    app.on_remote_semantic_action(move |name, value, id, text, session| {
+        recorded.borrow_mut().push((
+            name.to_string(),
+            value,
+            id.to_string(),
+            text.to_string(),
+            session.to_string(),
+        ));
+    });
+    let detached = Rc::new(std::cell::Cell::new(false));
+    let recorded = detached.clone();
+    app.on_remote_device_close(move || recorded.set(true));
+    app.show().unwrap();
+    settle_remote();
+    click(&app, "Playback tools");
+    settle_remote();
+    for (width, height) in [(320, 844), (390, 844), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width as f32, height as f32),
+            });
+        settle_remote();
+        for label in ["Chapters", "Secondary subtitles", "Scene bookmarks"] {
+            let row = ElementHandle::find_by_accessible_label(&app, label)
+                .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap();
+            assert!(row.absolute_position().x >= 0.0);
+            assert!(row.absolute_position().x + row.size().width <= width as f32 + 1.0);
+            assert!(row.size().height >= 44.0);
+        }
+    }
+    app.window().set_size(slint::PhysicalSize::new(390, 1800));
+    settle_remote();
+    click(&app, "Chapters");
+    settle_remote();
+    click(&app, "Opening scene");
+    assert_eq!(
+        calls.borrow().last().unwrap(),
+        &(
+            "chapter".into(),
+            0.0,
+            "chapter-stable".into(),
+            "".into(),
+            "receiver-a".into()
+        )
+    );
+    key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    click(&app, "Secondary subtitles");
+    settle_remote();
+    click(&app, "Off");
+    assert_eq!(calls.borrow().last().unwrap().0, "secondary_subtitle");
+    assert_eq!(calls.borrow().last().unwrap().1, -1.0);
+    key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    click(&app, "Scene bookmarks");
+    settle_remote();
+    click(&app, "Edit note");
+    settle_remote();
+    click(&app, "Clear note");
+    settle_remote();
+    let bridge = app.global::<nova::RemoteBridge>();
+    assert_eq!(bridge.get_menu_page(), "bookmark-editor");
+    let call = calls.borrow().last().unwrap().clone();
+    assert_eq!(
+        call,
+        (
+            "bookmark_edit".into(),
+            0.0,
+            "bookmark-stable".into(),
+            "".into(),
+            "receiver-a".into()
+        )
+    );
+    // A failed clear preserves the pre-existing draft for a real retry.
+    app.set_remote_semantic_name("bookmark_edit".into());
+    app.set_remote_semantic_id("bookmark-stable".into());
+    app.set_remote_semantic_session("receiver-a".into());
+    app.set_remote_semantic_success(false);
+    app.set_remote_semantic_notice("Device could not save the note.".into());
+    app.set_remote_semantic_revision(1);
+    settle_remote();
+    let note = ElementHandle::find_by_accessible_label(&app, "Bookmark note")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
+        .unwrap();
+    assert_eq!(note.accessible_value().unwrap(), "Keep this note");
+    assert_eq!(bridge.get_menu_page(), "bookmark-editor");
+    click(&app, "Save note");
+    settle_remote();
+    assert_eq!(calls.borrow().last().unwrap().3, "Keep this note");
+    // A newer acknowledgement for another action never closes this editor.
+    app.set_remote_semantic_name("chapter".into());
+    app.set_remote_semantic_id("chapter-stable".into());
+    app.set_remote_semantic_success(true);
+    app.set_remote_semantic_revision(2);
+    settle_remote();
+    assert_eq!(bridge.get_menu_page(), "bookmark-editor");
+    app.set_remote_semantic_name("bookmark_edit".into());
+    app.set_remote_semantic_id("bookmark-stable".into());
+    app.set_remote_semantic_revision(3);
+    settle_remote();
+    assert_eq!(bridge.get_menu_page(), "bookmarks");
+    key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    assert_eq!(bridge.get_menu_page(), "tools");
+    key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    assert_eq!(bridge.get_menu_page(), "");
+    assert!(!detached.get(), "nearest Back remains inside grouped tools");
+    key(&app, slint::platform::Key::Escape);
+    assert!(detached.get());
+}
+
+// Slint evaluates changed bindings and mounts their timers during an event
+// turn. One large clock jump can start an exit timer at the *end* of that jump.
+// Advance rendered frames so both timer installation and its deadline run,
+// matching the production event loop while retaining the full elapsed bound.
+fn advance_remote_motion(app: &nova::AppWindow, millis: u64) {
+    for _ in 0..millis / 20 {
+        if let Some(page) =
+            ElementHandle::find_by_element_type_name(app, "RemoteControlsPage").next()
+        {
+            let _ = (page.size(), page.absolute_position());
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn controls_retain_outgoing_snapshot_disable_input_and_cancel_stale_exit_on_reopen() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::controls_retain_outgoing_snapshot_disable_input_and_cancel_stale_exit_on_reopen"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    let anim = app.global::<nova::Anim>();
+    anim.set_enabled(true);
+    anim.set_transitions(true);
+    app.set_remote_title("Retained receiver title".into());
+    app.set_remote_connected(true);
+    app.set_remote_session("session-a".into());
+    app.set_remote_can_pause(true);
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let recorded = calls.clone();
+    app.on_remote_action(move |_, _, _| recorded.set(recorded.get() + 1));
+    let closed = Rc::new(std::cell::Cell::new(0));
+    let recorded = closed.clone();
+    app.on_remote_controls_visual_closed(move || recorded.set(recorded.get() + 1));
+    app.show().unwrap();
+    app.set_remote_controls_open(true);
+    settle_remote();
+    assert!(app.get_remote_controls_visual_retained());
+    let page = || ElementHandle::find_by_element_type_name(&app, "RemoteControlsPage").next();
+    assert!(page().is_some());
+    app.set_remote_controls_open(false);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    assert!(page().is_some(), "outgoing page must remain mounted");
+    assert!(app.get_remote_controls_visual_retained());
+    assert_eq!(app.get_remote_title(), "Retained receiver title");
+    key(&app, "k");
+    assert_eq!(calls.get(), 0);
+    assert_eq!(closed.get(), 0);
+    app.set_remote_controls_open(true);
+    advance_remote_motion(&app, 800);
+    assert!(page().is_some());
+    assert_eq!(closed.get(), 0);
+    app.set_remote_controls_open(false);
+    advance_remote_motion(&app, 800);
+    assert!(page().is_none());
+    assert_eq!(closed.get(), 1);
+    assert!(!app.get_remote_controls_visual_retained());
+    app.set_remote_controls_open(true);
+    settle_remote();
+    app.set_remote_controls_open(false);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    anim.set_enabled(false);
+    settle_remote();
+    assert!(page().is_none(), "disabling motion finishes an active exit");
+    assert_eq!(closed.get(), 2);
+    app.set_remote_controls_open(true);
+    settle_remote();
+    app.set_remote_controls_open(false);
+    settle_remote();
+    assert!(page().is_none(), "reduced-motion navigation is immediate");
+    assert_eq!(closed.get(), 3);
 }

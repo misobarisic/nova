@@ -1,6 +1,39 @@
 (() => {
   "use strict";
   const S = globalThis.Supernova = { sources: {}, VERSION: 2, MAX: 50, CANDIDATE_MAX: 300, RESULT_TTL: 900 };
+  // Invocation-only policy. Hosts without this capability retain the plugin's
+  // existing configuration, so the same package remains usable on older Nova.
+  S.withStreamPreferences = (settings, preferences) => !preferences || !nova.streamPreferences ? settings : {
+    ...settings, streamPreferences:preferences,
+    "quality.preferred":"any", "language.prefs":[], "codec.prefs":[],
+  };
+  S.preferenceFacts = new WeakMap();
+  S.copyRow = row => {
+    const copy={...row};
+    if (S.preferenceFacts.has(row)) S.preferenceFacts.set(copy,S.preferenceFacts.get(row));
+    return copy;
+  };
+  S.acceptPreferences = (facts,settings,complete) => !settings.streamPreferences || nova.streamPreferences.accepts(JSON.stringify(facts),complete);
+  S.preferenceComparator = (settings,facts) => {
+    if (!settings.streamPreferences) return ()=>0;
+    const serialized=new Map();
+    const snapshot=row=>{
+      if (!serialized.has(row)) serialized.set(row,JSON.stringify(facts(row)));
+      return serialized.get(row);
+    };
+    return (a,b)=>nova.streamPreferences.compare(snapshot(a),snapshot(b));
+  };
+  S.sortByPreferences = (rows,settings,facts,identity) => {
+    if (typeof nova.streamPreferences.sort !== "function") {
+      const compare=S.preferenceComparator(settings,facts);
+      return rows.sort((a,b)=>compare(a,b) || (identity(a)<identity(b) ? -1 : identity(a)>identity(b) ? 1 : 0));
+    }
+    // Parse each facts object once in Rust, then use the same authoritative
+    // comparator without QuickJS/JSON crossings for every comparison.
+    const indices=JSON.parse(nova.streamPreferences.sort(JSON.stringify(rows.map(row=>({id:identity(row),facts:facts(row)})))));
+    if (!Array.isArray(indices) || indices.length!==rows.length || new Set(indices).size!==rows.length || indices.some(index=>!Number.isInteger(index) || index<0 || index>=rows.length)) throw new Error("Invalid shared stream sort response");
+    return indices.map(index=>rows[index]);
+  };
   S.json = raw => { try { return JSON.parse(raw); } catch (_) { return null; } };
   S.hash = value => /^[a-f\d]{40}$/i.test(String(value || "")) ? String(value).toLowerCase() : null;
   S.magnetHash = value => {

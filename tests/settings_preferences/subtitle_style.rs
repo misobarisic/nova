@@ -86,7 +86,13 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
                 "Subtitle appearance and timing",
             )
         };
-        for (width, height, android) in [(360, 800, true), (900, 360, true), (1280, 800, false)] {
+        for (width, height, android) in [
+            (320, 740, true),
+            (390, 844, true),
+            (360, 800, true),
+            (900, 360, true),
+            (1280, 800, false),
+        ] {
             app.window()
                 .set_size(slint::PhysicalSize::new(width, height));
             app.set_is_android(android);
@@ -155,6 +161,35 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
             settle(&app);
             key(&app, slint::platform::Key::Return);
             assert_eq!(global_edits.borrow().last().unwrap().0, 6);
+            for (caption_id, button_id) in [
+                ("color_caption", "color_button"),
+                ("embedded_caption", "embedded_button"),
+            ] {
+                let caption = ElementHandle::find_by_element_id(
+                    &app,
+                    &format!("SubtitleControls::{caption_id}"),
+                )
+                .next()
+                .expect("subtitle caption");
+                let button = ElementHandle::find_by_element_id(
+                    &app,
+                    &format!("SubtitleControls::{button_id}"),
+                )
+                .next()
+                .expect("subtitle control");
+                assert!(
+                    (44.0..=76.0).contains(&button.size().height),
+                    "subtitle control keeps its intrinsic height: {language} {width}px {button_id}: {:?}",
+                    button.size()
+                );
+                let gap = button.absolute_position().y
+                    - caption.absolute_position().y
+                    - caption.size().height;
+                assert!(
+                    (gap - 4.0).abs() < 0.5,
+                    "subtitle caption/control gap: {language} {width}px {button_id}: {gap}"
+                );
+            }
 
             app.set_show_settings(false);
             app.set_effective_subtitle_style(slint::ModelRc::new(slint::VecModel::from(vec![
@@ -170,10 +205,8 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
                 .unwrap()
                 .mock_single_click(slint::platform::PointerEventButton::Left);
             settle(&app);
-            // Reach the last category even when a short landscape card clips it.
-            for _ in 0..if android { 4 } else { 3 } {
-                key(&app, slint::platform::Key::DownArrow);
-            }
+            // Subtitles owns the two tool shortcuts on every layout.
+            key(&app, slint::platform::Key::Return);
             key(&app, slint::platform::Key::Return);
             assert!(
                 ElementHandle::find_by_accessible_label(&app, appearance)
@@ -227,6 +260,7 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
             }
             key(&app, slint::platform::Key::Return);
             assert_eq!(resets.borrow().last(), Some(&3));
+            key(&app, slint::platform::Key::Escape);
             key(&app, slint::platform::Key::Escape);
             key(&app, slint::platform::Key::Escape);
             app.set_player_open(false);

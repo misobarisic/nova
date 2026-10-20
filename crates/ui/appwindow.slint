@@ -4,7 +4,7 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -173,8 +173,73 @@ export component AppWindow inherits Window {
     in-out property <bool> remote_can_fullscreen <=> RemoteBridge.can_fullscreen;
     in-out property <[TrackRow]> remote_audio_tracks <=> RemoteBridge.audio_tracks;
     in-out property <[TrackRow]> remote_sub_tracks <=> RemoteBridge.sub_tracks;
+    in-out property <bool> remote_controls_visual_retained <=> RemoteBridge.controls_visual_retained;
+    in-out property <[RemoteChapterRow]> remote_chapters <=> RemoteBridge.chapters;
+    in-out property <[RemoteBookmarkRow]> remote_bookmarks <=> RemoteBridge.bookmarks;
+    in-out property <[TrackRow]> remote_secondary_sub_tracks <=> RemoteBridge.secondary_sub_tracks;
+    in-out property <int> remote_secondary_subtitle_position <=> RemoteBridge.secondary_subtitle_position;
+    in-out property <[float]> remote_subtitle_style <=> RemoteBridge.subtitle_style;
+    in-out property <int> remote_intro_skip_mode <=> RemoteBridge.intro_skip_mode;
+    in-out property <int> remote_skip_segment_kind <=> RemoteBridge.skip_segment_kind;
+    in-out property <string> remote_skip_token <=> RemoteBridge.skip_token;
+    in-out property <string> remote_bookmark_notice <=> RemoteBridge.bookmark_notice;
+    in-out property <int> remote_subtitle_addon_status <=> RemoteBridge.subtitle_addon_status;
+    in-out property <int> remote_decoder <=> RemoteBridge.decoder;
+    in-out property <float> remote_brightness <=> RemoteBridge.brightness;
+    in-out property <bool> remote_automatic_recovery <=> RemoteBridge.automatic_recovery;
+    in-out property <int> remote_semantic_revision <=> RemoteBridge.semantic_revision;
+    in-out property <string> remote_semantic_name <=> RemoteBridge.semantic_name;
+    in-out property <string> remote_semantic_id <=> RemoteBridge.semantic_id;
+    in-out property <string> remote_semantic_session <=> RemoteBridge.semantic_session;
+    in-out property <bool> remote_semantic_success <=> RemoteBridge.semantic_success;
+    in-out property <string> remote_semantic_notice <=> RemoteBridge.semantic_notice;
+    in-out property <bool> remote_can_chapters <=> RemoteBridge.can_chapters;
+    in-out property <bool> remote_can_subtitle_style <=> RemoteBridge.can_subtitle_style;
+    in-out property <bool> remote_can_secondary_subtitles <=> RemoteBridge.can_secondary_subtitles;
+    in-out property <bool> remote_can_intro_skip <=> RemoteBridge.can_intro_skip;
+    in-out property <bool> remote_can_bookmarks <=> RemoteBridge.can_bookmarks;
+    in-out property <bool> remote_can_source_recovery <=> RemoteBridge.can_source_recovery;
+    in-out property <bool> remote_can_source_offers <=> RemoteBridge.can_source_offers;
+    in-out property <bool> remote_can_subtitle_discovery <=> RemoteBridge.can_subtitle_discovery;
+    in-out property <bool> remote_can_decoder <=> RemoteBridge.can_decoder;
+    in-out property <bool> remote_can_brightness <=> RemoteBridge.can_brightness;
+    in-out property <bool> remote_chapters_truncated <=> RemoteBridge.chapters_truncated;
+    in-out property <bool> remote_bookmarks_truncated <=> RemoteBridge.bookmarks_truncated;
+    private property <bool> remote_controls_motion: Anim.enabled && Anim.transitions;
+    private property <float> remote_controls_slide: 0.0;
+    animate remote_controls_slide { duration: root.remote_controls_motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> remote_controls_alpha: 0.0;
+    animate remote_controls_alpha { duration: root.remote_controls_motion ? Anim.transition_fade : 0ms; }
+    function finish_remote_controls_exit() {
+        remote_controls_done.stop();
+        if !root.remote_controls_open && root.remote_controls_visual_retained {
+            root.remote_controls_visual_retained = false;
+            RemoteBridge.menu_page = "";
+            RemoteBridge.track_picker = 0;
+            RemoteBridge.controls_visual_closed();
+        }
+    }
+    changed remote_controls_motion => {
+        if !root.remote_controls_motion {
+            root.remote_controls_slide = root.remote_controls_open ? 1.0 : 0.0;
+            root.remote_controls_alpha = root.remote_controls_open ? 1.0 : 0.0;
+            root.finish_remote_controls_exit();
+        }
+    }
+    remote_controls_done := Timer {
+        interval: Math.max(Anim.transition_slide, Anim.transition_fade); running: false;
+        triggered => { root.finish_remote_controls_exit(); }
+    }
     changed remote_controls_open => {
-        if !root.remote_controls_open { RemoteBridge.track_picker = 0; }
+        remote_controls_done.stop();
+        if root.remote_controls_open {
+            root.remote_controls_visual_retained = true;
+            root.remote_controls_slide = 1.0; root.remote_controls_alpha = 1.0;
+        } else {
+            root.remote_controls_slide = 0.0; root.remote_controls_alpha = 0.0;
+            if root.remote_controls_visual_retained && root.remote_controls_motion { remote_controls_done.start(); }
+            else { root.finish_remote_controls_exit(); }
+        }
         if !root.remote_controls_open && RemoteBridge.speed_preview_token != "" {
             let token = RemoteBridge.speed_preview_token;
             RemoteBridge.speed_preview_token = "";
@@ -182,6 +247,8 @@ export component AppWindow inherits Window {
         }
     }
     callback remote_action(string, float, string);
+    callback remote_semantic_action(string, float, string, string, string);
+    callback remote_controls_visual_closed();
     callback remote_device_refresh();
     callback remote_device_open(string);
     callback remote_device_selected(string);
@@ -189,6 +256,8 @@ export component AppWindow inherits Window {
     callback remote_stream_picked(int);
     callback remote_replacement_confirmed(string, bool);
     public function remote_bridge_action(a0: string, a1: float, a2: string) { root.remote_action(a0, a1, a2); }
+    public function remote_bridge_semantic_action(a0: string, a1: float, a2: string, a3: string, a4: string) { root.remote_semantic_action(a0, a1, a2, a3, a4); }
+    public function remote_bridge_controls_visual_closed() { root.remote_controls_visual_closed(); }
     public function remote_bridge_device_refresh() { root.remote_device_refresh(); }
     public function remote_bridge_device_open(a0: string) { root.remote_device_open(a0); }
     public function remote_bridge_device_selected(a0: string) { root.remote_device_selected(a0); }
@@ -209,6 +278,8 @@ export component AppWindow inherits Window {
     public function player_bridge_toggle_pause() { root.toggle_pause(); }
     public function player_bridge_seek_relative(v: float) { root.seek_relative(v); }
     public function player_bridge_seek(v: float) { root.seek(v); }
+    public function player_bridge_seek_chapter(v: float) { root.seek_chapter(v); }
+    public function player_bridge_seek_scene_bookmark(id: string) { root.seek_scene_bookmark(id); }
     public function player_bridge_close_player() { root.close_player(); }
     public function player_bridge_take_screenshot() { root.take_screenshot(); }
     public function player_bridge_volume_step(v: float) { root.volume_step(v); }
@@ -1793,6 +1864,8 @@ export component AppWindow inherits Window {
     callback toggle_pause();
     callback seek_relative(float);
     callback seek(float);
+    callback seek_chapter(float);
+    callback seek_scene_bookmark(string);
     callback close_player();
     callback take_screenshot();
     callback resume_choice(bool);
@@ -2223,6 +2296,9 @@ export component AppWindow inherits Window {
                     root.page_back_request += 1;
                 }
                 accept
+            } else if root.remote_controls_visual_retained && !root.remote_controls_open {
+                // A retained outgoing surface has no session/input authority.
+                accept
             } else if root.update_notice_shown && (e.text == Key.Menu || (e.text == Key.Tab && !update_notice.actions_focused)) {
                 if !e.repeat { update_notice.focus_actions(); }
                 accept
@@ -2253,8 +2329,8 @@ export component AppWindow inherits Window {
                 if !e.repeat { if root.more_service_route == 9 { root.more_subpage_back(); } else { root.party_page_open = false; } } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
                 if !e.repeat { root.remote_replacement_confirmed(root.remote_replacement_token, false); } accept
-            } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_controls_open) {
-                if !e.repeat { if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } } accept
+            } else if ((e.text == Key.Escape || (e.text == Key.Backspace && RemoteBridge.menu_page != "bookmark-editor")) && root.remote_controls_open) {
+                if !e.repeat { RemoteBridge.back_request += 1; } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_devices_open) {
                 if !e.repeat { if root.more_service_route == 8 { root.more_subpage_back(); } else { root.remote_devices_open = false; } } accept
             } else if (e.text == Key.Back && (e.repeat || root.system_back_held)) {
@@ -2283,7 +2359,7 @@ export component AppWindow inherits Window {
                 } else if (root.remote_replacement_token != "") {
                     root.remote_replacement_confirmed(root.remote_replacement_token, false); accept
                 } else if (root.remote_controls_open) {
-                    if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } accept
+                    RemoteBridge.back_request += 1; accept
                 } else if (root.remote_devices_open) {
                     if root.more_service_route == 8 { root.more_subpage_back(); } else { root.remote_devices_open = false; } accept
                 } else if (root.resume_prompt_visible) {
@@ -2764,9 +2840,17 @@ export component AppWindow inherits Window {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
     }
-    if root.remote_controls_open: RemoteControlsPage {
-        width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
-        safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
+    if root.remote_controls_open || root.remote_controls_visual_retained: remote_controls_host := Rectangle {
+        width: 100%; height: 100%; background: transparent;
+        // The fixed host blocks the exposed edge during both slide directions.
+        TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+        remote_controls_page := RemoteControlsPage {
+            x: (1.0 - root.remote_controls_slide) * root.width * 0.10;
+            opacity: root.remote_controls_alpha;
+            active: root.remote_controls_open;
+            width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+            safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
+        }
     }
     if root.remote_replacement_token != "": RemoteReplacementDialog {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;

@@ -1,4 +1,4 @@
-//! Profile-local scene archive. Old bookmarks retain an unknown added date;
+//! Profile-owned scene archive. Old bookmarks retain an unknown added date;
 //! editing a note never changes the original date or the playback position.
 use super::*;
 use crate::{BookmarkSceneRow, BookmarkTitleRow, BookmarksBridge};
@@ -61,7 +61,8 @@ pub(super) fn new_bookmark(
     let added_at = nova_config::now_ms();
     Bookmark {
         id: format!(
-            "{:x}-{:x}-{:x}",
+            "{:x}-{:x}-{:x}-{:x}",
+            nova_sync::local_device().unwrap_or(u64::from(std::process::id())),
             added_at,
             position.to_bits(),
             NEXT_BOOKMARK.fetch_add(1, Ordering::Relaxed)
@@ -106,7 +107,7 @@ pub(super) fn save_bookmarks(values: &Bookmarks) -> Result<(), String> {
         return Err("bookmark storage is not writable".into());
     }
     let raw = serde_json::to_string(values).map_err(|e| e.to_string())?;
-    storage::try_set_str(BOOKMARKS_KEY, &raw).map_err(|e| e.to_string())
+    sync::persist_sync_snapshot(BOOKMARKS_KEY, &raw, false).map_err(|e| e.to_string())
 }
 
 fn valid(bookmark: &Bookmark) -> bool {

@@ -401,7 +401,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "desktop")]
-    fn manual_refresh_bypasses_ready_and_pending_work_and_rejects_late_cache_writes() {
+    fn manual_and_preference_refresh_bypass_old_work_and_reject_late_cache_writes() {
         use std::io::{Read, Write};
         const ROOT: &str = "NOVA_MANUAL_STREAM_REFRESH_TEST_ROOT";
         let Some(root) = std::env::var_os(ROOT) else {
@@ -414,7 +414,7 @@ mod tests {
                 .env(ROOT, &root)
                 .args([
                     "--exact",
-                    "app::stream_prefetch::tests::manual_refresh_bypasses_ready_and_pending_work_and_rejects_late_cache_writes",
+                    "app::stream_prefetch::tests::manual_and_preference_refresh_bypass_old_work_and_reject_late_cache_writes",
                     "--nocapture",
                 ])
                 .output()
@@ -442,7 +442,9 @@ mod tests {
             .unwrap();
             socket.write_all(body).unwrap();
         }
-        for preload_ready in [true, false] {
+        for (preload_ready, policy_change) in
+            [(true, false), (false, false), (true, true), (false, true)]
+        {
             let app = AppWindow::new().unwrap();
             let player = crate::player::Player::setup(&app);
             let (hi, _) = mpsc::channel();
@@ -454,6 +456,10 @@ mod tests {
                 player,
                 DownloadCoordinator::new(root.join(format!("downloads-{preload_ready}"))),
             );
+            // Seed the current effective policy before speculative work begins.
+            assert!(bridge.refresh_stream_preferences_policy());
+            let initial_epoch = bridge.shared.lock().unwrap().stream_prefetch.epoch;
+            let fresh_epoch = initial_epoch + 1;
             let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let owner = format!("http://{}", server.local_addr().unwrap());
             let url = format!("{owner}/stream/series/tt123:1:1.json");
@@ -547,8 +553,24 @@ mod tests {
                 assert_eq!(bridge.shared.lock().unwrap().stream_prefetch.ready.len(), 1);
             }
 
-            // Exercise the actual user action, not just Cache::invalidate.
-            bridge.refresh_stream_sources();
+            // Both explicit refresh and changed effective preferences must
+            // bypass ready/pending work without accepting an old completion.
+            if policy_change {
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .cache_settings
+                    .stream_filters
+                    .enabled = true;
+                assert!(bridge.refresh_stream_preferences_policy());
+                assert!(
+                    !bridge.refresh_stream_preferences_policy(),
+                    "unchanged policy is a no-op"
+                );
+            } else {
+                bridge.refresh_stream_sources();
+            }
             accepted_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             assert!(!app.get_stream_refresh_enabled());
             assert!(app.get_streams_searching());
@@ -557,7 +579,7 @@ mod tests {
                 assert_eq!(state.stream_generation, 41);
                 assert_eq!(state.stream_filter, 1, "refresh keeps the chosen addon");
                 assert_eq!(state.stream_page, 0);
-                assert_eq!(state.stream_prefetch.epoch, 1);
+                assert_eq!(state.stream_prefetch.epoch, fresh_epoch);
                 assert!(state.stream_prefetch.ready.is_empty());
                 assert_eq!(
                     state.stream_prefetch.pending.len(),
@@ -568,7 +590,10 @@ mod tests {
                 bridge.refresh_stream_sources();
             }
             assert_eq!(bridge.shared.lock().unwrap().stream_generation, 41);
-            assert_eq!(bridge.shared.lock().unwrap().stream_prefetch.epoch, 1);
+            assert_eq!(
+                bridge.shared.lock().unwrap().stream_prefetch.epoch,
+                fresh_epoch
+            );
             // Join only the new epoch so its callback also acknowledges that
             // the picker's completion has already been queued on the UI.
             let (fresh_done_tx, fresh_done_rx) = mpsc::channel();
@@ -622,7 +647,13 @@ mod tests {
             let state = bridge.shared.lock().unwrap();
             assert!(state.stream_prefetch.pending.is_empty());
             assert_eq!(state.stream_prefetch.ready.len(), 1);
-            assert!(state.stream_prefetch.ready.keys().all(|key| key.epoch == 1));
+            assert!(
+                state
+                    .stream_prefetch
+                    .ready
+                    .keys()
+                    .all(|key| key.epoch == fresh_epoch)
+            );
         }
     }
 

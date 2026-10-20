@@ -154,6 +154,32 @@ mod tests {
             end > position as f32 && end <= 10.0,
             "real network cache appears ahead of playback: {end}"
         );
+        // Exercise the actual native map-to-String representation consumed by
+        // the seek UI, rather than assuming hand-written fixture JSON matches
+        // libmpv. Some demuxers expose no seekable range despite read-ahead.
+        let raw = mpv.get_property::<String>("demuxer-cache-state").unwrap();
+        let cache: serde_json::Value =
+            serde_json::from_str(&raw).expect("mpv cache-state String must contain JSON");
+        let ranges = cache
+            .get("seekable-ranges")
+            .and_then(serde_json::Value::as_array)
+            .expect("native cache-state must expose its seekable-ranges array");
+        if let Some((start, end)) = ranges.iter().take(64).find_map(|range| {
+            let start = range.get("start")?.as_f64()?;
+            let end = range.get("end")?.as_f64()?.min(10.0);
+            (start.is_finite() && end.is_finite() && start >= 0.0 && end > start)
+                .then_some((start, end))
+        }) {
+            let target = start + (end - start) / 2.0;
+            let now = Instant::now();
+            let grace = crate::SeekBuffer::begin(7, now, target, position, 10.0, end, Some(&raw))
+                .expect("a seek inside the real native cache range must retain its indicator");
+            let retained = grace
+                .visible(7, now + Duration::from_millis(250), target, 10.0)
+                .expect("one missing-telemetry tick must preserve the real cached span");
+            assert!((retained as f64 - end).abs() < 1e-5);
+            assert!(grace.visible(8, now, target, 10.0).is_none());
+        }
         std::thread::sleep(Duration::from_millis(150));
         assert!(mpv.get_property::<bool>("pause").unwrap());
         assert!((mpv.get_property::<f64>("time-pos").unwrap() - position).abs() < 0.05);

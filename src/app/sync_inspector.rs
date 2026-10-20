@@ -23,6 +23,8 @@ fn domain_title(domain: &str) -> &'static str {
         "peers" | "presence" => "Devices",
         "profiles" => "Profiles",
         "playback_preferences" => "Playback preferences",
+        activity_sync::BOOKMARKS => "Bookmarks",
+        activity_sync::STATS => "Stats",
         "last_stream" => "Last stream choices",
         _ => "Other account data",
     }

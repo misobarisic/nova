@@ -83,6 +83,8 @@ export global PlayerOsdBridge {
     callback subtitle_clearance_changed(float, float);
     callback toggle_pause();
     callback seek(float);
+    callback seek_chapter(float);
+    callback seek_scene_bookmark(string);
     callback seek_relative(float);
     callback close_player();
     callback take_screenshot();

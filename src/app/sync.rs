@@ -43,6 +43,8 @@ pub(super) const SCOPED_DOMAINS: &[&str] = &[
     DOMAIN_PROGRESS,
     DOMAIN_LAST_STREAM,
     DOMAIN_PLAYBACK_PREFERENCES,
+    activity_sync::BOOKMARKS,
+    activity_sync::STATS,
     DOMAIN_VIEWING_ACTIVITY,
     DOMAIN_HISTORY_HIDDEN,
     DOMAIN_NEW_EPISODES_HIDDEN,
@@ -202,6 +204,10 @@ fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::R
         .into());
     }
     let domains: Vec<SnapshotDomainRecords> = match key {
+        bookmarks::BOOKMARKS_KEY => vec![(
+            activity_sync::BOOKMARKS,
+            activity_sync::bookmark_records(raw)?,
+        )],
         plugin_settings::KEY => vec![(DOMAIN_PLUGIN_SETTINGS, plugin_settings::records(raw)?)],
         addon_packages::KEY => vec![(
             DOMAIN_PACKAGES,
@@ -699,15 +705,29 @@ pub(super) fn settings_group_fields(record: &str) -> Option<&'static [&'static s
 /// top-level field, plus one object-valued record per group. Serializing the
 /// struct generically means new fields sync without any wiring.
 fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
+    let mut migrated = settings.clone();
+    stream_filters::migrate_overrides(&mut migrated);
+    let settings = &migrated;
     let Ok(raw) = serde_json::to_string(settings) else {
         return Vec::new();
     };
     let old = storage::try_get_str("settings").ok().flatten();
     let raw = preserve_unsupported_settings(old.as_deref(), &raw);
-    let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str::<serde_json::Value>(&raw)
-    else {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Vec::new();
     };
+    let mut expanded = serde_json::Value::Object(map);
+    stream_filters::flatten_settings(&mut expanded);
+    let serde_json::Value::Object(mut map) = expanded else {
+        return Vec::new();
+    };
+    // An unreadable legacy override cannot be split safely. Never publish its
+    // effective local subfields as account choices while retaining that policy.
+    if settings.sync_overrides.contains_key("stream_filters") {
+        for (key, _) in stream_filters::RULE_SCOPES {
+            map.remove(*key);
+        }
+    }
     // Overrides never become account records. The fallback is captured before
     // the override starts; live publication refreshes it from the account store.
     for (field, shared) in &settings.sync_overrides {
@@ -789,6 +809,9 @@ fn preserve_settings_snapshot(old: Option<&str>, raw: &str) -> String {
 
 /// Only actual general-setting fields may opt out of sync.
 pub(super) fn setting_can_override(field: &str) -> bool {
+    if stream_filters::scope_fields(field).is_some() {
+        return true;
+    }
     !UNSYNCED_SETTINGS_FIELDS.contains(&field)
         && field != "home_recommendations_migrated"
         && field != "home_recommendations_hidden"
@@ -801,6 +824,14 @@ pub(super) fn shared_setting_value(
     records: &[(String, String)],
     field: &str,
 ) -> Option<serde_json::Value> {
+    if stream_filters::scope_fields(field).is_some() {
+        if let Some((_, raw)) = records.iter().find(|(name, _)| name == field) {
+            return serde_json::from_str(raw).ok();
+        }
+        let raw = &records.iter().find(|(name, _)| name == "stream_filters")?.1;
+        let rules: nova_config::StreamFilterRules = serde_json::from_str(raw).ok()?;
+        return stream_filters::scope_value(&serde_json::to_value(rules).ok()?, field);
+    }
     if field == "background_style" && !records.iter().any(|(name, _)| name == field) {
         let raw = &records.iter().find(|(name, _)| name == "true_black")?.1;
         return serde_json::from_str::<bool>(raw)
@@ -843,6 +874,7 @@ fn settings_fields_for_records(
     records: &[(String, String)],
 ) -> Vec<(String, String, u64)> {
     let mut shared = settings.clone();
+    stream_filters::migrate_overrides(&mut shared);
     retain_migrated_home_layout(&mut shared, records);
     // A full publication can precede UI projection of received records. Never
     // interpret a stale snapshot's missing identity as an unhide operation.
@@ -883,12 +915,30 @@ fn retain_migrated_home_layout(settings: &mut CacheSettings, records: &[(String,
 /// LWW value. Device-specific fields always keep the local value; unknown
 /// fields are ignored by serde, so a newer peer can add settings safely.
 fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> CacheSettings {
-    let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(base) else {
+    let mut migrated = base.clone();
+    stream_filters::migrate_overrides(&mut migrated);
+    let base = &migrated;
+    let serde_json::Value::Object(mut map) = stream_filters::settings_value(base) else {
         return base.clone();
     };
     let has_home_layout = fields.iter().any(|(name, _)| name == "home_layout");
     for (name, json) in fields {
         if UNSYNCED_SETTINGS_FIELDS.contains(&name.as_str()) {
+            continue;
+        }
+        if name == "stream_filters" {
+            // Independent records always win, regardless of record order. The
+            // legacy aggregate remains a read fallback for older peers.
+            if let Ok(rules) = serde_json::from_str::<nova_config::StreamFilterRules>(json) {
+                let rules = serde_json::to_value(rules).unwrap();
+                for (key, _) in stream_filters::RULE_SCOPES {
+                    if !fields.iter().any(|(name, _)| name.as_str() == *key)
+                        && let Some(value) = stream_filters::scope_value(&rules, key)
+                    {
+                        map.insert((*key).into(), value);
+                    }
+                }
+            }
             continue;
         }
         if name == "home_recommendations_hidden" || name.starts_with(RECOMMENDATION_HIDDEN_PREFIX) {
@@ -907,7 +957,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
                 for field in SETTINGS_GROUP_HOME_LAYOUT {
                     trial.insert((*field).into(), group[*field].clone());
                 }
-                if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(trial.clone()))
+                if stream_filters::settings_from_value(serde_json::Value::Object(trial.clone()))
                     .is_ok()
                 {
                     map = trial;
@@ -958,7 +1008,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
                     if allowed.contains(&field.as_str()) {
                         let mut trial = map.clone();
                         trial.insert(field.clone(), value.clone());
-                        if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(
+                        if stream_filters::settings_from_value(serde_json::Value::Object(
                             trial.clone(),
                         ))
                         .is_ok()
@@ -978,8 +1028,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
         } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
             let mut trial = map.clone();
             trial.insert(name.clone(), value.clone());
-            if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(trial.clone()))
-                .is_ok()
+            if stream_filters::settings_from_value(serde_json::Value::Object(trial.clone())).is_ok()
             {
                 map = trial;
                 allow_setting_field(name);
@@ -992,8 +1041,17 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
             }
         }
     }
-    let local = serde_json::to_value(base).unwrap_or_default();
+    let local = stream_filters::settings_value(base);
     let mut overrides = base.sync_overrides.clone();
+    if overrides.contains_key("stream_filters") {
+        // An unsupported legacy baseline still owns the whole local policy.
+        // Keep its values isolated until a future version can split it safely.
+        for (key, _) in stream_filters::RULE_SCOPES {
+            if let Some(value) = local.get(*key) {
+                map.insert((*key).into(), value.clone());
+            }
+        }
+    }
     for (field, baseline) in &mut overrides {
         if !setting_can_override(field) {
             continue;
@@ -1001,7 +1059,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
         if let Some(shared) = shared_setting_value(fields, field) {
             let mut trial = local.clone();
             trial[field] = shared.clone();
-            if serde_json::from_value::<CacheSettings>(trial).is_ok() {
+            if stream_filters::settings_from_value(trial).is_ok() {
                 *baseline = shared;
             }
         }
@@ -1020,7 +1078,8 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
         serde_json::to_value(overrides).unwrap_or_default(),
     );
     let mut merged: CacheSettings =
-        serde_json::from_value(serde_json::Value::Object(map)).unwrap_or_else(|_| base.clone());
+        stream_filters::settings_from_value(serde_json::Value::Object(map))
+            .unwrap_or_else(|_| base.clone());
     union_recommendation_hidden(&mut merged, fields);
     // Device-specific fields are never taken from the remote record.
     merged.android_hwdec = base.android_hwdec;
@@ -1091,6 +1150,7 @@ pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
 /// Snapshots used to seed inactive profiles come from disk, never from the
 /// active profile's Shared models. The record owner still exchanges every domain.
 const PROFILE_SNAPSHOTS: &[(&str, &str)] = &[
+    (bookmarks::BOOKMARKS_KEY, activity_sync::BOOKMARKS),
     ("library", DOMAIN_LIBRARY),
     ("episode_progress", DOMAIN_PROGRESS),
     (PREFERENCES_KEY, DOMAIN_PLAYBACK_PREFERENCES),
@@ -1139,6 +1199,7 @@ fn seed_stored_profiles() -> nova_sync::Result<()> {
                     persist_sync_snapshot(key, &raw, true)?;
                 }
             }
+            activity_sync::seed_sessions_background(profiles::ProfileStore::capture());
             Ok(())
         })?;
     }
@@ -1183,7 +1244,11 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
     let (records, basis, deleted) = {
         let store = owner.lock().unwrap();
         (
-            store.records(domain),
+            if base == activity_sync::STATS {
+                Vec::new()
+            } else {
+                store.records(domain)
+            },
             store.digest().get(domain).cloned(),
             store
                 .record("profile_deletions", id)
@@ -1203,7 +1268,20 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
     }
     profiles::with_context(profiles::context_for(id), || -> nova_sync::Result<()> {
         persistence::register_collections();
+        if base == activity_sync::STATS {
+            let owner = profiles::ProfileStore::capture();
+            profiles::thread::spawn(move || {
+                if let Err(error) = activity_sync::project_sessions(&owner) {
+                    storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+                }
+            });
+            return Ok(());
+        }
         let snapshot: Option<(&str, String)> = match base {
+            activity_sync::BOOKMARKS => Some((
+                bookmarks::BOOKMARKS_KEY,
+                activity_sync::bookmark_snapshot(&records)?,
+            )),
             DOMAIN_LIBRARY => {
                 let mut entries = records
                     .iter()
@@ -1332,6 +1410,48 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
 // Materialize: rebuild app state from remote records
 // ---------------------------------------------------------------------------
 
+/// Resolve only authoritative action registers. Materialized alias rows are
+/// views, so this helper never allocates clocks, creates records or revives a
+/// target tombstone. Callers choose their own guarded publication boundary.
+pub(super) fn resolve_progress_alias_groups(
+    store: &nova_sync::Store,
+    domain: &str,
+    groups: &[Vec<media_identity::EpisodeKey>],
+) -> HashMap<String, EpisodeProgress> {
+    let mut changes = HashMap::new();
+    for group in groups {
+        let keys = group
+            .iter()
+            .filter_map(|(series, episode)| {
+                let key = progress_map_key(series, episode);
+                let raw = store.record(domain, &key)?.value.as_deref()?;
+                let progress: EpisodeProgress = serde_json::from_str(raw).ok()?;
+                (progress.series_id == *series && progress.episode_id == *episode).then_some(key)
+            })
+            .collect::<Vec<_>>();
+        let Some(raw) = store.resolved_progress_in(domain, keys.iter().map(String::as_str)) else {
+            continue;
+        };
+        let Ok(progress) = serde_json::from_str::<EpisodeProgress>(&raw) else {
+            continue;
+        };
+        for (series, episode) in group {
+            let key = progress_map_key(series, episode);
+            if store
+                .record(domain, &key)
+                .is_some_and(|record| record.is_deleted())
+            {
+                continue;
+            }
+            let mut view = progress.clone();
+            view.series_id = series.clone();
+            view.episode_id = episode.clone();
+            changes.insert(key, view);
+        }
+    }
+    changes
+}
+
 impl Bridge {
     /// Push all current local state into the sync store. Called once at
     /// startup/after enabling; a no-op for records that already match.
@@ -1339,6 +1459,7 @@ impl Bridge {
         // Check the durable baseline before cloning/serializing large histories.
         // Local writes already commit snapshots atomically with sync records.
         for (key, domain) in [
+            (bookmarks::BOOKMARKS_KEY, activity_sync::BOOKMARKS),
             ("library", DOMAIN_LIBRARY),
             ("episode_progress", DOMAIN_PROGRESS),
             (PREFERENCES_KEY, DOMAIN_PLAYBACK_PREFERENCES),
@@ -1359,6 +1480,9 @@ impl Bridge {
                 }
                 let state = self.shared.lock().unwrap();
                 let raw = match key {
+                    bookmarks::BOOKMARKS_KEY => {
+                        storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
+                    }
                     plugin_settings::KEY | addon_packages::KEY => {
                         storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
                     }
@@ -1402,6 +1526,9 @@ impl Bridge {
         if let Err(error) = seed_stored_profiles() {
             storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
         }
+        // Covers the unscoped compatibility owner too; the queue deduplicates
+        // an active owner already visited by seed_stored_profiles.
+        activity_sync::seed_sessions_background(profiles::ProfileStore::capture());
     }
 
     /// Upgrade an existing settings baseline with newly supported defaults.
@@ -1613,6 +1740,31 @@ impl Bridge {
                     .cloned()
             });
             match domain.as_str() {
+                activity_sync::BOOKMARKS => {
+                    let result = (|| -> nova_sync::Result<()> {
+                        let handle = nova_sync::local_store()?;
+                        let records = handle
+                            .lock()
+                            .unwrap()
+                            .records(&profile_domain(activity_sync::BOOKMARKS));
+                        let raw = activity_sync::bookmark_snapshot(&records)?;
+                        persist_sync_snapshot(bookmarks::BOOKMARKS_KEY, &raw, false)
+                    })();
+                    if let Err(error) = result {
+                        storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                        continue;
+                    }
+                    if publish_models {
+                        self.refresh_bookmarks();
+                        self.reload_scene_bookmarks();
+                    }
+                }
+                activity_sync::STATS => {
+                    self.reload_synced_viewing_journal();
+                    // The worker acknowledges its captured digest after the
+                    // complete archive projection commits successfully.
+                    continue;
+                }
                 stremio::DOMAIN => {
                     self.stremio_wake();
                     continue;
@@ -1881,32 +2033,41 @@ impl Bridge {
     /// Materialize proven aliases through the same action registers used by
     /// sync, rather than inventing another watched action or guessing by S/E.
     pub(super) fn sync_reconcile_progress_aliases(&self) -> bool {
-        let mut identities = {
+        let (identities, progress_keys) = {
             let state = self.shared.lock().unwrap();
             if state.progress.is_empty() {
                 return false;
             }
-            state
+            let mut identities = state
                 .entries
                 .iter()
                 .filter(|entry| entry.type_ != "movie")
                 .map(|entry| (entry.type_.clone(), entry.id.clone()))
-                .collect::<HashSet<_>>()
+                .collect::<HashSet<_>>();
+            if let Some(item) = state
+                .modal_item
+                .as_ref()
+                .filter(|item| item.type_ != "movie")
+            {
+                identities.insert((item.type_.clone(), item.id.clone()));
+            }
+            let progress_keys = state
+                .progress
+                .values()
+                .map(|row| (row.series_id.clone(), row.episode_id.clone()))
+                .collect::<Vec<_>>();
+            (identities, progress_keys)
         };
-        if let Some(item) = self.shared.lock().unwrap().modal_item.as_ref()
-            && item.type_ != "movie"
-        {
-            identities.insert((item.type_.clone(), item.id.clone()));
-        }
-        let groups = identities
-            .into_iter()
-            .flat_map(|(type_, series)| {
-                let videos = read_episodes_cache_for(&type_, &series).unwrap_or_default();
-                episode_progress_alias_groups(&videos)
-                    .into_iter()
-                    .map(move |(native, aliases)| (series.clone(), native, aliases))
-            })
-            .collect::<Vec<_>>();
+        let inventories = identities.into_iter().map(|(media_type, series_id)| {
+            let videos = read_episodes_cache_for(&media_type, &series_id).unwrap_or_default();
+            media_identity::TitleInventory {
+                media_type,
+                series_id,
+                videos,
+            }
+        });
+        let groups = media_identity::IdentityIndex::with_progress(inventories, progress_keys)
+            .progress_groups;
         if groups.is_empty() {
             return false;
         }
@@ -1919,43 +2080,11 @@ impl Bridge {
         let Ok(owner) = nova_sync::local_store() else {
             return false;
         };
-        let changes = {
-            let store = owner.lock().unwrap();
-            groups
-                .into_iter()
-                .filter_map(|(series, native, aliases)| {
-                    let key = progress_map_key(&series, &native);
-                    // Forgetting this native episode must not resurrect it via an
-                    // older alias which a peer still retains.
-                    if store
-                        .record(&profile_domain(DOMAIN_PROGRESS), &key)
-                        .is_some_and(|r| r.is_deleted())
-                    {
-                        return None;
-                    }
-                    let keys = aliases
-                        .iter()
-                        .filter_map(|alias| {
-                            let key = progress_map_key(&series, alias);
-                            let raw = store
-                                .record(&profile_domain(DOMAIN_PROGRESS), &key)?
-                                .value
-                                .as_deref()?;
-                            let p: EpisodeProgress = serde_json::from_str(raw).ok()?;
-                            (p.series_id == series && p.episode_id == *alias).then_some(key)
-                        })
-                        .collect::<Vec<_>>();
-                    let raw = store.resolved_progress_in(
-                        &profile_domain(DOMAIN_PROGRESS),
-                        keys.iter().map(String::as_str),
-                    )?;
-                    let mut progress: EpisodeProgress = serde_json::from_str(&raw).ok()?;
-                    progress.series_id = series;
-                    progress.episode_id = native;
-                    Some((key, progress))
-                })
-                .collect::<Vec<_>>()
-        };
+        let changes = resolve_progress_alias_groups(
+            &owner.lock().unwrap(),
+            &profile_domain(DOMAIN_PROGRESS),
+            &groups,
+        );
         let snapshot = {
             let mut state = self.shared.lock().unwrap();
             let mut changed = false;
@@ -3331,6 +3460,7 @@ mod tests {
             play_count: plays,
             updated_at_secs: at,
             history: None,
+            manual_watch_action: None,
         }
     }
 
@@ -3635,6 +3765,89 @@ mod tests {
             merged.episode_start_behavior,
             nova_config::EpisodeStartBehavior::StartOver
         );
+    }
+
+    #[test]
+    fn legacy_stream_filter_override_splits_without_publishing_local_values() {
+        let baseline = nova_config::StreamFilterRules {
+            enabled: true,
+            max_height: Some(1080),
+            audio_languages: vec!["ja".into()],
+            use_preferred_audio_languages: false,
+            ..Default::default()
+        };
+        let mut local = CacheSettings::default();
+        local.stream_filters.max_height = Some(480);
+        local.stream_filters.audio_languages = vec!["hr".into()];
+        local.sync_overrides.insert(
+            "stream_filters".into(),
+            serde_json::to_value(&baseline).unwrap(),
+        );
+        let legacy = vec![(
+            "stream_filters".into(),
+            serde_json::to_string(&baseline).unwrap(),
+        )];
+        let merged = merge_settings_fields(&local, &legacy);
+        assert_eq!(merged.stream_filters, local.stream_filters);
+        assert!(!merged.sync_overrides.contains_key("stream_filters"));
+        assert_eq!(
+            merged.sync_overrides.len(),
+            stream_filters::RULE_SCOPES.len()
+        );
+        let published: HashMap<_, _> = settings_fields_for_records(&merged, &legacy)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(published["stream_filters_resolution"], "1080");
+        let audio: serde_json::Value =
+            serde_json::from_str(&published["stream_filters_audio"]).unwrap();
+        assert_eq!(audio["audio_languages"], serde_json::json!(["ja"]));
+        assert!(!published.contains_key("stream_filters"));
+    }
+
+    #[test]
+    fn independent_stream_rule_override_keeps_new_records_ahead_of_legacy_aggregate() {
+        let mut local = CacheSettings::default();
+        local.stream_filters.max_height = Some(480);
+        local
+            .sync_overrides
+            .insert("stream_filters_resolution".into(), serde_json::json!(1080));
+        let old = nova_config::StreamFilterRules {
+            max_height: Some(720),
+            max_bytes: Some(1 << 30),
+            ..Default::default()
+        };
+        let mut records = vec![
+            (
+                "stream_filters".into(),
+                serde_json::to_string(&old).unwrap(),
+            ),
+            ("stream_filters_resolution".into(), "2160".into()),
+            ("stream_filters_size".into(), "8589934592".into()),
+            (
+                "stream_filters_excluded_codecs".into(),
+                r#"["hevc"]"#.into(),
+            ),
+        ];
+        for _ in 0..2 {
+            let merged = merge_settings_fields(&local, &records);
+            assert_eq!(merged.stream_filters.max_height, Some(480));
+            assert_eq!(merged.stream_filters.max_bytes, Some(8 << 30));
+            assert_eq!(
+                merged.stream_filters.excluded_video_codecs,
+                [nova_config::stream_filters::VideoCodec::Hevc]
+            );
+            assert_eq!(
+                merged.sync_overrides.len(),
+                1,
+                "overriding resolution cannot override other rules"
+            );
+            assert_eq!(
+                merged.sync_overrides["stream_filters_resolution"],
+                serde_json::json!(2160)
+            );
+            records.reverse();
+        }
     }
 
     #[test]

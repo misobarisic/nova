@@ -66,6 +66,8 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
     let seeks = Rc::new(RefCell::new(Vec::new()));
     let recorded = seeks.clone();
     app.on_seek(move |position| recorded.borrow_mut().push(position));
+    let recorded = seeks.clone();
+    app.on_seek_chapter(move |position| recorded.borrow_mut().push(position));
     let weak = app.as_weak();
     app.on_osd_mouse_moved(move || weak.upgrade().unwrap().set_osd_visible(true));
     app.show().unwrap();
@@ -102,9 +104,9 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
         settle(&app);
         // Chapters keeps its row before the additional playback tools.
         let chapter_row = if android || app.get_desktop_decoder_available() {
-            6
-        } else {
             5
+        } else {
+            4
         };
         for _ in 0..chapter_row {
             key(&app, slint::platform::Key::DownArrow);
@@ -215,6 +217,8 @@ fn embedded_markers_and_titles_follow_hover_and_held_scrubbing() {
     let seeks = Rc::new(RefCell::new(Vec::new()));
     let recorded = seeks.clone();
     app.on_seek(move |value| recorded.borrow_mut().push(value));
+    let recorded = seeks.clone();
+    app.on_seek_chapter(move |value| recorded.borrow_mut().push(value));
     let weak = app.as_weak();
     app.on_osd_mouse_moved(move || weak.upgrade().unwrap().set_osd_visible(true));
     app.show().unwrap();
@@ -321,7 +325,8 @@ fn accessible_chapter_menu_supports_keyboard_selection_and_hides_without_metadat
     app.set_player_chapters(chapters());
     let seeks = Rc::new(RefCell::new(Vec::new()));
     let recorded = seeks.clone();
-    app.on_seek(move |value| recorded.borrow_mut().push(value));
+    app.on_seek(|_| panic!("chapter menu must use its semantic callback"));
+    app.on_seek_chapter(move |value| recorded.borrow_mut().push(value));
     app.show().unwrap();
     settle(&app);
     element(&app, "PlayerOverlay::settings_gear")

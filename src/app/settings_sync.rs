@@ -36,8 +36,9 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        let settings = self.shared.lock().unwrap().cache_settings.clone();
-        let values = serde_json::to_value(&settings).unwrap_or_default();
+        let mut settings = self.shared.lock().unwrap().cache_settings.clone();
+        stream_filters::migrate_overrides(&mut settings);
+        let values = stream_filters::settings_value(&settings);
         let records = sync::account_setting_records();
         let mut rows = Vec::new();
         if let Some(fields) = values.as_object() {
@@ -57,7 +58,7 @@ impl Bridge {
                 let shared_supported = restore_value.is_none_or(|v| {
                     let mut trial = values.clone();
                     trial[key] = v.clone();
-                    serde_json::from_value::<CacheSettings>(trial).is_ok()
+                    stream_filters::settings_from_value(trial).is_ok()
                 });
                 rows.push(crate::SettingSyncInfo {
                     key: key.into(),
@@ -165,7 +166,8 @@ impl Bridge {
         let _guard = sync::ApplyingGuard::new();
         self.capture_settings();
         let mut settings = self.shared.lock().unwrap().cache_settings.clone();
-        let values = serde_json::to_value(&settings).unwrap_or_default();
+        stream_filters::migrate_overrides(&mut settings);
+        let values = stream_filters::settings_value(&settings);
         let records = sync::account_setting_records();
         let shared = sync::shared_setting_value(&records, field);
         if enabled {
@@ -187,7 +189,7 @@ impl Bridge {
                     sync::shared_setting_value(&records, "home_recommendations_migrated")
                         .unwrap_or(serde_json::Value::Bool(false));
             }
-            let Ok(mut restored) = serde_json::from_value::<CacheSettings>(values) else {
+            let Ok(mut restored) = stream_filters::settings_from_value(values) else {
                 return;
             };
             restored.sync_overrides.remove(field);
@@ -201,5 +203,6 @@ impl Bridge {
         write_settings(&settings);
         self.settings_to_ui();
         self.refresh_setting_sync();
+        self.apply_stream_filter();
     }
 }

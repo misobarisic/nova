@@ -215,8 +215,9 @@ java_sources = "android/java"
 # builds set this false.
 [package.metadata.android.application]
 has_code = true
-# Direct mmap from the APK; cargo-apk2 stores only native libraries uncompressed
-# and zipalign gives them 16 KiB boundaries (see the Nix packager patch).
+# Direct mmap for the build intermediate and per-ABI releases; cargo-apk2 stores
+# native libraries on 16 KiB boundaries. The release packager alone converts
+# the final universal APK to compressed libraries with extraction enabled.
 extract_native_libs = false
 # Launcher / task-switcher name. cargo-apk2 falls back to the artifact name
 # (`nova`) when this is empty; the label is what the user reads, so it carries

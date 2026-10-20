@@ -2,6 +2,30 @@
 use super::*;
 use nova_providers::plugin_settings::{self as service, PluginSettingsBackend, SettingsMap};
 pub(super) const KEY: &str = "plugin_settings";
+struct LiveStreamPreferences {
+    owner: String,
+    profile: String,
+    epoch: u64,
+    rules: nova_config::StreamFilterRules,
+}
+static LIVE_STREAM_PREFERENCES: std::sync::LazyLock<Mutex<Option<LiveStreamPreferences>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// Publish the selected owner's in-memory policy before a debounced save or
+/// provider dispatch. Epoch and durable-owner checks prevent another profile's
+/// settings from leaking into a retained worker's invocation.
+pub(super) fn publish_stream_preferences(rules: &nova_config::StreamFilterRules) {
+    let context = profiles::capture();
+    if !profiles::is_current(&context) {
+        return;
+    }
+    *LIVE_STREAM_PREFERENCES.lock().unwrap() = Some(LiveStreamPreferences {
+        owner: profiles::ProfileStore::capture().domain(KEY),
+        profile: context.id,
+        epoch: context.epoch,
+        rules: rules.clone(),
+    });
+}
 pub(super) struct Backend {
     owner: profiles::ProfileStore,
 }
@@ -16,6 +40,48 @@ impl Backend {
 impl PluginSettingsBackend for Backend {
     fn owner_id(&self) -> Option<String> {
         Some(self.owner.domain("plugin_settings"))
+    }
+    fn stream_preferences(
+        &self,
+    ) -> Result<
+        Option<nova_config::stream_filters::StreamFilterRules>,
+        nova_providers::ProviderHostError,
+    > {
+        if self.owner.retired().map_err(provider_error)? {
+            return Err(provider_error("provider owner retired"));
+        }
+        let active = profiles::active_context();
+        let live = LIVE_STREAM_PREFERENCES
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|snapshot| {
+                snapshot.owner == self.owner.domain(KEY)
+                    && snapshot.profile == active.id
+                    && snapshot.epoch == active.epoch
+            })
+            .map(|snapshot| snapshot.rules.clone());
+        if let Some(rules) = live
+            && profiles::is_current(&active)
+        {
+            return Ok(Some(rules));
+        }
+        let settings = self
+            .owner
+            .read("settings")
+            .map_err(provider_error)?
+            .map(|raw| {
+                serde_json::from_str(&raw)
+                    .ok()
+                    .and_then(settings::recover_settings)
+                    .ok_or_else(|| provider_error("unreadable provider stream preferences"))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Some(settings.stream_filters.resolved_with_subtitles(
+            &settings.default_audio_language,
+            &settings.default_subtitle_language,
+        )))
     }
     fn provider_revision(
         &self,
@@ -187,6 +253,116 @@ mod tests {
         assert!(!projected["example"].contains_key("token"));
         assert!(project(vec![("../token".into(), "true".into())]).is_err());
     }
+
+    #[test]
+    fn provider_policy_uses_unsaved_live_owner_and_rejects_other_owners_and_epochs() {
+        const TEST_DIR: &str = "NOVA_PROVIDER_POLICY_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-provider-policy-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args(["--exact", "app::plugin_settings::tests::provider_policy_uses_unsaved_live_owner_and_rejects_other_owners_and_epochs", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        storage::init_at(&PathBuf::from(root));
+        profiles::initialize().unwrap();
+        let alice = profiles::ProfileStore::capture();
+        let bob = profiles::ProfileStore::for_profile("policy-bob");
+        let mut alice_settings = CacheSettings {
+            default_audio_language: "en".into(),
+            default_subtitle_language: "hr,en".into(),
+            ..Default::default()
+        };
+        alice_settings.stream_filters.enabled = true;
+        alice_settings.stream_filters.max_height = Some(1080);
+        let mut bob_settings = CacheSettings {
+            default_audio_language: "ja".into(),
+            default_subtitle_language: "fr".into(),
+            ..Default::default()
+        };
+        bob_settings.stream_filters.enabled = true;
+        bob_settings.stream_filters.max_height = Some(2160);
+        alice
+            .write("settings", &serde_json::to_string(&alice_settings).unwrap())
+            .unwrap();
+        bob.write("settings", &serde_json::to_string(&bob_settings).unwrap())
+            .unwrap();
+        let alice_backend = Backend::for_store(alice.clone());
+        let bob_backend = Backend::for_store(bob.clone());
+        assert_eq!(
+            alice_backend
+                .stream_preferences()
+                .unwrap()
+                .unwrap()
+                .audio_languages,
+            ["en"]
+        );
+        assert_eq!(
+            alice_backend
+                .stream_preferences()
+                .unwrap()
+                .unwrap()
+                .subtitle_languages,
+            ["hr", "en"]
+        );
+        let mut live = alice_settings
+            .stream_filters
+            .resolved_with_subtitles("hr", "de");
+        live.max_height = Some(720);
+        publish_stream_preferences(&live);
+        assert_eq!(alice_backend.stream_preferences().unwrap(), Some(live));
+        assert_eq!(
+            serde_json::from_str::<CacheSettings>(&alice.read("settings").unwrap().unwrap())
+                .unwrap()
+                .stream_filters
+                .max_height,
+            Some(1080),
+            "live policy must be available before persistence"
+        );
+        let bob_policy = bob_backend.stream_preferences().unwrap().unwrap();
+        assert_eq!(bob_policy.audio_languages, ["ja"]);
+        assert_eq!(bob_policy.subtitle_languages, ["fr"]);
+        assert_eq!(bob_policy.max_height, Some(2160));
+        bob_settings.stream_filters.max_height = Some(480);
+        bob.write("settings", &serde_json::to_string(&bob_settings).unwrap())
+            .unwrap();
+        assert_eq!(
+            bob_backend
+                .stream_preferences()
+                .unwrap()
+                .unwrap()
+                .max_height,
+            Some(480),
+            "inactive owner reads its own latest persisted policy"
+        );
+        LIVE_STREAM_PREFERENCES
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .epoch += 1;
+        assert_eq!(
+            alice_backend
+                .stream_preferences()
+                .unwrap()
+                .unwrap()
+                .max_height,
+            Some(1080),
+            "a snapshot from another activation cannot replace durable policy"
+        );
+    }
 }
 
 /// Older applications retain unfamiliar record domains but acknowledge their
@@ -223,6 +399,7 @@ fn plugin_id(url: &str) -> Option<&str> {
     url.strip_prefix("nova-provider://")
         .map(|id| id.trim_end_matches('/'))
 }
+
 impl Bridge {
     pub(super) fn refresh_plugin_settings_ui(&self, url: &str) {
         let Some(app) = self.app() else {
@@ -235,6 +412,8 @@ impl Bridge {
                 };
                 let schema = nova_providers::provider_settings_schema(url).unwrap_or_default();
                 let snapshot = service::settings_snapshot(plugin, &schema)?;
+                let managed =
+                    plugin == "supernova" && nova_providers::provider_uses_stream_preferences(url);
                 let value_for = |key: &str| {
                     schema
                         .iter()
@@ -436,7 +615,33 @@ impl Bridge {
                         ..Default::default()
                     });
                 }
+                if managed {
+                    rows.push(nova_ui::PluginSettingRow {
+                        key: "nova.streamPreferences".into(),
+                        kind: "host-preferences".into(),
+                        label: text::tr("Profile and device stream preferences").into(),
+                        summary: format!(
+                            "{} {}",
+                            text::tr("Managed in Settings → Player → Stream filters."),
+                            text::stream_filter_summary(&self.effective_stream_filter_rules())
+                        )
+                        .into(),
+                        ..Default::default()
+                    });
+                }
                 for field in schema.iter().filter(|field| field.collection.is_none()) {
+                    if managed
+                        && matches!(
+                            field.key.as_str(),
+                            "quality.preferred"
+                                | "language.prefs"
+                                | "codec.prefs"
+                                | "subtitle.prefs"
+                                | "sort.order"
+                        )
+                    {
+                        continue;
+                    }
                     if field.kind == "ordered-choices" {
                         let value = snapshot.values.get(&field.key).unwrap_or(&field.default);
                         let chosen = value.as_array().cloned().unwrap_or_default();

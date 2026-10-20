@@ -18,6 +18,331 @@ fn evaluate(script: &str) -> Value {
 }
 
 #[test]
+fn legacy_discovery_ranking_does_not_extract_unused_native_policy_facts() {
+    let result = evaluate(
+        r#"
+        const unexpected=()=>{throw new Error('legacy ranking requested native policy facts');};
+        S.recordFacts=unexpected;S.rowFacts=unexpected;S.acceptPreferences=unexpected;S.preferenceComparator=unexpected;S.sortByPreferences=unexpected;
+        const settings={"quality.preferred":"any"};
+        const records=Array.from({length:300},(_,index)=>({infoHash:String(index).padStart(40,'0'),title:'Example S01 Complete 1080p',fileIdx:null,sizeBytes:100,seeders:index}));
+        const ranked=S.rank(records,settings);
+        const rows=S.sortRows([{id:'a',title:'Example 1080p',description:'📁 Example.mkv',size:100,seeders:1},{id:'b',title:'Example 1080p',description:'📁 Example.mkv',size:100,seeders:2}],settings);
+        return {first:ranked[0].seeders,count:ranked.length,rows:rows.map(row=>row.id)};
+    "#,
+    );
+    assert_eq!(result, json!({"first":299,"count":300,"rows":["b","a"]}));
+}
+
+#[test]
+fn native_record_facts_reuse_unchanged_rows_and_refresh_after_proof_and_evidence_updates() {
+    let result = evaluate(
+        r#"
+        let parses=0;const languages=S.releaseLanguages;
+        S.releaseLanguages=text=>{parses++;return languages(text);};
+        const record={title:'Example 1080p HEVC Japanese',fileIdx:null,sizeBytes:1000,seeders:5};
+        const initial=S.recordFacts(record),firstParses=parses;
+        const repeated=S.recordFacts(record);
+        const reused=initial===repeated && parses===firstParses;
+        record.seeders=10;const peers=S.recordFacts(record);
+        record.fileIdx=0;record.fileName='Example 720p AVC English.mkv';record.sizeBytes=400;
+        const proof=S.recordFacts(record);
+        record.sourceMetadata=S.releaseEvidence('Video: AVC\nResolution: 720p\nAudio: English\nSubtitles: Croatian');
+        const evidence=S.recordFacts(record);
+        record.sourceMetadata=S.releaseEvidence('Video: HEVC\nResolution: 1080p\nAudio: Japanese\nSubtitles: English');
+        const replacement=S.recordFacts(record);
+        record.trackMetadata={source:'AnimeTosho',fileName:record.fileName,fileSize:400,videoCodec:'av1',audioLanguages:['hr'],subtitleLanguages:['ja'],audioCodecs:[],audioChannels:[]};
+        const probe=S.recordFacts(record);
+        record.fileName='Other selected file.mkv';record.sizeBytes=450;
+        const changedFile=S.recordFacts(record);
+        record.title='Example Season Pack 2160p';record.sourceMetadata=null;record.trackMetadata=null;
+        const changedTitle=S.recordFacts(record);
+        return {reused,initial,peers,proof,evidence,replacement,probe,changedFile,changedTitle};
+    "#,
+    );
+    assert_eq!(
+        result["reused"], true,
+        "unchanged ranking waves reuse parsing"
+    );
+    assert!(result["initial"]["bytes"].is_null());
+    assert_eq!(result["initial"]["audio_languages"], json!(["ja"]));
+    assert_eq!(result["peers"]["seeders"], 10);
+    assert_eq!(result["proof"]["bytes"], 400);
+    assert!(
+        result["proof"]["codec"].is_null(),
+        "conflicting release/file codec labels remain unknown"
+    );
+    assert_eq!(result["evidence"]["codec"], "avc");
+    assert_eq!(result["evidence"]["subtitle_languages"], json!(["hr"]));
+    assert_eq!(result["replacement"]["codec"], "hevc");
+    assert_eq!(result["replacement"]["audio_languages"], json!(["ja"]));
+    assert_eq!(result["probe"]["codec"], "av1");
+    assert_eq!(result["probe"]["audio_languages"], json!(["hr"]));
+    assert_eq!(
+        result["changedFile"]["codec"], "hevc",
+        "old selected-file probe cannot follow a new file identity/size"
+    );
+    assert_eq!(result["changedFile"]["bytes"], 450);
+    assert_eq!(result["changedTitle"]["season_pack"], true);
+    assert_eq!(result["changedTitle"]["height"], 2160);
+}
+
+#[test]
+fn native_batch_sort_preserves_exact_u64_order_and_rejects_malformed_or_unbounded_input() {
+    use nova_config::stream_filters::{SortCriterion, SortDirection, StreamFilterRules};
+    let manifest: PluginManifest = serde_json::from_value(json!({"formatVersion":1,"id":"sort-fixture","name":"Fixture","version":"1","entry":"fixture.js","permissions":{}})).unwrap();
+    let runtime = PluginRuntime::new(
+        manifest,
+        r#"globalThis.novaProvider={handle(request){return JSON.parse(nova.streamPreferences.sort(request.oversized?' '.repeat(2097153):request.payload));}}"#,
+    );
+    let mut rules = StreamFilterRules {
+        enabled: true,
+        ..Default::default()
+    };
+    let index = rules
+        .sort_order
+        .iter()
+        .position(|rule| rule.criterion == SortCriterion::Size)
+        .unwrap();
+    let size = rules.sort_order.remove(index);
+    rules.sort_order.insert(0, size);
+    let run = |rules: &StreamFilterRules, payload: &str| {
+        runtime
+            .invoke(
+                MemoryProviderHost::new(),
+                &json!({"streamPreferences":rules,"payload":payload}),
+            )
+            .unwrap()
+    };
+    let rows = json!([
+        {"id":"a","facts":{"bytes":u64::MAX}},
+        {"id":"b","facts":{"bytes":u64::MAX-1}},
+        {"id":"c","facts":{"bytes":null}},
+        {"id":"z","facts":{"bytes":u64::MAX-1}},
+    ])
+    .to_string();
+    assert_eq!(
+        run(&rules, &rows),
+        json!([1, 3, 0, 2]),
+        "facts stay in Rust: no JS floating-point rounding at u64 limits"
+    );
+    rules.sort_order[0].direction = SortDirection::Desc;
+    assert_eq!(
+        run(&rules, &rows),
+        json!([0, 1, 3, 2]),
+        "unknown values stay last in reverse direction too"
+    );
+    assert_eq!(run(&rules, "[]"), json!([]));
+    for invalid in [
+        "[".to_owned(),
+        json!([{"id":"","facts":{}}]).to_string(),
+        json!([{"id":"x".repeat(8193),"facts":{}}]).to_string(),
+        json!([{"id":"x","facts":{"height":20}}]).to_string(),
+        json!([{"id":"x","facts":{"codec":"unsupported-value"}}]).to_string(),
+        json!([{"id":"x","facts":{"audio_languages":["https://example.com/private"]}}]).to_string(),
+        json!([{"id":"x","facts":{"subtitle_languages":vec!["en";33]}}]).to_string(),
+        serde_json::to_string(&vec![json!({"id":"x","facts":{}}); 4097]).unwrap(),
+    ] {
+        assert!(
+            run(&rules, &invalid)["error"].is_string(),
+            "malformed or unbounded sort input must be rejected"
+        );
+    }
+    assert!(
+        runtime
+            .invoke(
+                MemoryProviderHost::new(),
+                &json!({"streamPreferences":rules,"oversized":true})
+            )
+            .unwrap()["error"]
+            .is_string()
+    );
+}
+
+#[test]
+fn shared_policy_filters_upstream_candidates_and_rows_and_ranks_audio_before_codec() {
+    use nova_config::stream_filters::{StreamFilterRules, VideoCodec};
+    let definition = crate::bundled_providers()
+        .iter()
+        .find(|provider| provider.url == crate::SUPERNOVA_PROVIDER_URL)
+        .unwrap();
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let source = format!(
+        "{}\n{}",
+        definition.source,
+        r#"
+        globalThis.novaProvider={handle(request){
+            const S=globalThis.Supernova;
+            const original={"quality.preferred":"2160p","language.prefs":["en"],"codec.prefs":["hevc"]};
+            const settings=S.withStreamPreferences(original,request.streamPreferences);
+            const make=(id,codec,audio,height=720,bytes=100)=>({infoHash:id.repeat(40),title:'Example',sources:['nyaa'],fileIdx:0,fileName:id+'.mkv',sizeBytes:bytes,seeders:1,sourceMetadata:{videoCodec:codec,audioLanguages:audio,resolution:height}});
+            const records=[make('a','avc',['ja']),make('b','hevc',['en']),make('c','avc',['en']),make('d','vp9',['ja']),make('e',null,[]),make('f','avc',['ja'],2160),make('g','avc',['ja'],720,2000)];
+            const candidates=S.rank(records,settings);
+            const rows=S.sortRows(records.map(record=>S.row(record,false)),settings);
+            return {candidates:candidates.map(record=>record.infoHash[0]),rows:rows.map(row=>row.id[0]),original,unknownProvisional:S.acceptPreferences(S.recordFacts(records[4]),settings,false),unknownFinal:S.acceptPreferences(S.rowFacts(S.row(records[4],false)),settings,true)};
+        }};
+    "#
+    );
+    let runtime = PluginRuntime::new(manifest, source);
+    let mut rules = StreamFilterRules {
+        enabled: true,
+        max_height: Some(1080),
+        max_bytes: Some(1000),
+        video_codecs: vec![VideoCodec::Avc, VideoCodec::Hevc, VideoCodec::Vp9],
+        excluded_video_codecs: vec![VideoCodec::Vp9],
+        audio_languages: vec!["ja".into(), "en".into()],
+        codec_priority: vec![VideoCodec::Hevc, VideoCodec::Avc],
+        retain_unknown: false,
+        ..Default::default()
+    };
+    let run = |rules: &StreamFilterRules| {
+        runtime
+            .invoke(
+                MemoryProviderHost::new(),
+                &json!({"op":"streams","streamPreferences":rules}),
+            )
+            .unwrap()
+    };
+    let soft = run(&rules);
+    assert_eq!(soft["rows"], json!(["a", "b", "c"]));
+    assert!(
+        soft["candidates"].as_array().unwrap().contains(&json!("e")),
+        "unknown candidates reach inspection"
+    );
+    assert_eq!(soft["unknownProvisional"], true);
+    assert_eq!(soft["unknownFinal"], false);
+    assert_eq!(
+        soft["original"]["quality.preferred"], "2160p",
+        "ephemeral overlay leaves plugin settings intact"
+    );
+    rules.require_audio_language = true;
+    rules.audio_languages = vec!["ja".into()];
+    assert_eq!(run(&rules)["rows"], json!(["a"]));
+    rules.require_audio_language = false;
+    rules.require_preferred_codec = true;
+    rules.codec_priority = vec![VideoCodec::Hevc];
+    assert_eq!(run(&rules)["rows"], json!(["b"]));
+    rules.excluded_video_codecs.push(VideoCodec::Hevc);
+    assert_eq!(
+        run(&rules)["rows"],
+        json!([]),
+        "explicit block wins over codec preference"
+    );
+    rules.enabled = false;
+    let disabled = run(&rules);
+    assert_eq!(
+        disabled["rows"].as_array().unwrap().len(),
+        7,
+        "disabled policy has no hidden legacy filters"
+    );
+    assert_eq!(disabled["unknownFinal"], true);
+}
+
+#[test]
+fn shared_full_sort_reorders_every_criterion_without_hidden_addon_tiebreaks() {
+    use nova_config::stream_filters::{
+        SortCriterion, SortDirection, StreamFacts, StreamFilterRules, VideoCodec,
+    };
+    let definition = crate::bundled_providers()
+        .iter()
+        .find(|provider| provider.url == crate::SUPERNOVA_PROVIDER_URL)
+        .unwrap();
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let source = format!(
+        "{}\n{}",
+        definition.source,
+        r#"
+        globalThis.novaProvider={handle(request){
+            const S=globalThis.Supernova;
+            const settings=S.withStreamPreferences({"quality.preferred":"2160p","language.prefs":["fr"],"codec.prefs":["vp9"],"subtitle.prefs":["ja"],"sort.order":S.SORT_DEFAULT.map(item=>({...item,direction:'asc'}))},request.streamPreferences);
+            const make=(id,codec,audio,subtitles,height,bytes,seeders,pack)=>({infoHash:id.repeat(40),title:pack?'Example Season Pack':'Example',sources:['nyaa'],fileIdx:0,fileName:id+'.mkv',sizeBytes:bytes,seeders,sourceMetadata:{videoCodec:codec,audioLanguages:audio,subtitleLanguages:subtitles,resolution:height}});
+            const records=[make('a','avc',['ja'],['fr'],720,600,5,false),make('b','hevc',['en'],['ja'],1080,300,50,true),make('c','avc',['en'],['en'],1080,300,null,false)];
+            const rows=records.map((record,index)=>S.row(record,request.cached && index===1,JSON.stringify({fileName:record.fileName})));
+            const sorted=S.sortRows(rows,settings);
+            const unproved={...records[1],fileIdx:null};
+            return {rows:sorted.map(row=>row.id[0]),candidates:S.rank(records,settings).map(record=>record.infoHash[0]),facts:rows.map(row=>row.streamFacts),provisional:S.recordFacts(unproved),copied:S.rowFacts(S.copyRow(rows[0]))};
+        }};
+    "#
+    );
+    let runtime = PluginRuntime::new(manifest, source);
+    let rules = StreamFilterRules {
+        enabled: true,
+        audio_languages: vec!["ja".into(), "en".into()],
+        codec_priority: vec![VideoCodec::Hevc, VideoCodec::Avc],
+        subtitle_languages: vec!["en".into(), "fr".into()],
+        ..Default::default()
+    };
+    let run = |rules: &StreamFilterRules, cached: bool| {
+        runtime
+            .invoke(
+                MemoryProviderHost::new(),
+                &json!({"op":"streams","streamPreferences":rules,"cached":cached}),
+            )
+            .unwrap()
+    };
+    let ordinary = run(&rules, false);
+    assert_eq!(ordinary["rows"], json!(["a", "b", "c"]));
+    assert_eq!(ordinary["candidates"], ordinary["rows"]);
+    let promoted = |criterion, direction| {
+        let mut next = rules.clone();
+        let index = next
+            .sort_order
+            .iter()
+            .position(|rule| rule.criterion == criterion)
+            .unwrap();
+        let mut rule = next.sort_order.remove(index);
+        rule.direction = direction;
+        next.sort_order.insert(0, rule);
+        next
+    };
+    use SortCriterion::*;
+    use SortDirection::*;
+    for (criterion, direction, expected) in [
+        (Seeders, Desc, json!(["b", "a", "c"])),
+        (Seeders, Asc, json!(["a", "b", "c"])),
+        (Resolution, Desc, json!(["b", "c", "a"])),
+        (Size, Asc, json!(["b", "c", "a"])),
+        (SeasonPack, Desc, json!(["b", "a", "c"])),
+        (Audio, Desc, json!(["b", "c", "a"])),
+        (Codec, Desc, json!(["a", "c", "b"])),
+        (Subtitle, Asc, json!(["c", "a", "b"])),
+        (Subtitle, Desc, json!(["a", "c", "b"])),
+    ] {
+        let result = run(&promoted(criterion, direction), false);
+        assert_eq!(result["rows"], expected, "{criterion:?} {direction:?}");
+        assert_eq!(
+            result["candidates"], expected,
+            "candidate {criterion:?} {direction:?}"
+        );
+    }
+    let cached = run(&promoted(Cached, Desc), true);
+    assert_eq!(cached["rows"], json!(["b", "a", "c"]));
+    assert_eq!(cached["facts"][1]["cached"], true);
+    assert!(
+        cached["facts"][1]["seeders"].is_null(),
+        "cached availability is not a peer count"
+    );
+    assert!(ordinary["provisional"]["cached"].is_null());
+    assert!(
+        ordinary["provisional"]["bytes"].is_null(),
+        "unproved episode bytes cannot be a pack total"
+    );
+    assert_eq!(ordinary["copied"], ordinary["facts"][0]);
+    let a: StreamFacts = serde_json::from_value(ordinary["facts"][0].clone()).unwrap();
+    let b: StreamFacts = serde_json::from_value(ordinary["facts"][1].clone()).unwrap();
+    assert_eq!(a.subtitle_languages, ["fr"]);
+    assert_eq!(b.season_pack, Some(true));
+    assert!(
+        rules.compare(&a, &b).is_lt(),
+        "app receives exactly the evidence compared upstream"
+    );
+    // Every metric ties when disabled; the source may only use stable IDs,
+    // even though its obsolete plugin sort/quality fields strongly disagree.
+    let mut disabled = rules;
+    disabled.enabled = false;
+    assert_eq!(run(&disabled, true)["rows"], json!(["a", "b", "c"]));
+}
+
+#[test]
 fn markdown_track_lists_keep_judas_audio_and_subtitle_languages_separate() {
     let result = evaluate(
         r#"return S.releaseEvidence('### Release information\n**Video:** 1080p HEVC 10bit\n**Audio:** Japanese - English\n**Subtitles:** English - French\nSource: WEB-DL');"#,
@@ -104,12 +429,12 @@ fn bluray_remux_is_a_compatible_source_refinement() {
 }
 
 #[test]
-fn unsupported_codecs_do_not_turn_mixed_claims_into_a_preferred_codec() {
+fn explicit_vp9_is_known_but_mixed_codec_claims_stay_unknown() {
     let result = evaluate(
         r#"return ['Video: VP9 / AV1','Video: VP9','Video: MPEG-4 AVC'].map(S.releaseEvidence);"#,
     );
     assert!(result[0]["videoCodec"].is_null());
-    assert!(result[1]["videoCodec"].is_null());
+    assert_eq!(result[1]["videoCodec"], "vp9");
     assert_eq!(result[2]["videoCodec"], "avc");
 }
 
@@ -129,7 +454,7 @@ fn standalone_specs_and_inline_track_labels_are_explicit_evidence() {
 #[test]
 fn evidence_validation_bounds_fields_and_merge_deduplicates_only_matching_domains() {
     let result = evaluate(
-        r#"return {accepted:S.validReleaseEvidence({videoCodec:null,resolution:null,releaseSource:null,audioLanguages:['en'],subtitleLanguages:[]}),rejected:[{rawDescription:'Audio: English'},{audioLanguages:['eng']},{videoCodec:'vp9'},{audioLanguages:['en','en']},{audioCodecs:['AAC'.repeat(100)]},{resolution:99999},{audioChannels:['1'.repeat(100)]},{subtitleLanguages:Array(33).fill('en')}].map(S.validReleaseEvidence),oversized:S.releaseEvidence('Audio: English\n'+'x'.repeat(65536)),merged:S.mergeReleaseEvidence({audioLanguages:['ja'],subtitleLanguages:['fr']},{audioLanguages:['en','ja'],subtitleLanguages:['en']})};"#,
+        r#"return {accepted:S.validReleaseEvidence({videoCodec:null,resolution:null,releaseSource:null,audioLanguages:['en'],subtitleLanguages:[]}),rejected:[{rawDescription:'Audio: English'},{audioLanguages:['eng']},{videoCodec:'future-unknown-codec'},{audioLanguages:['en','en']},{audioCodecs:['AAC'.repeat(100)]},{resolution:99999},{audioChannels:['1'.repeat(100)]},{subtitleLanguages:Array(33).fill('en')}].map(S.validReleaseEvidence),oversized:S.releaseEvidence('Audio: English\n'+'x'.repeat(65536)),merged:S.mergeReleaseEvidence({audioLanguages:['ja'],subtitleLanguages:['fr']},{audioLanguages:['en','ja'],subtitleLanguages:['en']})};"#,
     );
     assert_eq!(result["accepted"], true);
     assert_eq!(
