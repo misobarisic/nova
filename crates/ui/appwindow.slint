@@ -446,6 +446,10 @@ export component AppWindow inherits Window {
         stream_action_title <=> root.stream_action_title;
         stream_action_items <=> root.stream_action_items;
         modal_episodes <=> root.modal_episodes;
+        season_download_active <=> root.season_download_active;
+        season_download_review <=> root.season_download_review;
+        season_download_status <=> root.season_download_status;
+        season_download_rows <=> root.season_download_rows;
         season_names <=> root.season_names;
         season_combo_idx <=> root.season_combo_idx;
         season_cards <=> root.season_cards;
@@ -1631,6 +1635,14 @@ export component AppWindow inherits Window {
     callback stream_action_selected(string, int);
     callback stream_filter_picked(int);
     callback stream_selector_back();
+    in-out property <bool> season_download_active;
+    in-out property <bool> season_download_review;
+    in-out property <string> season_download_status;
+    in-out property <[string]> season_download_rows;
+    callback season_download_start(int, bool);
+    callback season_download_confirm();
+    callback season_download_retry();
+    callback season_download_cancel();
     callback season_picked(int);
     callback episode_picked(int);
     // Episodes tab pager move (absolute page; the backend clamps it).
@@ -2026,6 +2038,10 @@ export component AppWindow inherits Window {
     public function detail_bridge_add_to_library() { root.add_to_library(); }
     public function detail_bridge_library_action(a: int) { root.detail_library_action(a); }
     public function detail_bridge_open_categories() { root.categories_modal = true; }
+    public function detail_bridge_season_download_start(i: int, unwatched: bool) { root.season_download_start(i, unwatched); }
+    public function detail_bridge_season_download_retry() { root.season_download_retry(); }
+    public function detail_bridge_season_download_confirm() { root.season_download_confirm(); }
+    public function detail_bridge_season_download_cancel() { root.season_download_cancel(); }
     public function detail_bridge_season_picked(i: int) { root.season_picked(i); }
     public function detail_bridge_episode_picked(i: int) { root.episode_picked(i); }
     public function detail_bridge_episode_page_picked(p: int) { root.episode_page_picked(p); }

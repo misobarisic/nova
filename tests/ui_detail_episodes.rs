@@ -20,3 +20,6 @@ mod season_rail;
 
 #[path = "detail_episodes/sticky_controls.rs"]
 mod sticky_controls;
+
+#[path = "detail_episodes/season_downloads.rs"]
+mod season_downloads;

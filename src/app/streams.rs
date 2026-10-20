@@ -157,7 +157,7 @@ impl StreamPreference {
 
 pub(super) fn stream_recommendation_usable(row: &StreamUi) -> bool {
     match &row.source {
-        StreamSource::Unsupported => false,
+        StreamSource::Unsupported | StreamSource::ExternalUrl(_) => false,
         StreamSource::Downloaded { path, .. } => row.download.as_ref().is_some_and(|job| {
             job.phase == crate::download::DownloadPhase::Completed
                 && job.artifact_path.as_ref() == Some(path)
@@ -202,6 +202,7 @@ pub(crate) struct StreamCardText {
     pub metadata: String,
     pub description: String,
     pub size: String,
+    pub listing_bytes: Option<u64>,
     pub binge_group: Option<String>,
     pub subtitle_hints: Vec<(String, String)>,
 }
@@ -211,6 +212,10 @@ pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
     let display = stream_display(stream);
     let detail = display.strip_prefix(&label).unwrap_or_default().trim();
     let mut card = split_stream_card(&label, detail);
+    // externalUrl represents a browser destination, not a downloadable file.
+    if stream.extra.contains_key("externalUrl") {
+        return card;
+    }
     if let Some(hints) = stream.extra.get("behaviorHints") {
         for key in ["filename", "videoHash", "videoSize"] {
             let Some(value) = hints.get(key) else {
@@ -227,6 +232,13 @@ pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
             }
         }
     }
+    card.listing_bytes = stream
+        .extra
+        .get("behaviorHints")
+        .and_then(|h| h.get("videoSize"))
+        .or_else(|| stream.extra.get("size"))
+        .and_then(|s| s.as_u64().or_else(|| s.as_str()?.parse().ok()))
+        .filter(|s| *s > 0);
     // Stremio addons may expose the selected video's byte size in hints.
     // Read this before falling back to human-readable torrent metadata.
     card.binge_group = stream
@@ -264,6 +276,7 @@ fn split_stream_card(label: &str, detail: &str) -> StreamCardText {
         metadata: label.to_owned(),
         description: description.to_owned(),
         size: String::new(),
+        listing_bytes: None,
         binge_group: None,
         subtitle_hints: Vec::new(),
     }
@@ -353,11 +366,22 @@ fn advertised_stream_size(display: &str) -> Option<String> {
 
 /// Classify a parsed addon stream into how it can be played here.
 ///
-/// A direct URL (or YouTube id) wins: it plays without the embedded engine.
+/// An explicit externalUrl opens a validated browser destination. Otherwise a
+/// direct URL (or YouTube id) plays without the embedded engine.
 /// Only a bare `infoHash` row (no direct `url`, the Torrentio shape) becomes a
 /// torrent — and only on native targets, since the web build has no librqbit
 /// and reports it as unsupported.
 pub(crate) fn stream_source(s: &addons::Stream) -> StreamSource {
+    // The explicit SDK browser destination takes precedence even when an addon
+    // also supplies an ambiguous media URL/hash. Invalid destinations must not
+    // fall through to playback or a deferred resolver.
+    if let Some(external) = s.extra.get("externalUrl") {
+        return external
+            .as_str()
+            .and_then(detail_extras::web_url)
+            .map(StreamSource::ExternalUrl)
+            .unwrap_or(StreamSource::Unsupported);
+    }
     if let Some(url) = s.web_url() {
         let headers = stream_request_headers(s);
         let subtitles = stream_subtitle_files(s);
@@ -387,7 +411,10 @@ pub(crate) fn stream_source_for_addon(
     addon_generation: u64,
     settings_generation: u64,
 ) -> StreamSource {
-    if stream.web_url().is_some() || stream.info_hash.is_some() {
+    if stream.extra.contains_key("externalUrl")
+        || stream.web_url().is_some()
+        || stream.info_hash.is_some()
+    {
         return stream_source(stream);
     }
     let Some(raw) = stream.extra.get("novaResolver") else {
@@ -739,5 +766,83 @@ mod choice_identity_tests {
             remote,
             stream_choice_identity("https://remote.example", "series", "tt1:3:2", &stream)
         );
+    }
+
+    #[test]
+    fn declared_external_url_has_browser_semantics_without_file_metadata() {
+        let stream: addons::Stream = serde_json::from_value(json!({
+            "name": "WatchHub", "description": "Release · 2 GB",
+            "externalUrl": "https://watch.example/title/42",
+            "url": "https://media.example/ambiguous.mp4", "infoHash": "abc",
+            "behaviorHints": {"videoSize": 1234, "bingeGroup": "family"},
+            "novaResolver": {"providerId":"owner", "token":"deferred"}
+        }))
+        .unwrap();
+        assert!(
+            matches!(stream_source(&stream), StreamSource::ExternalUrl(url) if url == "https://watch.example/title/42")
+        );
+        assert!(matches!(
+            stream_source_for_addon(&stream, "https://addon.example", 1, 1),
+            StreamSource::ExternalUrl(_)
+        ));
+        let card = stream_card_text(&stream);
+        assert!(card.size.is_empty());
+        assert!(card.listing_bytes.is_none());
+        assert!(card.subtitle_hints.is_empty());
+        let row = StreamUi {
+            id: "external".into(),
+            choice_id: Some("external".into()),
+            owner_url: "addon".into(),
+            display: String::new(),
+            card,
+            source: stream_source(&stream),
+            addon: "WatchHub".into(),
+            download: None,
+        };
+        assert!(!stream_recommendation_usable(&row));
+        assert_eq!(
+            recommended_stream(
+                &[row.clone()],
+                Some("external"),
+                &StreamPreference::from_row(&row)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_declared_browser_destinations_never_fall_back_to_media() {
+        for external in [
+            json!("javascript:alert(1)"),
+            json!("file:///tmp/video"),
+            json!("https://user:password@example.test/page"),
+            json!("https://example.test/\npage"),
+            json!("https://example.test/\u{7f}page"),
+            json!("https://example.test/".to_owned() + &"a".repeat(8192)),
+            json!(null),
+            json!(123),
+        ] {
+            let stream: addons::Stream = serde_json::from_value(json!({"externalUrl": external, "url": "https://media.example/video.mp4", "infoHash":"abc"})).unwrap();
+            assert!(matches!(
+                stream_source_for_addon(&stream, "https://addon.example", 1, 1),
+                StreamSource::Unsupported
+            ));
+        }
+    }
+
+    #[test]
+    fn ordinary_watchhub_named_or_hosted_urls_remain_in_app_media() {
+        let direct: addons::Stream = serde_json::from_value(
+            json!({"name":"WatchHub", "url":"https://watchhub.example/video.mp4"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(stream_source(&direct), StreamSource::Url(url) if url == "https://watchhub.example/video.mp4")
+        );
+        let with_options: addons::Stream = serde_json::from_value(json!({"name":"WatchHub", "url":"https://watchhub.example/video.mp4", "behaviorHints":{"proxyHeaders":{"request":{"Referer":"https://watchhub.example/"}}}})).unwrap();
+        assert!(matches!(
+            stream_source(&with_options),
+            StreamSource::UrlWithOptions { .. }
+        ));
     }
 }

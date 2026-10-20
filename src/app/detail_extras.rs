@@ -48,7 +48,7 @@ fn names(values: &[String]) -> Vec<String> {
     }
     result
 }
-fn web_url(value: &str) -> Option<String> {
+pub(super) fn web_url(value: &str) -> Option<String> {
     if value.len() > 8192 || value.chars().any(char::is_control) {
         return None;
     }

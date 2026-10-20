@@ -818,6 +818,22 @@ mod tests {
     }
 
     #[test]
+    fn browser_destinations_are_never_automatic_next_episode_candidates() {
+        assert!(
+            automatic_choice(
+                &[row(
+                    "external",
+                    "WatchHub",
+                    StreamSource::ExternalUrl("https://watch.example/title".into())
+                )],
+                None,
+                true
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn automatic_successor_requires_known_release_and_never_skips_unknown_or_future() {
         let videos: Vec<_> = (1..=3)
             .map(|episode| Video {

@@ -601,6 +601,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_season_picked(move |idx| b.season_picked(idx as usize));
+    let b = bridge.clone();
+    app.on_season_download_start(move |idx, unwatched| {
+        b.season_download_start(idx as usize, unwatched)
+    });
+    let b = bridge.clone();
+    app.on_season_download_confirm(move || b.season_download_confirm());
+    let b = bridge.clone();
+    app.on_season_download_retry(move || b.season_download_retry());
+    let b = bridge.clone();
+    app.on_season_download_cancel(move || b.stream_selector_back());
 
     let b = bridge.clone();
     app.on_episode_picked(move |idx| b.episode_picked(idx as usize));

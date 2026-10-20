@@ -225,3 +225,117 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
         failures.join("\n  ")
     );
 }
+
+#[test]
+fn browser_destinations_hide_size_information_and_preserve_selection_identity() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::browser_destinations_hide_size_information_and_preserve_selection_identity"
+    )) {
+        return;
+    }
+    use i_slint_backend_testing::ElementQuery;
+    use std::time::Duration;
+
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
+    app.set_modal_episodes(false);
+    app.set_detail_tab(0);
+    app.set_selected_title("Browser destinations and media".into());
+    app.window().set_size(slint::PhysicalSize::new(600, 1100));
+    app.show().unwrap();
+    let selections = Rc::new(RefCell::new(Vec::new()));
+    let picked = selections.clone();
+    // This fixture records UI dispatch only. It deliberately installs no app
+    // playback/browser handler and never launches an external application.
+    app.on_stream_picked(move |index| picked.borrow_mut().push(index));
+    let settle = || {
+        for _ in 0..8 {
+            for element in ElementQuery::from_root(&app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = (element.size(), element.absolute_position());
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+            slint::platform::update_timers_and_animations();
+        }
+    };
+    let browser = nova::StreamRow {
+        id: "browser".into(),
+        text: "Browser destination".into(),
+        title: "Browser destination".into(),
+        metadata: "WatchHub".into(),
+        external_link: true,
+        details: "Open in browser".into(),
+        ..Default::default()
+    };
+    let media = nova::StreamRow {
+        id: "media".into(),
+        text: "Ordinary media".into(),
+        title: "Ordinary media".into(),
+        metadata: "WatchHub".into(),
+        external_link: false,
+        ..Default::default()
+    };
+    app.set_streams(Rc::new(VecModel::from(vec![browser.clone()])).into());
+    app.set_stream_total(1);
+    settle();
+    assert_eq!(
+        ElementHandle::find_by_element_id(&app, "StreamList::size_pill").count(),
+        0,
+        "a browser destination has no file-size lane"
+    );
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "SIZE UNKNOWN").count(),
+        0,
+        "browser destinations must not invent unknown download sizes"
+    );
+
+    app.set_streams(Rc::new(VecModel::from(vec![media.clone()])).into());
+    settle();
+    let size = ElementHandle::find_by_element_id(&app, "StreamList::size_label")
+        .next()
+        .expect("ordinary media retains its file-size label");
+    assert_eq!(size.accessible_label().as_deref(), Some("SIZE UNKNOWN"));
+    assert!(size.size().height > 0.0);
+
+    app.set_streams(Rc::new(VecModel::from(vec![browser, media])).into());
+    app.set_stream_total(2);
+    settle();
+    for label in ["Browser destination", "Ordinary media"] {
+        let element = ElementHandle::find_by_accessible_label(&app, label)
+            .find(|element| {
+                element.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .expect("each source keeps its own selectable stream row");
+        let position = element.absolute_position();
+        let size = element.size();
+        let position = slint::LogicalPosition::new(
+            position.x + size.width / 2.0,
+            position.y + size.height / 2.0,
+        );
+        for event in [
+            slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+            slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        settle();
+    }
+    assert_eq!(
+        *selections.borrow(),
+        vec![0, 1],
+        "browser and media clicks retain their distinct backend row identities"
+    );
+}

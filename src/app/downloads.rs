@@ -28,7 +28,7 @@ type ResolveDownload = dyn Fn(
     + Send
     + Sync;
 #[derive(Clone)]
-struct ResolverDownload {
+pub(super) struct ResolverDownload {
     token: String,
     resolve: Arc<ResolveDownload>,
     /// Only provider configuration changes invalidate an already queued
@@ -70,7 +70,7 @@ pub(crate) struct DownloadCoordinator {
     inner: Arc<DownloadInner>,
 }
 
-struct NewDownload {
+pub(super) struct NewDownload {
     media_type: String,
     media_id: String,
     request_id: String,
@@ -146,6 +146,9 @@ fn completed_snapshot_matches(job: &DownloadJob, snapshot: &DownloadJob) -> bool
 }
 
 impl DownloadCoordinator {
+    pub(super) fn available_bytes(&self) -> Option<u64> {
+        crate::download::available_bytes(&self.inner.root)
+    }
     pub(crate) fn new(root: PathBuf) -> Self {
         if let Err(error) = std::fs::create_dir_all(&root) {
             eprintln!("nova downloads: cannot create {}: {error}", root.display());
@@ -371,7 +374,7 @@ impl DownloadCoordinator {
         self.enqueue_with_resolver(request, None)
     }
 
-    fn enqueue_with_resolver(
+    pub(super) fn enqueue_with_resolver(
         &self,
         request: NewDownload,
         resolver: Option<ResolverDownload>,
@@ -389,12 +392,12 @@ impl DownloadCoordinator {
         let intro_request = intro_skip::download_request(&media_type, &media_id, &request_id);
         let id = {
             let mut state = self.inner.state();
-            if let Some(index) = state
-                .manifest
-                .jobs
-                .iter()
-                .position(|job| job.request_id == request_id && job.source == source)
-            {
+            if let Some(index) = state.manifest.jobs.iter().position(|job| {
+                job.media_type == media_type
+                    && job.media_id == media_id
+                    && job.request_id == request_id
+                    && job.source == source
+            }) {
                 if let Some(resolver) = resolver {
                     let id = state.manifest.jobs[index].id.clone();
                     state.resolvers.insert(id, resolver);
@@ -1784,12 +1787,31 @@ impl Bridge {
             .find(|stream| stream.id == stream_id)
             .cloned();
         let Some(stream) = stream else { return };
+        if self.shared.lock().unwrap().season_download.is_some() {
+            app.set_stream_action_id(stream.id.clone().into());
+            app.set_stream_action_title(text::tr("Select a stream for download").into());
+            app.set_stream_action_items(
+                Rc::new(VecModel::from(vec![SheetItem {
+                    label: text::tr("Select stream").into(),
+                    enabled: stream.download.is_none(),
+                }]))
+                .into(),
+            );
+            app.set_stream_action_open(true);
+            return;
+        }
         let (title, items) = match &stream.download {
             Some(job) => {
                 let mut items = vec![SheetItem {
                     label: SharedString::from(DownloadCoordinator::action_label(job)),
                     enabled: true,
                 }];
+                if job.phase == DownloadPhase::Failed {
+                    items.push(SheetItem {
+                        label: text::tr("Choose another stream").into(),
+                        enabled: true,
+                    });
+                }
                 items.push(SheetItem {
                     label: SharedString::from(text::tr("Remove download")),
                     enabled: true,
@@ -1806,10 +1828,18 @@ impl Bridge {
                         crate::download::validate_download_url(url).is_ok()
                     }
                     StreamSource::Torrent { .. } | StreamSource::Resolver { .. } => true,
-                    StreamSource::Unsupported | StreamSource::Downloaded { .. } => false,
+                    StreamSource::Unsupported
+                    | StreamSource::ExternalUrl(_)
+                    | StreamSource::Downloaded { .. } => false,
                 };
                 let mut items = vec![SheetItem {
-                    label: SharedString::from(text::tr("Play stream")),
+                    label: SharedString::from(text::tr(
+                        if matches!(stream.source, StreamSource::ExternalUrl(_)) {
+                            "Open in browser"
+                        } else {
+                            "Play stream"
+                        },
+                    )),
                     enabled: true,
                 }];
                 if downloadable {
@@ -1837,6 +1867,9 @@ impl Bridge {
             .find(|stream| stream.id == stream_id)
             .cloned();
         let Some(stream) = stream else { return };
+        if self.season_download_pick_row(stream.clone()) {
+            return;
+        }
         if let Some(job) = stream.download {
             match action {
                 0 => match job.phase {
@@ -1846,7 +1879,10 @@ impl Bridge {
                     DownloadPhase::Paused | DownloadPhase::Failed => self.downloads.resume(&job.id),
                     _ => self.downloads.pause(&job.id),
                 },
-                1 => self.downloads.remove(&job.id),
+                1 if job.phase == DownloadPhase::Failed => {
+                    self.reselect_failed_download(job.clone())
+                }
+                1 | 2 => self.downloads.remove(&job.id),
                 _ => {}
             }
             self.apply_stream_filter();
@@ -1869,7 +1905,13 @@ impl Bridge {
     }
 
     pub(super) fn download_stream(&self, stream: &StreamUi) {
-        if let StreamSource::Unsupported = stream.source {
+        if self.season_download_pick_row(stream.clone()) {
+            return;
+        }
+        if matches!(
+            stream.source,
+            StreamSource::Unsupported | StreamSource::ExternalUrl(_)
+        ) {
             self.set_stream_hint(Some(StreamHint::Fixed(
                 "This stream cannot be downloaded here.",
             )));
@@ -1904,6 +1946,32 @@ impl Bridge {
                 modal.map(|m| m.year.clone()).unwrap_or_default(),
             )
         };
+        let Some((source, resolver)) = self.prepare_download_source(stream) else {
+            return;
+        };
+        let request = NewDownload {
+            media_type,
+            media_id,
+            request_id,
+            title,
+            year,
+            display: stream.display.clone(),
+            addon: stream.addon.clone(),
+            source,
+        };
+        if let Some(resolver) = resolver {
+            self.downloads
+                .enqueue_with_resolver(request, Some(resolver));
+        } else {
+            self.downloads.enqueue(request);
+        }
+        self.apply_stream_filter();
+    }
+
+    pub(super) fn prepare_download_source(
+        &self,
+        stream: &StreamUi,
+    ) -> Option<(JobSource, Option<ResolverDownload>)> {
         let resolver = match &stream.source {
             StreamSource::Resolver {
                 provider_url,
@@ -1929,7 +1997,7 @@ impl Bridge {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This stream selection is out of date. Reload streams.",
                     )));
-                    return;
+                    return None;
                 };
                 let authority = capability.clone();
                 Some(ResolverDownload {
@@ -1956,30 +2024,36 @@ impl Bridge {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This stream selection is out of date. Reload streams.",
                     )));
-                    return;
+                    return None;
                 };
                 source
             }
-            StreamSource::Unsupported => return,
-            StreamSource::Downloaded { .. } => return,
+            StreamSource::Unsupported | StreamSource::ExternalUrl(_) => return None,
+            StreamSource::Downloaded { .. } => return None,
         };
-        let request = NewDownload {
-            media_type,
-            media_id,
-            request_id,
-            title,
-            year,
-            display: stream.display.clone(),
-            addon: stream.addon.clone(),
-            source,
-        };
-        if let Some(resolver) = resolver {
-            self.downloads
-                .enqueue_with_resolver(request, Some(resolver));
-        } else {
-            self.downloads.enqueue(request);
-        }
-        self.apply_stream_filter();
+        Some((source, resolver))
+    }
+
+    pub(super) fn enqueue_season_download(
+        &self,
+        stream: &StreamUi,
+        identity: (&str, &str, &str, &str, &str),
+        prepared: (JobSource, Option<ResolverDownload>),
+    ) -> String {
+        let (media_type, media_id, request_id, title, year) = identity;
+        self.downloads.enqueue_with_resolver(
+            NewDownload {
+                media_type: media_type.into(),
+                media_id: media_id.into(),
+                request_id: request_id.into(),
+                title: title.into(),
+                year: year.into(),
+                display: stream.display.clone(),
+                addon: stream.addon.clone(),
+                source: prepared.0,
+            },
+            prepared.1,
+        )
     }
 
     pub(super) fn download_settings_to_ui(&self) {

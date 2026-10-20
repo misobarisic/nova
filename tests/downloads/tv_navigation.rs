@@ -130,6 +130,63 @@ fn downloads_arrows_reach_filters_sort_series_episode_actions_and_transfers() {
 }
 
 #[test]
+fn failed_downloads_offer_reselection_in_groups_and_transfers() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::failed_downloads_offer_reselection_in_groups_and_transfers"
+    )) {
+        return;
+    }
+    let app = setup();
+    let failed = |id: &str| nova::DownloadEpisode {
+        id: id.into(),
+        title: "Episode with a failed stream".into(),
+        action_kind: 3,
+        action_label: "Retry download".into(),
+        ..Default::default()
+    };
+    app.set_downloads_page_groups(
+        Rc::new(VecModel::from(vec![nova::DownloadGroup {
+            id: "series".into(),
+            title: "Series".into(),
+            failed_count: 1,
+            episodes: Rc::new(VecModel::from(vec![failed("group-episode")])).into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.set_downloads_page_transfers(Rc::new(VecModel::from(vec![failed("transfer")])).into());
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let captured = actions.clone();
+    app.on_downloads_page_action(move |id, kind| {
+        captured.borrow_mut().push((id.to_string(), kind))
+    });
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    settle(&app);
+    let recovery = ElementHandle::find_by_accessible_label(&app, "Choose another stream")
+        .next()
+        .expect("failed episode recovery action");
+    assert!(recovery.size().height >= 56.0);
+    recovery.mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(actions.borrow().last(), Some(&("group-episode".into(), 2)));
+    app.recover_back_focus();
+    // Search -> filters -> sort -> group heading -> failed episode.
+    for _ in 0..4 {
+        key(&app, Key::DownArrow);
+    }
+    key(&app, Key::RightArrow);
+    key(&app, Key::RightArrow);
+    key(&app, Key::Return);
+    assert_eq!(actions.borrow().last(), Some(&("group-episode".into(), 2)));
+    key(&app, Key::DownArrow);
+    key(&app, Key::RightArrow);
+    key(&app, Key::RightArrow);
+    key(&app, Key::Return);
+    assert_eq!(actions.borrow().last(), Some(&("transfer".into(), 2)));
+}
+
+#[test]
 fn calendar_arrows_select_view_day_and_release() {
     if !crate::isolation::run(concat!(
         module_path!(),

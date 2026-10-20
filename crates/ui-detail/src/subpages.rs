@@ -8,6 +8,8 @@ pub fn prepare_subpages(shared: &std::rc::Rc<NovaUiSharedSharedGlobals>) {
         shared.global_DetailContent.clone(),
         std::marker::PhantomData,
     );
+    let bridge = DetailBridge(shared.global_DetailBridge.clone(), std::marker::PhantomData);
+    bridge.set_season_download_menu(-1);
     content.set_tracking_factory(slint::ComponentFactory::default());
     content.set_streams_factory(slint::ComponentFactory::default());
     content.set_episodes_factory(slint::ComponentFactory::default());

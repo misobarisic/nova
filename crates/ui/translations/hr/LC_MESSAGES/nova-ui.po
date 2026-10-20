@@ -3568,3 +3568,39 @@ msgstr "Reproducirajte video u plutajućem prozoru pri izlasku iz Nove. Kada je 
 
 msgid "Outside picture in picture, pause in the background. Automatically continue only if the video was playing before you left."
 msgstr "Izvan slike u slici pauzirajte reprodukciju u pozadini. Automatski nastavite samo ako se video reproducirao prije izlaska."
+
+msgid "Download season"
+msgstr "Preuzmi sezonu"
+
+msgid "All episodes"
+msgstr "Sve epizode"
+
+msgid "Unwatched episodes"
+msgstr "Neodgledane epizode"
+
+msgid "Review season download"
+msgstr "Pregled preuzimanja sezone"
+
+msgid "Confirm download"
+msgstr "Potvrdi preuzimanje"
+
+msgid "Sizes are estimates from stream listings. Other downloads may use free space."
+msgstr "Veličine su procjene iz popisa izvora. Druga preuzimanja mogu zauzeti slobodan prostor."
+
+msgid "Retry streams"
+msgstr "Ponovno traži izvore"
+
+msgid "Choose another stream"
+msgstr "Odaberi drugi izvor"
+
+msgid "↑ ↓ Navigate    Enter Select    Esc Cancel"
+msgstr "↑ ↓ Navigacija    Enter Odaberi    Esc Otkaži"
+
+msgid "Open in browser"
+msgstr "Otvori u pregledniku"
+
+msgid "Could not open this link in your browser."
+msgstr "Poveznicu nije moguće otvoriti u pregledniku."
+
+msgid "↑ ↓ Navigate    Enter Open    Esc Back"
+msgstr "↑ ↓ Navigacija    Enter Otvori    Esc Natrag"

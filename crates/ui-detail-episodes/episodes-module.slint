@@ -1,3 +1,4 @@
+import { PillButton } from "../ui/settings-controls.slint";
 import { InterfaceStyle, Theme, Anim, DetailBridge, DetailContent } from "@NovaUiShared";
 import { EpisodePager } from "../ui/episode-pager.slint";
 import { SearchField } from "../ui/searchfield.slint";
@@ -49,6 +50,18 @@ export component DetailEpisodesModule inherits Window {
         width: root.episode_content_w;
         spacing: 10px;
         alignment: start;
+
+        PillButton {
+            visible: DetailBridge.modal_episodes && DetailBridge.season_combo_idx >= 0;
+            label: @tr("Download season");
+            clicked => { DetailBridge.season_download_menu = DetailBridge.season_combo_idx; }
+        }
+        if !DetailBridge.season_download_active && DetailBridge.season_download_status != "": Text {
+            text: DetailBridge.season_download_status;
+            color: Theme.current.text_secondary;
+            font-size: InterfaceStyle.tv ? 20px : 14px;
+            wrap: word-wrap;
+        }
 
         // Keep toolbar anchors and focus timers addressable across the body
         // and overlay. The shell mounts this leaf only for the Episodes tab.
@@ -204,6 +217,7 @@ export component DetailEpisodesModule inherits Window {
                                         title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
                                         activated => { DetailBridge.season_watch_action(i, 0); }
                                     }
+                                    MenuItem { title: @tr("Download season"); activated => { DetailBridge.season_download_menu = i; } }
                                     MenuSeparator {}
                                     MenuItem {
                                         title: @tr("Select season");

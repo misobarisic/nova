@@ -1,10 +1,20 @@
+import { PillButton } from "../ui/settings-controls.slint";
+import { ScrollView } from "../ui/scrollview.slint";
+import { Theme } from "@NovaUiShared";
 import { DetailBridge, DetailContent } from "@NovaUiShared";
 import { StreamSelector } from "../ui/stream-selector.slint";
 export component DetailStreamsModule inherits Window {
     default-font-family: "Roboto"; background: transparent;
     width: DetailBridge.viewport_width; height: DetailBridge.viewport_height;
-    public function focus_shell() { if DetailBridge.stream_selector_open { selector.focus_shell(); } }
+    public function focus_shell() { if DetailBridge.season_download_review { review_focus.focus(); } else if DetailBridge.stream_selector_open { selector.focus_shell(); } }
+    property <bool> reviewing: DetailBridge.season_download_review;
+    property <int> review_choice: 0;
+    property <bool> review_keyboard: false;
+    changed reviewing => { if DetailBridge.season_download_review { root.review_choice = 0; root.review_keyboard = false; review_focus.focus(); } }
         selector := StreamSelector {
+            visible: !DetailBridge.season_download_review;
+            selection_mode: DetailBridge.season_download_active;
+            retry_requested => { DetailBridge.season_download_retry(); }
             title: DetailBridge.selected_title;
             is_movie: DetailBridge.is_movie;
             year: DetailBridge.selected_year;
@@ -14,7 +24,7 @@ export component DetailStreamsModule inherits Window {
             poster: DetailBridge.selected_poster;
             backdrop: DetailBridge.selected_backdrop;
             rows: DetailBridge.streams;
-            hint: DetailBridge.streams_hint;
+            hint: DetailBridge.season_download_active ? DetailBridge.season_download_status : DetailBridge.streams_hint;
             addons: DetailBridge.stream_addons;
             loading: DetailBridge.stream_loading;
             searching: DetailBridge.streams_searching;
@@ -42,4 +52,53 @@ export component DetailStreamsModule inherits Window {
             action_selected(id, a) => { DetailBridge.stream_action_selected(id, a); }
         }
 
+    review_focus := FocusScope {
+        visible: DetailBridge.season_download_review;
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { DetailBridge.season_download_cancel(); }
+                accept
+            } else if e.text == Key.LeftArrow || e.text == Key.RightArrow || e.text == Key.Tab {
+                root.review_keyboard = true;
+                root.review_choice = e.text == Key.LeftArrow ? 0 : e.text == Key.RightArrow ? 1 : 1 - root.review_choice;
+                accept
+            } else if e.text == Key.Return || e.text == " " {
+                root.review_keyboard = true;
+                if !e.repeat {
+                    if root.review_choice == 0 { DetailBridge.season_download_cancel(); }
+                    else { DetailBridge.season_download_confirm(); }
+                }
+                accept
+            } else { reject }
+        }
+        Rectangle { width: 100%; height: 100%; background: Theme.current.artwork_canvas;
+            VerticalLayout {
+                x: (parent.width - self.width) / 2; width: Math.min(840px, parent.width); height: 100%;
+                padding-top: DetailBridge.safe-top + 16px;
+                padding-bottom: DetailBridge.safe-bottom + 16px;
+                padding-left: DetailBridge.safe-left + 16px;
+                padding-right: DetailBridge.safe-right + 16px;
+                spacing: 12px;
+                Text { text: @tr("Review season download"); font-size: 22px; font-weight: 700; color: Theme.current.text_primary; wrap: word-wrap; }
+                // Keep the review readable in short landscape: summaries and
+                // episode rows scroll together while both actions stay visible.
+                review_scroll := ScrollView {
+                    min-height: 0px; vertical-stretch: 1;
+                    content-width: self.visible-width;
+                    VerticalLayout { width: review_scroll.visible-width; spacing: 12px; alignment: start;
+                        Text { text: DetailBridge.selected_title; color: Theme.current.text_primary; font-size: 18px; font-weight: 600; wrap: word-wrap; }
+                        Text { text: @tr("{n} episode" | "{n} episodes" % DetailBridge.season_download_rows.length); color: Theme.current.text_secondary; font-size: 14px; }
+                        Text { text: DetailBridge.season_download_status; color: Theme.current.text_secondary; wrap: word-wrap; }
+                        Text { text: @tr("Sizes are estimates from stream listings. Other downloads may use free space."); color: Theme.current.text_muted; wrap: word-wrap; }
+                        for row in DetailBridge.season_download_rows: Text { font-size: 14px; text: row; color: Theme.current.text_primary; wrap: word-wrap; }
+                    }
+                }
+                HorizontalLayout { spacing: 12px;
+                    review_cancel := PillButton { focused: root.review_keyboard && root.review_choice == 0; label: @tr("Cancel"); clicked => { DetailBridge.season_download_cancel(); } }
+                    review_confirm := PillButton { focused: root.review_keyboard && root.review_choice == 1; primary: true; label: @tr("Confirm download"); clicked => { DetailBridge.season_download_confirm(); } }
+                }
+            }
+        }
+    }
 }

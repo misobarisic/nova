@@ -257,6 +257,7 @@ impl Bridge {
             // outgoing player or actors. Failure leaves the selected session live.
             let prepared = PreparedProfile::load(self, id)?;
             let incoming = profiles::prepare_activation(id)?;
+            self.cancel_season_download();
             self.party_leave();
             self.remote_disconnect();
             self.clear_addon_subtitles();
@@ -357,6 +358,12 @@ impl Bridge {
             app.set_modal_visible(false);
             app.set_selected_details(Default::default());
             app.set_stream_selector_open(false);
+            app.set_season_download_active(false);
+            app.set_season_download_review(false);
+            app.set_season_download_status(Default::default());
+            app.set_season_download_rows(Default::default());
+            app.global::<nova_ui_shared::DetailBridge>()
+                .set_season_download_menu(-1);
             app.set_categories_modal(false);
             app.set_discover_search_open(false);
             app.set_discover_search_focused(false);

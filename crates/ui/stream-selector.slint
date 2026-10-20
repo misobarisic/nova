@@ -4,6 +4,7 @@ import { InterfaceStyle, PartyBridge, RemoteBridge, Theme, Anim, StreamRow, Shee
 
 
 import { Spinner } from "std-widgets.slint";
+import { PillButton } from "settings-controls.slint";
 import { MenuSheet } from "menusheet.slint";
 import { IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
 
@@ -309,7 +310,8 @@ component StreamList {
                     }
 
                     pill_row := HorizontalLayout {
-                        height: 26px;
+                        visible: !st.external_link;
+                        height: st.external_link ? 0px : 26px;
                         spacing: 0px;
                         size_pill := Rectangle {
                             width: Math.min(pill_row.width, size_label.preferred-width + 20px);
@@ -411,7 +413,7 @@ component StreamList {
                             min-width: 0px;
                         }
 
-                        Rectangle { height: 26px; }
+                        if !st.external_link: Rectangle { height: 26px; }
                         if st.is_download && st.download_action != 4: Rectangle { height: 4px; }
                     }
                 }
@@ -537,6 +539,8 @@ export component StreamSelector inherits Rectangle {
     in property <string> title;
     in property <bool> is_movie;
     in property <string> year;
+    in property <bool> selection_mode: false;
+    callback retry_requested();
     in property <string> episode_context;
     in property <string> episode_number;
     in property <string> episode_title;
@@ -881,6 +885,10 @@ export component StreamSelector inherits Rectangle {
                     font-size: InterfaceStyle.tv ? 18px : 13px; color: Theme.current.text_muted;
                     wrap: word-wrap; max-lines: root.short && !root.scrolling_landscape ? 1 : 0; overflow: elide; min-width: 0px;
                 }
+                if root.selection_mode: HorizontalLayout {
+                    vertical-stretch: 0; alignment: end;
+                    PillButton { label: @tr("Retry streams"); enabled: !root.searching; clicked => { root.retry_requested(); } }
+                }
                 result_scroll := Flickable {
                     vertical-stretch: root.scrolling_landscape ? 0 : 1;
                     preferred-height: root.scrolling_landscape ? (root.rows.length > 0 ? stream_list.preferred-height : 160px) : 0px;
@@ -928,7 +936,7 @@ export component StreamSelector inherits Rectangle {
                     height: 44px;
                     spacing: 12px;
                     if !root.touch_menus && !root.narrow && !root.short: Text {
-                        text: @tr("↑ ↓ Navigate    Enter Play    Esc Back");
+                        text: root.selection_mode ? @tr("↑ ↓ Navigate    Enter Select    Esc Cancel") : (root.kb_index >= root.page_start && root.kb_index < root.page_start + root.rows.length && root.rows[root.kb_index - root.page_start].external_link ? @tr("↑ ↓ Navigate    Enter Open    Esc Back") : @tr("↑ ↓ Navigate    Enter Play    Esc Back"));
                         color: Theme.current.text_hint;
                         font-size: InterfaceStyle.tv ? 18px : 12px; vertical-alignment: center;
                         overflow: elide; min-width: 0px;

@@ -182,6 +182,8 @@ pub(crate) struct TypeDef {
 pub(crate) enum StreamSource {
     /// A direct URL (HLS/MP4/…) playable by mpv as-is.
     Url(String),
+    /// A provider web page, explicitly opened in the system browser.
+    ExternalUrl(String),
     /// A direct URL with addon-supplied headers or external subtitles.
     UrlWithOptions {
         url: String,
@@ -342,6 +344,7 @@ struct Shared {
     /// A metadata refresh can rerun the same episode with new stream aliases.
     /// Older addon replies must not modify the new search's rows or pills.
     stream_generation: u64,
+    season_download: Option<season_downloads::Plan>,
     /// Visible row identities whose entrance has already been published.
     stream_revealed_ids: HashSet<String>,
     /// Display labels for pending transport identities.
@@ -793,6 +796,7 @@ mod profile_session;
 mod profiles;
 pub(crate) mod remote_playback;
 mod run;
+mod season_downloads;
 mod settings;
 mod settings_sync;
 mod stream_prefetch;

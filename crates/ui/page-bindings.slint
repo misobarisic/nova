@@ -77,6 +77,10 @@ export component HomeBindings {
 }
 
 export component DetailBindings {
+    in-out property <bool> season_download_active <=> DetailBridge.season_download_active;
+    in-out property <bool> season_download_review <=> DetailBridge.season_download_review;
+    in-out property <string> season_download_status <=> DetailBridge.season_download_status;
+    in-out property <[string]> season_download_rows <=> DetailBridge.season_download_rows;
     in-out property <bool> list_services_title_selected <=> DetailBridge.list_services_title_selected;
     in-out property <bool> list_services_title_connected <=> DetailBridge.list_services_title_connected;
     in-out property <bool> list_services_title_busy <=> DetailBridge.list_services_title_busy;

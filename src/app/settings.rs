@@ -1141,6 +1141,7 @@ impl Bridge {
     }
 
     pub(super) fn modal_closed(&self) {
+        self.cancel_season_download();
         self.remote_disconnect();
         self.cancel_pending_for_navigation();
         if self.app().is_some_and(|app| app.get_tracking_open()) {

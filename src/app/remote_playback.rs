@@ -1056,7 +1056,10 @@ impl Bridge {
                             .filter_map(|stream| {
                                 let source =
                                     stream_source_for_addon(&stream, &owner, generation, settings);
-                                if matches!(source, StreamSource::Unsupported) {
+                                if matches!(
+                                    source,
+                                    StreamSource::Unsupported | StreamSource::ExternalUrl(_)
+                                ) {
                                     return None;
                                 }
                                 Some((
@@ -1283,7 +1286,7 @@ impl Bridge {
                 file_idx,
             } => self.play_torrent(display, info_hash, file_idx),
             StreamSource::Downloaded { job_id, .. } => self.play_download(&job_id),
-            StreamSource::Unsupported => {}
+            StreamSource::Unsupported | StreamSource::ExternalUrl(_) => {}
         }
         self.shared.lock().unwrap().remote_playback.start_context = None;
     }

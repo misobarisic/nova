@@ -85,6 +85,30 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Open in browser" => "Otvori u pregledniku",
+        "Could not open this link in your browser." => {
+            "Poveznicu nije moguće otvoriti u pregledniku."
+        }
+        "Season download planning supports up to 500 episodes." => {
+            "Planiranje preuzimanja sezone podržava do 500 epizoda."
+        }
+        "No eligible episodes to download." => "Nema dostupnih epizoda za preuzimanje.",
+        "Select a stream for download" => "Odaberite izvor za preuzimanje",
+        "Select stream" => "Odaberi izvor",
+        "Unknown size" => "Nepoznata veličina",
+        "No matching release. Select a stream for this episode." => {
+            "Nema odgovarajućeg izdanja. Odaberite izvor za ovu epizodu."
+        }
+        "This source does not identify a different episode. Choose another stream." => {
+            "Ovaj izvor ne označava drugu epizodu. Odaberite drugi izvor."
+        }
+        "This download plan is out of date. Cancel and start again." => {
+            "Ovaj je plan preuzimanja zastario. Otkažite i počnite ponovno."
+        }
+        "Not enough free space for the known download size." => {
+            "Nema dovoljno slobodnog prostora za poznatu veličinu preuzimanja."
+        }
+        "Choose another stream" => "Odaberi drugi izvor",
         "Catalogs" => "Katalozi",
         "Subtitles" => "Titlovi",
         "Picture in picture" => "Slika u slici",
@@ -2259,4 +2283,56 @@ pub fn trakt_device_code(uri: &str, code: &str) -> String {
     } else {
         format!("Visit {uri} and enter code {code}")
     }
+}
+
+/// Listing-only subtotal; unknown episodes prevent a definite remaining-space claim.
+pub fn season_download_summary(known: u64, unknown: usize, free: Option<u64>) -> String {
+    let size = nova_download_size(known);
+    let mut summary = if croatian() {
+        format!("Procijenjena poznata veličina: ~{size} · Nepoznate veličine: {unknown}")
+    } else {
+        format!("Estimated known size: ~{size} · Unknown sizes: {unknown}")
+    };
+    if let Some(free) = free {
+        let available = nova_download_size(free);
+        summary.push_str(&if croatian() {
+            format!("\nSlobodan prostor: {available}")
+        } else {
+            format!("\nFree space: {available}")
+        });
+        if known > free {
+            summary.push_str(if croatian() {
+                " · Nedovoljno prostora"
+            } else {
+                " · Not enough space"
+            });
+        }
+        if unknown == 0
+            && let Some(remaining) = free.checked_sub(known)
+        {
+            let remaining = nova_download_size(remaining);
+            summary.push_str(&if croatian() {
+                format!(" · Procijenjeno preostalo: {remaining}")
+            } else {
+                format!(" · Projected remaining: {remaining}")
+            });
+        }
+    } else {
+        summary.push_str(if croatian() {
+            "\nSlobodan prostor nije dostupan"
+        } else {
+            "\nFree space unavailable"
+        });
+    }
+    summary
+}
+fn nova_download_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < 4 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }

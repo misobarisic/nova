@@ -46,13 +46,20 @@ component DownloadEpisodeRow inherits Rectangle {
     // Compact cards give titles and transfer details their own line. A side
     // action used to leave only a few characters and overflow its fixed width.
     private property <bool> stacked: root.width < 480px;
-    height: InterfaceStyle.tv ? 106px : root.stacked ? 118px : 82px;
+    private property <length> recovery-height: root.episode.action_kind == 3 ? (InterfaceStyle.tv ? 64px : 52px) : 0px;
+    height: (InterfaceStyle.tv ? 106px : root.stacked ? 118px : 82px) + root.recovery-height;
     background: Theme.current.artwork_canvas;
+    if root.episode.action_kind == 3: DownloadButton {
+        x: 8px; y: root.height - root.recovery-height + 4px; width: root.width - 16px; height: InterfaceStyle.tv ? 56px : 44px;
+        label: @tr("Choose another stream");
+        tv-focused: root.tv-focused && root.tv-action == 2;
+        picked => { root.action(root.episode.id, 2); }
+    }
     episode_text := VerticalLayout {
         x: root.stacked ? 8px : episode_badge.x + episode_badge.width + 8px;
         y: 8px;
         width: Math.max(0px, root.stacked ? root.width - 16px : episode_action.x - self.x - 8px);
-        height: root.stacked ? 50px : root.height - 16px;
+        height: root.stacked ? 50px : root.height - 16px - root.recovery-height;
         min-width: 0px; spacing: 3px; alignment: center;
         Text { vertical-stretch: 0; min-width: 0px; text: root.episode.title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 21px : 13px; font-weight: 600; overflow: elide; }
         Text { vertical-stretch: 0; min-width: 0px; text: root.episode.details; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; overflow: elide; }
@@ -65,13 +72,13 @@ component DownloadEpisodeRow inherits Rectangle {
         }
     }
     episode_badge := Rectangle {
-        x: 8px; y: root.stacked ? 66px : (root.height - self.height) / 2;
+        x: 8px; y: root.stacked ? 66px : ((root.height - root.recovery-height) - self.height) / 2;
         width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
         Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center; vertical-alignment: center; }
     }
     episode_action := DownloadButton {
         x: root.stacked ? episode_badge.x + episode_badge.width + 8px : root.width - self.width - (InterfaceStyle.tv ? 84px : 60px);
-        y: root.stacked ? 62px : (root.height - self.height) / 2;
+        y: root.stacked ? 62px : ((root.height - root.recovery-height) - self.height) / 2;
         width: root.stacked ? Math.max(44px, root.width - episode_badge.x - episode_badge.width - 68px) : Math.max(100px, Math.min(160px, root.width * 0.3));
         label: root.episode.action_label; wrap-label: true;
         tv-focused: root.tv-focused && root.tv-action == 0;
@@ -106,7 +113,8 @@ component DownloadSeriesCard inherits Rectangle {
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
     background: Theme.current.artwork_canvas; clip: true;
     // Only the chevron animates; rows and card height switch immediately.
-    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * (InterfaceStyle.tv ? 106px : root.width < 480px ? 118px : 82px));
+    // Count recovery rows without constructing collapsed episode delegates.
+    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * (InterfaceStyle.tv ? 106px : root.width < 480px ? 118px : 82px) + root.group.failed_count * (InterfaceStyle.tv ? 64px : 52px));
     // Without an explicit anchor Slint centers this fixed-height child in
     // the expanded card, moving the artwork and clipping the toggle in rows.
     Rectangle { x: 0px; y: 0px; width: 100%; height: 86px; background: Theme.current.control;
@@ -120,8 +128,8 @@ component DownloadSeriesCard inherits Rectangle {
             DownloadButton { tv-focused: root.tv-focused && root.tv-episode < 0; reveal(y,h) => { root.reveal(y,h); } width: InterfaceStyle.tv ? 56px : 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
         }
     }
-    if !root.group.collapsed: VerticalLayout {
-        y: 86px; width: 100%; height: root.group.episodes.length * (InterfaceStyle.tv ? 106px : root.width < 480px ? 118px : 82px); spacing: 0px;
+    if !root.group.collapsed: episodes_body := VerticalLayout {
+        y: 86px; width: 100%; height: self.preferred-height; spacing: 0px;
         for episode[index] in root.group.episodes: DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
     }
 }
@@ -262,7 +270,7 @@ export component DownloadsPage inherits Rectangle {
                 let d = e.text == Key.RightArrow ? 1 : -1;
                 if root.tv-zone < 0 { if d > 0 { root.tv-zone = 0; } }
                 else if root.tv-zone == 1 { root.tv-filter = Math.max(0, Math.min(3, root.tv-filter + d)); }
-                else if root.tv-zone >= 3 && root.tv-episode >= 0 { root.tv-action = Math.max(0, Math.min(1, root.tv-action + d)); }
+                else if root.tv-zone >= 3 && root.tv-episode >= 0 { root.tv-action = Math.max(0, Math.min(((root.tv-zone == 4 && root.transfers[root.tv-episode].action_kind == 3) || (root.tv-zone == 3 && root.groups[root.tv-group].episodes[root.tv-episode].action_kind == 3)) ? 2 : 1, root.tv-action + d)); }
                 else if d < 0 { root.tv-zone = -1; }
                 accept
             } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {

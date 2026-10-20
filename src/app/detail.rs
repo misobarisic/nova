@@ -71,6 +71,7 @@ impl Bridge {
         discover_index: Option<usize>,
         watch_now: bool,
     ) {
+        self.cancel_season_download();
         let _ = (generation, searching);
         let app = match self.app() {
             Some(a) => a,
@@ -346,7 +347,11 @@ impl Bridge {
         // carries its addon label so results can be grouped into pills.
         let stream_urls = {
             let state = self.shared.lock().unwrap();
-            stream_search_urls_for(&state, &request_id)
+            let mut urls = stream_search_urls_for(&state, &request_id);
+            if state.season_download.is_some() {
+                urls.truncate(16);
+            }
+            urls
         };
 
         let mut seen_labels = HashSet::new();
@@ -409,7 +414,12 @@ impl Bridge {
         // moment it arrives, so results appear addon-by-addon instead of
         // after the slowest one. An addon that fails or returns nothing is
         // reported with an empty row list so its pill is removed.
-        for (addon, url, owner_url, owner_generation) in stream_urls {
+        let limit = if self.shared.lock().unwrap().season_download.is_some() {
+            16
+        } else {
+            usize::MAX
+        };
+        for (addon, url, owner_url, owner_generation) in stream_urls.into_iter().take(limit) {
             let context = StreamResponseContext {
                 request_id: request_id.clone(),
                 media_type: modal_type.clone(),
@@ -1744,6 +1754,7 @@ impl Bridge {
 
     /// Main thread: switch the episode list to another season.
     pub(super) fn season_picked(&self, index: usize) {
+        self.cancel_season_download();
         self.cancel_watch_now();
         self.reset_episode_page();
         let idx = {
@@ -1993,6 +2004,7 @@ impl Bridge {
     /// Main thread: an episode was picked — show its streams. `index` is
     /// into the currently displayed (filter-narrowed) episode rows.
     pub(super) fn episode_picked(&self, index: usize) {
+        self.cancel_season_download();
         self.cancel_watch_now();
         let (series_id, request_id, video) = {
             let state = self.shared.lock().unwrap();
@@ -2175,6 +2187,7 @@ impl Bridge {
 
     /// Main thread: go back from an episode's streams to the episode list.
     pub(super) fn episodes_back(&self) {
+        self.cancel_season_download();
         self.cancel_watch_now();
         let is_episodic = {
             let state = self.shared.lock().unwrap();
@@ -2267,6 +2280,7 @@ impl Bridge {
     /// Detail tab bar: 0 = Overview, 3 = Episodes (1/2 are addon-less stubs).
     /// The episode list remains on this tab underneath its stream selector.
     pub(super) fn detail_tab_picked(&self, tab: i32) {
+        self.cancel_season_download();
         self.cancel_watch_now();
         let Some(app) = self.app() else {
             return;
@@ -2356,6 +2370,14 @@ impl Bridge {
     /// Back preserves the origin of selection: manual episodes return to
     /// their list, movies to Overview, and Home shortcuts to the root page.
     pub(super) fn stream_selector_back(&self) {
+        if self.season_download_is_replacement() {
+            self.cancel_season_download();
+            if let Some(app) = self.app() {
+                app.set_modal_visible(false);
+            }
+            self.modal_closed();
+            return;
+        }
         self.remote_disconnect();
         self.cancel_pending_for_navigation();
         let Some(app) = self.app() else {
@@ -2538,6 +2560,9 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_streams_searching(searching);
         }
+        if !searching {
+            self.season_download_list_ready();
+        }
     }
 
     /// Build the displayed stream list from `stream_all`, narrowed by the
@@ -2672,6 +2697,11 @@ impl Bridge {
             })
             .collect();
         displayed.extend(filtered);
+        if self.shared.lock().unwrap().season_download.is_some() {
+            // Planning offers downloadable files only. Browser handoffs and
+            // existing jobs must never look like selectable episode sources.
+            displayed.retain(season_downloads::downloadable);
+        }
         let last_used = self.last_stream.identity(nova_config::now_secs());
         let has_exact = last_used.as_deref().is_some_and(|id| {
             displayed.iter().any(|row| {
@@ -2700,19 +2730,22 @@ impl Bridge {
                 .or(recommended_id.as_deref()),
         );
         let last_used_index = last_used.as_deref().and_then(|id| {
-            displayed
-                .iter()
-                .position(|row| row.choice_id.as_deref() == Some(id))
+            displayed.iter().position(|row| {
+                stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id)
+            })
         });
         let stream_rows: Vec<StreamRow> = displayed
             .iter()
             .enumerate()
             .map(|(index, row)| {
-                let details = row
-                    .download
-                    .as_ref()
-                    .map(DownloadCoordinator::status_text)
-                    .unwrap_or_default();
+                let details = if matches!(row.source, StreamSource::ExternalUrl(_)) {
+                    text::tr("Open in browser").to_string()
+                } else {
+                    row.download
+                        .as_ref()
+                        .map(DownloadCoordinator::status_text)
+                        .unwrap_or_default()
+                };
                 let lines = Self::estimate_stream_lines(&row.display)
                     + if details.is_empty() { 0 } else { 1 };
                 StreamRow {
@@ -2726,6 +2759,7 @@ impl Bridge {
                     details: SharedString::from(details),
                     lines,
                     is_download: row.download.is_some(),
+                    external_link: matches!(row.source, StreamSource::ExternalUrl(_)),
                     last_used: last_used_index == Some(index),
                     recommended: recommended_id
                         .as_deref()
@@ -2930,6 +2964,25 @@ impl Bridge {
     }
 
     pub(super) fn stream_picked(&self, index: usize) {
+        if self.season_download_pick(index) {
+            return;
+        }
+        let browser_url = {
+            let state = self.shared.lock().unwrap();
+            state.streams.get(index).and_then(|row| match &row.source {
+                StreamSource::ExternalUrl(url) => Some(url.clone()),
+                _ => None,
+            })
+        };
+        if let Some(url) = browser_url {
+            if detail_extras::web_url(&url).is_none() || crate::player::open_browser(&url).is_err()
+            {
+                self.set_stream_hint(Some(StreamHint::Fixed(
+                    "Could not open this link in your browser.",
+                )));
+            }
+            return;
+        }
         if self.remote_stream_selected(index) {
             return;
         }
@@ -2958,7 +3011,7 @@ impl Bridge {
         // the user can use. Save the original resolver identity before it is
         // exchanged for a temporary playback URL.
         let usable = match &stream.source {
-            StreamSource::Unsupported => false,
+            StreamSource::Unsupported | StreamSource::ExternalUrl(_) => false,
             StreamSource::Downloaded { job_id, path } => {
                 path.is_file()
                     && self
@@ -3043,6 +3096,7 @@ impl Bridge {
                     addon_generation,
                 );
             }
+            StreamSource::ExternalUrl(_) => {} // Handled before any playback effects above.
             StreamSource::Unsupported => {
                 self.set_stream_hint(Some(StreamHint::Fixed(
                     "This stream cannot be played here.",

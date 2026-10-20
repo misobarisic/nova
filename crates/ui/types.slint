@@ -67,6 +67,8 @@ export struct StreamRow {
     /// each row an explicit height so long text is never clipped.
     lines: int,
     is_download: bool,
+    /// Browser destination: no file size, transfer status or download actions.
+    external_link: bool,
     /// The device's most recently chosen source for this movie/episode.
     last_used: bool,
     recommended: bool,
@@ -344,7 +346,7 @@ export struct DownloadEpisode {
 
 export struct DownloadGroup {
     id: string, title: string, subtitle: string, artwork: image, artwork_identity: string,
-    episodes: [DownloadEpisode], collapsed: bool,
+    episodes: [DownloadEpisode], collapsed: bool, failed_count: int,
 }
 
 export struct SettingsDestination { id: int, stable-id: string, group: int, title: string, description: string, terms: string, aliases: string, parent: int }

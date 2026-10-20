@@ -154,6 +154,7 @@ impl Bridge {
         };
         match action {
             1 => self.remove_download(id),
+            2 if job.phase == DownloadPhase::Failed => self.reselect_failed_download(job.clone()),
             0 => match job.phase {
                 DownloadPhase::Completed => self.play_download(id),
                 DownloadPhase::Paused | DownloadPhase::Failed => self.downloads.resume(id),
@@ -420,6 +421,10 @@ impl Bridge {
                     artwork,
                     artwork_identity,
                     collapsed: collapsed.contains(&id),
+                    failed_count: episodes
+                        .iter()
+                        .filter(|episode| episode.action_kind == 3)
+                        .count() as i32,
                     episodes: Rc::new(VecModel::from(episodes)).into(),
                 }
             })

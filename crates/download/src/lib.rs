@@ -8,6 +8,8 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
+mod capacity;
+pub use capacity::available_bytes;
 mod hls;
 mod http;
 
