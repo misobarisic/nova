@@ -182,6 +182,27 @@ fn fixture(app: &nova::AppWindow) {
     app.set_settings_selected_id(5);
     app.set_settings_detail_open(true);
     let filters = app.global::<nova::StreamFiltersBridge>();
+    filters.set_resolution_options(
+        Rc::new(VecModel::from(vec![
+            240, 360, 480, 576, 720, 1080, 1440, 2160, 4320, 8640,
+        ]))
+        .into(),
+    );
+    filters.set_resolution_option_names(
+        Rc::new(VecModel::from(vec![
+            "240p".into(),
+            "360p".into(),
+            "480p".into(),
+            "576p".into(),
+            "720p".into(),
+            "1080p".into(),
+            "1440p".into(),
+            "2160p".into(),
+            "4320p".into(),
+            "8640p".into(),
+        ]))
+        .into(),
+    );
     filters.set_max_resolution_index(3);
     filters.set_max_size_index(4);
     filters.set_audio_languages("ja, en".into());
@@ -267,6 +288,38 @@ fn wire_edits(app: &nova::AppWindow) -> Rc<RefCell<Vec<(i32, String)>>> {
                 }
                 17 => f.set_use_preferred_audio_languages(value == "true"),
                 18 => f.set_require_preferred_codec(value == "true"),
+                19 | 20 => {
+                    let (action, height) = value.split_once(':').unwrap();
+                    let height = height.parse::<i32>().unwrap();
+                    let mut order = if field == 19 {
+                        f.get_excluded_resolutions()
+                    } else {
+                        f.get_resolution_priority_order()
+                    }
+                    .iter()
+                    .collect::<Vec<_>>();
+                    match action {
+                        "add" if !order.contains(&height) => order.push(height),
+                        "remove" => order.retain(|item| *item != height),
+                        "up" | "down" => {
+                            if let Some(index) = order.iter().position(|item| *item == height) {
+                                let target = if action == "up" {
+                                    index.saturating_sub(1)
+                                } else {
+                                    (index + 1).min(order.len() - 1)
+                                };
+                                order.swap(index, target);
+                            }
+                        }
+                        _ => {}
+                    }
+                    if field == 19 {
+                        f.set_excluded_resolutions(Rc::new(VecModel::from(order)).into());
+                    } else {
+                        f.set_resolution_priority_order(Rc::new(VecModel::from(order)).into());
+                    }
+                }
+                21 => f.set_require_preferred_resolution(value == "true"),
                 _ => panic!("unexpected stream filter field"),
             }
         });
@@ -375,6 +428,9 @@ fn universal_filters_fit_320_and_390_phones_and_desktop_with_keyboard_and_touch(
             "Use stream rules",
             "Maximum resolution",
             "Maximum size",
+            "Exclude resolution",
+            "Add resolution preference",
+            "Only preferred resolutions",
             "H.264 / AVC",
             "H.265 / HEVC",
             "AV1",
@@ -416,11 +472,55 @@ fn universal_filters_fit_320_and_390_phones_and_desktop_with_keyboard_and_touch(
         assert_eq!(edits.borrow().last().unwrap(), &(1, "2".into()));
         app.global::<nova::StreamFiltersBridge>()
             .set_max_resolution_index(3);
+        let content = (*app).global::<nova_ui_shared::SettingsContent>();
+        select_filter_row(
+            &app,
+            content.invoke_kb_stream_filter_resolution_exclude_picker(),
+        );
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(edits.borrow().last().unwrap(), &(19, "add:240".into()));
+        click(&app, "Remove excluded resolution: 240p");
+        assert_eq!(edits.borrow().last().unwrap(), &(19, "remove:240".into()));
+        content.set_stream_filter_resolution_choice(5);
+        select_filter_row(&app, content.invoke_kb_stream_filter_resolution_picker());
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::Return);
+        click(&app, "Move up: 2160p");
+        assert_eq!(edits.borrow().last().unwrap(), &(20, "up:2160".into()));
+        assert_eq!(
+            app.global::<nova::StreamFiltersBridge>()
+                .get_resolution_priority_order()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![2160, 1080]
+        );
+        select_filter_row(&app, content.invoke_kb_stream_filter_require_resolution());
+        key(&app, slint::platform::Key::Return);
+        assert!(
+            app.global::<nova::StreamFiltersBridge>()
+                .get_require_preferred_resolution()
+        );
+        click(&app, "Remove: 2160p");
+        click(&app, "Remove: 1080p");
+        app.global::<nova::StreamFiltersBridge>()
+            .set_require_preferred_resolution(false);
         click(&app, "Exclude AV1");
         assert_eq!(edits.borrow().last().unwrap().0, 13);
-        select_filter_row(&app, 13);
+        select_filter_row(
+            &app,
+            (*app)
+                .global::<nova_ui_shared::SettingsContent>()
+                .invoke_kb_stream_filter_codec_picker(),
+        );
         key(&app, slint::platform::Key::Return);
-        select_filter_row(&app, 13);
+        select_filter_row(
+            &app,
+            (*app)
+                .global::<nova_ui_shared::SettingsContent>()
+                .invoke_kb_stream_filter_codec_picker(),
+        );
         key(&app, slint::platform::Key::RightArrow);
         key(&app, slint::platform::Key::Return);
         click(&app, "Move up: H.265 / HEVC");
@@ -570,6 +670,9 @@ fn filter_scope_uses_standard_settings_comparison_and_device_override() {
         "stream_filters_enabled",
         "stream_filters_resolution",
         "stream_filters_size",
+        "stream_filters_excluded_resolutions",
+        "stream_filters_resolution_priority",
+        "stream_filters_require_resolution",
         "stream_filters_allowed_codecs",
         "stream_filters_excluded_codecs",
         "stream_filters_codec_priority",
@@ -805,6 +908,27 @@ fn selector_fixture(app: &nova::AppWindow) {
     );
     sync.on_lookup(|_| 0);
     let filters = app.global::<nova::StreamFiltersBridge>();
+    filters.set_resolution_options(
+        Rc::new(VecModel::from(vec![
+            240, 360, 480, 576, 720, 1080, 1440, 2160, 4320, 8640,
+        ]))
+        .into(),
+    );
+    filters.set_resolution_option_names(
+        Rc::new(VecModel::from(vec![
+            "240p".into(),
+            "360p".into(),
+            "480p".into(),
+            "576p".into(),
+            "720p".into(),
+            "1080p".into(),
+            "1440p".into(),
+            "2160p".into(),
+            "4320p".into(),
+            "8640p".into(),
+        ]))
+        .into(),
+    );
     filters.set_max_resolution_index(3);
     filters.set_max_resolution_label("1080p".into());
     filters.set_max_size_index(4);

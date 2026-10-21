@@ -5,6 +5,11 @@ export global StreamFiltersBridge {
     in-out property <int> max_size_index;
     in-out property <string> max_resolution_label;
     in-out property <string> max_size_label;
+    in-out property <[int]> resolution_options;
+    in-out property <[string]> resolution_option_names;
+    in-out property <[int]> excluded_resolutions;
+    in-out property <[int]> resolution_priority_order;
+    in-out property <bool> require_preferred_resolution;
     in-out property <bool> allow_avc;
     in-out property <bool> allow_hevc;
     in-out property <bool> allow_av1;

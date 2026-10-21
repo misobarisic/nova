@@ -99,6 +99,29 @@ fn stremthru_media_attributes_preserve_track_roles_and_description() {
 }
 
 #[test]
+fn stremthru_resolution_attributes_keep_exact_heights_and_reject_malformed_numbers() {
+    let result = evaluate(
+        r#"
+        const parse=height=>{
+          const feed='<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel><item><title>Example</title>'+
+            '<torznab:attr name="infohash" value="0123456789012345678901234567890123456789"/>'+
+            '<torznab:attr name="resolution" value="'+height+'"/></item></channel></rss>';
+          return S.sources.stremthru.parse(feed)[0].sourceMetadata?.resolution ?? null;
+        };
+        return {valid:['144','240','800','8640'].map(parse),invalid:['143','8641','0800','800.5','8e2','height800p','800p50'].map(parse)};
+        "#,
+    );
+    assert_eq!(result["valid"], json!([144, 240, 800, 8640]));
+    assert!(
+        result["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(Value::is_null)
+    );
+}
+
+#[test]
 fn conflicting_optional_attributes_do_not_discard_playable_source_rows() {
     let result = evaluate(
         r#"

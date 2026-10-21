@@ -134,6 +134,7 @@ export component AppWindow inherits Window {
     callback discover_continue_pagination();
     public function discover_bridge_continue_pagination() { root.discover_continue_pagination(); }
     in-out property <int> catalog_grouping_default_index <=> CatalogGroupingBridge.default_index;
+    in-out property <bool> catalog_grouping_infer_series <=> CatalogGroupingBridge.infer_series;
     in-out property <[CatalogGroupingRow]> catalog_grouping_rows <=> CatalogGroupingBridge.rows;
     in-out property <string> catalog_grouping_search <=> CatalogGroupingBridge.search;
     in-out property <bool> catalog_grouping_chooser_open <=> CatalogGroupingBridge.chooser_open;
@@ -143,6 +144,7 @@ export component AppWindow inherits Window {
     in-out property <string> catalog_grouping_detail_season_label <=> CatalogGroupingBridge.detail_season_label;
     in-out property <string> catalog_grouping_detail_scope_notice <=> CatalogGroupingBridge.detail_scope_notice;
     callback catalog_grouping_default_changed(int);
+    callback catalog_grouping_infer_series_changed(bool);
     callback catalog_grouping_override_changed(string,int,int);
     callback catalog_grouping_override_removed(string);
     callback catalog_grouping_search_changed(string);
@@ -150,6 +152,7 @@ export component AppWindow inherits Window {
     callback catalog_grouping_chooser_closed();
     callback catalog_grouping_detail_all_seasons();
     public function catalog_grouping_bridge_default_changed(value:int) { root.catalog_grouping_default_changed(value); }
+    public function catalog_grouping_bridge_infer_series_changed(value:bool) { root.catalog_grouping_infer_series_changed(value); }
     public function catalog_grouping_bridge_override_changed(key:string,surface:int,mode:int) { root.catalog_grouping_override_changed(key,surface,mode); }
     public function catalog_grouping_bridge_override_removed(key:string) { root.catalog_grouping_override_removed(key); }
     public function catalog_grouping_bridge_search_changed(query:string) { root.catalog_grouping_search_changed(query); }
@@ -1441,8 +1444,8 @@ export component AppWindow inherits Window {
     // title rate separately. Both sliders cover 0.5–2.0; ± steps by 0.05.
     in-out property <float> playback_speed: 1.0;
     in-out property <float> effective_playback_speed: 1.0;
-    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0];
-    in-out property <[float]> effective_subtitle_style: [0, 56, 19, 100, 3, 0, 0];
+    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0, 45];
+    in-out property <[float]> effective_subtitle_style: [0, 56, 19, 100, 3, 0, 0, 45];
     in property <bool> subtitle_style_preference_saved: false;
     callback default_subtitle_style_changed(int, float);
     callback subtitle_style_changed(int, float);

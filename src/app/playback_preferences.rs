@@ -204,7 +204,7 @@ impl Bridge {
     }
 
     pub(super) fn edit_subtitle_style(&self, index: i32, value: f32, global: bool) {
-        if !(0..7).contains(&index) {
+        if !(0..8).contains(&index) {
             return;
         }
         if global {

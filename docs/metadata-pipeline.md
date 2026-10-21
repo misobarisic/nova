@@ -42,16 +42,34 @@ and ordinary external-ID aliases alone do not establish these relationships.
 
 The source-shaped fixtures in `test-fixtures/catalog-grouping` document
 AIOMetadata's canonical IMDb episode IDs/triples. Native-only responses without
-parent evidence remain ungrouped. The optional `novaCatalogGrouping` extension
+parent evidence remain ungrouped under the default confirmed-only policy. The optional `novaCatalogGrouping` extension
 is distinguished from those existing addon fields. Conflicts, ambiguous
-episodes, specials and incomplete partitions do not produce guessed groups.
+episodes and incomplete partitions do not produce guessed season groups. Independently verified broker parent proof remains usable for Series grouping when the exact native inventory contains specials; the whole source remains reachable in Season mode.
 
-A separate local `catalog_grouping_evidence:v1` cache stores envelope version 3
+Settings → Display's **Infer series grouping** is an independent profile boolean
+(`catalog_grouping_infer_series`, false by default), synced with ordinary device
+overrides. It applies only when a catalog uses Series mode. The optional bounded
+route combines explicit source-owned prequel/season relationships, consecutive
+season labels and a matching title family with an independently confirmed
+canonical series anchor. Titles or relationship links alone remain insufficient;
+conflicts, branches, cycles and mismatched owners must reject the inference.
+`GroupingProof::InferredSeasonChain` records this weaker origin separately, and
+`GroupingEvidence::is_inferred()` identifies it for presentation and policy
+checks. The result provides only a display parent with unknown season and no
+partitions: it cannot mint episode aliases, renumber native episodes, change
+Library/progress identity, establish tracker coverage or create virtual seasons.
+Original and Season modes retain confirmed-only behavior; disabling inference
+removes its display memberships without changing the underlying native items.
+
+A separate local `catalog_grouping_evidence:v1` cache stores envelope version 5
 evidence, capped at 128 entries / 512 KiB, with seven-day positive and 30-second
-negative TTLs. Source ownership and metadata inventory revision participate in
-its keys. The exact-ID resolver permits two concurrent lookups, at most two
+negative TTLs. Source ownership, metadata inventory revision and the confirmed/inferred policy
+participate in its separate key namespaces. Confirmed proof takes precedence;
+a negative lookup while inference is disabled cannot suppress an enabled lookup.
+Inferred proof retains a minimal native parent preview and provenance for display,
+without duplicating its episode inventory or exporting episode aliases. The exact-ID resolver permits two concurrent lookups, at most two
 accepting endpoints per request, a two-second total timeout and 2 MiB body cap.
-Original mode does not initiate catalog-grouping network requests. Derived
+When the exact owner returns a matching globally identified native inventory, the resolver can reuse bounded current confirmed broker cache results to recover parent-only proof without running full enrichment. Legacy opaque identities are never transplanted between installations; changed inventories, revisions and conflicting parent claims reject recovery. Original mode does not initiate catalog-grouping network requests. Derived
 evidence is not synced; only the grouping preferences use settings sync. Immutable
 read snapshots remain available while background writers serialize and persist a
 replacement.

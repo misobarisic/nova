@@ -2,8 +2,8 @@
 use super::*;
 use crate::StreamFiltersBridge;
 use nova_config::stream_filters::{
-    StreamFacts, StreamFilterRules, VideoCodec, advertised, audio_language, resolution,
-    structured_video_codec,
+    RESOLUTION_CHOICES, StreamFacts, StreamFilterRules, VideoCodec, advertised, audio_language,
+    resolution, structured_video_codec,
 };
 
 pub(super) const RESOLUTIONS: [u16; 7] = [0, 480, 720, 1080, 1440, 2160, 4320];
@@ -14,6 +14,18 @@ const SIZES_GIB: [u64; 9] = [0, 1, 2, 4, 8, 16, 32, 64, 128];
 pub(super) const RULE_SCOPES: &[(&str, &[&str])] = &[
     ("stream_filters_enabled", &["enabled"]),
     ("stream_filters_resolution", &["max_height"]),
+    (
+        "stream_filters_excluded_resolutions",
+        &["excluded_resolutions"],
+    ),
+    (
+        "stream_filters_resolution_priority",
+        &["resolution_priority"],
+    ),
+    (
+        "stream_filters_require_resolution",
+        &["require_preferred_resolution"],
+    ),
     ("stream_filters_size", &["max_bytes"]),
     ("stream_filters_allowed_codecs", &["video_codecs"]),
     ("stream_filters_excluded_codecs", &["excluded_video_codecs"]),
@@ -474,6 +486,45 @@ impl Bridge {
                 .unwrap_or_default()
                 .into(),
         );
+        bridge.set_resolution_options(
+            Rc::new(VecModel::from(
+                RESOLUTION_CHOICES
+                    .iter()
+                    .map(|height| i32::from(*height))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        bridge.set_resolution_option_names(
+            Rc::new(VecModel::from(
+                RESOLUTION_CHOICES
+                    .iter()
+                    .map(|height| format!("{height}p").into())
+                    .collect::<Vec<SharedString>>(),
+            ))
+            .into(),
+        );
+        bridge.set_excluded_resolutions(
+            Rc::new(VecModel::from(
+                rules
+                    .excluded_resolutions
+                    .iter()
+                    .map(|height| i32::from(*height))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        bridge.set_resolution_priority_order(
+            Rc::new(VecModel::from(
+                rules
+                    .resolution_priority
+                    .iter()
+                    .map(|height| i32::from(*height))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        bridge.set_require_preferred_resolution(rules.require_preferred_resolution);
         bridge.set_allow_avc(rules.video_codecs.contains(&VideoCodec::Avc));
         bridge.set_allow_hevc(rules.video_codecs.contains(&VideoCodec::Hevc));
         bridge.set_allow_av1(rules.video_codecs.contains(&VideoCodec::Av1));
@@ -742,6 +793,32 @@ impl Bridge {
             }
             17 => rules.use_preferred_audio_languages = boolean,
             18 => rules.require_preferred_codec = boolean,
+            19 | 20 => {
+                let Some((action, height)) = value.split_once(':') else {
+                    return;
+                };
+                let Some(height) = resolution(height) else {
+                    return;
+                };
+                let list = if field == 19 {
+                    &mut rules.excluded_resolutions
+                } else {
+                    &mut rules.resolution_priority
+                };
+                let index = list.iter().position(|item| *item == height);
+                match (action, index) {
+                    ("add", None) => list.push(height),
+                    ("remove", Some(index)) => {
+                        list.remove(index);
+                    }
+                    ("up", Some(index)) if field == 20 && index > 0 => list.swap(index, index - 1),
+                    ("down", Some(index)) if field == 20 && index + 1 < list.len() => {
+                        list.swap(index, index + 1)
+                    }
+                    _ => return,
+                }
+            }
+            21 => rules.require_preferred_resolution = boolean,
             8 => rules.require_audio_language = boolean,
             9 => rules.retain_unknown = boolean,
             _ => return,

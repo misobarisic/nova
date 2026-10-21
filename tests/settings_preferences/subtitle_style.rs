@@ -58,7 +58,7 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
         let app = weak.upgrade().unwrap();
         let current = app.get_subtitle_style();
         let mut style = SubtitleStyle::default();
-        for index in 0..7 {
+        for index in 0..8 {
             style = style.with_value(index, current.row_data(index as usize).unwrap());
         }
         app.set_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
@@ -191,9 +191,40 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
                 );
             }
 
+            content.set_kb_pr(style_row + 7);
+            settle(&app);
+            key(&app, slint::platform::Key::RightArrow);
+            assert_eq!(global_edits.borrow().last().unwrap().0, 7);
+            let backdrop_target = format!(
+                "{increase} {}",
+                if language == "hr" {
+                    "Neprozirnost pozadine (%)"
+                } else {
+                    "Background opacity (%)"
+                }
+            );
+            let backdrop = button(&app, &backdrop_target)
+                .expect("background control revealed by keyboard focus");
+            let center = backdrop.absolute_position().y + backdrop.size().height / 2.0;
+            app.set_settings_scroll_y(
+                (app.get_settings_scroll_y() + height as f32 / 2.0 - center).min(0.0),
+            );
+            settle(&app);
+            let backdrop =
+                button(&app, &backdrop_target).expect("background control after centering");
+            let pos = backdrop.absolute_position();
+            let size = backdrop.size();
+            assert!(size.width >= 44.0 && size.height >= 44.0);
+            assert!(pos.x >= 0.0 && pos.x + size.width <= width as f32 + 0.5);
+            assert!(pos.y >= 80.0 && pos.y + size.height <= height as f32 - 20.0);
+            let before_backdrop = global_edits.borrow().len();
+            click(&app, &backdrop_target);
+            assert_eq!(global_edits.borrow().len(), before_backdrop + 1);
+            assert_eq!(global_edits.borrow().last().unwrap().0, 7);
+
             app.set_show_settings(false);
             app.set_effective_subtitle_style(slint::ModelRc::new(slint::VecModel::from(vec![
-                0.0, 38.0, 19.0, 100.0, 1.65, 0.0, 0.0,
+                0.0, 38.0, 19.0, 100.0, 1.65, 0.0, 0.0, 45.0,
             ])));
             app.set_player_open(true);
             app.set_is_paused(true);
@@ -255,7 +286,10 @@ fn subtitle_defaults_and_title_controls_fit_and_route_independently() {
             key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::Return);
             assert_eq!(title_edits.borrow().last(), Some(&(6, 1.0)));
-            for _ in 0..7 {
+            key(&app, slint::platform::Key::DownArrow);
+            key(&app, slint::platform::Key::RightArrow);
+            assert_eq!(title_edits.borrow().last(), Some(&(7, 46.0)));
+            for _ in 0..8 {
                 key(&app, slint::platform::Key::UpArrow);
             }
             key(&app, slint::platform::Key::Return);

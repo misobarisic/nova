@@ -373,7 +373,7 @@ component SettingsMenu inherits Rectangle {
     in property <bool> subtitle_preference_saved: false;
     in property <bool> speed_preference_saved: false;
     in property <bool> subtitle_style_preference_saved: false;
-    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0];
+    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0, 45];
     callback subtitle_style_changed(int, float);
     // Effective base rate: title override or the global default.
     in-out property <float> playback_speed: 1.0;
@@ -1127,7 +1127,7 @@ export component PlayerOverlay {
     in property <bool> subtitle_preference_saved: false;
     in property <bool> speed_preference_saved: false;
     in property <bool> subtitle_style_preference_saved: false;
-    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0];
+    in-out property <[float]> subtitle_style: [0, 56, 19, 100, 3, 0, 0, 45];
     callback subtitle_style_changed(int, float);
     in-out property <float> volume: 100.0;
     in-out property <bool> muted: false;
@@ -1393,7 +1393,7 @@ export component PlayerOverlay {
             if (root.settings_page == 3) {
                 return root.audio_tracks.length + 1;
             }
-            if root.settings_page == 5 { return 8; }
+            if root.settings_page == 5 { return 9; }
             if root.settings_page == 6 { return 4; }
             if root.settings_page == 7 { return root.player_chapters.length; }
             if root.settings_page == 8 { return root.secondary_sub_tracks.length + 4; }

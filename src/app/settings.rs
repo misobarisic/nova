@@ -516,6 +516,7 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             CacheSettings {
                 catalog_grouping_default: state.cache_settings.catalog_grouping_default,
+                catalog_grouping_infer_series: state.cache_settings.catalog_grouping_infer_series,
                 catalog_grouping_overrides: state.cache_settings.catalog_grouping_overrides.clone(),
                 stream_filters: state.cache_settings.stream_filters.clone(),
                 smart_collections: state.cache_settings.smart_collections.clone(),

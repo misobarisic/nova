@@ -83,13 +83,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        super::super::apply_preference_options(&mpv, &prefs, native);
+        super::super::apply_preference_options(&mpv, &prefs, &native);
         assert_eq!(mpv.get_property::<String>("alang").unwrap(), "ja,en");
         assert_eq!(mpv.get_property::<String>("slang").unwrap(), "hr,en");
         assert_eq!(mpv.get_property::<String>("sid").unwrap(), "no");
         assert_eq!(mpv.get_property::<f64>("speed").unwrap(), 1.6_f32 as f64);
         let prefs = SessionPreferences::from_settings(&settings, TitlePreferences::default());
-        super::super::apply_preference_options(&mpv, &prefs, native);
+        super::super::apply_preference_options(&mpv, &prefs, &native);
         assert_eq!(mpv.get_property::<String>("sid").unwrap(), "auto");
         assert_eq!(mpv.get_property::<f64>("speed").unwrap(), 1.15_f32 as f64);
     }
@@ -114,7 +114,7 @@ mod tests {
         let mut before = properties.map(|key| mpv.get_property::<f64>(key).unwrap());
         before[1] = SubtitleStyle::DEFAULT_FONT_SIZE as f64;
         let native = super::super::native_subtitle_defaults(&mpv);
-        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), native);
+        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), &native);
         assert_eq!(
             properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
             before
@@ -144,7 +144,7 @@ mod tests {
         );
         // This same helper runs for fresh loads and Android renderer reloads.
         for _ in 0..2 {
-            super::super::apply_preference_options(&mpv, &prefs, native);
+            super::super::apply_preference_options(&mpv, &prefs, &native);
             assert_eq!(
                 properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
                 [-0.5, 70.0, 80.0, 85.0, 5.0]
@@ -154,7 +154,7 @@ mod tests {
                 "force"
             );
         }
-        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), native);
+        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), &native);
         assert_eq!(
             properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
             before,
@@ -163,6 +163,93 @@ mod tests {
         assert_eq!(
             mpv.get_property::<String>("sub-ass-override").unwrap(),
             "yes"
+        );
+    }
+
+    #[test]
+    fn native_backdrop_applies_on_reload_and_off_restores_shadow_without_touching_secondary_policy()
+    {
+        use nova_config::playback_preferences::{
+            SessionPreferences, SubtitleStyle, SubtitleStylePatch, TitlePreferences,
+        };
+        let mpv = libmpv2::Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        let native = super::super::native_subtitle_defaults(&mpv);
+        let original_box = mpv.get_property::<String>("sub-border-style").unwrap();
+        let original_color = mpv.get_property::<String>("sub-back-color").unwrap();
+        let original_shadow = mpv.get_property::<f64>("sub-shadow-offset").unwrap();
+        mpv.set_property("secondary-sub-ass-override", "no")
+            .unwrap();
+        mpv.set_property("secondary-sub-delay", 1.75_f64).unwrap();
+        let settings = nova_config::CacheSettings::default();
+        let prefs = SessionPreferences::from_settings(&settings, TitlePreferences::default());
+        // This shared application path serves both native subtitle slots and
+        // is reused when Android recreates its renderer/source session.
+        for _ in 0..2 {
+            super::super::apply_preference_options(&mpv, &prefs, &native);
+            assert_eq!(
+                mpv.get_property::<String>("sub-border-style").unwrap(),
+                "background-box"
+            );
+            assert_eq!(
+                mpv.get_property::<String>("sub-back-color")
+                    .unwrap()
+                    .to_uppercase(),
+                "#73000000"
+            );
+            assert_eq!(mpv.get_property::<f64>("sub-shadow-offset").unwrap(), 6.0);
+            assert_eq!(
+                mpv.get_property::<f64>("secondary-sub-delay").unwrap(),
+                1.75
+            );
+            assert_eq!(
+                mpv.get_property::<String>("secondary-sub-ass-override")
+                    .unwrap(),
+                "no"
+            );
+            assert_eq!(
+                mpv.get_property::<String>("sub-ass-override").unwrap(),
+                "yes"
+            );
+        }
+        let prefs = SessionPreferences::from_settings(
+            &settings,
+            TitlePreferences {
+                subtitle_style: Some(SubtitleStylePatch::default().with_value(7, 0.0)),
+                ..Default::default()
+            },
+        );
+        super::super::apply_preference_options(&mpv, &prefs, &native);
+        assert_eq!(
+            mpv.get_property::<String>("sub-border-style").unwrap(),
+            original_box
+        );
+        assert_eq!(
+            mpv.get_property::<String>("sub-back-color").unwrap(),
+            original_color
+        );
+        assert_eq!(
+            mpv.get_property::<f64>("sub-shadow-offset").unwrap(),
+            original_shadow
+        );
+        let style = SubtitleStyle::default()
+            .with_value(7, 100.0)
+            .with_value(4, 2.75);
+        super::super::apply_subtitle_style(&mpv, style, &native);
+        assert_eq!(
+            mpv.get_property::<String>("sub-back-color")
+                .unwrap()
+                .to_uppercase(),
+            "#FF000000"
+        );
+        assert_eq!(mpv.get_property::<f64>("sub-border-size").unwrap(), 2.75);
+        assert_eq!(
+            mpv.get_property::<f64>("secondary-sub-delay").unwrap(),
+            1.75
         );
     }
 

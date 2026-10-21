@@ -21,7 +21,6 @@
     ["TrueHD",/\btrue[ .-]?hd\b/gi],["DTS",/\bdts(?:[ .-]?hd(?:[ .-]?ma)?)?\b/gi],
     ["AAC",/\baac(?:[ .-]?lc)?\b/gi],["FLAC",/\bflac\b/gi],["MP3",/\bmp3\b/gi],
     ["Opus",/\bopus\b/gi],["Vorbis",/\bvorbis\b/gi],["PCM",/\b(?:l?pcm|pcm_s(?:16|24)le)\b/gi]];
-  const resolutions = new Set([360,480,576,720,1080,1440,2160,4320]);
   const sources = new Set(["WEB-DL","WEBRip","Blu-ray","Blu-ray REMUX","BDRip","BRRip","DVD","DVDRip","HDTV","TVRip","Remux"]);
   const sourcePatterns = [["WEB-DL",/\bweb[ .-]?dl\b/gi],["WEBRip",/\bweb[ .-]?rip\b/gi],
     ["Blu-ray",/\bblu[ .-]?ray\b/gi],["BDRip",/\bbd[ .-]?rip\b/gi],["BRRip",/\bbr[ .-]?rip\b/gi],
@@ -37,7 +36,7 @@
       list("subtitleLanguages",item=>languageMap.has(item) && languageMap.get(item)===item) &&
       list("audioCodecs",item=>audioPatterns.some(([codec])=>codec===item)) && list("audioChannels",channelValid) &&
       (!own(value,"videoCodec") || [null,"avc","hevc","av1","vp9","other"].includes(value.videoCodec)) &&
-      (!own(value,"resolution") || value.resolution===null || resolutions.has(value.resolution)) &&
+      (!own(value,"resolution") || value.resolution===null || S.validResolutionHeight(value.resolution)) &&
       (!own(value,"releaseSource") || value.releaseSource===null || sources.has(value.releaseSource));
   };
   S.mergeReleaseEvidence = (left,right) => {
@@ -109,11 +108,11 @@
     if (kind==="video" || kind==="spec") {
       const codecs=matches(text,videoPatterns);
       if (codecs.length) evidence.videoCodec=codecs.length===1 ? codecs[0] : null;
-      const heights=[...text.matchAll(/\b(360|480|576|720|1080|1440|2160|4320)[pi]\b/gi)].map(match=>Number(match[1]));
-      for (const match of text.matchAll(/\b\d{3,5}\s*[x×]\s*(360|480|576|720|1080|1440|2160|4320)\b/gi)) heights.push(Number(match[1]));
+      const heights=[...text.matchAll(/(?<![a-z\d])(?<!\b\d{1,3}[.,])([1-9]\d{2,3})[pi](?![a-z\d])/gi)].map(match=>Number(match[1]));
+      for (const match of text.matchAll(/\b([1-9]\d{2,4})\s*[x×]\s*([1-9]\d{2,3})\b/gi)) { const width=Number(match[1]),height=Number(match[2]); if (width>=height && width<=16384) heights.push(height); }
       if (/\b(?:4k|uhd)\b/i.test(text)) heights.push(2160);
       if (/\b8k\b/i.test(text)) heights.push(4320);
-      if (heights.length) evidence.resolution=scalar([...new Set(heights)]);
+      if (heights.length) { const height=scalar([...new Set(heights)]); evidence.resolution=S.validResolutionHeight(height) ? height : null; }
     }
     if (kind==="audio" || kind==="spec") {
       const codecs=matches(text,audioPatterns),channels=channelValues(text);
@@ -162,8 +161,9 @@
           const found=languages(value);
           if (found.length) add({[section==="audio" ? "audioLanguages" : "subtitleLanguages"]:found});
         } else if (name==="height" && section==="video") {
-          const height=Number(value.replace(/[ ,]/g,"").match(/^\d+/)?.[0]);
-          if (resolutions.has(height)) add({resolution:height});
+          const explicit=value.trim().match(/^([1-9]\d{2,3}|[1-9][ ,]\d{3})\s*(?:pixels?)?$/i);
+          const height=explicit ? Number(explicit[1].replace(/[ ,]/g,"")) : null;
+          if (S.validResolutionHeight(height)) add({resolution:height});
         } else if (name==="source") add(technical(value,"source"));
         else if (name!=="width" && name!=="language") add(technical(value,section));
         continue;
@@ -185,7 +185,7 @@
         const facts=technical(line,"spec");
         let remainder=line;
         for (const [,pattern] of [...videoPatterns,...audioPatterns,...sourcePatterns]) remainder=remainder.replace(pattern," ");
-        remainder=remainder.replace(/\b\d{3,5}\s*[x×]\s*\d{3,5}\b|\b(?:360|480|576|720|1080|1440|2160|4320)[pi]\b|\b(?:4k|8k|uhd|hdr10\+?|hdr|sdr|dv|dolby vision|softsubbed|hardsubbed|\d+[ -]?bit|stereo|mono)\b/gi," ")
+        remainder=remainder.replace(/\b\d{3,5}\s*[x×]\s*\d{3,5}\b|(?<![a-z\d])(?<!\b\d{1,3}[.,])[1-9]\d{2,3}[pi](?![a-z\d])|\b(?:4k|8k|uhd|hdr10\+?|hdr|sdr|dv|dolby vision|softsubbed|hardsubbed|\d+[ -]?bit|stereo|mono)\b/gi," ")
           .replace(/\b\d+(?:\.\d+)?\s*(?:channels?|kbps|mbps|khz|hz)\b|\b[1-9]\.[01]\b/gi," ").replace(/[\s,;:/+&|().=-]+/g,"");
         if (!remainder && (own(facts,"videoCodec") || own(facts,"resolution"))) add(facts);
       }

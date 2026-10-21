@@ -1816,6 +1816,38 @@ pub(crate) fn exercise_stream_preference_cache_runtime() {
         invoke(Some(&reordered), None, false)["after"],
         json!(["reordered", "reordered"])
     );
+    let blocked = nova_config::StreamFilterRules {
+        excluded_resolutions: vec![720],
+        ..a.clone()
+    };
+    let preferred = nova_config::StreamFilterRules {
+        resolution_priority: vec![1080, 720],
+        ..a.clone()
+    };
+    let reverse_preferred = nova_config::StreamFilterRules {
+        resolution_priority: vec![720, 1080],
+        ..a.clone()
+    };
+    let strict_preferred = nova_config::StreamFilterRules {
+        require_preferred_resolution: true,
+        ..preferred.clone()
+    };
+    for (context, value) in [
+        (&blocked, "blocked"),
+        (&preferred, "preferred"),
+        (&reverse_preferred, "reverse-preferred"),
+        (&strict_preferred, "strict-preferred"),
+    ] {
+        assert_eq!(
+            invoke(Some(context), Some(value), false)["before"],
+            json!(["", ""]),
+            "resolution blocks, order and strictness isolate cached results"
+        );
+        assert_eq!(
+            invoke(Some(context), None, false)["after"],
+            json!([value, value])
+        );
+    }
     assert_eq!(invoke(Some(&b), None, true)["after"], json!(["", ""]));
     let ordinary = invoke(None, Some("ordinary"), false);
     assert_eq!(ordinary["before"], json!(["", ""]));

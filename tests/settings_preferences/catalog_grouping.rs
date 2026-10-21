@@ -116,32 +116,41 @@ fn grouping_controls_fit_translate_route_independent_modes_and_keep_unavailable_
     sync.set_enabled(true);
     sync.set_rows(
         Rc::new(VecModel::from(
-            ["catalog_grouping_default", "catalog_grouping_overrides"]
-                .into_iter()
-                .map(|key| nova::SettingSyncInfo {
-                    key: key.into(),
-                    status: 1,
-                    can_override: true,
-                    has_shared: true,
-                    shared_supported: true,
-                    local_value: "Original".into(),
-                    shared_value: "Original".into(),
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>(),
+            [
+                "catalog_grouping_default",
+                "catalog_grouping_overrides",
+                "catalog_grouping_infer_series",
+            ]
+            .into_iter()
+            .map(|key| nova::SettingSyncInfo {
+                key: key.into(),
+                status: 1,
+                can_override: true,
+                has_shared: true,
+                shared_supported: true,
+                local_value: "Original".into(),
+                shared_value: "Original".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
         ))
         .into(),
     );
     sync.on_lookup(|key| match key.as_str() {
         "catalog_grouping_default" => 0,
         "catalog_grouping_overrides" => 1,
+        "catalog_grouping_infer_series" => 2,
         _ => -1,
     });
 
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     app.show().unwrap();
     settle(&app);
-    for field in ["catalog_grouping_default", "catalog_grouping_overrides"] {
+    for field in [
+        "catalog_grouping_default",
+        "catalog_grouping_overrides",
+        "catalog_grouping_infer_series",
+    ] {
         tap(&app, &reveal(&app, &format!("setting-scope:{field}")));
         settle(&app);
         assert!(sync.get_open());
@@ -159,6 +168,7 @@ fn grouping_controls_fit_translate_route_independent_modes_and_keep_unavailable_
             settle(&app);
             for id in [
                 "catalog-grouping-default",
+                "catalog-grouping-infer-series",
                 "catalog-grouping-search",
                 "catalog-grouping-0:opaque-a",
                 "catalog-grouping-1:opaque-a",
@@ -204,13 +214,13 @@ fn grouping_controls_fit_translate_route_independent_modes_and_keep_unavailable_
     let content = (*app).global::<nova_ui_shared::SettingsContent>();
     settings.set_kb_active(true);
     settings.set_kb_zone(6);
-    content.set_kb_dr(10);
+    content.set_kb_dr(11);
     key(&app, slint::platform::Key::RightArrow);
     assert_eq!(calls.borrow().last(), Some(&("opaque-a".into(), 0, 1)));
-    content.set_kb_dr(11);
+    content.set_kb_dr(12);
     key(&app, slint::platform::Key::LeftArrow);
     assert_eq!(calls.borrow().last(), Some(&("opaque-a".into(), 1, 1)));
-    content.set_kb_dr(13);
+    content.set_kb_dr(14);
     key(&app, slint::platform::Key::RightArrow);
     assert_eq!(calls.borrow().last(), Some(&("opaque-old".into(), 0, 2)));
     let removed = Rc::new(RefCell::new(Vec::new()));
@@ -218,13 +228,77 @@ fn grouping_controls_fit_translate_route_independent_modes_and_keep_unavailable_
     app.on_catalog_grouping_override_removed(move |id| captured.borrow_mut().push(id.to_string()));
     tap(&app, &reveal(&app, "catalog-grouping-remove:opaque-old"));
     assert_eq!(&*removed.borrow(), &["opaque-old"]);
-    content.set_kb_dr(9);
+    content.set_kb_dr(10);
     key(&app, slint::platform::Key::Return);
     assert!(content.get_input_focused());
     key(&app, slint::platform::Key::Back);
     assert!(!content.get_input_focused());
     assert!(app.get_settings_detail_open(), "Back first blurs search");
 }
+#[test]
+fn inferred_series_toggle_routes_touch_keyboard_and_scope_at_phone_and_desktop_widths() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::inferred_series_toggle_routes_touch_keyboard_and_scope_at_phone_and_desktop_widths"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(3);
+    app.set_settings_detail_open(true);
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let recorded = changes.clone();
+    app.on_catalog_grouping_infer_series_changed(move |enabled| {
+        recorded.borrow_mut().push(enabled)
+    });
+    let bridge = app.global::<nova::SettingsBridge>();
+    let content = (*app).global::<nova_ui_shared::SettingsContent>();
+    app.show().unwrap();
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        app.window().dispatch_event(WindowEvent::Resized {
+            size: slint::LogicalSize::new(width as f32, 900.0),
+        });
+        settle(&app);
+        app.set_catalog_grouping_infer_series(false);
+        tap(&app, &reveal(&app, "catalog-grouping-infer-series"));
+        settle(&app);
+        assert!(app.get_catalog_grouping_infer_series());
+        assert_eq!(changes.borrow().last(), Some(&true));
+
+        bridge.set_kb_active(true);
+        bridge.set_kb_zone(6);
+        content.set_kb_dr(9);
+        key(&app, slint::platform::Key::Return);
+        assert!(!app.get_catalog_grouping_infer_series());
+        assert_eq!(changes.borrow().last(), Some(&false));
+        key(&app, slint::platform::Key::RightArrow);
+        assert!(app.get_catalog_grouping_infer_series());
+        key(&app, slint::platform::Key::LeftArrow);
+        assert!(!app.get_catalog_grouping_infer_series());
+
+        content.set_kb_dr(8);
+        key(&app, slint::platform::Key::DownArrow);
+        assert_eq!(
+            content.get_kb_dr(),
+            9,
+            "default grouping leads to inference"
+        );
+        key(&app, slint::platform::Key::DownArrow);
+        assert_eq!(content.get_kb_dr(), 10, "inference leads to search");
+        key(&app, slint::platform::Key::UpArrow);
+        assert_eq!(content.get_kb_dr(), 9);
+    }
+    assert_eq!(
+        &*changes.borrow(),
+        &[true, false, true, false, true, false, true, false]
+    );
+}
+
 #[test]
 fn source_chooser_keeps_exit_image_inactive_cancels_reopen_and_uses_native_keys() {
     if !crate::isolation::run(concat!(

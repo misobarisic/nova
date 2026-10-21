@@ -3854,6 +3854,82 @@ mod tests {
     }
 
     #[test]
+    fn inferred_catalog_grouping_syncs_with_an_independent_device_override() {
+        let mut local = CacheSettings::default();
+        assert!(!local.catalog_grouping_infer_series);
+        assert!(setting_can_override("catalog_grouping_infer_series"));
+        local.sync_overrides.insert(
+            "catalog_grouping_infer_series".into(),
+            serde_json::json!(false),
+        );
+        let incoming = vec![("catalog_grouping_infer_series".into(), "true".into())];
+        let merged = merge_settings_fields(&local, &incoming);
+        assert!(!merged.catalog_grouping_infer_series);
+        assert_eq!(
+            merged.sync_overrides["catalog_grouping_infer_series"],
+            serde_json::json!(true)
+        );
+        let fields: HashMap<_, _> = settings_fields_for_records(&merged, &incoming)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(fields["catalog_grouping_infer_series"], "true");
+        let mut shared = merged;
+        shared
+            .sync_overrides
+            .remove("catalog_grouping_infer_series");
+        assert!(merge_settings_fields(&shared, &incoming).catalog_grouping_infer_series);
+        assert_eq!(
+            shared.catalog_grouping_default,
+            nova_config::CatalogGroupingMode::Original
+        );
+    }
+
+    #[test]
+    fn resolution_lists_sync_independently_with_device_overrides() {
+        let mut local = CacheSettings::default();
+        local.stream_filters.resolution_priority = vec![1080, 2160];
+        local.sync_overrides.insert(
+            "stream_filters_resolution_priority".into(),
+            serde_json::json!([720]),
+        );
+        let incoming = vec![
+            (
+                "stream_filters_excluded_resolutions".into(),
+                "[480,720]".into(),
+            ),
+            (
+                "stream_filters_resolution_priority".into(),
+                "[2160,1080]".into(),
+            ),
+            ("stream_filters_require_resolution".into(), "true".into()),
+        ];
+        let merged = merge_settings_fields(&local, &incoming);
+        assert_eq!(merged.stream_filters.excluded_resolutions, [480, 720]);
+        assert_eq!(merged.stream_filters.resolution_priority, [1080, 2160]);
+        assert!(merged.stream_filters.require_preferred_resolution);
+        assert_eq!(
+            merged.sync_overrides["stream_filters_resolution_priority"],
+            serde_json::json!([2160, 1080])
+        );
+        assert_eq!(merged.sync_overrides.len(), 1);
+        let fields: HashMap<_, _> = settings_fields_for_records(&merged, &incoming)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(fields["stream_filters_resolution_priority"], "[2160,1080]");
+        assert_eq!(fields["stream_filters_excluded_resolutions"], "[480,720]");
+        assert_eq!(fields["stream_filters_require_resolution"], "true");
+        for key in [
+            "stream_filters_excluded_resolutions",
+            "stream_filters_resolution_priority",
+            "stream_filters_require_resolution",
+        ] {
+            assert!(setting_can_override(key));
+        }
+    }
+
+    #[test]
     fn settings_fields_split_per_field_and_group_cache() {
         let settings = CacheSettings {
             image_disk_cache_limit_mb: Some(2048),

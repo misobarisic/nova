@@ -18,6 +18,49 @@ fn evaluate(script: &str) -> Value {
 }
 
 #[test]
+fn explicit_resolution_evidence_preserves_exact_heights_and_rejects_ambiguous_tokens() {
+    let result = evaluate(
+        r#"
+        const valid=[144,240,800,8640],invalid=[0,143,8641,65535,800.5,'800',null,{},[],true];
+        const record=height=>({title:'Example',fileName:'Example.mkv',fileIdx:0,sizeBytes:1,seeders:1,sources:['Nyaa'],infoHash:'a'.repeat(40),sourceMetadata:{resolution:height}});
+        const good=['Example.240p.AVC','[Group] Example 8640p','Example_800p_AVC','Example 800p 800p','Example 4k','Example 8k','Example.2026.1080p.WEB-DL','Example.2026.240p.AVC'];
+        const bad=['Example 143p','Example 8641p','Example 0240p','Example 123240p','Example height240p','Example 240pixels','Example 240p50','Example 240.5p','Example 2.400p','Example 240p 8640p','Example 2160p 8k','Example 800','Example high quality'];
+        return {valid:valid.map(height=>S.validReleaseEvidence({resolution:height})),invalid:invalid.map(height=>S.validReleaseEvidence({resolution:height})),
+          facts:valid.map(height=>S.recordFacts(record(height)).height),rows:valid.map(height=>S.row(record(height),false).streamFacts.height),
+          good:good.map(S.resolution),bad:bad.map(S.resolution),
+          descriptions:['Resolution: 240p','Resolution: 8640p','Video: 1280x800','Video\nHeight: 800 pixels','Video\nHeight: 8 640 pixels','800p AVC'].map(text=>S.releaseEvidence(text)?.resolution ?? null),
+          prose:['This story has 240p fans','The upload is 800 pixels tall','Video\nHeight: 800 adventures','Resolution: height240p','Resolution: 240p50','Resolution: 2.400p','Resolution: 143p','Resolution: 8641p','Resolution: 800p 1080p'].map(text=>S.releaseEvidence(text)?.resolution ?? null)};
+        "#,
+    );
+    assert_eq!(result["valid"], json!([true, true, true, true]));
+    // Explicit null remains the normalized representation of conflicting facts.
+    assert_eq!(
+        result["invalid"],
+        json!([
+            false, false, false, false, false, false, true, false, false, false
+        ])
+    );
+    assert_eq!(result["facts"], json!([144, 240, 800, 8640]));
+    assert_eq!(result["rows"], result["facts"]);
+    assert_eq!(
+        result["good"],
+        json!([240, 8640, 800, 800, 2160, 4320, 1080, 240])
+    );
+    assert!(result["bad"].as_array().unwrap().iter().all(Value::is_null));
+    assert_eq!(
+        result["descriptions"],
+        json!([240, 8640, 800, 800, 8640, 800])
+    );
+    assert!(
+        result["prose"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(Value::is_null)
+    );
+}
+
+#[test]
 fn legacy_discovery_ranking_does_not_extract_unused_native_policy_facts() {
     let result = evaluate(
         r#"
@@ -235,6 +278,102 @@ fn shared_policy_filters_upstream_candidates_and_rows_and_ranks_audio_before_cod
         "disabled policy has no hidden legacy filters"
     );
     assert_eq!(disabled["unknownFinal"], true);
+}
+
+#[test]
+fn shared_resolution_policy_reaches_candidate_caps_batch_sort_and_final_rows() {
+    use nova_config::stream_filters::{
+        SortCriterion, SortDirection, StreamFilterRules, StreamSortRule,
+    };
+    let definition = crate::bundled_providers()
+        .iter()
+        .find(|provider| provider.url == crate::SUPERNOVA_PROVIDER_URL)
+        .unwrap();
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let source = format!(
+        "{}\n{}",
+        definition.source,
+        r#"
+        globalThis.novaProvider={handle(request){
+            const S=globalThis.Supernova;
+            const settings=S.withStreamPreferences({"quality.preferred":"2160p"},request.streamPreferences);
+            if(request.fallback) nova.streamPreferences.sort=undefined;
+            const make=(id,height)=>({infoHash:id.repeat(40),title:'Example',sources:['nyaa'],fileIdx:0,fileName:id+'.mkv',sizeBytes:100,seeders:1,sourceMetadata:{resolution:height}});
+            const records=[make('a',720),make('b',1080),make('c',2160),make('d',800),make('e',null),make('f',4320),make('g',576)];
+            const candidates=S.rank(records,settings);
+            const rows=S.sortRows(records.map(record=>S.row(record,false)),settings);
+            S.CANDIDATE_MAX=1; S.MAX=1;
+            return {candidates:candidates.map(record=>record.infoHash[0]),rows:rows.map(row=>row.id[0]),pool:candidates.slice(0,S.CANDIDATE_MAX).map(record=>record.infoHash[0]),visible:rows.slice(0,S.MAX).map(row=>row.id[0])};
+        }};
+        "#
+    );
+    let runtime = PluginRuntime::new(manifest, source);
+    let mut rules = StreamFilterRules {
+        enabled: true,
+        max_height: Some(2160),
+        excluded_resolutions: vec![720],
+        resolution_priority: vec![1080, 720],
+        retain_unknown: false,
+        sort_order: vec![StreamSortRule {
+            criterion: SortCriterion::Resolution,
+            direction: SortDirection::Desc,
+        }],
+        ..Default::default()
+    };
+    let run = |rules: &StreamFilterRules, fallback| {
+        runtime
+            .invoke(
+                MemoryProviderHost::new(),
+                &json!({
+                    "op":"streams", "streamPreferences":rules, "fallback":fallback
+                }),
+            )
+            .unwrap()
+    };
+    for fallback in [false, true] {
+        let soft = run(&rules, fallback);
+        assert_eq!(soft["candidates"], json!(["b", "c", "d", "g", "e"]));
+        assert_eq!(soft["rows"], json!(["b", "c", "d", "g"]));
+        assert_eq!(
+            soft["pool"],
+            json!(["b"]),
+            "preference must apply before inspection caps"
+        );
+        assert_eq!(soft["visible"], json!(["b"]));
+    }
+    rules.sort_order[0].direction = SortDirection::Asc;
+    let ascending = run(&rules, false);
+    assert_eq!(ascending["rows"], json!(["b", "g", "d", "c"]));
+    assert_eq!(
+        ascending["pool"],
+        json!(["b"]),
+        "direction cannot reverse preferences"
+    );
+    rules.require_preferred_resolution = true;
+    let strict = run(&rules, false);
+    assert_eq!(strict["rows"], json!(["b"]));
+    assert_eq!(
+        strict["candidates"],
+        json!(["b", "e"]),
+        "unknown candidates may acquire file facts"
+    );
+    rules.retain_unknown = true;
+    assert_eq!(run(&rules, false)["rows"], json!(["b", "e"]));
+    rules.retain_unknown = false;
+    rules.excluded_resolutions.push(1080);
+    assert_eq!(
+        run(&rules, false)["rows"],
+        json!([]),
+        "exclusions override strict preferences"
+    );
+    rules.resolution_priority.clear();
+    assert_eq!(
+        run(&rules, false)["rows"],
+        json!(["g", "d", "c"]),
+        "empty preferred list is unrestricted"
+    );
+    rules.enabled = false;
+    assert_eq!(run(&rules, false)["rows"].as_array().unwrap().len(), 7);
 }
 
 #[test]

@@ -1,7 +1,10 @@
 //! Pure, reversible addon catalog projection. Group keys are display identities
 //! only; every action must resolve to an original member and its exact owner.
 mod cache;
-pub use cache::{cached_evidence, remember_evidence, set_catalog_grouping_cache};
+pub(crate) use cache::remember_inferred_evidence;
+pub use cache::{
+    cached_evidence, cached_evidence_with_inference, remember_evidence, set_catalog_grouping_cache,
+};
 
 use addons::{MetaItem, MetaPreview};
 use nova_config::CatalogGroupingMode;
@@ -109,6 +112,17 @@ pub struct SeasonSelection {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InferredParentPreview {
+    pub source: SourceIdentity,
+    pub name: String,
+    pub poster: Option<String>,
+    pub background: Option<String>,
+    pub logo: Option<String>,
+    pub release_info: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GroupingProof {
     /// Explicit, versioned parent relation, not a generic external-ID alias.
@@ -117,6 +131,16 @@ pub enum GroupingProof {
     CanonicalEpisodes {
         provider_id: String,
         episode_ids: Vec<String>,
+    },
+    /// Optional display-only inference. The source explicitly points to the
+    /// preceding named season and its native episodes occur in this TV parent.
+    /// This is never evidence that any source episode has canonical numbering.
+    InferredSeasonChain {
+        provider_id: String,
+        related_release_id: String,
+        source_season: u32,
+        related_season: u32,
+        parent_preview: InferredParentPreview,
     },
     /// The broker validated native-to-canonical episode alignment.
     BrokerAlignment {
@@ -141,6 +165,12 @@ pub struct GroupingEvidence {
 }
 
 impl GroupingEvidence {
+    pub fn is_inferred(&self) -> bool {
+        self.proofs
+            .iter()
+            .any(|proof| matches!(proof, GroupingProof::InferredSeasonChain { .. }))
+    }
+
     pub fn verified(&self) -> bool {
         matches!(self.source.media_type.as_str(), "series" | "anime")
             && !self.source.id.is_empty()
@@ -151,6 +181,58 @@ impl GroupingEvidence {
             && !has_conflict(&self.parents)
             && !matches!(self.season, SeasonMembership::Season(0))
             && self.valid_partitions()
+            && (!self.is_inferred() || self.valid_inference())
+    }
+
+    fn valid_inference(&self) -> bool {
+        self.season == SeasonMembership::Unknown
+            && self.season_partitions.is_empty()
+            && self.proofs.len() == 1
+            && self.parents.len() == 1
+            && self
+                .source_inventory_fingerprint
+                .as_ref()
+                .is_some_and(|value| {
+                    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+            && self.proofs.iter().all(|proof| match proof {
+                GroupingProof::InferredSeasonChain {
+                    provider_id,
+                    related_release_id,
+                    source_season,
+                    related_season,
+                    parent_preview,
+                } => {
+                    *provider_id == crate::addon_metadata_id(&self.source.addon_url)
+                        && anime_release_id(related_release_id)
+                        && *related_release_id != self.source.id
+                        && *related_season > 0
+                        && *source_season <= 100
+                        && related_season.checked_add(1) == Some(*source_season)
+                        && parent_preview.source.addon_url == self.source.addon_url
+                        && parent_preview.source.media_type == "series"
+                        && ParentIdentity::parse(&parent_preview.source.id)
+                            .is_some_and(|parent| self.parents.contains(&parent))
+                        && !parent_preview.name.is_empty()
+                        && parent_preview.name.len() <= 256
+                        && !parent_preview.name.chars().any(char::is_control)
+                        && [
+                            &parent_preview.poster,
+                            &parent_preview.background,
+                            &parent_preview.logo,
+                        ]
+                        .iter()
+                        .all(|value| {
+                            value
+                                .as_ref()
+                                .is_none_or(|value| bounded_art(Some(value.clone())).is_some())
+                        })
+                        && parent_preview.release_info.as_ref().is_none_or(|value| {
+                            value.as_str().is_some_and(|value| value.len() <= 64)
+                        })
+                }
+                _ => false,
+            })
     }
 
     pub fn fingerprint(&self) -> String {
@@ -163,7 +245,8 @@ impl GroupingEvidence {
         canonical.parents.dedup();
         for proof in &mut canonical.proofs {
             match proof {
-                GroupingProof::ExplicitParent { .. } => {}
+                GroupingProof::ExplicitParent { .. }
+                | GroupingProof::InferredSeasonChain { .. } => {}
                 GroupingProof::CanonicalEpisodes { episode_ids, .. }
                 | GroupingProof::BrokerAlignment { episode_ids, .. } => {
                     episode_ids.sort();
@@ -294,11 +377,25 @@ pub fn merge_grouping_evidence(
             if !explicit.verified() || !cached.verified() || explicit.source != cached.source {
                 return None;
             }
+            // Independently confirmed parent/episode evidence supersedes an
+            // optional suggestion; inference must never taint its provenance.
+            if explicit.is_inferred() != cached.is_inferred() {
+                return Some(if explicit.is_inferred() {
+                    cached
+                } else {
+                    explicit
+                });
+            }
             let mut parents = explicit.parents.clone();
             parents.extend(cached.parents.clone());
             parents.sort();
             parents.dedup();
             if has_conflict(&parents) {
+                return None;
+            }
+            if explicit.is_inferred()
+                && explicit.source_inventory_fingerprint != cached.source_inventory_fingerprint
+            {
                 return None;
             }
             let season = match (&explicit.season, &cached.season) {
@@ -831,13 +928,47 @@ pub fn evidence_for_refreshed_detail(
         || source.media_type != detail.preview.type_
         || source.addon_url != owner_url
         || !matches!(source.media_type.as_str(), "series" | "anime")
-        || detail.videos.iter().any(|video| video.season == Some(0))
     {
         return None;
     }
     let explicit_present = detail.preview.extra.contains_key("novaCatalogGrouping");
     if explicit_present && evidence_from_preview(source, &detail.preview, owner_url).is_none() {
         return None;
+    }
+    if detail.videos.iter().any(|video| video.season == Some(0)) {
+        // A special prevents a complete regular-season partition, but cannot
+        // erase a separately broker-verified parent for this exact inventory.
+        // Never infer this relationship from untrusted novaStreamIds alone.
+        let inventory =
+            episode_inventory_fingerprint(detail.videos.iter().map(|video| video.id.as_str()));
+        let owner = crate::addon_metadata_id(owner_url);
+        let mut cached = cached.filter(|cached| {
+            cached.verified()
+                && cached.source == *source
+                && cached.source_inventory_fingerprint.as_ref() == Some(&inventory)
+                && cached.proofs.iter().any(|proof| {
+                    matches!(proof,
+                    GroupingProof::BrokerAlignment { provider_id, .. }
+                        if !provider_id.is_empty() && provider_id != &owner)
+                })
+                && header_agrees_with_mapping(detail, cached)
+                && detail.videos.iter().all(|video| {
+                    !episode_has_canonical_claim(video)
+                        || video_canonical_episode_including_specials(video)
+                            .is_some_and(|(parent, _, _)| cached.parents.contains(&parent))
+                })
+        })?;
+        if explicit_present {
+            cached = merge_grouping_evidence(
+                Some(cached),
+                evidence_from_preview(source, &detail.preview, owner_url),
+            )?;
+        }
+        // Keep the entire native source reachable in Season mode. Emitting
+        // only its regular seasons would silently lose the special.
+        cached.season = SeasonMembership::Unknown;
+        cached.season_partitions.clear();
+        return cached.verified().then_some(cached);
     }
     let claims = detail.videos.iter().any(episode_has_canonical_claim);
     let fresh = evidence_from_detail(source, detail, owner_url);
@@ -909,6 +1040,16 @@ pub fn evidence_from_response(
     bytes: &[u8],
     provider_url: &str,
 ) -> Option<GroupingEvidence> {
+    let detail = detail_from_response(source, bytes, provider_url)?;
+    let evidence = evidence_from_detail(source, &detail, provider_url)?;
+    header_agrees_with_mapping(&detail, &evidence).then_some(evidence)
+}
+
+pub(crate) fn detail_from_response(
+    source: &SourceIdentity,
+    bytes: &[u8],
+    provider_url: &str,
+) -> Option<MetaItem> {
     if bytes.len() > 2 * 1024 * 1024 {
         return None;
     }
@@ -921,14 +1062,20 @@ pub fn evidence_from_response(
         );
     }
     let detail = addons::Addon::parse_meta(&serde_json::to_vec(&value).ok()?).ok()??;
-    evidence_from_detail(source, &detail, provider_url)
+    (detail.preview.id == source.id && detail.preview.type_ == source.media_type).then_some(detail)
 }
 
 /// Explicit canonical episode triples are an ordinary compatible-addon field
 /// contract (including AIOMetadata's imdb_id/imdbSeason/imdbEpisode output).
 /// They describe mapped episodes, unlike whole-title external-ID aliases.
 fn video_canonical_episode(video: &addons::Video) -> Option<(ParentIdentity, u32, u32)> {
-    let canonical = canonical_episode(&video.id);
+    video_canonical_episode_including_specials(video).filter(|(_, season, _)| *season > 0)
+}
+
+fn video_canonical_episode_including_specials(
+    video: &addons::Video,
+) -> Option<(ParentIdentity, u32, u32)> {
+    let canonical = canonical_episode_including_specials(&video.id);
     let mapped =
         if video.extra.contains_key("imdbSeason") || video.extra.contains_key("imdbEpisode") {
             let parent = video
@@ -940,9 +1087,7 @@ fn video_canonical_episode(video: &addons::Video) -> Option<(ParentIdentity, u32
             if !matches!(parent, ParentIdentity::ImdbSeries(_)) {
                 return None;
             }
-            let season = u32::try_from(video.extra.get("imdbSeason")?.as_u64()?)
-                .ok()
-                .filter(|n| *n > 0)?;
+            let season = u32::try_from(video.extra.get("imdbSeason")?.as_u64()?).ok()?;
             let episode = u32::try_from(video.extra.get("imdbEpisode")?.as_u64()?)
                 .ok()
                 .filter(|n| *n > 0)?;
@@ -958,9 +1103,13 @@ fn video_canonical_episode(video: &addons::Video) -> Option<(ParentIdentity, u32
 }
 
 pub(crate) fn canonical_episode(id: &str) -> Option<(ParentIdentity, u32, u32)> {
+    canonical_episode_including_specials(id).filter(|(_, season, _)| *season > 0)
+}
+
+fn canonical_episode_including_specials(id: &str) -> Option<(ParentIdentity, u32, u32)> {
     let (parent_season, episode) = id.rsplit_once(':')?;
     let (parent, season) = parent_season.rsplit_once(':')?;
-    let season = season.parse::<u32>().ok().filter(|n| *n > 0)?;
+    let season = season.parse::<u32>().ok()?;
     let episode = episode.parse::<u32>().ok().filter(|n| *n > 0)?;
     Some((ParentIdentity::parse(parent)?, season, episode))
 }
@@ -969,6 +1118,7 @@ pub(crate) fn canonical_episode(id: &str) -> Option<(ParentIdentity, u32, u32)> 
 pub enum GroupingLookupStatus {
     Original,
     Confirmed,
+    Inferred,
     Unconfirmed,
     Deferred,
     Stale,
@@ -988,7 +1138,386 @@ pub fn resolve_catalog_grouping_evidence(
     mode: CatalogGroupingMode,
     revision: u64,
 ) -> GroupingLookup {
-    crate::metadata::resolve_catalog_grouping_evidence(source, mode, revision)
+    resolve_catalog_grouping_evidence_with_inference(source, mode, revision, false)
+}
+
+pub fn resolve_catalog_grouping_evidence_with_inference(
+    source: &SourceIdentity,
+    mode: CatalogGroupingMode,
+    revision: u64,
+    allow_inferred: bool,
+) -> GroupingLookup {
+    crate::metadata::resolve_catalog_grouping_evidence_with_inference(
+        source,
+        mode,
+        revision,
+        allow_inferred,
+    )
+}
+
+/// Retained canonical metadata, supplied by the exact owner's relation
+/// response. It is a navigation option alongside the original native release.
+pub fn inferred_parent_entry(evidence: &GroupingEvidence) -> Option<OwnedCatalogEntry> {
+    if !evidence.is_inferred() || !evidence.verified() {
+        return None;
+    }
+    let mut parents = evidence.proofs.iter().filter_map(|proof| match proof {
+        GroupingProof::InferredSeasonChain { parent_preview, .. } => Some(parent_preview),
+        _ => None,
+    });
+    let parent = parents.next()?;
+    if parents.any(|other| other.source != parent.source) {
+        return None;
+    }
+    Some(OwnedCatalogEntry {
+        source: parent.source.clone(),
+        preview: MetaPreview {
+            id: parent.source.id.clone(),
+            type_: parent.source.media_type.clone(),
+            name: parent.name.clone(),
+            poster: parent.poster.clone(),
+            background: parent.background.clone(),
+            logo: parent.logo.clone(),
+            release_info: parent.release_info.clone(),
+            ..Default::default()
+        },
+        evidence: None,
+    })
+}
+
+pub(crate) struct SeasonRelation {
+    pub source: SourceIdentity,
+    pub season: u32,
+}
+
+fn anime_release_id(id: &str) -> bool {
+    matches!(
+        crate::ExternalId::parse(id),
+        Some(crate::ExternalId::MalAnime(_) | crate::ExternalId::AnilistAnime(_))
+    ) && !id.contains("://")
+        || id.strip_prefix("kitsu:").is_some_and(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_digit())
+                && id
+                    .parse::<u32>()
+                    .is_ok_and(|id| id > 0 && id <= i32::MAX as u32)
+        })
+}
+
+fn bounded_art(value: Option<String>) -> Option<String> {
+    value.filter(|value| {
+        value.len() <= 8192
+            && url::Url::parse(value).is_ok_and(|url| matches!(url.scheme(), "https" | "http"))
+    })
+}
+
+fn excluded_season_title(title: &str) -> bool {
+    let title = crate::sequence::normalized_title(title);
+    [
+        "remake",
+        "reboot",
+        "spinoff",
+        "spin off",
+        "side story",
+        "alternate",
+        "alternative",
+        "recap",
+        "movie",
+        "film",
+    ]
+    .iter()
+    .any(|marker| format!(" {title} ").contains(&format!(" {marker} ")))
+}
+
+fn season_family(title: &str) -> String {
+    crate::sequence::series_identity(title)
+        .base
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+fn family_matches(detail: &MetaItem, family: &str) -> bool {
+    std::iter::once(detail.preview.title())
+        .chain(
+            [&detail.preview.extra, &detail.extra]
+                .into_iter()
+                .flat_map(|extra| {
+                    ["aliases", "aka", "akaNames"]
+                        .into_iter()
+                        .flat_map(move |field| {
+                            extra
+                                .get(field)
+                                .and_then(serde_json::Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .take(16)
+                                .filter_map(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                        })
+                }),
+        )
+        .any(|title| !excluded_season_title(&title) && season_family(&title) == family)
+}
+
+fn release_aliases(detail: &MetaItem) -> BTreeSet<String> {
+    let mut aliases = BTreeSet::from([detail.preview.id.clone()]);
+    for fields in [&detail.preview.extra, &detail.extra] {
+        for id in
+            crate::normalize_external_ids(fields, &detail.preview.id, &detail.preview.type_).typed
+        {
+            match id {
+                crate::ExternalId::MalAnime(id) => {
+                    aliases.insert(format!("mal:{id}"));
+                }
+                crate::ExternalId::AnilistAnime(id) => {
+                    aliases.insert(format!("anilist:{id}"));
+                }
+                _ => {}
+            }
+        }
+        for field in ["kitsu_id", "kitsuId", "_kitsuId", "kitsu"] {
+            if let Some(value) = fields.get(field).and_then(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .or_else(|| v.as_u64().map(|v| v.to_string()))
+            }) {
+                let value = value.strip_prefix("kitsu:").unwrap_or(&value);
+                if value.parse::<u32>().is_ok_and(|id| id > 0) {
+                    aliases.insert(format!("kitsu:{value}"));
+                }
+            }
+        }
+    }
+    aliases
+}
+
+/// Parse only an explicit, unique addon-native prequel link. Titles constrain
+/// the relationship; they never discover or prove it on their own.
+pub(crate) fn season_relation(
+    source: &SourceIdentity,
+    detail: &MetaItem,
+) -> Option<SeasonRelation> {
+    if detail.preview.id != source.id
+        || detail.preview.type_ != source.media_type
+        || !matches!(source.media_type.as_str(), "series" | "anime")
+        || excluded_season_title(&detail.preview.title())
+        || detail.preview.extra.contains_key("novaCatalogGrouping")
+    {
+        return None;
+    }
+    let current = crate::sequence::series_identity(&detail.preview.title());
+    if !current.labeled || current.season < 2 || current.part != 1 {
+        return None;
+    }
+    let family = season_family(&detail.preview.title());
+    let mut relations = BTreeMap::new();
+    for fields in [&detail.preview.extra, &detail.extra] {
+        if fields
+            .get("links")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|links| links.len() > 64)
+        {
+            return None;
+        }
+        for link in fields
+            .get("links")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(64)
+        {
+            if !link
+                .get("category")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("prequel"))
+            {
+                continue;
+            }
+            let url = url::Url::parse(link.get("url")?.as_str()?).ok()?;
+            if url.scheme() != "stremio"
+                || url.host_str().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return None;
+            }
+            let parts = url.path_segments()?.collect::<Vec<_>>();
+            if parts.len() != 3 || parts[0] != "detail" || !matches!(parts[1], "series" | "anime") {
+                return None;
+            }
+            let id = percent_encoding::percent_decode_str(parts[2])
+                .decode_utf8()
+                .ok()?
+                .into_owned();
+            if !anime_release_id(&id) || id == source.id {
+                return None;
+            }
+            // The native title can carry MAL/Kitsu aliases; a prequel pointing
+            // back to one of those aliases is a cycle, not a preceding season.
+            if release_aliases(detail).contains(&id) {
+                return None;
+            }
+            let title = link.get("name")?.as_str()?;
+            let previous = crate::sequence::series_identity(title);
+            if excluded_season_title(title)
+                || (!previous.labeled && current.season != 2)
+                || previous.part != 1
+                || previous.season.checked_add(1) != Some(current.season)
+                || season_family(title) != family
+            {
+                return None;
+            }
+            relations.insert(
+                id.clone(),
+                SeasonRelation {
+                    source: SourceIdentity {
+                        addon_url: source.addon_url.clone(),
+                        media_type: parts[1].into(),
+                        id,
+                    },
+                    season: previous.season,
+                },
+            );
+        }
+    }
+    if relations.len() != 1 {
+        return None;
+    }
+    relations.into_values().next()
+}
+
+/// The target request may return its whole TV series instead of an alias of
+/// that standalone release. Keep that original canonical identity and prove
+/// the relationship through native episode membership, never title rewriting.
+pub(crate) fn infer_season_parent(
+    source: &SourceIdentity,
+    detail: &MetaItem,
+    relation: &SeasonRelation,
+    parent_detail: &MetaItem,
+    provider_url: &str,
+) -> Option<GroupingEvidence> {
+    if relation.source.addon_url != source.addon_url
+        || provider_url != source.addon_url
+        || parent_detail.preview.type_ != "series"
+        || excluded_season_title(&parent_detail.preview.title())
+        || !family_matches(parent_detail, &season_family(&detail.preview.title()))
+        || parent_detail.videos.is_empty()
+        || parent_detail.videos.len() > 10_000
+    {
+        return None;
+    }
+    let source_aliases = release_aliases(detail);
+    for fields in [&parent_detail.preview.extra, &parent_detail.extra] {
+        if fields
+            .get("links")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|links| links.len() > 64)
+        {
+            return None;
+        }
+        if fields
+            .get("links")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(64)
+            .any(|link| {
+                link.get("category")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| kind.eq_ignore_ascii_case("prequel"))
+                    && link
+                        .get("url")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|url| url.rsplit('/').next())
+                        .is_some_and(|target| source_aliases.contains(target))
+            })
+        {
+            return None;
+        }
+    }
+    let parent = ParentIdentity::parse(&parent_detail.preview.id)?;
+    // Native anime numbering may stay local S1 even when an explicit mapping
+    // says canonical S3. Only validate attempted claims and parent agreement;
+    // inference never installs or changes any episode correspondence.
+    if detail.videos.iter().any(|video| {
+        episode_has_canonical_claim(video)
+            && video_canonical_episode_including_specials(video)
+                .is_none_or(|(claimed, _, _)| claimed != parent)
+    }) {
+        return None;
+    }
+    let mut native = BTreeSet::new();
+    let mut positions = BTreeSet::new();
+    let prefix = format!("{}:", relation.source.id);
+    let mut matched = 0;
+    for video in &parent_detail.videos {
+        if video.id.is_empty() || !native.insert(&video.id) {
+            return None;
+        }
+        if let (Some(season), Some(episode)) = (video.season, video.episode_number())
+            && !positions.insert((season, episode))
+        {
+            return None;
+        }
+        if episode_has_canonical_claim(video) {
+            let (claimed, season, episode) = video_canonical_episode_including_specials(video)?;
+            if claimed != parent
+                || video.season.is_some_and(|value| value != season)
+                || video.episode_number().is_some_and(|value| value != episode)
+            {
+                return None;
+            }
+        }
+        if let Some(number) = video.id.strip_prefix(&prefix) {
+            if !number.parse::<u32>().is_ok_and(|number| number > 0)
+                || video.season != Some(relation.season)
+                || video.episode_number().is_none_or(|n| n == 0)
+            {
+                return None;
+            }
+            matched += 1;
+        }
+    }
+    if matched == 0 {
+        return None;
+    }
+    let current = crate::sequence::series_identity(&detail.preview.title());
+    let evidence = GroupingEvidence {
+        source: source.clone(),
+        parents: vec![parent],
+        season: SeasonMembership::Unknown,
+        proofs: vec![GroupingProof::InferredSeasonChain {
+            provider_id: crate::addon_metadata_id(provider_url),
+            related_release_id: relation.source.id.clone(),
+            source_season: current.season,
+            related_season: relation.season,
+            parent_preview: InferredParentPreview {
+                source: SourceIdentity {
+                    addon_url: source.addon_url.clone(),
+                    media_type: parent_detail.preview.type_.clone(),
+                    id: parent_detail.preview.id.clone(),
+                },
+                name: parent_detail.preview.title(),
+                poster: bounded_art(parent_detail.preview.poster.clone()),
+                background: bounded_art(parent_detail.preview.background.clone()),
+                logo: bounded_art(parent_detail.preview.logo.clone()),
+                release_info: parent_detail
+                    .preview
+                    .year_str()
+                    .filter(|value| value.len() <= 64)
+                    .map(serde_json::Value::String),
+            },
+        }],
+        season_partitions: vec![],
+        source_inventory_fingerprint: Some(episode_inventory_fingerprint(
+            detail.videos.iter().map(|video| video.id.as_str()),
+        )),
+    };
+    (evidence.verified()
+        && header_agrees_with_mapping(detail, &evidence)
+        && header_agrees_with_mapping(parent_detail, &evidence))
+    .then_some(evidence)
 }
 
 /// Consume only broker-validated canonical episode connections. A generic
@@ -1069,15 +1598,16 @@ pub fn evidence_from_broker(
     let evidence = GroupingEvidence {
         source: source.clone(),
         parents,
-        source_inventory_fingerprint: (covered == result.details.episodes.len()).then(|| {
-            episode_inventory_fingerprint(
-                result
-                    .details
-                    .episodes
-                    .iter()
-                    .map(|episode| episode.source_id.as_str()),
-            )
-        }),
+        // Parent-only proof is still bound to the exact native inventory.
+        // In particular, a broker may map every regular episode while leaving
+        // specials untouched; Detail must be able to retain that parent proof.
+        source_inventory_fingerprint: Some(episode_inventory_fingerprint(
+            result
+                .details
+                .episodes
+                .iter()
+                .map(|episode| episode.source_id.as_str()),
+        )),
         season_partitions: if covered == result.details.episodes.len() {
             partitions
                 .into_iter()
@@ -1814,6 +2344,371 @@ mod tests {
             .is_none(),
             "a weaker relation never masks partial canonical claims"
         );
+    }
+
+    #[test]
+    fn broker_parent_survives_a_combined_native_inventory_with_a_special() {
+        let owner = "https://owner.example/manifest.json";
+        let external = crate::addon_metadata_id("https://metadata.example/manifest.json");
+        let source = SourceIdentity {
+            addon_url: owner.into(),
+            media_type: "series".into(),
+            id: "mal:61990".into(),
+        };
+        let connection = crate::MetadataConnection {
+            addon_id: external,
+            media_id: "tt12590266".into(),
+            ids: vec![crate::ExternalId::parse("tt12590266").unwrap()],
+            basis: "identity-or-exact-title".into(),
+        };
+        let mut videos = vec![json!({
+            "id":"tt12590266:0:1", "season":0, "episode":1,
+            "title":"Ending Theme | Let You Down"
+        })];
+        let mut result = crate::EnrichmentResult {
+            inventory_revision: 1,
+            status: "confirmed".into(),
+            details: crate::ProviderDetails {
+                media: crate::MediaItem {
+                    source_id: source.id.clone(),
+                    media_type: source.media_type.clone(),
+                    title: "Cyberpunk: Edgerunners".into(),
+                    ..Default::default()
+                },
+                episodes: vec![crate::Episode {
+                    source_id: "tt12590266:0:1".into(),
+                    season: 0,
+                    number: 1,
+                    ..Default::default()
+                }],
+            },
+            connections: vec![connection.clone()],
+            episode_metadata: BTreeMap::new(),
+            supplemental_seasons: vec![],
+        };
+        for (season, kitsu) in [(1, 43248), (2, 50016)] {
+            for episode in 1..=10 {
+                let native = format!("kitsu:{kitsu}:{episode}");
+                let canonical = format!("tt12590266:{season}:{episode}");
+                videos.push(json!({"id":native, "season":season, "episode":episode,
+                    "novaStreamIds":[canonical]}));
+                result.details.episodes.push(crate::Episode {
+                    source_id: native.clone(),
+                    season,
+                    number: episode,
+                    ..Default::default()
+                });
+                result.episode_metadata.insert(
+                    native,
+                    crate::EpisodeEnrichment {
+                        ids: vec![canonical],
+                        connections: vec![connection.clone()],
+                        season: Some(season),
+                        episode: Some(episode),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let value = json!({"meta":{"id":source.id,"type":"series",
+            "name":"Cyberpunk: Edgerunners 2", "imdb_id":"tt12590266", "videos":videos}});
+        let parse = |value: &serde_json::Value| {
+            addons::Addon::parse_meta(&serde_json::to_vec(value).unwrap())
+                .unwrap()
+                .unwrap()
+        };
+        let detail = parse(&value);
+        let cached = evidence_from_broker(&source, &result).unwrap();
+        assert_eq!(cached.season, SeasonMembership::Unknown);
+        assert!(cached.season_partitions.is_empty());
+        assert_eq!(
+            cached.source_inventory_fingerprint,
+            Some(episode_inventory_fingerprint(
+                detail.videos.iter().map(|video| video.id.as_str())
+            ))
+        );
+        assert!(
+            evidence_for_refreshed_detail(&source, &detail, owner, None).is_none(),
+            "unverified novaStreamIds cannot establish parenthood"
+        );
+        let retained =
+            evidence_for_refreshed_detail(&source, &detail, owner, Some(cached.clone())).unwrap();
+        assert_eq!(
+            retained.parents,
+            [ParentIdentity::ImdbSeries("tt12590266".into())]
+        );
+        assert!(retained.season_partitions.is_empty());
+        assert_eq!(retained.season, SeasonMembership::Unknown);
+        let mut native = OwnedCatalogEntry::new(owner, detail.preview.clone());
+        native.evidence = Some(retained);
+        let mut parent = native.clone();
+        parent.source.id = "tt12590266".into();
+        parent.preview.id = parent.source.id.clone();
+        parent.evidence.as_mut().unwrap().source = parent.source.clone();
+        let entries = [native, parent];
+        let grouped = project_catalog(&entries, Series);
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].members.len(), 2);
+        assert_eq!(grouped[0].members[0].source.id, "mal:61990");
+        assert_eq!(grouped[0].members[1].source.id, "tt12590266");
+        let seasons = project_catalog(&entries, Season);
+        assert_eq!(seasons.len(), 2);
+        assert!(
+            seasons.iter().all(|group| group.canonical_season.is_none()),
+            "the original sources keep the special reachable; no partial virtual seasons"
+        );
+        assert_eq!(detail.videos.len(), 21);
+        assert_eq!(detail.videos[0].id, "tt12590266:0:1");
+        assert_eq!(detail.videos[1].id, "kitsu:43248:1");
+        assert_eq!(detail.videos[11].id, "kitsu:50016:1");
+        for index in 0..4 {
+            let mut changed = value.clone();
+            match index {
+                0 => changed["meta"]["videos"][1]["id"] = json!("changed-native-id"),
+                1 => changed["meta"]["videos"][0]["id"] = json!("tt999:0:1"),
+                2 => changed["meta"]["videos"][1]["imdbSeason"] = json!(1),
+                _ => changed["meta"]["imdb_id"] = json!("tt999"),
+            }
+            assert!(
+                evidence_for_refreshed_detail(
+                    &source,
+                    &parse(&changed),
+                    owner,
+                    Some(cached.clone())
+                )
+                .is_none()
+            );
+        }
+        let mut unverified = result;
+        unverified.connections.clear();
+        assert!(evidence_from_broker(&source, &unverified).is_none());
+    }
+
+    #[test]
+    fn catalog_response_rejects_a_header_that_contradicts_episode_parent_proof() {
+        let source = SourceIdentity {
+            addon_url: "https://owner.example".into(),
+            media_type: "series".into(),
+            id: "mal:7".into(),
+        };
+        let mut value = json!({"meta":{"id":"mal:7","type":"series","imdb_id":"tt7",
+            "videos":[{"id":"mal:7:1","season":1,"episode":1,
+                "imdb_id":"tt7","imdbSeason":2,"imdbEpisode":1}]}});
+        assert!(
+            evidence_from_response(
+                &source,
+                &serde_json::to_vec(&value).unwrap(),
+                &source.addon_url
+            )
+            .is_some()
+        );
+        value["meta"]["imdb_id"] = json!("tt8");
+        assert!(
+            evidence_from_response(
+                &source,
+                &serde_json::to_vec(&value).unwrap(),
+                &source.addon_url
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn optional_season_chain_uses_an_explicit_relation_and_canonical_native_membership() {
+        let owner = "https://owner.example/manifest.json";
+        let source = SourceIdentity {
+            addon_url: owner.into(),
+            media_type: "series".into(),
+            id: "mal:62516".into(),
+        };
+        let value = json!({"meta":{"id":"mal:62516","type":"series","name":"DAN DA DAN Season 3",
+            "_kitsuId":"50163","imdb_id":null,"links":[{"category":"prequel","name":"DAN DA DAN Season 2","url":"stremio:///detail/series/kitsu:49425"}],
+            "videos":(1..=27).map(|n|json!({"id":format!("kitsu:50163:{n}"),"season":1,"episode":n,"title":format!("Episode {n}")})).collect::<Vec<_>>()}});
+        let parent_value = json!({"meta":{"id":"tt30217403","type":"series","name":"DAN DA DAN","imdb_id":"tt30217403","poster":"https://images.example/poster.jpg","releaseInfo":"2024–",
+            "videos":[{"id":"tt30217403:0:1","season":0,"episode":1},
+                {"id":"kitsu:48269:1","season":1,"episode":1},
+                {"id":"kitsu:49425:1","season":2,"episode":1},
+                {"id":"tt30217403:3:1","season":3,"episode":1}]}});
+        let parse = |v: &serde_json::Value| {
+            addons::Addon::parse_meta(&serde_json::to_vec(v).unwrap())
+                .unwrap()
+                .unwrap()
+        };
+        let detail = parse(&value);
+        let parent = parse(&parent_value);
+        let original_videos = serde_json::to_value(&detail.videos).unwrap();
+        let relation = season_relation(&source, &detail).unwrap();
+        let inferred = infer_season_parent(&source, &detail, &relation, &parent, owner).unwrap();
+        assert!(inferred.is_inferred() && inferred.verified());
+        assert_eq!(
+            inferred.parents,
+            [ParentIdentity::ImdbSeries("tt30217403".into())]
+        );
+        assert_eq!(inferred.season, SeasonMembership::Unknown);
+        assert!(inferred.season_partitions.is_empty());
+        assert_eq!(inferred.fingerprint(), inferred.clone().fingerprint());
+        let navigation = inferred_parent_entry(&inferred).unwrap();
+        assert_eq!(navigation.source.id, "tt30217403");
+        assert_eq!(navigation.source.addon_url, owner);
+        assert_eq!(navigation.preview.name, "DAN DA DAN");
+        assert!(navigation.evidence.is_none());
+        let mut native = OwnedCatalogEntry::new(owner, detail.preview.clone());
+        native.evidence = Some(inferred.clone());
+        assert_eq!(
+            project_catalog(&[native.clone()], Season)[0].canonical_season,
+            None
+        );
+        assert_eq!(native.preview.id, "mal:62516");
+        assert_eq!(
+            serde_json::to_value(&detail.videos).unwrap(),
+            original_videos,
+            "display inference must not alter local season/episode numbering or progress aliases"
+        );
+        assert_eq!(detail.videos.len(), 27);
+        assert_eq!(detail.videos[0].season, Some(1));
+        for index in 0..6 {
+            let mut bad = value.clone();
+            match index {
+                0=>bad["meta"].as_object_mut().unwrap().remove("links").map(|_|()).unwrap(),
+                1=>bad["meta"]["links"].as_array_mut().unwrap().push(json!({"category":"prequel","name":"DAN DA DAN Season 2","url":"stremio:///detail/series/kitsu:999"})),
+                2=>bad["meta"]["links"][0]["url"]=json!("stremio:///detail/series/kitsu:50163"),
+                3=>bad["meta"]["links"][0]["name"]=json!("DAN DA DAN Season 1"),
+                4=>bad["meta"]["name"]=json!("DAN DA DAN Remake Season 3"),
+                _=>bad["meta"]["type"]=json!("movie"),
+            }
+            assert!(
+                season_relation(&source, &parse(&bad)).is_none(),
+                "relation rejection {index}"
+            );
+        }
+        // An unlabeled first release is permitted only for explicit Season 2;
+        // the parent's native inventory, not the descriptor's default number,
+        // must independently place that preceding release in canonical S1.
+        let mut second_season = value.clone();
+        second_season["meta"]["name"] = json!("DAN DA DAN Season 2");
+        second_season["meta"]["links"][0]["name"] = json!("DAN DA DAN");
+        second_season["meta"]["links"][0]["url"] = json!("stremio:///detail/series/kitsu:48269");
+        let second_detail = parse(&second_season);
+        let first_relation = season_relation(&source, &second_detail).unwrap();
+        assert!(
+            infer_season_parent(&source, &second_detail, &first_relation, &parent, owner)
+                .unwrap()
+                .is_inferred()
+        );
+        let mut wrong_first_anchor = parent_value.clone();
+        wrong_first_anchor["meta"]["videos"] =
+            json!([{"id":"kitsu:48269:1","season":2,"episode":1}]);
+        assert!(
+            infer_season_parent(
+                &source,
+                &second_detail,
+                &first_relation,
+                &parse(&wrong_first_anchor),
+                owner
+            )
+            .is_none()
+        );
+        let mut long_links = value.clone();
+        long_links["meta"]["links"] = json!(vec![value["meta"]["links"][0].clone(); 65]);
+        assert!(season_relation(&source, &parse(&long_links)).is_none());
+        let mut long_parent = parent_value.clone();
+        long_parent["meta"]["links"] = json!(vec![json!({"category":"genre","name":"Genre"}); 65]);
+        assert!(
+            infer_season_parent(&source, &detail, &relation, &parse(&long_parent), owner).is_none()
+        );
+        let mut conflicting_source = value.clone();
+        conflicting_source["meta"]["imdb_id"] = json!("tt999");
+        let conflicting_detail = parse(&conflicting_source);
+        let valid_relation = season_relation(&source, &conflicting_detail).unwrap();
+        assert!(
+            infer_season_parent(
+                &source,
+                &conflicting_detail,
+                &valid_relation,
+                &parent,
+                owner
+            )
+            .is_none()
+        );
+        for malformed in [false, true] {
+            let mut bad_source = value.clone();
+            bad_source["meta"]["videos"][0]["imdb_id"] = json!("tt999");
+            bad_source["meta"]["videos"][0]["imdbSeason"] = json!(3);
+            if !malformed {
+                bad_source["meta"]["videos"][0]["imdbEpisode"] = json!(1);
+            }
+            assert!(
+                infer_season_parent(&source, &parse(&bad_source), &relation, &parent, owner)
+                    .is_none()
+            );
+        }
+        let mut local_numbering = value.clone();
+        local_numbering["meta"]["videos"][0]["imdb_id"] = json!("tt30217403");
+        local_numbering["meta"]["videos"][0]["imdbSeason"] = json!(3);
+        local_numbering["meta"]["videos"][0]["imdbEpisode"] = json!(1);
+        assert!(
+            infer_season_parent(&source, &parse(&local_numbering), &relation, &parent, owner)
+                .unwrap()
+                .is_inferred(),
+            "valid canonical S3 may coexist with unchanged native local S1"
+        );
+        let mut native_parent = parent_value.clone();
+        native_parent["meta"]["videos"] = json!([{"id":"kitsu:49425:1","season":2,"episode":1}]);
+        native_parent["meta"]["imdb_id"] = json!("tt999");
+        assert!(
+            infer_season_parent(&source, &detail, &relation, &parse(&native_parent), owner)
+                .is_none(),
+            "native episode IDs cannot mask a contradictory parent header"
+        );
+        for index in 0..8 {
+            let mut bad = parent_value.clone();
+            match index {
+                0 => bad["meta"]["type"] = json!("movie"),
+                1 => bad["meta"]["imdb_id"] = json!("tt999"),
+                2 => bad["meta"]["name"] = json!("Unrelated Story"),
+                3 => bad["meta"]["videos"][2]["id"] = json!("kitsu:999:1"),
+                4 => bad["meta"]["videos"][2]["season"] = json!(1),
+                5 => bad["meta"]["videos"][0]["id"] = json!("tt999:0:1"),
+                6 => {
+                    bad["meta"]["links"] =
+                        json!([{"category":"prequel","url":"stremio:///detail/series/kitsu:50163"}])
+                }
+                _ => bad["meta"]["videos"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":"kitsu:49425:2","season":2,"episode":1})),
+            }
+            assert!(
+                infer_season_parent(&source, &detail, &relation, &parse(&bad), owner).is_none(),
+                "anchor rejection {index}"
+            );
+        }
+        for index in 0..6 {
+            let mut bad = inferred.clone();
+            let GroupingProof::InferredSeasonChain {
+                provider_id,
+                parent_preview,
+                ..
+            } = &mut bad.proofs[0]
+            else {
+                unreachable!()
+            };
+            match index {
+                0 => *provider_id = "untrusted".into(),
+                1 => parent_preview.source.id = "tt999".into(),
+                2 => parent_preview.source.addon_url = "https://other.example".into(),
+                3 => parent_preview.source.media_type = "movie".into(),
+                4 => parent_preview.name = "x".repeat(257),
+                _ => parent_preview.release_info = Some(json!({"invalid":"shape"})),
+            }
+            assert!(!bad.verified());
+            assert!(inferred_parent_entry(&bad).is_none());
+        }
+        let mut confirmed = entry("mal:62516", &["tt999"], None).evidence.unwrap();
+        confirmed.source = source;
+        let preferred = merge_grouping_evidence(Some(inferred), Some(confirmed.clone())).unwrap();
+        assert_eq!(preferred, confirmed);
+        assert!(!preferred.is_inferred());
     }
 
     #[test]

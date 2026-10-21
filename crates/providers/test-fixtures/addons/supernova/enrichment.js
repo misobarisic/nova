@@ -32,7 +32,7 @@
     // bounded optional upgrade, not a crawl of every torrent detail page.
     for (const record of records.slice(0,24)) {
       for (const detail of (record.details || []).filter(detail=>S.validDetailReference(detail) && enabledSources.includes(detail.source)).slice(0,2)) {
-        const key="evidence:v1:"+nova.crypto.hmacSha256Base64Url(JSON.stringify([record.infoHash,detail]),"supernova-evidence-v1");
+        const key="evidence:v2:"+nova.crypto.hmacSha256Base64Url(JSON.stringify([record.infoHash,detail]),"supernova-evidence-v2");
         const cached=S.resultCacheGet(key),now=Math.floor(Date.now()/1000);
         if (cached && Number.isInteger(cached.expiresAt) && cached.expiresAt>now && cached.expiresAt<=now+86400 && (cached.evidence===null || S.validReleaseEvidence(cached.evidence))) {
           if (cached.evidence) apply(record,cached.evidence);

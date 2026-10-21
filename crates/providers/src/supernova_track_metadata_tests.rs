@@ -19,6 +19,50 @@ fn evaluate(script: &str) -> Value {
 }
 
 #[test]
+fn probe_resolution_uses_exact_valid_video_heights_and_keeps_conflicts_unknown() {
+    let result = evaluate(
+        r#"
+        const target={fileName:'Example.mkv',sizeBytes:42,fileId:123};
+        const video=height=>({codec_type:'video',codec_name:'hevc',height});
+        const probe=streams=>S.animetoshoTracks({id:123,filename:target.fileName,size:42,torrent_id:7,info:{ffprobe:{streams}}},target,7);
+        const base={title:'Example 1080p',infoHash:'a'.repeat(40),sources:['Nyaa'],fileIdx:0,fileName:target.fileName,sizeBytes:42,seeders:1,sourceMetadata:{resolution:720}};
+        const inspected=streams=>{const metadata=probe(streams),record={...base,trackMetadata:metadata};return {metadata,fact:S.recordFacts(record).height,row:S.row(record,false).streamFacts.height};};
+        const good=[144,240,800,8640].map(height=>inspected([video(height),{...video(1080),disposition:{attached_pic:1}}]));
+        const bad=[143,8641,800.5,'800',null,{},[],true].map(height=>inspected([video(height)]));
+        const missing=inspected([{codec_type:'video',codec_name:'hevc'}]);
+        const conflict=inspected([video(240),video(800)]),partial=inspected([video(800),{codec_type:'video',codec_name:'hevc'}]);
+        const duplicate=inspected([video(800),video(800)]);
+        const metadata=probe([video(800)]);
+        return {good,bad,missing,conflict,partial,duplicate,invalidStored:[143,8641,800.5,'800'].map(resolution=>S.validTrackMetadata({...metadata,resolution})),oldStored:S.validTrackMetadata((({resolution,...rest})=>rest)(metadata))};
+        "#,
+    );
+    for (index, height) in [144, 240, 800, 8640].into_iter().enumerate() {
+        let row = &result["good"][index];
+        assert_eq!(row["metadata"]["resolution"], height);
+        assert_eq!(row["fact"], height);
+        assert_eq!(row["row"], height);
+    }
+    for row in result["bad"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain([&result["conflict"], &result["partial"]])
+    {
+        assert!(row["metadata"]["resolution"].is_null());
+        assert!(row["fact"].is_null());
+        assert!(row["row"].is_null());
+    }
+    assert!(result["missing"]["metadata"].get("resolution").is_none());
+    assert_eq!(
+        result["missing"]["fact"], 720,
+        "missing probe heights retain release hints"
+    );
+    assert_eq!(result["duplicate"]["fact"], 800);
+    assert_eq!(result["invalidStored"], json!([false, false, false, false]));
+    assert_eq!(result["oldStored"], true);
+}
+
+#[test]
 fn public_probe_separates_dual_audio_and_subtitles_without_filename_labels() {
     let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/hokuto-tracks.json");
     let result = evaluate(&format!(

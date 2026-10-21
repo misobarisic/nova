@@ -2,6 +2,10 @@
 //! audio languages describe advertised audio, never external subtitle choices.
 use serde::{Deserialize, Serialize};
 
+/// Common advertised heights for settings controls; rules may use any valid
+/// exact height without rounding nonstandard releases into one of these tiers.
+pub const RESOLUTION_CHOICES: [u16; 10] = [240, 360, 480, 576, 720, 1080, 1440, 2160, 4320, 8640];
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
@@ -139,6 +143,11 @@ pub struct StreamFacts {
 pub struct StreamFilterRules {
     pub enabled: bool,
     pub max_height: Option<u16>,
+    /// Explicit blocks always win over resolution preferences.
+    pub excluded_resolutions: Vec<u16>,
+    /// Ordered exact-height preferences; unlisted known heights tie last.
+    pub resolution_priority: Vec<u16>,
+    pub require_preferred_resolution: bool,
     pub max_bytes: Option<u64>,
     /// An empty set accepts all video codecs.
     pub video_codecs: Vec<VideoCodec>,
@@ -164,6 +173,9 @@ impl Default for StreamFilterRules {
         Self {
             enabled: false,
             max_height: None,
+            excluded_resolutions: Vec::new(),
+            resolution_priority: Vec::new(),
+            require_preferred_resolution: false,
             max_bytes: None,
             video_codecs: Vec::new(),
             excluded_video_codecs: Vec::new(),
@@ -188,6 +200,9 @@ impl<'de> Deserialize<'de> for StreamFilterRules {
         struct Fields {
             enabled: bool,
             max_height: Option<u16>,
+            excluded_resolutions: Vec<u16>,
+            resolution_priority: Vec<u16>,
+            require_preferred_resolution: bool,
             max_bytes: Option<u64>,
             video_codecs: Vec<VideoCodec>,
             excluded_video_codecs: Vec<VideoCodec>,
@@ -204,6 +219,9 @@ impl<'de> Deserialize<'de> for StreamFilterRules {
         Ok(Self {
             enabled: fields.enabled,
             max_height: fields.max_height,
+            excluded_resolutions: fields.excluded_resolutions,
+            resolution_priority: fields.resolution_priority,
+            require_preferred_resolution: fields.require_preferred_resolution,
             max_bytes: fields.max_bytes,
             video_codecs: fields.video_codecs,
             excluded_video_codecs: fields.excluded_video_codecs,
@@ -227,6 +245,18 @@ impl StreamFilterRules {
             .max_height
             .filter(|height| (144..=8640).contains(height));
         self.max_bytes = self.max_bytes.filter(|bytes| *bytes > 0);
+        for list in [
+            &mut self.excluded_resolutions,
+            &mut self.resolution_priority,
+        ] {
+            let mut unique = Vec::new();
+            for height in list.drain(..) {
+                if (144..=8640).contains(&height) && !unique.contains(&height) {
+                    unique.push(height);
+                }
+            }
+            *list = unique;
+        }
         for list in [
             &mut self.video_codecs,
             &mut self.excluded_video_codecs,
@@ -290,7 +320,13 @@ impl StreamFilterRules {
         for rule in &self.sort_order {
             let order = match rule.criterion {
                 SortCriterion::Cached => compare_known(a.cached, b.cached, rule.direction),
-                SortCriterion::Resolution => compare_known(a.height, b.height, rule.direction),
+                SortCriterion::Resolution => {
+                    // Preference order always means best first. Direction only
+                    // chooses the numerical fallback among unlisted heights.
+                    self.resolution_rank(a)
+                        .cmp(&self.resolution_rank(b))
+                        .then_with(|| compare_known(a.height, b.height, rule.direction))
+                }
                 SortCriterion::Size => compare_known(a.bytes, b.bytes, rule.direction),
                 SortCriterion::SeasonPack => {
                     compare_known(a.season_pack, b.season_pack, rule.direction)
@@ -339,6 +375,20 @@ impl StreamFilterRules {
             .unwrap_or(usize::MAX)
     }
 
+    pub fn resolution_rank(&self, facts: &StreamFacts) -> usize {
+        if !self.enabled || self.resolution_priority.is_empty() {
+            return 0;
+        }
+        facts
+            .height
+            .and_then(|height| {
+                self.resolution_priority
+                    .iter()
+                    .position(|wanted| *wanted == height)
+            })
+            .unwrap_or(usize::MAX)
+    }
+
     pub fn rank(&self, facts: &StreamFacts) -> (usize, usize) {
         (self.audio_rank(facts), self.codec_rank(facts))
     }
@@ -351,6 +401,15 @@ impl StreamFilterRules {
             limit.is_none_or(|limit| known.map_or(self.retain_unknown, |known| known <= limit))
         };
         under(self.max_height.map(u64::from), facts.height.map(u64::from))
+            && facts.height.map_or(
+                self.excluded_resolutions.is_empty() || self.retain_unknown,
+                |height| !self.excluded_resolutions.contains(&height),
+            )
+            && (!self.require_preferred_resolution
+                || self.resolution_priority.is_empty()
+                || facts.height.map_or(self.retain_unknown, |height| {
+                    self.resolution_priority.contains(&height)
+                }))
             && under(self.max_bytes, facts.bytes)
             && facts.codec.map_or(
                 self.excluded_video_codecs.is_empty() || self.retain_unknown,
@@ -575,6 +634,130 @@ pub fn advertised(text: &str) -> StreamFacts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resolution_preferences_filter_exact_heights_with_blocks_and_caps_winning() {
+        let facts = |height| StreamFacts {
+            height,
+            ..Default::default()
+        };
+        let mut rules = StreamFilterRules {
+            enabled: true,
+            max_height: Some(2160),
+            resolution_priority: vec![1080, 720, 2160, 4320],
+            excluded_resolutions: vec![720],
+            ..Default::default()
+        };
+        assert!(rules.accepts(&facts(Some(1080))));
+        assert!(rules.accepts(&facts(Some(800))), "preferences are soft");
+        assert!(!rules.accepts(&facts(Some(720))), "blocks win preferences");
+        assert!(!rules.accepts(&facts(Some(4320))), "caps win preferences");
+        rules.require_preferred_resolution = true;
+        assert!(
+            !rules.accepts(&facts(Some(800))),
+            "no nearest-tier matching"
+        );
+        assert!(rules.accepts(&facts(None)));
+        rules.retain_unknown = false;
+        assert!(!rules.accepts(&facts(None)));
+        rules.resolution_priority.clear();
+        assert!(
+            rules.accepts(&facts(Some(800))),
+            "empty strict list is unrestricted"
+        );
+        rules.max_height = None;
+        assert!(
+            !rules.accepts(&facts(None)),
+            "blocks obey the unknown policy"
+        );
+        rules.excluded_resolutions.clear();
+        assert!(
+            rules.accepts(&facts(None)),
+            "no active resolution constraint"
+        );
+        rules.resolution_priority = vec![1080];
+        assert!(
+            !rules.accepts(&facts(None)),
+            "strict preferences obey the unknown policy"
+        );
+        rules.enabled = false;
+        assert!(rules.accepts(&facts(Some(800))));
+        assert!(rules.accepts(&facts(None)));
+    }
+
+    #[test]
+    fn resolution_order_is_best_first_then_numeric_with_unknown_always_last() {
+        let mut rules = StreamFilterRules {
+            enabled: true,
+            resolution_priority: vec![1080, 720],
+            ..Default::default()
+        };
+        let heights = [None, Some(2160), Some(720), Some(800), Some(1080)];
+        for (direction, expected) in [
+            (
+                SortDirection::Asc,
+                [Some(1080), Some(720), Some(800), Some(2160), None],
+            ),
+            (
+                SortDirection::Desc,
+                [Some(1080), Some(720), Some(2160), Some(800), None],
+            ),
+        ] {
+            rules.sort_order = vec![StreamSortRule {
+                criterion: SortCriterion::Resolution,
+                direction,
+            }];
+            let mut rows = heights.map(|height| StreamFacts {
+                height,
+                ..Default::default()
+            });
+            rows.sort_by(|a, b| rules.compare(a, b));
+            assert_eq!(rows.map(|facts| facts.height), expected);
+        }
+        // A different higher-priority criterion must retain precedence.
+        rules.sort_order.insert(
+            0,
+            StreamSortRule {
+                criterion: SortCriterion::Cached,
+                direction: SortDirection::Desc,
+            },
+        );
+        let cached = StreamFacts {
+            height: Some(2160),
+            cached: Some(true),
+            ..Default::default()
+        };
+        let preferred = StreamFacts {
+            height: Some(1080),
+            cached: Some(false),
+            ..Default::default()
+        };
+        assert!(rules.compare(&cached, &preferred).is_lt());
+        rules.enabled = false;
+        assert_eq!(rules.resolution_rank(&preferred), 0);
+        assert!(rules.compare(&cached, &preferred).is_eq());
+    }
+
+    #[test]
+    fn resolution_rule_defaults_roundtrip_and_validation_preserve_exact_order() {
+        let old: StreamFilterRules =
+            serde_json::from_str(r#"{"enabled":true,"max_height":1080}"#).unwrap();
+        assert!(old.excluded_resolutions.is_empty());
+        assert!(old.resolution_priority.is_empty());
+        assert!(!old.require_preferred_resolution);
+        let rules = StreamFilterRules {
+            excluded_resolutions: vec![1080, 0, 143, 8641, 1080, 144, 8640],
+            resolution_priority: vec![720, 800, 720, 1080, u16::MAX, 144],
+            require_preferred_resolution: true,
+            ..old
+        }
+        .normalized();
+        assert_eq!(rules.excluded_resolutions, [1080, 144, 8640]);
+        assert_eq!(rules.resolution_priority, [720, 800, 1080, 144]);
+        let roundtrip: StreamFilterRules =
+            serde_json::from_str(&serde_json::to_string(&rules).unwrap()).unwrap();
+        assert_eq!(roundtrip, rules);
+    }
+
     #[test]
     fn audio_ranks_before_codec_and_strictness_switches_are_independent() {
         let mut rules = StreamFilterRules {

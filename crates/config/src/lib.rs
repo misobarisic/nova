@@ -711,6 +711,9 @@ cache_settings_type! {
     /// One profile settings field, keyed by exact installation/catalog/surface.
     #[serde(default, deserialize_with = "catalog_grouping::deserialize_overrides")]
     pub catalog_grouping_overrides: Vec<CatalogGroupingOverride>,
+    /// Opt-in parent-only Series inference; never establishes episode identity.
+    #[serde(default)]
+    pub catalog_grouping_infer_series: bool,
     /// Profile-owned source rules, shared unless this device overrides the field.
     #[serde(default)]
     pub stream_filters: StreamFilterRules,
@@ -1015,6 +1018,7 @@ impl Default for CacheSettings {
         Self {
             catalog_grouping_default: CatalogGroupingMode::Original,
             catalog_grouping_overrides: Vec::new(),
+            catalog_grouping_infer_series: false,
             stream_filters: StreamFilterRules::default(),
             smart_collections: Vec::new(),
             tmdb_api_key: String::new(),

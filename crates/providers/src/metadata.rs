@@ -1838,6 +1838,398 @@ mod tests {
     }
 
     #[test]
+    fn catalog_lookup_recovers_a_special_inventory_from_retained_broker_proof() {
+        const CHILD: &str = "NOVA_CATALOG_BROKER_RECOVERY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "metadata::tests::catalog_lookup_recovers_a_special_inventory_from_retained_broker_proof", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use crate::catalog_grouping::{
+            self as grouping, GroupingLookupStatus, OwnedCatalogEntry, SourceIdentity,
+        };
+        use nova_config::CatalogGroupingMode;
+        #[derive(Default)]
+        struct Disk(Mutex<Option<String>>);
+        impl MetadataCache for Disk {
+            fn load(&self) -> Result<Option<String>, ProviderHostError> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn save(&self, value: &str) -> Result<(), ProviderHostError> {
+                *self.0.lock().unwrap() = Some(value.into());
+                Ok(())
+            }
+        }
+        let owner = addon("https://owner.example", "mal:", false);
+        let canonical = addon("https://canonical.example", "tt", false);
+        configure_metadata_addons(vec![owner.clone(), canonical.clone()]);
+        let revision = metadata_revision();
+        let source = SourceIdentity {
+            addon_url: owner.url.clone(),
+            media_type: "series".into(),
+            id: "mal:61990".into(),
+        };
+        let value = json!({"meta":{"id":"mal:61990","type":"series","name":"Cyberpunk: Edgerunners 2","imdb_id":"tt12590266","videos":[
+            {"id":"tt12590266:0:1","season":0,"episode":1},
+            {"id":"kitsu:43248:1","season":1,"episode":1},
+            {"id":"kitsu:50016:1","season":2,"episode":1}
+        ]}});
+        let detail = addons::Addon::parse_meta(&serde_json::to_vec(&value).unwrap())
+            .unwrap()
+            .unwrap();
+        let connection = MetadataConnection {
+            addon_id: addon_metadata_id(&canonical.url),
+            media_id: "tt12590266".into(),
+            ids: vec![ExternalId::parse("tt12590266").unwrap()],
+            basis: "identity-or-exact-title".into(),
+        };
+        let result = EnrichmentResult {
+            inventory_revision: revision,
+            status: "confirmed".into(),
+            details: ProviderDetails {
+                media: MediaItem {
+                    source_id: source.id.clone(),
+                    media_type: source.media_type.clone(),
+                    ..Default::default()
+                },
+                episodes: detail
+                    .videos
+                    .iter()
+                    .map(|video| Episode {
+                        source_id: video.id.clone(),
+                        season: video.season.unwrap(),
+                        number: video.episode.unwrap(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            },
+            connections: vec![connection.clone()],
+            episode_metadata: detail
+                .videos
+                .iter()
+                .filter(|video| video.season != Some(0))
+                .map(|video| {
+                    (
+                        video.id.clone(),
+                        EpisodeEnrichment {
+                            ids: vec![format!("tt12590266:{}:1", video.season.unwrap())],
+                            connections: vec![connection.clone()],
+                            season: video.season,
+                            episode: video.episode,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            supplemental_seasons: vec![],
+        };
+        let broker_disk = |results: &[EnrichmentResult]| {
+            let values = results.iter().enumerate().map(|(i,result)| (format!("metadata:v2:fixture{i}"), json!({"saved_at":now(),"value":serde_json::to_string(&(now(),result)).unwrap()}))).collect::<BTreeMap<_,_>>();
+            Arc::new(Disk(Mutex::new(Some(
+                serde_json::to_string(&values).unwrap(),
+            ))))
+        };
+        set_metadata_cache(broker_disk(std::slice::from_ref(&result)));
+        let old_key = grouping::projection_fingerprint(&(3_u32, revision, &source));
+        let old_negative = json!({(old_key):{"version":3,"revision":revision,"at":now(),"source":source,"evidence":null}});
+        grouping::set_catalog_grouping_cache(Arc::new(Disk(Mutex::new(Some(
+            old_negative.to_string(),
+        )))));
+        assert!(
+            grouping::cached_evidence(&source, revision).is_none(),
+            "obsolete negative cannot prevent catalog-only recovery"
+        );
+        let endpoint = addons::Addon::new(&owner.url)
+            .unwrap()
+            .meta_url("series", &source.id);
+        // Compatible endpoints can return a canonical header ID for a MAL
+        // request. The same explicit-alias guard must bind recovery to MAL.
+        let mut alias_response = value;
+        alias_response["meta"]["id"] = json!("tt12590266");
+        alias_response["meta"]["mal_id"] = json!(61990);
+        assert_eq!(
+            grouping::detail_from_response(
+                &source,
+                &serde_json::to_vec(&alias_response).unwrap(),
+                &owner.url
+            )
+            .unwrap()
+            .preview
+            .id,
+            source.id
+        );
+        let transport = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([(endpoint.clone(), alias_response)]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        set_metadata_transport(transport.clone());
+        let lookup =
+            resolve_catalog_grouping_evidence(&source, CatalogGroupingMode::Series, revision);
+        assert_eq!(lookup.status, GroupingLookupStatus::Confirmed);
+        let evidence = lookup.evidence.unwrap();
+        assert_eq!(
+            evidence.parents,
+            [grouping::ParentIdentity::ImdbSeries("tt12590266".into())]
+        );
+        assert!(evidence.season_partitions.is_empty());
+        assert_eq!(evidence.season, grouping::SeasonMembership::Unknown);
+        assert_eq!(
+            *transport.calls.lock().unwrap(),
+            [endpoint],
+            "only existing exact-owner request; no enrichment/search fanout"
+        );
+        let mut native = OwnedCatalogEntry::new(&source.addon_url, detail.preview.clone());
+        native.evidence = Some(evidence.clone());
+        let mut parent = native.clone();
+        parent.source.id = "tt12590266".into();
+        parent.preview.id = parent.source.id.clone();
+        parent.evidence.as_mut().unwrap().source = parent.source.clone();
+        assert_eq!(
+            grouping::project_catalog(&[native.clone(), parent], CatalogGroupingMode::Series).len(),
+            1
+        );
+        assert_eq!(native.preview.id, "mal:61990");
+        assert_eq!(detail.videos[0].id, "tt12590266:0:1");
+        let inventory = snapshot().lock().unwrap().clone();
+        let mut changed = detail.clone();
+        changed.videos[1].id = "kitsu:999:1".into();
+        assert!(recover_catalog_grouping(&source, &changed, revision, &inventory).is_none());
+        let mut stale = result.clone();
+        stale.inventory_revision = revision.wrapping_add(1);
+        set_metadata_cache(broker_disk(&[stale]));
+        assert!(recover_catalog_grouping(&source, &detail, revision, &inventory).is_none());
+        let mut opaque_source = source.clone();
+        opaque_source.id = "show".into();
+        opaque_source.addon_url = "https://other-owner.example".into();
+        let mut opaque_detail = detail.clone();
+        opaque_detail.preview.id = "show".into();
+        opaque_detail.videos[1].id = "ep:1".into();
+        let mut opaque_result = result.clone();
+        opaque_result.details.media.source_id = "show".into();
+        opaque_result.details.episodes[1].source_id = "ep:1".into();
+        set_metadata_cache(broker_disk(&[opaque_result]));
+        assert!(
+            recover_catalog_grouping(&opaque_source, &opaque_detail, revision, &inventory)
+                .is_none(),
+            "another owner's opaque IDs cannot supply portable proof"
+        );
+        let mut global_opaque_detail = detail.clone();
+        global_opaque_detail.videos[1].id = "ep:1".into();
+        let mut global_opaque_result = result.clone();
+        global_opaque_result.details.episodes[1].source_id = "ep:1".into();
+        set_metadata_cache(broker_disk(&[global_opaque_result]));
+        assert!(
+            recover_catalog_grouping(&source, &global_opaque_detail, revision, &inventory)
+                .is_none(),
+            "a global title cannot make opaque episode IDs portable between owners"
+        );
+        let mut no_header = detail.clone();
+        no_header.preview.extra.remove("imdb_id");
+        no_header.extra.remove("imdb_id");
+        no_header.videos[0].id = "kitsu:777:1".into();
+        let mut first = result.clone();
+        first.details.episodes[0].source_id = "kitsu:777:1".into();
+        let mut conflicting = first.clone();
+        conflicting.connections[0].media_id = "tt999".into();
+        conflicting.connections[0].ids = vec![ExternalId::parse("tt999").unwrap()];
+        let conflicting_connection = conflicting.connections[0].clone();
+        for mapping in conflicting.episode_metadata.values_mut() {
+            mapping.ids[0] = format!("tt999:{}:1", mapping.season.unwrap());
+            mapping.connections = vec![conflicting_connection.clone()];
+        }
+        set_metadata_cache(broker_disk(&[first, conflicting]));
+        assert!(
+            recover_catalog_grouping(&source, &no_header, revision, &inventory).is_none(),
+            "conflicting eligible broker parents never depend on cache iteration order"
+        );
+    }
+
+    #[test]
+    fn optional_series_inference_is_bounded_policy_scoped_and_keeps_native_numbering() {
+        const CHILD: &str = "NOVA_OPTIONAL_SERIES_INFERENCE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","metadata::tests::optional_series_inference_is_bounded_policy_scoped_and_keeps_native_numbering","--nocapture"]).env(CHILD,"1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use crate::catalog_grouping::{self as grouping, GroupingLookupStatus, SourceIdentity};
+        use nova_config::CatalogGroupingMode::{Original, Season, Series};
+        #[derive(Default)]
+        struct Disk(Mutex<Option<String>>);
+        impl MetadataCache for Disk {
+            fn load(&self) -> Result<Option<String>, ProviderHostError> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn save(&self, value: &str) -> Result<(), ProviderHostError> {
+                *self.0.lock().unwrap() = Some(value.into());
+                Ok(())
+            }
+        }
+        struct BoundedTransport(Arc<FixtureTransport>);
+        impl AddonMetadataTransport for BoundedTransport {
+            fn fetch(
+                &self,
+                url: &str,
+                timeout: Duration,
+                limit: usize,
+            ) -> Result<Vec<u8>, ProviderHostError> {
+                assert!(timeout <= Duration::from_secs(2));
+                self.0.fetch(url, timeout, limit)
+            }
+        }
+        let mut owner = addon("https://owner.example", "mal:", false);
+        owner.manifest.id_prefixes.push("kitsu:".into());
+        configure_metadata_addons(vec![owner.clone()]);
+        let revision = metadata_revision();
+        let source = SourceIdentity {
+            addon_url: owner.url.clone(),
+            media_type: "series".into(),
+            id: "mal:62516".into(),
+        };
+        let source_response = json!({"meta":{"id":"mal:62516","type":"series","name":"DAN DA DAN Season 3","_kitsuId":"50163","imdb_id":null,
+            "links":[{"category":"prequel","name":"DAN DA DAN Season 2","url":"stremio:///detail/series/kitsu:49425"}],
+            "videos":(1..=27).map(|n|json!({"id":format!("kitsu:50163:{n}"),"season":1,"episode":n,"title":format!("Episode {n}")})).collect::<Vec<_>>()}});
+        let parent_response = json!({"meta":{"id":"tt30217403","type":"series","name":"DAN DA DAN","_kitsuId":"48269","imdb_id":"tt30217403",
+            "videos":[{"id":"tt30217403:0:1","season":0,"episode":1},{"id":"kitsu:48269:1","season":1,"episode":1},
+                {"id":"kitsu:49425:1","season":2,"episode":1},{"id":"tt30217403:3:1","season":3,"episode":1}]}});
+        let endpoint = addons::Addon::new(&owner.url).unwrap();
+        let source_url = endpoint.meta_url("series", &source.id);
+        let related_url = endpoint.meta_url("series", "kitsu:49425");
+        let fixture = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([
+                (source_url.clone(), source_response.clone()),
+                (related_url.clone(), parent_response),
+            ]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        set_metadata_transport(Arc::new(BoundedTransport(fixture.clone())));
+        let disk = Arc::new(Disk::default());
+        grouping::set_catalog_grouping_cache(disk.clone());
+        set_metadata_cache(Arc::new(Disk::default()));
+        let off = resolve_catalog_grouping_evidence(&source, Series, revision);
+        assert_eq!(off.status, GroupingLookupStatus::Unconfirmed);
+        assert_eq!(fixture.calls.lock().unwrap().len(), 1);
+        let lookup =
+            resolve_catalog_grouping_evidence_with_inference(&source, Series, revision, true);
+        assert_eq!(lookup.status, GroupingLookupStatus::Inferred);
+        let inferred = lookup.evidence.unwrap();
+        assert!(inferred.is_inferred());
+        assert_eq!(inferred.season, grouping::SeasonMembership::Unknown);
+        assert!(inferred.season_partitions.is_empty());
+        assert_eq!(
+            *fixture.calls.lock().unwrap(),
+            [source_url.clone(), source_url.clone(), related_url.clone()],
+            "one extra exact relation request, never search/enrichment fanout"
+        );
+        assert_eq!(
+            grouping::inferred_parent_entry(&inferred)
+                .unwrap()
+                .preview
+                .id,
+            "tt30217403"
+        );
+        assert_eq!(grouping::cached_evidence(&source, revision), Some(None));
+        assert!(
+            grouping::cached_evidence_with_inference(&source, revision, true)
+                .flatten()
+                .unwrap()
+                .is_inferred()
+        );
+        let season =
+            resolve_catalog_grouping_evidence_with_inference(&source, Season, revision, true);
+        assert_eq!(season.status, GroupingLookupStatus::Unconfirmed);
+        assert_eq!(
+            resolve_catalog_grouping_evidence_with_inference(&source, Original, revision, true)
+                .status,
+            GroupingLookupStatus::Original
+        );
+        grouping::set_catalog_grouping_cache(disk);
+        assert!(
+            resolve_catalog_grouping_evidence_with_inference(&source, Series, revision, true)
+                .evidence
+                .unwrap()
+                .is_inferred()
+        );
+        assert!(
+            resolve_catalog_grouping_evidence(&source, Series, revision)
+                .evidence
+                .is_none()
+        );
+        assert_eq!(fixture.calls.lock().unwrap().len(), 3);
+        let detail = addons::Addon::parse_meta(&serde_json::to_vec(&source_response).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.videos.len(), 27);
+        assert!(
+            detail
+                .videos
+                .iter()
+                .all(|video| video.season == Some(1) && !video.extra.contains_key("novaStreamIds"))
+        );
+        let mut other = addon("https://other.example", "mal:", false);
+        other.manifest.name = "Independent".into();
+        configure_metadata_addons(vec![owner.clone(), other.clone()]);
+        let revision = metadata_revision();
+        let other_url = addons::Addon::new(&other.url)
+            .unwrap()
+            .meta_url("series", &source.id);
+        let budget_fixture = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([
+                (source_url.clone(), source_response.clone()),
+                (other_url.clone(), source_response.clone()),
+            ]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        set_metadata_transport(Arc::new(BoundedTransport(budget_fixture.clone())));
+        assert_eq!(
+            resolve_catalog_grouping_evidence_with_inference(&source, Series, revision, true)
+                .status,
+            GroupingLookupStatus::Unconfirmed
+        );
+        assert_eq!(
+            *budget_fixture.calls.lock().unwrap(),
+            [source_url.clone(), other_url.clone()],
+            "relation requests never exceed the two-request bound"
+        );
+        grouping::set_catalog_grouping_cache(Arc::new(Disk::default()));
+        let confirmed_response = json!({"meta":{"id":"mal:62516","type":"series","name":"Confirmed","novaCatalogGrouping":{"version":1,"kind":"series_member","parentIds":["tt999"]}}});
+        let confirmed_fixture = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([
+                (source_url.clone(), source_response),
+                (other_url.clone(), confirmed_response),
+            ]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        set_metadata_transport(Arc::new(BoundedTransport(confirmed_fixture.clone())));
+        let confirmed =
+            resolve_catalog_grouping_evidence_with_inference(&source, Series, revision, true)
+                .evidence
+                .unwrap();
+        assert!(!confirmed.is_inferred());
+        assert_eq!(
+            confirmed.parents,
+            [grouping::ParentIdentity::ImdbSeries("tt999".into())]
+        );
+        assert_eq!(confirmed_fixture.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
     fn weak_ties_larger_than_detail_budget_remain_unresolved() {
         let installed = addon("https://metadata.example", "tt", true);
         let endpoint = addons::Addon::new(&installed.url).unwrap();
@@ -2526,16 +2918,116 @@ fn remember_catalog_grouping(caller_url: &str, result: &EnrichmentResult) {
     }
 }
 
+fn global_catalog_id(id: &str) -> bool {
+    !id.contains("://")
+        && (crate::catalog_grouping::ParentIdentity::parse(id).is_some()
+            || matches!(
+                crate::ExternalId::parse(id),
+                Some(crate::ExternalId::MalAnime(_) | crate::ExternalId::AnilistAnime(_))
+            )
+            || id.strip_prefix("kitsu:").is_some_and(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|byte| byte.is_ascii_digit())
+                    && id
+                        .parse::<u32>()
+                        .is_ok_and(|id| id > 0 && id <= i32::MAX as u32)
+            }))
+}
+
+fn global_catalog_episode_id(id: &str) -> bool {
+    let Some((parent, episode)) = id.rsplit_once(':') else {
+        return false;
+    };
+    if !episode.parse::<u32>().is_ok_and(|episode| episode > 0) {
+        return false;
+    }
+    global_catalog_id(parent)
+        || parent.rsplit_once(':').is_some_and(|(parent, season)| {
+            season.parse::<u32>().is_ok() && global_catalog_id(parent)
+        })
+}
+
+/// Recover only portable, already broker-verified episode relationships. Old
+/// metadata cache keys hide the caller, so opaque source/episode IDs can never
+/// be transplanted between installations. The exact owner must have just
+/// returned this same globally scoped inventory; no new enrichment is run.
+fn recover_catalog_grouping(
+    source: &crate::catalog_grouping::SourceIdentity,
+    detail: &addons::MetaItem,
+    revision: u64,
+    inventory: &Snapshot,
+) -> Option<crate::catalog_grouping::GroupingEvidence> {
+    use crate::catalog_grouping::{self as grouping, GroupingProof, SeasonMembership};
+    if !global_catalog_id(&source.id)
+        || detail.preview.id != source.id
+        || detail.preview.type_ != source.media_type
+        || detail.videos.is_empty()
+        || !detail
+            .videos
+            .iter()
+            .all(|video| global_catalog_episode_id(&video.id))
+    {
+        return None;
+    }
+    let mut recovered = None;
+    for result in cache::confirmed_for_source(source, revision) {
+        let Some(candidate) = grouping::evidence_from_broker(source, &result) else {
+            continue;
+        };
+        if candidate.proofs.iter().any(|proof| match proof {
+            GroupingProof::BrokerAlignment { provider_id, .. } => !inventory
+                .addons
+                .iter()
+                .any(|addon| addon_metadata_id(&addon.url) == *provider_id),
+            _ => true,
+        }) {
+            continue;
+        }
+        let Some(mut candidate) = grouping::evidence_for_refreshed_detail(
+            source,
+            detail,
+            &source.addon_url,
+            Some(candidate),
+        ) else {
+            continue;
+        };
+        // Recovery establishes Series membership only. A cached broker result
+        // must not create virtual season cards or hide unmapped/special videos.
+        candidate.season = SeasonMembership::Unknown;
+        candidate.season_partitions.clear();
+        recovered = match recovered {
+            None => Some(candidate),
+            Some(previous) => Some(grouping::merge_grouping_evidence(
+                Some(previous),
+                Some(candidate),
+            )?),
+        };
+    }
+    recovered
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_catalog_grouping_evidence(
     source: &crate::catalog_grouping::SourceIdentity,
     mode: nova_config::CatalogGroupingMode,
     revision: u64,
 ) -> crate::catalog_grouping::GroupingLookup {
+    resolve_catalog_grouping_evidence_with_inference(source, mode, revision, false)
+}
+
+pub(crate) fn resolve_catalog_grouping_evidence_with_inference(
+    source: &crate::catalog_grouping::SourceIdentity,
+    mode: nova_config::CatalogGroupingMode,
+    revision: u64,
+    allow_inferred: bool,
+) -> crate::catalog_grouping::GroupingLookup {
     use crate::catalog_grouping::{GroupingLookup, GroupingLookupStatus as Status};
+    let allow_inferred = allow_inferred && mode == nova_config::CatalogGroupingMode::Series;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static ACTIVE: AtomicUsize = AtomicUsize::new(0);
-    static IN_FLIGHT: OnceLock<Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity)>>> =
-        OnceLock::new();
+    static IN_FLIGHT: OnceLock<
+        Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity, bool)>>,
+    > = OnceLock::new();
     let response = |evidence, status| GroupingLookup { evidence, status };
     if mode == nova_config::CatalogGroupingMode::Original {
         return response(None, Status::Original);
@@ -2543,11 +3035,13 @@ pub(crate) fn resolve_catalog_grouping_evidence(
     if revision != metadata_revision() {
         return response(None, Status::Stale);
     }
-    if let Some(evidence) = crate::catalog_grouping::cached_evidence(source, revision) {
-        let status = if evidence.is_some() {
-            Status::Confirmed
-        } else {
-            Status::Unconfirmed
+    if let Some(evidence) =
+        crate::catalog_grouping::cached_evidence_with_inference(source, revision, allow_inferred)
+    {
+        let status = match evidence.as_ref() {
+            Some(evidence) if evidence.is_inferred() => Status::Inferred,
+            Some(_) => Status::Confirmed,
+            None => Status::Unconfirmed,
         };
         return response(evidence, status);
     }
@@ -2555,7 +3049,7 @@ pub(crate) fn resolve_catalog_grouping_evidence(
         return response(None, Status::Unconfirmed);
     }
     let jobs = IN_FLIGHT.get_or_init(Default::default);
-    let job = (revision, source.clone());
+    let job = (revision, source.clone(), allow_inferred);
     {
         let mut jobs = jobs.lock().unwrap();
         if jobs.contains(&job) || ACTIVE.load(Ordering::Relaxed) >= 2 {
@@ -2565,8 +3059,8 @@ pub(crate) fn resolve_catalog_grouping_evidence(
         ACTIVE.fetch_add(1, Ordering::Relaxed);
     }
     struct Guard<'a> {
-        jobs: &'a Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity)>>,
-        job: (u64, crate::catalog_grouping::SourceIdentity),
+        jobs: &'a Mutex<BTreeSet<(u64, crate::catalog_grouping::SourceIdentity, bool)>>,
+        job: (u64, crate::catalog_grouping::SourceIdentity, bool),
         active: &'a AtomicUsize,
     }
     impl Drop for Guard<'_> {
@@ -2609,6 +3103,8 @@ pub(crate) fn resolve_catalog_grouping_evidence(
     let _nested = NestedGuard::new();
     let mut evidence = None;
     let mut conflicting = false;
+    let mut owner_detail = None;
+    let mut calls = 0;
     for installed in endpoints.into_iter().take(2) {
         let Some(remaining) = budget.checked_sub(started.elapsed()) else {
             break;
@@ -2616,6 +3112,7 @@ pub(crate) fn resolve_catalog_grouping_evidence(
         let Ok(addon) = addons::Addon::new(&installed.url) else {
             continue;
         };
+        calls += 1;
         let Ok(bytes) = transport.fetch(
             &addon.meta_url(&source.media_type, &source.id),
             remaining,
@@ -2626,9 +3123,32 @@ pub(crate) fn resolve_catalog_grouping_evidence(
         if bytes.len() > RESPONSE_LIMIT {
             continue;
         }
-        let Some(found) =
-            crate::catalog_grouping::evidence_from_response(source, &bytes, &installed.url)
-        else {
+        if installed.url == source.addon_url {
+            owner_detail =
+                crate::catalog_grouping::detail_from_response(source, &bytes, &installed.url);
+        }
+        let mut found =
+            crate::catalog_grouping::evidence_from_response(source, &bytes, &installed.url);
+        if installed.url == source.addon_url
+            && let Some(detail) =
+                crate::catalog_grouping::detail_from_response(source, &bytes, &installed.url)
+            && let Some(recovered) = recover_catalog_grouping(source, &detail, revision, &inventory)
+        {
+            found = match found {
+                Some(current) => {
+                    let Some(merged) = crate::catalog_grouping::merge_grouping_evidence(
+                        Some(current),
+                        Some(recovered),
+                    ) else {
+                        conflicting = true;
+                        break;
+                    };
+                    Some(merged)
+                }
+                None => Some(recovered),
+            };
+        }
+        let Some(found) = found else {
             continue;
         };
         if let Some(previous) = evidence.take() {
@@ -2643,17 +3163,59 @@ pub(crate) fn resolve_catalog_grouping_evidence(
             evidence = Some(found);
         }
     }
+    if allow_inferred
+        && evidence.is_none()
+        && !conflicting
+        && calls < 2
+        && let Some(detail) = owner_detail.as_ref()
+        && let Some(relation) = crate::catalog_grouping::season_relation(source, detail)
+        && let Some(owner) = inventory.addons.iter().find(|addon| {
+            addon.url == source.addon_url
+                && addon
+                    .manifest
+                    .accepts("meta", &relation.source.media_type, &relation.source.id)
+        })
+        && let Ok(addon) = addons::Addon::new(&owner.url)
+        && let Some(remaining) = budget.checked_sub(started.elapsed())
+        && let Ok(bytes) = transport.fetch(
+            &addon.meta_url(&relation.source.media_type, &relation.source.id),
+            remaining,
+            RESPONSE_LIMIT,
+        )
+        && bytes.len() <= RESPONSE_LIMIT
+        && let Ok(Some(parent_detail)) = addons::Addon::parse_meta(&bytes)
+    {
+        // Preserve the original typed TV-parent identity. A standalone anime
+        // release is not a whole-title alias of its parent series.
+        evidence = crate::catalog_grouping::infer_season_parent(
+            source,
+            detail,
+            &relation,
+            &parent_detail,
+            &owner.url,
+        );
+    }
     if revision != metadata_revision() {
         return response(None, Status::Stale);
     }
     if conflicting {
         evidence = None;
     }
-    crate::catalog_grouping::remember_evidence(source, revision, evidence.clone());
-    let status = if evidence.is_some() {
-        Status::Confirmed
+    if evidence
+        .as_ref()
+        .is_some_and(crate::catalog_grouping::GroupingEvidence::is_inferred)
+    {
+        crate::catalog_grouping::remember_inferred_evidence(source, revision, evidence.clone());
     } else {
-        Status::Unconfirmed
+        crate::catalog_grouping::remember_evidence(source, revision, evidence.clone());
+        if allow_inferred && evidence.is_none() {
+            crate::catalog_grouping::remember_inferred_evidence(source, revision, None);
+        }
+    }
+    let status = match evidence.as_ref() {
+        Some(evidence) if evidence.is_inferred() => Status::Inferred,
+        Some(_) => Status::Confirmed,
+        None => Status::Unconfirmed,
     };
     response(evidence, status)
 }

@@ -8,7 +8,9 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-const CACHE_VERSION: u32 = 3;
+// Version 5 keeps opt-in inferred results (including negatives) separate from
+// confirmed resolution. Old off-policy negatives cannot suppress inference.
+const CACHE_VERSION: u32 = 5;
 const ENTRY_LIMIT: usize = 256 * 1024;
 const STORE_LIMIT: usize = 512 * 1024;
 const COUNT_LIMIT: usize = 128;
@@ -23,6 +25,8 @@ struct Entry {
     at: u64,
     source: SourceIdentity,
     evidence: Option<GroupingEvidence>,
+    #[serde(default)]
+    inferred_policy: bool,
 }
 
 #[derive(Clone, Default)]
@@ -55,7 +59,19 @@ fn key(source: &SourceIdentity, revision: u64) -> String {
     super::digest(&(CACHE_VERSION, revision, source))
 }
 
+fn inference_key(source: &SourceIdentity, revision: u64) -> String {
+    super::digest(&(CACHE_VERSION, "inferred", revision, source))
+}
+
 impl Entry {
+    fn cache_key(&self) -> String {
+        if self.inferred_policy {
+            inference_key(&self.source, self.revision)
+        } else {
+            key(&self.source, self.revision)
+        }
+    }
+
     fn live(&self) -> bool {
         self.version == CACHE_VERSION
             && now().saturating_sub(self.at)
@@ -68,10 +84,11 @@ impl Entry {
 
     fn valid(&self) -> bool {
         self.version == CACHE_VERSION
-            && self
-                .evidence
-                .as_ref()
-                .is_none_or(|evidence| evidence.source == self.source && evidence.verified())
+            && self.evidence.as_ref().is_none_or(|evidence| {
+                evidence.source == self.source
+                    && evidence.verified()
+                    && evidence.is_inferred() == self.inferred_policy
+            })
             && now().saturating_sub(self.at)
                 < if self.evidence.is_some() {
                     POSITIVE_TTL
@@ -107,8 +124,7 @@ impl Snapshot {
             None => BTreeMap::new(),
             _ => return None,
         };
-        entries
-            .retain(|key, entry| entry.valid() && *key == self::key(&entry.source, entry.revision));
+        entries.retain(|key, entry| entry.valid() && *key == entry.cache_key());
         while entries.len() > COUNT_LIMIT {
             evict(&mut entries);
         }
@@ -143,10 +159,22 @@ impl Cache {
     }
 
     fn remember(&self, source: &SourceIdentity, revision: u64, evidence: Option<GroupingEvidence>) {
-        if evidence
-            .as_ref()
-            .is_some_and(|evidence| evidence.source != *source || !evidence.verified())
-        {
+        let inferred_policy = evidence.as_ref().is_some_and(GroupingEvidence::is_inferred);
+        self.remember_with_policy(source, revision, evidence, inferred_policy);
+    }
+
+    fn remember_with_policy(
+        &self,
+        source: &SourceIdentity,
+        revision: u64,
+        evidence: Option<GroupingEvidence>,
+        inferred_policy: bool,
+    ) {
+        if evidence.as_ref().is_some_and(|evidence| {
+            evidence.source != *source
+                || !evidence.verified()
+                || evidence.is_inferred() != inferred_policy
+        }) {
             return;
         }
         let entry = Entry {
@@ -155,6 +183,7 @@ impl Cache {
             at: now(),
             source: source.clone(),
             evidence,
+            inferred_policy,
         };
         if !serde_json::to_vec(&entry).is_ok_and(|raw| raw.len() <= ENTRY_LIMIT) {
             return;
@@ -163,7 +192,7 @@ impl Cache {
         let previous = self.snapshot();
         let mut entries = (*previous.entries).clone();
         entries.retain(|_, entry| entry.live());
-        entries.insert(key(source, revision), entry);
+        entries.insert(entry.cache_key(), entry);
         while entries.len() > COUNT_LIMIT {
             evict(&mut entries);
         }
@@ -188,9 +217,25 @@ impl Cache {
     }
 
     fn get(&self, source: &SourceIdentity, revision: u64) -> Option<Option<GroupingEvidence>> {
+        self.get_with_inference(source, revision, false)
+    }
+
+    fn get_with_inference(
+        &self,
+        source: &SourceIdentity,
+        revision: u64,
+        allow_inferred: bool,
+    ) -> Option<Option<GroupingEvidence>> {
         let entries = self.snapshot().entries;
-        entries
+        let confirmed = entries
             .get(&key(source, revision))
+            .filter(|entry| entry.live());
+        if confirmed.is_some_and(|entry| entry.evidence.is_some()) || !allow_inferred {
+            return confirmed.map(|entry| entry.evidence.clone());
+        }
+        // An off-policy negative says nothing about an optional inference.
+        entries
+            .get(&inference_key(source, revision))
             .filter(|entry| entry.live())
             .map(|entry| entry.evidence.clone())
     }
@@ -199,6 +244,22 @@ impl Cache {
 /// None = not cached; Some(None) = a recent unconfirmed/failed lookup.
 pub fn cached_evidence(source: &SourceIdentity, revision: u64) -> Option<Option<GroupingEvidence>> {
     store().get(source, revision)
+}
+
+pub fn cached_evidence_with_inference(
+    source: &SourceIdentity,
+    revision: u64,
+    allow_inferred: bool,
+) -> Option<Option<GroupingEvidence>> {
+    store().get_with_inference(source, revision, allow_inferred)
+}
+
+pub(crate) fn remember_inferred_evidence(
+    source: &SourceIdentity,
+    revision: u64,
+    evidence: Option<GroupingEvidence>,
+) {
+    store().remember_with_policy(source, revision, evidence, true);
 }
 
 pub fn remember_evidence(
@@ -384,6 +445,66 @@ mod tests {
     }
 
     #[test]
+    fn inferred_results_and_negatives_are_policy_scoped_and_confirmed_proof_wins() {
+        let disk = Arc::new(Disk::default());
+        let cache = Cache::load(disk.clone()).unwrap();
+        let source = source();
+        cache.remember(&source, 7, None);
+        assert_eq!(cache.get(&source, 7), Some(None));
+        assert_eq!(
+            cache.get_with_inference(&source, 7, true),
+            None,
+            "off-policy negative cannot suppress inference"
+        );
+        cache.remember_with_policy(&source, 7, None, true);
+        assert_eq!(cache.get_with_inference(&source, 7, true), Some(None));
+        let mut inferred = evidence(&source);
+        inferred.season = SeasonMembership::Unknown;
+        inferred.source_inventory_fingerprint =
+            Some(super::super::episode_inventory_fingerprint(["kitsu:3:1"]));
+        inferred.proofs = vec![GroupingProof::InferredSeasonChain {
+            provider_id: crate::addon_metadata_id(&source.addon_url),
+            related_release_id: "kitsu:2".into(),
+            source_season: 3,
+            related_season: 2,
+            parent_preview: super::super::InferredParentPreview {
+                source: SourceIdentity {
+                    addon_url: source.addon_url.clone(),
+                    media_type: "series".into(),
+                    id: "tt1".into(),
+                },
+                name: "Show".into(),
+                poster: None,
+                background: None,
+                logo: None,
+                release_info: None,
+            },
+        }];
+        cache.remember(&source, 7, Some(inferred.clone()));
+        assert_eq!(
+            cache.get(&source, 7),
+            Some(None),
+            "Detail/default getter never sees inferred proof"
+        );
+        assert_eq!(
+            cache.get_with_inference(&source, 7, true),
+            Some(Some(inferred.clone()))
+        );
+        let restarted = Cache::load(disk).unwrap();
+        assert_eq!(restarted.get(&source, 7), Some(None));
+        assert_eq!(
+            restarted.get_with_inference(&source, 7, true),
+            Some(Some(inferred))
+        );
+        let confirmed = evidence(&source);
+        restarted.remember(&source, 7, Some(confirmed.clone()));
+        assert_eq!(
+            restarted.get_with_inference(&source, 7, true),
+            Some(Some(confirmed))
+        );
+    }
+
+    #[test]
     fn cache_is_bounded_negative_entries_expire_and_corrupt_storage_is_preserved() {
         let disk = Arc::new(Disk::default());
         let cache = Cache::load(disk.clone()).unwrap();
@@ -399,6 +520,7 @@ mod tests {
             at: now().saturating_sub(NEGATIVE_TTL + 1),
             source: source(),
             evidence: None,
+            inferred_policy: false,
         };
         assert!(!old.valid());
         old.evidence = Some(evidence(&old.source));

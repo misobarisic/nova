@@ -569,6 +569,7 @@ fn grouped_tools_route_semantic_actions_and_bookmark_drafts_wait_for_matching_ac
     app.set_remote_connected(true);
     app.set_remote_session("receiver-a".into());
     app.set_remote_can_chapters(true);
+    app.set_remote_can_subtitle_style(true);
     app.set_remote_can_bookmarks(true);
     app.set_remote_can_secondary_subtitles(true);
     app.set_remote_chapters(
@@ -645,6 +646,49 @@ fn grouped_tools_route_semantic_actions_and_bookmark_drafts_wait_for_matching_ac
     assert_eq!(calls.borrow().last().unwrap().0, "secondary_subtitle");
     assert_eq!(calls.borrow().last().unwrap().1, -1.0);
     key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    click(&app, "Subtitle appearance");
+    settle_remote();
+    let background =
+        ElementHandle::find_by_accessible_label(&app, "Increase Background opacity (%)")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap();
+    assert!(background.size().width >= 44.0 && background.size().height >= 44.0);
+    click(&app, "Increase Background opacity (%)");
+    assert_eq!(
+        calls.borrow().last().unwrap(),
+        &(
+            "subtitle_style".into(),
+            46.0,
+            "7".into(),
+            "".into(),
+            "receiver-a".into()
+        )
+    );
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    settle_remote();
+    // Tool pages begin with no row selected; eight Down presses reach field7.
+    for _ in 0..8 {
+        key(&app, slint::platform::Key::DownArrow);
+    }
+    settle_remote();
+    let before_keyboard_backdrop = calls.borrow().len();
+    key(&app, slint::platform::Key::RightArrow);
+    assert_eq!(calls.borrow().len(), before_keyboard_backdrop + 1);
+    assert_eq!(
+        calls.borrow().last().unwrap(),
+        &(
+            "subtitle_style".into(),
+            46.0,
+            "7".into(),
+            "".into(),
+            "receiver-a".into()
+        )
+    );
+    key(&app, slint::platform::Key::Escape);
+    settle_remote();
+    assert_eq!(app.global::<nova::RemoteBridge>().get_menu_page(), "tools");
+    app.global::<nova::InterfaceStyle>().set_tv(false);
     settle_remote();
     click(&app, "Scene bookmarks");
     settle_remote();

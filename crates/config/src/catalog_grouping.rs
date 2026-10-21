@@ -113,6 +113,37 @@ mod tests {
     }
 
     #[test]
+    fn inferred_series_grouping_defaults_off_and_roundtrips_independently_of_modes() {
+        assert!(!CacheSettings::default().catalog_grouping_infer_series);
+        let mut legacy = serde_json::to_value(CacheSettings::default()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("catalog_grouping_infer_series");
+        let mut settings: CacheSettings = serde_json::from_value(legacy).unwrap();
+        assert!(!settings.catalog_grouping_infer_series);
+        let catalog = key("https://one.example", CatalogSurface::Home);
+        settings.set_catalog_grouping_override(catalog.clone(), Some(CatalogGroupingMode::Season));
+        for enabled in [true, false] {
+            settings.catalog_grouping_infer_series = enabled;
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
+            assert_eq!(
+                restored.catalog_grouping_mode(&catalog),
+                CatalogGroupingMode::Season
+            );
+            assert_eq!(
+                restored.catalog_grouping_default,
+                CatalogGroupingMode::Original
+            );
+        }
+        let mut malformed = serde_json::to_value(&settings).unwrap();
+        malformed["catalog_grouping_infer_series"] = serde_json::json!("true");
+        assert!(serde_json::from_value::<CacheSettings>(malformed).is_err());
+    }
+
+    #[test]
     fn original_is_backwards_compatible_and_distinct_from_inheritance() {
         let mut value = serde_json::to_value(CacheSettings::default()).unwrap();
         value

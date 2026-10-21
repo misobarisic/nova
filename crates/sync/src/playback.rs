@@ -15,7 +15,8 @@ use nova_playback_api::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{Semaphore, watch};
 
-pub const ALPN: &[u8] = b"nova/playback/3";
+// /4 extends the subtitle-style snapshot with the native backdrop opacity.
+pub const ALPN: &[u8] = b"nova/playback/4";
 const MAX_FRAME: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MEMBERSHIP_POLL: Duration = Duration::from_millis(100);
@@ -765,6 +766,10 @@ mod tests {
                 control: 0,
                 value: -1.7,
             },
+            PlaybackAction::SetSubtitleStyle {
+                control: 7,
+                value: 45.0,
+            },
             PlaybackAction::SelectSecondarySubtitleTrackToken("t123".into()),
             PlaybackAction::EditBookmark {
                 id: "b123".into(),
@@ -783,7 +788,7 @@ mod tests {
         }
         assert!(
             !PlaybackAction::SetSubtitleStyle {
-                control: 7,
+                control: 8,
                 value: 1.0
             }
             .valid_payload()
@@ -795,6 +800,9 @@ mod tests {
             }
             .valid_payload()
         );
+        for value in [-1.0, 101.0, f64::NAN, f64::INFINITY] {
+            assert!(!PlaybackAction::SetSubtitleStyle { control: 7, value }.valid_payload());
+        }
         assert!(
             !PlaybackAction::AddBookmark {
                 note: "x".repeat(281)
@@ -802,7 +810,7 @@ mod tests {
             .valid_payload()
         );
         assert!(!PlaybackAction::SetSpeed(3.0).valid_payload());
-        assert_eq!(ALPN, b"nova/playback/3");
+        assert_eq!(ALPN, b"nova/playback/4");
         assert_eq!(
             request_timeout(&Request::CurrentOffers { session }),
             Duration::from_secs(90)

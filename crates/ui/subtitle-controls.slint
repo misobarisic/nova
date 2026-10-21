@@ -4,7 +4,7 @@ import { MiniSlider, PillButton } from "settings-controls.slint";
 // Both hosts use the same units and bounds. The backend owns normalization and
 // persistence; this component only reports an edit to one field.
 export component SubtitleControls inherits VerticalLayout {
-    in property <[float]> values: [0, 56, 19, 100, 3, 0, 0];
+    in property <[float]> values: [0, 56, 19, 100, 3, 0, 0, 45];
     in property <int> focused_idx: -1;
     callback edited(int, float);
     callback reveal(length, length);
@@ -81,4 +81,33 @@ export component SubtitleControls inherits VerticalLayout {
         font-size: 12px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px;
         vertical-stretch: 0;
     }
+    VerticalLayout {
+        spacing: 4px; alignment: start; vertical-stretch: 0;
+        property <bool> selected: root.focused_idx == 7;
+        changed selected => { if self.selected { root.reveal(self.absolute-position.y, self.height); } }
+        Text { text: @tr("Background opacity (%)"); font-size: 14px; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+        HorizontalLayout {
+            spacing: 6px; vertical-stretch: 0;
+            PillButton { label: "−"; compact: true; btn_min_width: 44px;
+                accessible-label: @tr("Decrease") + " " + @tr("Background opacity (%)");
+                clicked => { root.edited(7, root.values[7] - 1); } }
+            MiniSlider {
+                allow-vertical-pan: true; horizontal-stretch: 1; min-width: 24px;
+                name: @tr("Background opacity (%)"); focused: root.focused_idx == 7;
+                value: root.values[7]; minimum: 0; maximum: 100; step: 1;
+                changed(v) => { root.edited(7, v); }
+            }
+            Text { width: 58px; height: 44px; text: Math.round(root.values[7]) + "%";
+                color: Theme.current.text_primary; font-size: 13px;
+                horizontal-alignment: center; vertical-alignment: center; }
+            PillButton { label: "+"; compact: true; btn_min_width: 44px;
+                accessible-label: @tr("Increase") + " " + @tr("Background opacity (%)");
+                clicked => { root.edited(7, root.values[7] + 1); } }
+        }
+        Text {
+            text: @tr("Adds a translucent black backdrop to styled text subtitles on both tracks. Embedded styles and image subtitles may keep their original appearance.");
+            font-size: 12px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+        }
+    }
+
 }

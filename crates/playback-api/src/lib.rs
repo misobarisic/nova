@@ -126,6 +126,7 @@ impl PlaybackAction {
                 4 => range(*value, 0.0, 10.0),
                 5 => range(*value, 0.0, 2.0) && value.fract() == 0.0,
                 6 => matches!(*value, 0.0 | 1.0),
+                7 => range(*value, 0.0, 100.0),
                 _ => false,
             },
             Self::SeekChapter { id: value }
@@ -303,7 +304,7 @@ pub struct PlaybackSnapshot {
     pub secondary_subtitle_tracks: Vec<PlaybackTrack>,
     pub secondary_subtitle_track: i32,
     pub secondary_subtitle_position: i32,
-    pub subtitle_style: [f64; 7],
+    pub subtitle_style: [f64; 8],
     pub chapters: Vec<PlaybackChapter>,
     pub bookmarks: Vec<PlaybackBookmark>,
     pub chapters_truncated: bool,
@@ -368,6 +369,7 @@ impl PlaybackSnapshot {
                     && (self.duration <= 0.0 || r.time <= self.duration)
             })
             && self.subtitle_style.iter().all(|v| v.is_finite())
+            && (0.0..=100.0).contains(&self.subtitle_style[7])
             && (0..=2).contains(&self.secondary_subtitle_position)
             && (-1..=2).contains(&self.intro_skip_mode)
             && (0..=2).contains(&self.skip_segment_kind)

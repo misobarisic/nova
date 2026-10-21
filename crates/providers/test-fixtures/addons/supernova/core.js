@@ -7,6 +7,7 @@
     ...settings, streamPreferences:preferences,
     "quality.preferred":"any", "language.prefs":[], "codec.prefs":[],
   };
+  S.validResolutionHeight = value => Number.isInteger(value) && value>=144 && value<=8640;
   S.preferenceFacts = new WeakMap();
   S.copyRow = row => {
     const copy={...row};

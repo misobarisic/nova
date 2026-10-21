@@ -39,6 +39,8 @@ pub struct SubtitleStyle {
     pub outline: Option<f32>,
     pub color: u8,
     pub override_ass: bool,
+    /// Percent opacity of mpv's shared black text-subtitle backdrop; zero disables it.
+    pub background_opacity: f32,
 }
 
 impl Default for SubtitleStyle {
@@ -52,6 +54,7 @@ impl Default for SubtitleStyle {
             outline: None,
             color: 0,
             override_ass: false,
+            background_opacity: 45.0,
         }
     }
 }
@@ -79,6 +82,7 @@ impl SubtitleStyle {
                 .map(|v| (bounded(v, 0.0, 10.0, 3.0) * 100.0).round() / 100.0),
             color: self.color.min(2),
             override_ass: self.override_ass,
+            background_opacity: bounded(self.background_opacity, 0.0, 100.0, 45.0).round(),
         }
     }
 
@@ -90,7 +94,7 @@ impl SubtitleStyle {
         style
     }
 
-    pub fn values(self) -> [f32; 7] {
+    pub fn values(self) -> [f32; 8] {
         let s = self.normalized();
         [
             s.delay,
@@ -100,6 +104,7 @@ impl SubtitleStyle {
             s.outline.unwrap_or(3.0),
             s.color as f32,
             if s.override_ass { 1.0 } else { 0.0 },
+            s.background_opacity,
         ]
     }
 
@@ -115,6 +120,7 @@ impl SubtitleStyle {
             4 => self.outline = Some(value),
             5 => self.color = value.round().clamp(0.0, 2.0) as u8,
             6 => self.override_ass = value >= 0.5,
+            7 => self.background_opacity = value,
             _ => {}
         }
         self.normalized()
@@ -133,6 +139,7 @@ pub struct SubtitleStylePatch {
     pub outline: Option<f32>,
     pub color: Option<u8>,
     pub override_ass: Option<bool>,
+    pub background_opacity: Option<f32>,
 }
 
 impl SubtitleStylePatch {
@@ -145,6 +152,9 @@ impl SubtitleStylePatch {
             outline: self.outline.or(default.outline),
             color: self.color.unwrap_or(default.color),
             override_ass: self.override_ass.unwrap_or(default.override_ass),
+            background_opacity: self
+                .background_opacity
+                .unwrap_or(default.background_opacity),
         }
         .normalized()
     }
@@ -162,6 +172,7 @@ impl SubtitleStylePatch {
             4 => self.outline = value.outline,
             5 => self.color = Some(value.color),
             6 => self.override_ass = Some(value.override_ass),
+            7 => self.background_opacity = Some(value.background_opacity),
             _ => {}
         }
         self
@@ -527,6 +538,33 @@ mod tests {
         assert_eq!(defaults.with_value(4, 99.0).outline, Some(10.0));
         assert_eq!(defaults.with_value(5, 99.0).color, 2);
         assert!(defaults.with_value(6, 1.0).override_ass);
+        assert_eq!(defaults.with_value(7, -1.0).background_opacity, 0.0);
+        assert_eq!(defaults.with_value(7, 101.0).background_opacity, 100.0);
+        assert_eq!(defaults.with_value(7, f32::NAN), defaults);
+    }
+
+    #[test]
+    fn subtitle_backdrop_defaults_migrate_and_title_edits_inherit_independently() {
+        let legacy: SubtitleStyle =
+            serde_json::from_str(r#"{"delay":0.3,"override_ass":false}"#).unwrap();
+        assert_eq!(legacy.background_opacity, 45.0);
+        let legacy_patch: SubtitleStylePatch = serde_json::from_str(r#"{"delay":0.3}"#).unwrap();
+        assert_eq!(legacy_patch.background_opacity, None);
+        let defaults = SubtitleStyle::default().with_value(7, 65.0);
+        assert_eq!(legacy_patch.apply(defaults).background_opacity, 65.0);
+        let off = legacy_patch.with_value(7, 0.0);
+        assert_eq!(off.apply(defaults).background_opacity, 0.0);
+        assert_eq!(
+            off.apply(defaults.with_value(1, 70.0)).font_size,
+            Some(70.0)
+        );
+        assert_eq!(off.apply(defaults).delay, 0.3);
+        assert_eq!(
+            serde_json::from_str::<SubtitleStylePatch>(&serde_json::to_string(&off).unwrap())
+                .unwrap(),
+            off
+        );
+        assert_eq!(SubtitleStyle::default().values()[7], 45.0);
     }
 
     fn track(id: i32, language: &str, kind: TrackKind) -> SemanticTrack {

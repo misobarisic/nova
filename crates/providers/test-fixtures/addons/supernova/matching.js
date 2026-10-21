@@ -242,9 +242,14 @@
     return index < 0 ? null : -index;
   };
   S.resolution = title => {
-    const match = String(title || "").match(/\b(4320|2160|1440|1080|720|576|480|360)p\b/i);
-    if (match) return Number(match[1]);
-    return /\b(?:4k|uhd)\b/i.test(title || "") ? 2160 : /\b8k\b/i.test(title || "") ? 4320 : null;
+    const text=String(title || "");
+    // Exact advertised tokens only: preserve nonstandard heights and reject
+    // conflicting claims rather than rounding or picking the first label.
+    const heights=[...text.matchAll(/(?<![a-z\d])(?<!\b\d{1,3}[.,])([1-9]\d{2,3})p(?![a-z\d])/gi)].map(match=>Number(match[1]));
+    if (/\b(?:4k|uhd)\b/i.test(text)) heights.push(2160);
+    if (/\b8k\b/i.test(text)) heights.push(4320);
+    const unique=[...new Set(heights)];
+    return unique.length===1 && S.validResolutionHeight(unique[0]) ? unique[0] : null;
   };
   const recordFactSnapshots = new WeakMap();
   S.recordFacts = record => {
@@ -288,7 +293,7 @@
   };
   S.validPreferenceFacts = facts => !!facts && typeof facts==="object" && !Array.isArray(facts)
     && Object.keys(facts).every(key=>["height","bytes","codec","audio_languages","subtitle_languages","cached","season_pack","seeders"].includes(key))
-    && (facts.height===null || Number.isInteger(facts.height) && facts.height>=144 && facts.height<=8640)
+    && (facts.height===null || S.validResolutionHeight(facts.height))
     && (facts.bytes===null || S.number(facts.bytes)!==null) && (facts.seeders===null || S.number(facts.seeders)!==null)
     && [null,"avc","hevc","av1","vp9","other"].includes(facts.codec)
     && [null,true,false].includes(facts.cached) && [null,true,false].includes(facts.season_pack)

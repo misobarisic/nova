@@ -47,6 +47,9 @@ export global SettingsContent {
     in-out property <int> kb_pr: 0;
     in-out property <string> stream_filter_language_draft;
     in-out property <int> stream_filter_codec_choice;
+    in-out property <int> stream_filter_resolution_exclude_choice: 0;
+    in-out property <int> stream_filter_resolution_choice: 5;
+    in-out property <int> stream_filter_resolution_column;
     in-out property <int> stream_filter_priority_column;
     in-out property <int> stream_filter_sort_column;
     in-out property <int> kb_theme: 0;
@@ -81,7 +84,7 @@ export global SettingsContent {
     // this calculation shared so leaf focus marks and shell arrows agree.
     public pure function kb_player_stream_filters_row() -> int {
         if SettingsBridge.player_backend_index == 0 {
-            return SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11;
+            return SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 12;
         }
         return SettingsBridge.is_android ? 2 : 3;
     }
@@ -91,7 +94,15 @@ export global SettingsContent {
     public pure function stream_filter_codec_label(codec: int) -> string {
         return codec == 0 ? "H.264 / AVC" : codec == 1 ? "H.265 / HEVC" : codec == 2 ? "AV1" : codec == 3 ? "VP9" : @tr("Other video codecs");
     }
-    public pure function kb_stream_filter_require_codec() -> int { return 14 + StreamFiltersBridge.codec_priority_order.length; }
+    public pure function kb_stream_filter_resolution_exclude_picker() -> int { return 3; }
+    public pure function kb_stream_filter_resolution_excluded_start() -> int { return 4; }
+    public pure function kb_stream_filter_resolution_picker() -> int { return 4 + StreamFiltersBridge.excluded_resolutions.length; }
+    public pure function kb_stream_filter_resolution_priority_start() -> int { return SettingsContent.kb_stream_filter_resolution_picker() + 1; }
+    public pure function kb_stream_filter_require_resolution() -> int { return SettingsContent.kb_stream_filter_resolution_priority_start() + StreamFiltersBridge.resolution_priority_order.length; }
+    public pure function kb_stream_filter_codec_start() -> int { return SettingsContent.kb_stream_filter_require_resolution() + 1; }
+    public pure function kb_stream_filter_codec_picker() -> int { return SettingsContent.kb_stream_filter_codec_start() + 10; }
+    public pure function kb_stream_filter_codec_priority_start() -> int { return SettingsContent.kb_stream_filter_codec_picker() + 1; }
+    public pure function kb_stream_filter_require_codec() -> int { return SettingsContent.kb_stream_filter_codec_priority_start() + StreamFiltersBridge.codec_priority_order.length; }
     public pure function kb_stream_filter_audio_source() -> int { return SettingsContent.kb_stream_filter_require_codec() + 1; }
     public pure function kb_stream_filter_audio_picker() -> int { return SettingsContent.kb_stream_filter_audio_source() + 1; }
     public pure function kb_stream_filter_require() -> int { return SettingsContent.kb_stream_filter_audio_source() + (StreamFiltersBridge.use_preferred_audio_languages ? 1 : 2); }
@@ -135,6 +146,9 @@ export global SettingsContent {
         SettingsContent.kb_pr = 0;
         SettingsContent.stream_filter_language_draft = "";
         SettingsContent.stream_filter_codec_choice = 0;
+        SettingsContent.stream_filter_resolution_exclude_choice = 0;
+        SettingsContent.stream_filter_resolution_choice = 5;
+        SettingsContent.stream_filter_resolution_column = 0;
         SettingsContent.stream_filter_priority_column = 0;
         SettingsContent.stream_filter_sort_column = 0;
         SettingsContent.kb_theme = 0;

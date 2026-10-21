@@ -26,7 +26,7 @@
             attrs[attr.name]=attr.value;
           }
           if (["audio","resolution","video"].includes(attr.name) && typeof attr.value==="string" && media.length<32) {
-            const value=attr.name==="resolution" && /^(360|480|576|720|1080|1440|2160|4320)$/.test(attr.value) ? attr.value+"p" : attr.value;
+            const value=attr.name==="resolution" && /^[1-9]\d{2,3}$/.test(attr.value) && S.validResolutionHeight(Number(attr.value)) ? attr.value+"p" : attr.value;
             media.push(({audio:"Audio",resolution:"Resolution",video:"Video"})[attr.name]+": "+value.slice(0,256));
           }
         }

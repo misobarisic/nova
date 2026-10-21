@@ -117,6 +117,39 @@ pub(super) fn read(key: &str) -> Option<String> {
         .get(key)
         .map(|entry| entry.value.clone())
 }
+/// Legacy entries do not retain their caller URL. Return only bounded,
+/// current confirmed candidates; callers must independently bind them to a
+/// freshly fetched owner inventory before using their episode proof.
+pub(super) fn confirmed_for_source(
+    source: &crate::catalog_grouping::SourceIdentity,
+    revision: u64,
+) -> Vec<EnrichmentResult> {
+    let source_id = serde_json::to_string(&source.id).unwrap_or_default();
+    let raw = store()
+        .lock()
+        .unwrap()
+        .entries
+        .values()
+        .take(COUNT_LIMIT)
+        // Cheap exact-string prefilter avoids cloning unrelated heavy results;
+        // structured source/revision validation still follows outside the lock.
+        .filter(|entry| entry.value.contains(&source_id))
+        .map(|entry| entry.value.clone())
+        .collect::<Vec<_>>();
+    // Parsing up to the bounded durable cache must not hold its writer lock.
+    raw.into_iter()
+        .filter_map(|raw| serde_json::from_str::<(u64, EnrichmentResult)>(&raw).ok())
+        .filter(|(at, result)| {
+            now().saturating_sub(*at) < super::CONFIRMED_CACHE_TTL
+                && result.status == "confirmed"
+                && result.inventory_revision == revision
+                && result.details.media.source_id == source.id
+                && result.details.media.media_type == source.media_type
+        })
+        .map(|(_, result)| result)
+        .collect()
+}
+
 pub(super) fn write(key: &str, result: &EnrichmentResult, raw: &str) {
     // Missing/failed discovery never replaces a confirmed durable mapping.
     // Explicit conflicting evidence invalidates it instead of resurrecting it.

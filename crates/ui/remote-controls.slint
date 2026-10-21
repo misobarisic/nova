@@ -128,7 +128,7 @@ component RemoteToolsSurface inherits Rectangle {
         return root.page == "tools" ? 7 : root.page == "chapters" ? RemoteBridge.chapters.length
             : root.page == "secondary" ? RemoteBridge.secondary_sub_tracks.length + 4
             : root.page == "intro" ? 6 : root.page == "bookmarks" ? 1 + RemoteBridge.bookmarks.length * 3
-            : root.page == "recovery" ? 6 : root.page == "device" ? 4 : root.page == "appearance" ? 8 : 3;
+            : root.page == "recovery" ? 6 : root.page == "device" ? 4 : root.page == "appearance" ? 9 : 3;
     }
     pure function available(i: int) -> bool {
         return root.page == "intro" ? (i >= 2 || RemoteBridge.skip_token != "")
@@ -158,8 +158,8 @@ component RemoteToolsSurface inherits Rectangle {
         width: 100%; height: 100%; enabled: root.active;
         key-pressed(e) => {
             if e.text == Key.Back || e.text == Key.Escape || (e.text == Key.Backspace && root.page != "bookmark-editor") { if !e.repeat { root.go_back(); } accept }
-            else if InterfaceStyle.tv && root.page == "appearance" && root.selected >= 0 && root.selected < 5 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
-                root.send("subtitle_style", RemoteBridge.subtitle_style[root.selected] + (e.text == Key.LeftArrow ? -1 : 1) * SubtitleStyle.step(root.selected), root.selected == 0 ? "0" : root.selected == 1 ? "1" : root.selected == 2 ? "2" : root.selected == 3 ? "3" : "4", ""); accept
+            else if InterfaceStyle.tv && root.page == "appearance" && ((root.selected >= 0 && root.selected < 5) || root.selected == 7) && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.send("subtitle_style", RemoteBridge.subtitle_style[root.selected] + (e.text == Key.LeftArrow ? -1 : 1) * SubtitleStyle.step(root.selected), root.selected == 0 ? "0" : root.selected == 1 ? "1" : root.selected == 2 ? "2" : root.selected == 3 ? "3" : root.selected == 4 ? "4" : "7", ""); accept
             } else if InterfaceStyle.tv && root.page == "appearance" && (root.selected == 5 || root.selected == 6) && (e.text == Key.Return || e.text == " ") {
                 if !e.repeat { root.send("subtitle_style", root.selected == 5 ? Math.mod(RemoteBridge.subtitle_style[5] + 1, 3) : (RemoteBridge.subtitle_style[6] >= 0.5 ? 0 : 1), root.selected == 5 ? "5" : "6", ""); } accept
             } else if InterfaceStyle.tv && root.page == "device" && root.selected == 3 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
@@ -211,10 +211,10 @@ component RemoteToolsSurface inherits Rectangle {
                     VerticalLayout { padding: 16px; spacing: 12px; alignment: start;
                         SubtitleControls {
                             values: RemoteBridge.subtitle_style; focused_idx: root.active && InterfaceStyle.tv ? root.selected : -1;
-                            edited(field, value) => { if RemoteBridge.can_subtitle_style { root.send("subtitle_style", value, field == 0 ? "0" : field == 1 ? "1" : field == 2 ? "2" : field == 3 ? "3" : field == 4 ? "4" : field == 5 ? "5" : "6", ""); } }
+                            edited(field, value) => { if RemoteBridge.can_subtitle_style { root.send("subtitle_style", value, field == 0 ? "0" : field == 1 ? "1" : field == 2 ? "2" : field == 3 ? "3" : field == 4 ? "4" : field == 5 ? "5" : field == 6 ? "6" : "7", ""); } }
                             reveal(y, h) => { root.reveal(y, h); }
                         }
-                        RemoteToolRow { slot: 7; current: root.selected; label: @tr("Reset subtitle appearance"); enabled: root.ready && RemoteBridge.can_subtitle_style; activate => { root.send("subtitle_style_reset", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
+                        RemoteToolRow { slot: 8; current: root.selected; label: @tr("Reset subtitle appearance"); enabled: root.ready && RemoteBridge.can_subtitle_style; activate => { root.send("subtitle_style_reset", 0, "", ""); } reveal(y,h) => { root.reveal(y,h); } }
                     }
                 }
                 if root.page == "secondary": SessionPanel {

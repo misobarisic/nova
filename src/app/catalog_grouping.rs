@@ -18,6 +18,7 @@ const MAX_SCOPES: usize = 96;
 struct Scope {
     key: CatalogGroupingKey,
     mode: CatalogGroupingMode,
+    infer_series: bool,
     fingerprint: String,
     revision: u64,
     profile: profiles::Context,
@@ -64,7 +65,7 @@ pub(super) struct State {
     settings_keys: HashMap<String, CatalogGroupingKey>,
     query: String,
     chooser: Option<OpenContext>,
-    chooser_members: HashMap<String, usize>,
+    chooser_members: HashMap<String, OwnedCatalogEntry>,
 }
 
 #[derive(Clone)]
@@ -203,6 +204,7 @@ fn view_budget(scope: &Scope) -> String {
         scope.profile.epoch,
         &scope.key,
         scope.mode,
+        scope.infer_series,
         scope.revision,
         scope.generation,
     ))
@@ -212,11 +214,15 @@ fn scope_is_current(state: &Shared, id: &str, stamp: &Scope, catalog_generation:
     profiles::is_current(&stamp.profile)
         && stamp.revision == nova_providers::metadata_revision()
         && state.cache_settings.catalog_grouping_mode(&stamp.key) == stamp.mode
+        && (state.cache_settings.catalog_grouping_infer_series
+            && stamp.mode == CatalogGroupingMode::Series)
+            == stamp.infer_series
         && (stamp.key.surface != CatalogSurface::Discover || stamp.generation == catalog_generation)
         && (stamp.key.surface != CatalogSurface::Home || home_scope_is_live(state, id, stamp))
         && state.catalog_grouping.scopes.get(id).is_some_and(|scope| {
             scope.fingerprint == stamp.fingerprint
                 && scope.mode == stamp.mode
+                && scope.infer_series == stamp.infer_series
                 && scope.revision == stamp.revision
                 && scope.generation == stamp.generation
                 && scope.profile == stamp.profile
@@ -292,12 +298,15 @@ impl Bridge {
         key: &CatalogGroupingKey,
         raw: &[MetaPreview],
     ) -> Vec<MetaPreview> {
-        let mode = self
-            .shared
-            .lock()
-            .unwrap()
-            .cache_settings
-            .catalog_grouping_mode(key);
+        let (mode, infer_series) = {
+            let state = self.shared.lock().unwrap();
+            let mode = state.cache_settings.catalog_grouping_mode(key);
+            (
+                mode,
+                state.cache_settings.catalog_grouping_infer_series
+                    && mode == CatalogGroupingMode::Series,
+            )
+        };
         let entries = raw
             .iter()
             .map(|preview| native_preview(preview, &key.addon_url))
@@ -316,7 +325,14 @@ impl Bridge {
                 let invalid_explicit = entry.preview.extra.contains_key("novaCatalogGrouping")
                     && entry.evidence.is_none();
                 let cached = (!invalid_explicit)
-                    .then(|| grouping::cached_evidence(&entry.source, revision).flatten())
+                    .then(|| {
+                        grouping::cached_evidence_with_inference(
+                            &entry.source,
+                            revision,
+                            infer_series,
+                        )
+                        .flatten()
+                    })
                     .flatten();
                 entry.evidence = grouping::merge_grouping_evidence(entry.evidence, cached);
                 entry
@@ -375,6 +391,9 @@ impl Bridge {
         if !profiles::is_current(&profile)
             || revision != nova_providers::metadata_revision()
             || state.cache_settings.catalog_grouping_mode(key) != mode
+            || (state.cache_settings.catalog_grouping_infer_series
+                && mode == CatalogGroupingMode::Series)
+                != infer_series
         {
             return raw
                 .iter()
@@ -410,6 +429,7 @@ impl Bridge {
             .filter(|scope| {
                 key.surface == CatalogSurface::Home
                     && scope.mode == mode
+                    && scope.infer_series == infer_series
                     && scope.revision == revision
                     && scope.profile == profile
             })
@@ -428,6 +448,7 @@ impl Bridge {
             Scope {
                 key: key.clone(),
                 mode,
+                infer_series,
                 fingerprint,
                 revision,
                 profile,
@@ -496,12 +517,15 @@ impl Bridge {
     /// The caller supplies a small visible candidate window, not a whole
     /// catalog. Both the queue and per-view attempts have independent bounds.
     pub(super) fn schedule_catalog_grouping(&self, key: CatalogGroupingKey, raw: &[MetaPreview]) {
-        let mode = self
-            .shared
-            .lock()
-            .unwrap()
-            .cache_settings
-            .catalog_grouping_mode(&key);
+        let (mode, infer_series) = {
+            let state = self.shared.lock().unwrap();
+            let mode = state.cache_settings.catalog_grouping_mode(&key);
+            (
+                mode,
+                state.cache_settings.catalog_grouping_infer_series
+                    && mode == CatalogGroupingMode::Series,
+            )
+        };
         if mode == CatalogGroupingMode::Original {
             return;
         }
@@ -518,7 +542,9 @@ impl Bridge {
                 if preview.extra.contains_key("novaCatalogGrouping") && explicit.is_none() {
                     return None;
                 }
-                if grouping::cached_evidence(&source, revision).is_some() {
+                if grouping::cached_evidence_with_inference(&source, revision, infer_series)
+                    .is_some()
+                {
                     return None;
                 }
                 if explicit.as_ref().is_some_and(|evidence| {
@@ -543,6 +569,7 @@ impl Bridge {
                 .filter(|(_, scope)| {
                     scope.key == key
                         && scope.mode == mode
+                        && scope.infer_series == infer_series
                         && scope.revision == revision
                         && sources.iter().all(|source| scope.sources.contains(source))
                 })
@@ -565,7 +592,8 @@ impl Bridge {
                     break;
                 }
                 if !matches!(source.media_type.as_str(), "series" | "anime")
-                    || grouping::cached_evidence(&source, revision).is_some()
+                    || grouping::cached_evidence_with_inference(&source, revision, infer_series)
+                        .is_some()
                     || state
                         .catalog_grouping
                         .attempted
@@ -615,10 +643,11 @@ impl Bridge {
             };
             let bridge = self.clone();
             thread::spawn(move || {
-                let result = grouping::resolve_catalog_grouping_evidence(
+                let result = grouping::resolve_catalog_grouping_evidence_with_inference(
                     &job.source,
                     job.stamp.mode,
                     job.stamp.revision,
+                    job.stamp.infer_series,
                 );
                 // Release the slot in the captured profile's session, before
                 // entering the UI. An account-scoped callback here could
@@ -637,7 +666,12 @@ impl Bridge {
                         &job.stamp,
                         bridge.catalog_gen.load(Ordering::Relaxed),
                     );
-                    if current && result.status == GroupingLookupStatus::Confirmed {
+                    if current
+                        && matches!(
+                            result.status,
+                            GroupingLookupStatus::Confirmed | GroupingLookupStatus::Inferred
+                        )
+                    {
                         match job.stamp.key.surface {
                             CatalogSurface::Discover => {
                                 bridge.reproject_catalog_grouping_discover()
@@ -661,7 +695,7 @@ impl Bridge {
         watch_now: bool,
     ) -> bool {
         let marker = display_key(preview);
-        let group = {
+        let (group, infer_series) = {
             let state = self.shared.lock().unwrap();
             let Some(registered) = state.catalog_grouping.groups.get(&marker) else {
                 return preview.extra.contains_key(DISPLAY_KEY);
@@ -679,7 +713,7 @@ impl Bridge {
             {
                 return true;
             }
-            registered.group.clone()
+            (registered.group.clone(), scope.infer_series)
         };
         // Prefer a parent which the catalog actually supplied and whose exact
         // owner advertises a compatible Detail endpoint. Broad ID support in
@@ -713,7 +747,35 @@ impl Bridge {
                 return true;
             }
         }
-        if group.members.len() == 1 {
+        // An inferred relation may retain a real canonical preview returned by
+        // the same owner. Offer it alongside the native release rather than
+        // inventing a parent or changing the release's episode identity.
+        let inferred_parent = if group.canonical_season.is_none() && infer_series {
+            let installed = self.shared.lock().unwrap().installed.clone();
+            group
+                .proven_mapping
+                .iter()
+                .filter_map(|proof| grouping::inferred_parent_entry(proof))
+                .find(|parent| {
+                    !group
+                        .members
+                        .iter()
+                        .any(|member| member.source == parent.source)
+                        && installed.iter().any(|addon| {
+                            addon.url == parent.source.addon_url
+                                && addon.enabled
+                                && addon.available
+                                && addon.manifest.accepts(
+                                    "meta",
+                                    &parent.source.media_type,
+                                    &parent.source.id,
+                                )
+                        })
+                })
+        } else {
+            None
+        };
+        if group.members.len() == 1 && inferred_parent.is_none() {
             let member = &group.members[0];
             let selection = group.season_selection(&member.source);
             if selection.is_none() {
@@ -739,13 +801,15 @@ impl Bridge {
         let mut members = HashMap::new();
         let installed = self.shared.lock().unwrap().installed.clone();
         let safe_labels = safe_addon_labels(&installed);
-        let rows = group
-            .members
-            .iter()
+        let parent_source = inferred_parent.as_ref().map(|parent| parent.source.clone());
+        let choices = inferred_parent
+            .into_iter()
+            .chain(group.members.iter().cloned());
+        let rows = choices
             .enumerate()
             .map(|(index, member)| {
                 let key = projection_fingerprint(&(&context.group_key, &member.source, index));
-                members.insert(key.clone(), index);
+                members.insert(key.clone(), member.clone());
                 let addon = safe_labels
                     .get(&member.source.addon_url)
                     .map(String::as_str)
@@ -759,13 +823,22 @@ impl Bridge {
                             _ => None,
                         })
                 });
+                let mut subtitle = season
+                    .map(|season| format!("{addon} · {} {season}", text::tr("Season")))
+                    .unwrap_or_else(|| addon.to_owned());
+                if parent_source.as_ref() == Some(&member.source) {
+                    subtitle.push_str(&format!(" · {}", text::tr("All seasons")));
+                } else if member
+                    .evidence
+                    .as_ref()
+                    .is_some_and(grouping::GroupingEvidence::is_inferred)
+                {
+                    subtitle.push_str(&format!(" · {}", text::tr("Inferred grouping")));
+                }
                 crate::CatalogGroupMemberRow {
                     key: key.into(),
                     title: member.preview.title().into(),
-                    subtitle: season
-                        .map(|season| format!("{addon} · {} {season}", text::tr("Season")))
-                        .unwrap_or_else(|| addon.to_owned())
-                        .into(),
+                    subtitle: subtitle.into(),
                 }
             })
             .collect::<Vec<_>>();
@@ -819,7 +892,7 @@ impl Bridge {
             let Some(context) = state.catalog_grouping.chooser.clone() else {
                 return;
             };
-            let Some(index) = state.catalog_grouping.chooser_members.get(key).copied() else {
+            let Some(member) = state.catalog_grouping.chooser_members.get(key).cloned() else {
                 return;
             };
             let Some(registered) = state.catalog_grouping.groups.get(&context.group_key) else {
@@ -838,9 +911,8 @@ impl Bridge {
             {
                 return;
             }
-            let Some(member) = registered.group.members.get(index) else {
-                return;
-            };
+            // The choice was captured from this exact registered projection,
+            // including any owner-supplied inferred parent navigation hint.
             (
                 context,
                 member.preview.clone(),
@@ -954,6 +1026,7 @@ impl Bridge {
         self.shared.lock().unwrap().catalog_grouping.settings_keys = keys;
         if let Some(app) = self.app() {
             app.set_catalog_grouping_default_index(settings.catalog_grouping_default.index());
+            app.set_catalog_grouping_infer_series(settings.catalog_grouping_infer_series);
             app.set_catalog_grouping_search(query.into());
             app.set_catalog_grouping_rows(Rc::new(VecModel::from(rows)).into());
         }
@@ -1021,6 +1094,24 @@ impl Bridge {
         self.refresh_catalog_grouping_policy();
     }
 
+    fn change_catalog_grouping_inference(&self, enabled: bool) {
+        if !writable_key("settings") {
+            return;
+        }
+        let settings = {
+            let mut state = self.shared.lock().unwrap();
+            state.cache_settings.catalog_grouping_infer_series = enabled;
+            state.cache_settings.clone()
+        };
+        set_active_cache_settings(settings.clone());
+        allow_setting_field("catalog_grouping_infer_series");
+        notify_setting_choice("catalog_grouping_infer_series", &settings);
+        write_settings(&settings);
+        self.refresh_catalog_grouping_settings();
+        self.refresh_setting_sync();
+        self.refresh_catalog_grouping_policy();
+    }
+
     /// User preferences sync; derived groups and lookup budgets remain local.
     /// A mode change reuses raw cached pages rather than refetching catalogs.
     pub(super) fn refresh_catalog_grouping_policy(&self) {
@@ -1032,6 +1123,7 @@ impl Bridge {
                 profile.epoch,
                 nova_providers::metadata_revision(),
                 state.cache_settings.catalog_grouping_default,
+                state.cache_settings.catalog_grouping_infer_series,
                 &state.cache_settings.catalog_grouping_overrides,
             ));
             if state.catalog_grouping.policy == policy {
@@ -1064,6 +1156,10 @@ impl Bridge {
 }
 
 pub(super) fn wire_catalog_grouping_callbacks(app: &AppWindow, bridge: &Bridge) {
+    let b = bridge.clone();
+    app.on_catalog_grouping_infer_series_changed(move |enabled| {
+        b.change_catalog_grouping_inference(enabled)
+    });
     let b = bridge.clone();
     app.on_catalog_grouping_default_changed(move |mode| {
         b.change_catalog_grouping(None, mode, false)
@@ -1389,5 +1485,110 @@ mod tests {
                 .catalog_grouping_overrides
                 .is_empty()
         );
+
+        // A real parent preview retained by optional inference offers a
+        // canonical page and the original release, even for a singleton card.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.catalog_grouping_default = CatalogGroupingMode::Series;
+            state.cache_settings.catalog_grouping_infer_series = true;
+            state.installed[0].available = true;
+            state.installed[0].manifest = serde_json::from_value(serde_json::json!({"id":"fixture","name":"Fixture","version":"1","types":["series"],"resources":["catalog","meta"],"catalogs":[{"id":"anime","type":"series","name":"Anime"}]})).unwrap();
+        }
+        let future = MetaPreview {
+            id: "mal:705".into(),
+            type_: "series".into(),
+            name: "Fixture Season 3".into(),
+            ..Default::default()
+        };
+        let visible = bridge.project_catalog_grouping(&home, std::slice::from_ref(&future));
+        let source = SourceIdentity {
+            addon_url: owner.into(),
+            media_type: "series".into(),
+            id: future.id.clone(),
+        };
+        let evidence = grouping::GroupingEvidence {
+            source: source.clone(),
+            parents: vec![grouping::ParentIdentity::ImdbSeries("tt705".into())],
+            season: SeasonMembership::Unknown,
+            season_partitions: vec![],
+            source_inventory_fingerprint: Some("a".repeat(64)),
+            proofs: vec![grouping::GroupingProof::InferredSeasonChain {
+                provider_id: nova_providers::addon_metadata_id(owner),
+                related_release_id: "kitsu:704".into(),
+                source_season: 3,
+                related_season: 2,
+                parent_preview: grouping::InferredParentPreview {
+                    source: SourceIdentity {
+                        addon_url: owner.into(),
+                        media_type: "series".into(),
+                        id: "tt705".into(),
+                    },
+                    name: "Fixture".into(),
+                    poster: None,
+                    background: None,
+                    logo: None,
+                    release_info: None,
+                },
+            }],
+        };
+        assert!(evidence.verified());
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let registered = state
+                .catalog_grouping
+                .groups
+                .get_mut(&display_key(&visible[0]))
+                .unwrap();
+            registered.group.members[0].evidence = Some(evidence.clone());
+            registered.group.proven_mapping = vec![Arc::new(evidence)];
+        }
+        assert!(bridge.open_catalog_group(&visible[0], 7, None, false));
+        assert_eq!(app.get_catalog_grouping_chooser_members().row_count(), 2);
+        let parent = app
+            .get_catalog_grouping_chooser_members()
+            .row_data(0)
+            .unwrap();
+        let native = app
+            .get_catalog_grouping_chooser_members()
+            .row_data(1)
+            .unwrap();
+        assert_eq!(parent.title, "Fixture");
+        assert!(parent.subtitle.contains("All seasons"));
+        assert!(native.subtitle.contains("Inferred grouping"));
+        assert_eq!(native.title, "Fixture Season 3");
+        let captured_parent_key = parent.key;
+        app.invoke_catalog_grouping_member_picked(native.key);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .id,
+            "mal:705"
+        );
+        app.invoke_catalog_grouping_infer_series_changed(false);
+        assert!(!app.get_catalog_grouping_infer_series());
+        app.invoke_catalog_grouping_member_picked(captured_parent_key);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .id,
+            "mal:705",
+            "turning inference off revokes old parent actions"
+        );
+        let restored = bridge.project_catalog_grouping(&home, std::slice::from_ref(&future));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, future.id);
+        assert!(bridge.shared.lock().unwrap().entries.is_empty());
+        assert!(bridge.shared.lock().unwrap().progress.is_empty());
     }
 }

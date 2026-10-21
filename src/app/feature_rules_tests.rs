@@ -18,6 +18,9 @@ fn filters(height: u16, codec: VideoCodec, language: &str) -> StreamFilterRules 
     StreamFilterRules {
         enabled: true,
         max_height: Some(height),
+        excluded_resolutions: vec![360],
+        resolution_priority: vec![height, 720],
+        require_preferred_resolution: height >= 1080,
         max_bytes: Some(4_000_000_000),
         video_codecs: vec![codec],
         audio_languages: vec![language.into()],

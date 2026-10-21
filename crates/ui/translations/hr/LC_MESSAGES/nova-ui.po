@@ -4492,3 +4492,54 @@ msgstr "Nedostupan katalog"
 
 msgid "No catalogs available."
 msgstr "Nema dostupnih kataloga."
+
+msgid "Excluded resolutions"
+msgstr "Izuzete rezolucije"
+
+msgid "Preferred resolutions"
+msgstr "Željene rezolucije"
+
+msgid "Only preferred resolutions"
+msgstr "Samo željene rezolucije"
+
+msgid "No excluded resolutions"
+msgstr "Nema izuzetih rezolucija"
+
+msgid "No resolution preference"
+msgstr "Nema prednosti rezolucije"
+
+msgid "Add resolution preference"
+msgstr "Dodaj željenu rezoluciju"
+
+msgid "Exclude resolution"
+msgstr "Izuzmi rezoluciju"
+
+msgid "Remove excluded resolution"
+msgstr "Ukloni izuzetu rezoluciju"
+
+msgid "Use this order when sorting by Resolution. Unlisted resolutions follow the numerical sort direction."
+msgstr "Primijeni ovaj redoslijed pri sortiranju prema rezoluciji. Ostale rezolucije slijede brojčani smjer sortiranja."
+
+msgid "Excluded resolutions stay hidden even when they are preferred."
+msgstr "Izuzete rezolucije ostaju skrivene čak i kada su željene."
+
+msgid "Hide other advertised resolutions. An empty list allows every resolution; unknown details follow the setting below."
+msgstr "Sakrij druge navedene rezolucije. Prazan popis dopušta sve rezolucije; za nepoznate pojedinosti vrijedi postavka u nastavku."
+
+msgid "Uses preferred resolutions first; direction orders the remaining resolutions."
+msgstr "Najprije koristi željene rezolucije; smjer određuje redoslijed ostalih rezolucija."
+
+msgid "Infer series grouping"
+msgstr "Izvedi grupiranje serija"
+
+msgid "Use explicit season relationships and a confirmed series anchor when a provider has no parent mapping. Episode numbering and progress stay unchanged."
+msgstr "Koristi izričite veze između sezona i potvrđenu seriju kao uporište kada pružatelj nema podatak o pripadnosti seriji. Brojevi epizoda i napredak ostaju nepromijenjeni."
+
+msgid "Inferred grouping"
+msgstr "Izvedeno grupiranje"
+
+msgid "Background opacity (%)"
+msgstr "Neprozirnost pozadine (%)"
+
+msgid "Adds a translucent black backdrop to styled text subtitles on both tracks. Embedded styles and image subtitles may keep their original appearance."
+msgstr "Dodaje poluprozirnu crnu pozadinu stiliziranim tekstnim titlovima na oba zapisa. Ugrađeni stilovi i slikovni titlovi mogu zadržati izvorni izgled."

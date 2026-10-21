@@ -160,6 +160,18 @@ export component SettingsDisplayModule inherits Window {
                         selected(_) => { root.select_grouping(8); CatalogGroupingBridge.default_index = self.current-index; CatalogGroupingBridge.default_changed(self.current-index); }
                     }
                 }
+                SettingsRow {
+                    setting-key: "catalog_grouping_infer_series";
+                    row-title: @tr("Infer series grouping");
+                    row-desc: @tr("Use explicit season relationships and a confirmed series anchor when a provider has no parent mapping. Episode numbering and progress stay unchanged.");
+                    ToggleSwitch {
+                        accessible-id: "catalog-grouping-infer-series";
+                        name: @tr("Infer series grouping");
+                        checked <=> CatalogGroupingBridge.infer_series;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 9 && SettingsBridge.kb_active;
+                        toggled => { root.select_grouping(9); CatalogGroupingBridge.infer_series_changed(self.checked); }
+                    }
+                }
             }
             SettingsCard {
                 SettingsRow {
@@ -172,9 +184,9 @@ export component SettingsDisplayModule inherits Window {
                         accessible-role: text-input; accessible-id: "catalog-grouping-search"; accessible-label: @tr("Search catalogs"); accessible-value: CatalogGroupingBridge.search;
                         text <=> CatalogGroupingBridge.search; placeholder-text: @tr("Search catalogs"); roomy: true; search-icon: true;
                         focus_changed(focused) => { SettingsContent.input_focused = focused; }
-                        edited(query) => { root.select_grouping(9); CatalogGroupingBridge.search_changed(query); }
+                        edited(query) => { root.select_grouping(10); CatalogGroupingBridge.search_changed(query); }
                         accepted(query) => { CatalogGroupingBridge.search_changed(query); SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); }
-                        property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 9 && SettingsBridge.kb_active;
+                        property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 10 && SettingsBridge.kb_active;
                         changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
                     }
                     if CatalogGroupingBridge.rows.length == 0: Text { text: CatalogGroupingBridge.search == "" ? @tr("No catalogs available.") : @tr("No catalogs match this search."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
@@ -191,19 +203,19 @@ export component SettingsDisplayModule inherits Window {
                                     model: [@tr("Default"), @tr("Original"), @tr("Season"), @tr("Series")];
                                     current-index: surface == 0 ? catalog.home_mode : catalog.discover_mode; roomy: true;
                                     width: Math.min(240px,Math.max(1px,SettingsContent.slot_width - 88px));
-                                    property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 10 + i * 3 + surface && SettingsBridge.kb_active;
+                                    property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 11 + i * 3 + surface && SettingsBridge.kb_active;
                                     border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
                                     changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
                                     private property <string> opened_key;
                                     opened => { self.opened_key = catalog.key; }
-                                    selected(_) => { if self.opened_key == catalog.key { root.select_grouping(10 + i * 3 + surface); CatalogGroupingBridge.override_changed(catalog.key,surface,self.current-index - 1); } }
+                                    selected(_) => { if self.opened_key == catalog.key { root.select_grouping(11 + i * 3 + surface); CatalogGroupingBridge.override_changed(catalog.key,surface,self.current-index - 1); } }
                                 }
                             }
                             PillButton {
                                 label: @tr("Remove"); accessible-id: "catalog-grouping-remove:" + catalog.key; destructive: true; compact: true; enabled: catalog.home_mode != 0 || catalog.discover_mode != 0;
                                 horizontal-stretch: 0;
-                                focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 12 + i * 3 && SettingsBridge.kb_active;
-                                clicked => { root.select_grouping(12 + i * 3); SettingsContent.focus_shell(); CatalogGroupingBridge.override_removed(catalog.key); }
+                                focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 13 + i * 3 && SettingsBridge.kb_active;
+                                clicked => { root.select_grouping(13 + i * 3); SettingsContent.focus_shell(); CatalogGroupingBridge.override_removed(catalog.key); }
                             }
                         }
                     }

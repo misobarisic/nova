@@ -134,6 +134,26 @@ pub fn tr(english: &str) -> &str {
         "All video codecs" => "Svi videokodeci",
         "No excluded codecs" => "Nema izuzetih kodeka",
         "No codec preference" => "Nema prednosti kodeka",
+        "Excluded resolutions" => "Izuzete rezolucije",
+        "Preferred resolutions" => "Željene rezolucije",
+        "Only preferred resolutions" => "Samo željene rezolucije",
+        "No excluded resolutions" => "Nema izuzetih rezolucija",
+        "No resolution preference" => "Nema prednosti rezolucije",
+        "Add resolution preference" => "Dodaj željenu rezoluciju",
+        "Exclude resolution" => "Izuzmi rezoluciju",
+        "Remove excluded resolution" => "Ukloni izuzetu rezoluciju",
+        "Use this order when sorting by Resolution. Unlisted resolutions follow the numerical sort direction." => {
+            "Primijeni ovaj redoslijed pri sortiranju prema rezoluciji. Ostale rezolucije slijede brojčani smjer sortiranja."
+        }
+        "Excluded resolutions stay hidden even when they are preferred." => {
+            "Izuzete rezolucije ostaju skrivene čak i kada su željene."
+        }
+        "Hide other advertised resolutions. An empty list allows every resolution; unknown details follow the setting below." => {
+            "Sakrij druge navedene rezolucije. Prazan popis dopušta sve rezolucije; za nepoznate pojedinosti vrijedi postavka u nastavku."
+        }
+        "Uses preferred resolutions first; direction orders the remaining resolutions." => {
+            "Najprije koristi željene rezolucije; smjer određuje redoslijed ostalih rezolucija."
+        }
         "Codec priority" => "Redoslijed kodeka",
         "Excluded video codecs" => "Izuzeti videokodeci",
         "Profile and device stream preferences" => "Postavke izvora profila i uređaja",
@@ -1007,7 +1027,16 @@ pub fn tr(english: &str) -> &str {
         }
         "This download is not complete yet." => "Preuzimanje još nije dovršeno.",
         "Unavailable catalog" => "Nedostupan katalog",
+        "Background opacity (%)" => "Neprozirnost pozadine (%)",
+        "Adds a translucent black backdrop to styled text subtitles on both tracks. Embedded styles and image subtitles may keep their original appearance." => {
+            "Dodaje poluprozirnu crnu pozadinu stiliziranim tekstnim titlovima na oba zapisa. Ugrađeni stilovi i slikovni titlovi mogu zadržati izvorni izgled."
+        }
         "Catalog grouping" => "Grupiranje kataloga",
+        "Infer series grouping" => "Izvedi grupiranje serija",
+        "Use explicit season relationships and a confirmed series anchor when a provider has no parent mapping. Episode numbering and progress stay unchanged." => {
+            "Koristi izričite veze između sezona i potvrđenu seriju kao uporište kada pružatelj nema podatak o pripadnosti seriji. Brojevi epizoda i napredak ostaju nepromijenjeni."
+        }
+        "Inferred grouping" => "Izvedeno grupiranje",
         "Catalog overrides" => "Iznimke kataloga",
         "Original" => "Izvorno",
         "No catalog overrides" => "Nema iznimki kataloga",
@@ -1889,6 +1918,24 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|order| stream_sort_summary(&order))
         .unwrap_or_else(|_| tr("Unsupported value").into());
     }
+    if field == "stream_filters_require_resolution" {
+        return value.as_bool().map_or_else(
+            || tr("Unsupported value").into(),
+            |enabled| tr(if enabled { "On" } else { "Off" }).into(),
+        );
+    }
+    if matches!(
+        field,
+        "stream_filters_excluded_resolutions" | "stream_filters_resolution_priority"
+    ) {
+        let Ok(heights) = serde_json::from_value::<Vec<u16>>(value.clone()) else {
+            return tr("Unsupported value").into();
+        };
+        if heights.iter().any(|height| !(144..=8640).contains(height)) {
+            return tr("Unsupported value").into();
+        }
+        return stream_resolution_list(&heights, field == "stream_filters_resolution_priority");
+    }
     if matches!(field, "stream_filters_resolution" | "stream_filters_size") {
         if !value.is_null() && value.as_u64().is_none() {
             return tr("Unsupported value").into();
@@ -2144,13 +2191,23 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             };
             if croatian() {
                 format!(
-                    "Pomak {:+.1} s · veličina {} · margine {} px · položaj {}% · obrub {} · {color} · {embedded}",
-                    style.delay, font_size, style.margin, style.position, outline
+                    "Pomak {:+.1} s · veličina {} · margine {} px · položaj {}% · obrub {} · neprozirnost pozadine {}% · {color} · {embedded}",
+                    style.delay,
+                    font_size,
+                    style.margin,
+                    style.position,
+                    outline,
+                    style.background_opacity
                 )
             } else {
                 format!(
-                    "Timing {:+.1} s · size {} · margins {} px · position {}% · outline {} · {color} · {embedded}",
-                    style.delay, font_size, style.margin, style.position, outline
+                    "Timing {:+.1} s · size {} · margins {} px · position {}% · outline {} · background opacity {}% · {color} · {embedded}",
+                    style.delay,
+                    font_size,
+                    style.margin,
+                    style.position,
+                    outline,
+                    style.background_opacity
                 )
             }
         }
@@ -2313,6 +2370,158 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolution_scope_values_keep_exact_order_validate_shapes_and_translate_empty_lists() {
+        with_language(Language::English, || {
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_excluded_resolutions",
+                    &serde_json::json!([240, 800, 8640])
+                ),
+                "240p, 800p, 8640p"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_resolution_priority",
+                    &serde_json::json!([1080, 720, 144])
+                ),
+                "1080p → 720p → 144p"
+            );
+            for field in [
+                "stream_filters_excluded_resolutions",
+                "stream_filters_resolution_priority",
+            ] {
+                for invalid in [
+                    serde_json::Value::Null,
+                    serde_json::json!({}),
+                    serde_json::json!("1080p"),
+                    serde_json::json!(["1080"]),
+                    serde_json::json!([800.5]),
+                    serde_json::json!([143]),
+                    serde_json::json!([8641]),
+                    serde_json::json!([-1]),
+                    serde_json::json!([null]),
+                ] {
+                    assert_eq!(
+                        setting_sync_value(field, &invalid),
+                        "Unsupported value",
+                        "{field}: {invalid}"
+                    );
+                }
+            }
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_excluded_resolutions",
+                    &serde_json::json!([])
+                ),
+                "No excluded resolutions"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_resolution_priority", &serde_json::json!([])),
+                "No resolution preference"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_require_resolution",
+                    &serde_json::json!(true)
+                ),
+                "On"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_require_resolution",
+                    &serde_json::json!(false)
+                ),
+                "Off"
+            );
+            for invalid in [
+                serde_json::Value::Null,
+                serde_json::json!("true"),
+                serde_json::json!(1),
+            ] {
+                assert_eq!(
+                    setting_sync_value("stream_filters_require_resolution", &invalid),
+                    "Unsupported value"
+                );
+            }
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_excluded_resolutions",
+                    &serde_json::json!([])
+                ),
+                "Nema izuzetih rezolucija"
+            );
+            assert_eq!(
+                setting_sync_value("stream_filters_resolution_priority", &serde_json::json!([])),
+                "Nema prednosti rezolucije"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_resolution_priority",
+                    &serde_json::json!([800, 240])
+                ),
+                "800p → 240p"
+            );
+            assert_eq!(
+                setting_sync_value(
+                    "stream_filters_require_resolution",
+                    &serde_json::json!(true)
+                ),
+                "Uključeno"
+            );
+        });
+    }
+
+    #[test]
+    fn resolution_summary_shows_blocks_priority_strictness_and_unknown_policy_in_both_languages() {
+        let mut rules = nova_config::StreamFilterRules {
+            enabled: true,
+            max_height: Some(2160),
+            excluded_resolutions: vec![240, 720],
+            resolution_priority: vec![1080, 800, 8640],
+            require_preferred_resolution: true,
+            retain_unknown: false,
+            ..Default::default()
+        };
+        with_language(Language::English, || {
+            let summary = stream_filter_summary(&rules);
+            for expected in [
+                "≤ 2160p",
+                "Excluded resolutions: 240p, 720p",
+                "Preferred resolutions: 1080p → 800p → 8640p",
+                "Only preferred resolutions",
+                "Unknown details hidden",
+            ] {
+                assert!(summary.contains(expected), "{summary}");
+            }
+            rules.resolution_priority = nova_config::stream_filters::RESOLUTION_CHOICES.to_vec();
+            let summary = stream_filter_summary(&rules);
+            assert!(summary.contains(
+                "240p → 360p → 480p → 576p → 720p → 1080p → 1440p → 2160p → 4320p → 8640p"
+            ));
+            rules.resolution_priority.clear();
+            assert!(
+                stream_filter_summary(&rules)
+                    .contains("Preferred resolutions: No resolution preference")
+            );
+        });
+        with_language(Language::Croatian, || {
+            let summary = stream_filter_summary(&rules);
+            for expected in [
+                "Izuzete rezolucije: 240p, 720p",
+                "Željene rezolucije: Nema prednosti rezolucije",
+                "Samo željene rezolucije",
+                "Nepoznate pojedinosti skrivene",
+            ] {
+                assert!(summary.contains(expected), "{summary}");
+            }
+            rules.enabled = false;
+            assert_eq!(stream_filter_summary(&rules), tr("Disabled"));
+        });
+    }
+
+    #[test]
     fn stream_rule_comparisons_show_independent_values_and_order() {
         with_language(Language::English, || {
             assert_eq!(
@@ -2372,6 +2581,55 @@ mod tests {
                     &serde_json::json!({"use_preferred_audio_languages": true, "audio_languages": []})
                 ),
                 "Koristi željene jezike zvuka"
+            );
+        });
+    }
+
+    #[test]
+    fn subtitle_style_scope_summary_shows_legacy_default_and_explicit_background_opacity() {
+        for (language, label) in [
+            (Language::English, "background opacity"),
+            (Language::Croatian, "neprozirnost pozadine"),
+        ] {
+            with_language(language, || {
+                for (value, opacity) in [
+                    (serde_json::json!({"delay": 0.2}), 45),
+                    (serde_json::json!({"background_opacity": 0}), 0),
+                    (serde_json::json!({"background_opacity": 100}), 100),
+                ] {
+                    let summary = setting_sync_value("subtitle_style", &value);
+                    assert!(
+                        summary.contains(&format!("{label} {opacity}%")),
+                        "{summary}"
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn inferred_catalog_grouping_scope_values_and_label_are_translated() {
+        with_language(Language::English, || {
+            assert_eq!(tr("Infer series grouping"), "Infer series grouping");
+            assert_eq!(
+                setting_sync_value("catalog_grouping_infer_series", &serde_json::json!(true)),
+                "On"
+            );
+            assert_eq!(
+                setting_sync_value("catalog_grouping_infer_series", &serde_json::json!(false)),
+                "Off"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(tr("Infer series grouping"), "Izvedi grupiranje serija");
+            assert_eq!(tr("Inferred grouping"), "Izvedeno grupiranje");
+            assert_eq!(
+                setting_sync_value("catalog_grouping_infer_series", &serde_json::json!(true)),
+                "Uključeno"
+            );
+            assert_eq!(
+                setting_sync_value("catalog_grouping_infer_series", &serde_json::json!(false)),
+                "Isključeno"
             );
         });
     }
@@ -2927,6 +3185,22 @@ fn stream_sort_summary(order: &[nova_config::stream_filters::StreamSortRule]) ->
         .join(" → ")
 }
 
+fn stream_resolution_list(heights: &[u16], preferred: bool) -> String {
+    if heights.is_empty() {
+        return tr(if preferred {
+            "No resolution preference"
+        } else {
+            "No excluded resolutions"
+        })
+        .into();
+    }
+    heights
+        .iter()
+        .map(|height| format!("{height}p"))
+        .collect::<Vec<_>>()
+        .join(if preferred { " → " } else { ", " })
+}
+
 pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
     if !rules.enabled {
         return tr("Disabled").into();
@@ -2934,6 +3208,23 @@ pub fn stream_filter_summary(rules: &nova_config::StreamFilterRules) -> String {
     let mut parts = Vec::new();
     if let Some(height) = rules.max_height {
         parts.push(format!("≤ {height}p"));
+    }
+    if !rules.excluded_resolutions.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            tr("Excluded resolutions"),
+            stream_resolution_list(&rules.excluded_resolutions, false)
+        ));
+    }
+    if !rules.resolution_priority.is_empty() || rules.require_preferred_resolution {
+        parts.push(format!(
+            "{}: {}",
+            tr("Preferred resolutions"),
+            stream_resolution_list(&rules.resolution_priority, true)
+        ));
+    }
+    if rules.require_preferred_resolution {
+        parts.push(tr("Only preferred resolutions").into());
     }
     if let Some(bytes) = rules.max_bytes {
         parts.push(format!("≤ {}", stream_size(bytes)));

@@ -3,6 +3,7 @@ export struct CatalogGroupingRow { key: string, title: string, addon: string, me
 export struct CatalogGroupMemberRow { key: string, title: string, subtitle: string }
 export global CatalogGroupingBridge {
     in-out property <int> default_index;
+    in-out property <bool> infer_series;
     in-out property <[CatalogGroupingRow]> rows;
     in-out property <string> search;
     in-out property <[CatalogGroupMemberRow]> chooser_members;
@@ -15,6 +16,7 @@ export global CatalogGroupingBridge {
     in-out property <string> detail_season_label;
     in-out property <string> detail_scope_notice;
     callback default_changed(int);
+    callback infer_series_changed(bool);
     callback override_changed(string, int, int);
     callback override_removed(string);
     callback search_changed(string);

@@ -8,9 +8,10 @@
   const basename=value=>String(value || "").split(/[\\/]/).pop();
   const unique=values=>[...new Set(values.filter(Boolean))];
   S.validTrackMetadata = metadata => {
-    if (!metadata || typeof metadata!=="object" || Array.isArray(metadata) || Object.keys(metadata).some(key=>!["audioLanguages","subtitleLanguages","videoCodec","audioCodecs","audioChannels","source","fileName","fileSize"].includes(key))) return false;
+    if (!metadata || typeof metadata!=="object" || Array.isArray(metadata) || Object.keys(metadata).some(key=>!["audioLanguages","subtitleLanguages","videoCodec","audioCodecs","audioChannels","source","fileName","fileSize","resolution"].includes(key))) return false;
     const list=(values,valid)=>Array.isArray(values) && values.length<=32 && values.every(valid) && new Set(values).size===values.length;
-    return metadata.source==="AnimeTosho" && typeof metadata.fileName==="string" && metadata.fileName.length>0 && metadata.fileName.length<=2048 && S.number(metadata.fileSize)>0 &&
+    return (!Object.prototype.hasOwnProperty.call(metadata,"resolution") || metadata.resolution===null || S.validResolutionHeight(metadata.resolution)) &&
+      metadata.source==="AnimeTosho" && typeof metadata.fileName==="string" && metadata.fileName.length>0 && metadata.fileName.length<=2048 && S.number(metadata.fileSize)>0 &&
       list(metadata.audioLanguages,value=>languages.has(value)) && list(metadata.subtitleLanguages,value=>languages.has(value)) &&
       [null,"avc","hevc","av1","vp9","other"].includes(metadata.videoCodec) && list(metadata.audioCodecs,value=>Object.values(audioCodecs).includes(value)) &&
       list(metadata.audioChannels,value=>typeof value==="string" && /^(?:[1-9]\d? channels|[1-9]\.[01])$/.test(value));
@@ -28,11 +29,18 @@
     const streams=file.info.ffprobe.streams;
     if (!Array.isArray(streams) || !streams.length || streams.length>128) return null;
     const audio=streams.filter(stream=>stream && stream.codec_type==="audio"),subtitles=streams.filter(stream=>stream && stream.codec_type==="subtitle");
-    const video=streams.filter(stream=>stream && stream.codec_type==="video" && !(stream.disposition && stream.disposition.attached_pic)).map(stream=>({h264:"avc",hevc:"hevc",av1:"av1",vp9:"vp9"})[stream.codec_name] || (typeof stream.codec_name==="string" && stream.codec_name ? "other" : null));
+    const videoStreams=streams.filter(stream=>stream && stream.codec_type==="video" && !(stream.disposition && stream.disposition.attached_pic));
+    const video=videoStreams.map(stream=>({h264:"avc",hevc:"hevc",av1:"av1",vp9:"vp9"})[stream.codec_name] || (typeof stream.codec_name==="string" && stream.codec_name ? "other" : null));
     const metadata={source:"AnimeTosho",fileName:target.fileName,fileSize:target.sizeBytes,
       audioLanguages:unique(audio.map(stream=>language(stream.tags && stream.tags.language))),subtitleLanguages:unique(subtitles.map(stream=>language(stream.tags && stream.tags.language))),
       videoCodec:video.length>0 && video.every(codec=>codec && codec===video[0]) ? video[0] : null,audioCodecs:unique(audio.map(stream=>audioCodecs[stream.codec_name])),
       audioChannels:unique(audio.map(stream=>{const layout=String(stream.channel_layout || "");if (/^[1-9]\.[01](?:\([^)]*\))?$/.test(layout)) return layout.slice(0,3);const channels=S.number(stream.channels);return channels>0 && channels<=64 ? ({1:"1.0",2:"2.0"}[channels] || `${channels} channels`) : null;}))};
+    // Missing old probes retain release hints. An explicit malformed or
+    // conflicting selected-file height is unknown and overrides those hints.
+    if (videoStreams.some(stream=>Object.prototype.hasOwnProperty.call(stream,"height"))) {
+      const heights=videoStreams.map(stream=>stream.height);
+      metadata.resolution=heights.length && heights.every(height=>S.validResolutionHeight(height) && height===heights[0]) ? heights[0] : null;
+    }
     return S.validTrackMetadata(metadata) ? metadata : null;
   };
   S.enrichTrackMetadata = (records,availableRows,deadline,maxRequests,onUpgrade) => {
@@ -55,7 +63,7 @@
     };
     const pending=[];
     for (const target of targets.slice(0,3)) {
-      target.key="tracks:animetosho:v1:"+nova.crypto.hmacSha256Base64Url(JSON.stringify([target.infoHash,target.fileName,target.sizeBytes]),"supernova-tracks-v1");
+      target.key="tracks:animetosho:v2:"+nova.crypto.hmacSha256Base64Url(JSON.stringify([target.infoHash,target.fileName,target.sizeBytes]),"supernova-tracks-v2");
       const cached=S.resultCacheGet(target.key),now=Math.floor(Date.now()/1000);
       if (cached && Number.isInteger(cached.expiresAt) && cached.expiresAt>now && cached.expiresAt<=now+86400 && (cached.metadata===null || (S.validTrackMetadata(cached.metadata) && cached.metadata.fileName===target.fileName && cached.metadata.fileSize===target.sizeBytes))) { if (cached.metadata) apply(target,cached.metadata); }
       else pending.push(target);

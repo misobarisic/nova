@@ -1024,7 +1024,7 @@ fn apply_track_options(mpv: &Mpv, prefs: &SessionPreferences, audio: bool) {
 fn apply_preference_options(
     mpv: &Mpv,
     prefs: &SessionPreferences,
-    native: nova_config::playback_preferences::SubtitleStyle,
+    native: &NativeSubtitleDefaults,
 ) {
     apply_track_options(mpv, prefs, true);
     apply_track_options(mpv, prefs, false);
@@ -1032,20 +1032,50 @@ fn apply_preference_options(
     apply_subtitle_style(mpv, prefs.subtitle_style(), native);
 }
 
-fn native_subtitle_defaults(mpv: &Mpv) -> nova_config::playback_preferences::SubtitleStyle {
-    nova_config::playback_preferences::SubtitleStyle {
-        font_size: Some(mpv.get_property::<f64>("sub-font-size").unwrap_or(55.0) as f32),
-        outline: Some(mpv.get_property::<f64>("sub-border-size").unwrap_or(3.0) as f32),
-        ..Default::default()
+/// Capture once before applying any saved/title appearance. Disabling the
+/// backdrop restores native shadow settings rather than leaving box padding
+/// behind as a large subtitle shadow.
+struct NativeSubtitleDefaults {
+    style: nova_config::playback_preferences::SubtitleStyle,
+    border_style: String,
+    back_color: String,
+    shadow_offset: f64,
+}
+impl Default for NativeSubtitleDefaults {
+    fn default() -> Self {
+        Self {
+            style: nova_config::playback_preferences::SubtitleStyle::default()
+                .with_value(1, 55.0)
+                .with_value(4, 3.0),
+            border_style: "outline-and-shadow".into(),
+            back_color: "#AF000000".into(),
+            shadow_offset: 0.0,
+        }
+    }
+}
+fn native_subtitle_defaults(mpv: &Mpv) -> NativeSubtitleDefaults {
+    NativeSubtitleDefaults {
+        style: nova_config::playback_preferences::SubtitleStyle {
+            font_size: Some(mpv.get_property::<f64>("sub-font-size").unwrap_or(55.0) as f32),
+            outline: Some(mpv.get_property::<f64>("sub-border-size").unwrap_or(3.0) as f32),
+            ..Default::default()
+        },
+        border_style: mpv
+            .get_property::<String>("sub-border-style")
+            .unwrap_or_else(|_| "outline-and-shadow".into()),
+        back_color: mpv
+            .get_property::<String>("sub-back-color")
+            .unwrap_or_else(|_| "#AF000000".into()),
+        shadow_offset: mpv.get_property::<f64>("sub-shadow-offset").unwrap_or(0.0),
     }
 }
 
 fn apply_subtitle_style(
     mpv: &Mpv,
     style: nova_config::playback_preferences::SubtitleStyle,
-    native: nova_config::playback_preferences::SubtitleStyle,
+    native: &NativeSubtitleDefaults,
 ) {
-    let style = style.resolved(native);
+    let style = style.resolved(native.style);
     let _ = mpv.set_property("sub-delay", style.delay as f64);
     let _ = mpv.set_property(
         "sub-font-size",
@@ -1065,6 +1095,21 @@ fn apply_subtitle_style(
             _ => "#FFFFFF",
         },
     );
+    // mpv/libass applies this shared text style to both subtitle slots.
+    // BorderStyle=4 preserves the normal glyph outline and puts one padded
+    // translucent rectangle behind the cue. No glyph blur, authored ASS
+    // rewriting, UI overlay or render-tick work is involved.
+    // https://mpv.io/manual/stable/#options-sub-border-style
+    if style.background_opacity > 0.0 {
+        let alpha = (style.background_opacity * 255.0 / 100.0).round() as u8;
+        let _ = mpv.set_property("sub-border-style", "background-box");
+        let _ = mpv.set_property("sub-back-color", format!("#{alpha:02X}000000").as_str());
+        let _ = mpv.set_property("sub-shadow-offset", 6.0_f64);
+    } else {
+        let _ = mpv.set_property("sub-border-style", native.border_style.as_str());
+        let _ = mpv.set_property("sub-back-color", native.back_color.as_str());
+        let _ = mpv.set_property("sub-shadow-offset", native.shadow_offset);
+    }
     let _ = mpv.set_property(
         "sub-ass-override",
         if style.override_ass { "force" } else { "yes" },
@@ -1088,7 +1133,7 @@ struct State {
     #[cfg(not(target_os = "android"))]
     transition_window_held: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
-    native_subtitle_defaults: nova_config::playback_preferences::SubtitleStyle,
+    native_subtitle_defaults: NativeSubtitleDefaults,
     preferences: Mutex<PreferenceSession>,
     secondary_subtitles: Mutex<TrackChoice>,
     secondary_subtitle_position: Mutex<secondary_subtitle_position::Placement>,
@@ -1226,7 +1271,7 @@ impl State {
             .lock()
             .unwrap()
             .set_base(mpv, style.position as f64);
-        apply_subtitle_style(mpv, style, self.native_subtitle_defaults);
+        apply_subtitle_style(mpv, style, &self.native_subtitle_defaults);
         let delay = self
             .subtitle_sync
             .lock()
@@ -1387,11 +1432,7 @@ impl Player {
             .as_ref()
             .ok()
             .map(native_subtitle_defaults)
-            .unwrap_or_else(|| {
-                nova_config::playback_preferences::SubtitleStyle::default()
-                    .with_value(1, 55.0)
-                    .with_value(4, 3.0)
-            });
+            .unwrap_or_default();
         let state = Arc::new(State {
             native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
@@ -1697,7 +1738,7 @@ impl Player {
                                         session.manual_audio = false;
                                         session.manual_subtitles = false;
                                         notifier_state.subtitle_position.lock().unwrap().set_base(mpv, session.preferences.subtitle_style().position as f64);
-                                        apply_preference_options(mpv, &session.preferences, notifier_state.native_subtitle_defaults);
+                                        apply_preference_options(mpv, &session.preferences, &notifier_state.native_subtitle_defaults);
                                     }
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
@@ -2783,7 +2824,7 @@ impl Player {
         &self,
         style: nova_config::playback_preferences::SubtitleStyle,
     ) -> nova_config::playback_preferences::SubtitleStyle {
-        style.resolved(self.state.native_subtitle_defaults)
+        style.resolved(self.state.native_subtitle_defaults.style)
     }
 
     pub fn set_title_subtitle_style_value(
