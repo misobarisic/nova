@@ -177,7 +177,7 @@ impl Handle {
     pub(super) fn has_trakt_observation(&self, series: &str, episode: Option<&str>) -> bool {
         let matches =
             |o: &Observation| o.series_id == series && episode.is_none_or(|id| o.episode_id == id);
-        self.playback.lock().unwrap().as_ref().is_some_and(&matches)
+        self.playback.lock().unwrap().as_ref().is_some_and(matches)
             || self
                 .scrobbles
                 .lock()

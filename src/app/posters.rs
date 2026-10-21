@@ -739,7 +739,7 @@ impl Bridge {
     pub(super) fn pump_episode_thumbs(bridge: Bridge) {
         loop {
             if EPISODE_ACTIVE
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
                     (active < 4).then_some(active + 1)
                 })
                 .is_err()
