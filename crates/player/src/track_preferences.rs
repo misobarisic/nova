@@ -185,7 +185,13 @@ mod tests {
         mpv.set_property("secondary-sub-ass-override", "no")
             .unwrap();
         mpv.set_property("secondary-sub-delay", 1.75_f64).unwrap();
-        let settings = nova_config::CacheSettings::default();
+        let settings = nova_config::CacheSettings {
+            subtitle_style: SubtitleStyle {
+                background_opacity: 45.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let prefs = SessionPreferences::from_settings(&settings, TitlePreferences::default());
         // This shared application path serves both native subtitle slots and
         // is reused when Android recreates its renderer/source session.

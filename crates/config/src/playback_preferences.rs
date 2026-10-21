@@ -54,7 +54,7 @@ impl Default for SubtitleStyle {
             outline: None,
             color: 0,
             override_ass: false,
-            background_opacity: 45.0,
+            background_opacity: 0.0,
         }
     }
 }
@@ -82,7 +82,7 @@ impl SubtitleStyle {
                 .map(|v| (bounded(v, 0.0, 10.0, 3.0) * 100.0).round() / 100.0),
             color: self.color.min(2),
             override_ass: self.override_ass,
-            background_opacity: bounded(self.background_opacity, 0.0, 100.0, 45.0).round(),
+            background_opacity: bounded(self.background_opacity, 0.0, 100.0, 0.0).round(),
         }
     }
 
@@ -547,7 +547,7 @@ mod tests {
     fn subtitle_backdrop_defaults_migrate_and_title_edits_inherit_independently() {
         let legacy: SubtitleStyle =
             serde_json::from_str(r#"{"delay":0.3,"override_ass":false}"#).unwrap();
-        assert_eq!(legacy.background_opacity, 45.0);
+        assert_eq!(legacy.background_opacity, 0.0);
         let legacy_patch: SubtitleStylePatch = serde_json::from_str(r#"{"delay":0.3}"#).unwrap();
         assert_eq!(legacy_patch.background_opacity, None);
         let defaults = SubtitleStyle::default().with_value(7, 65.0);
@@ -564,7 +564,7 @@ mod tests {
                 .unwrap(),
             off
         );
-        assert_eq!(SubtitleStyle::default().values()[7], 45.0);
+        assert_eq!(SubtitleStyle::default().values()[7], 0.0);
     }
 
     fn track(id: i32, language: &str, kind: TrackKind) -> SemanticTrack {

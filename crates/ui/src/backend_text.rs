@@ -2593,7 +2593,7 @@ mod tests {
         ] {
             with_language(language, || {
                 for (value, opacity) in [
-                    (serde_json::json!({"delay": 0.2}), 45),
+                    (serde_json::json!({"delay": 0.2}), 0),
                     (serde_json::json!({"background_opacity": 0}), 0),
                     (serde_json::json!({"background_opacity": 100}), 100),
                 ] {
