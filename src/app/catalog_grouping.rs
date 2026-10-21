@@ -65,7 +65,7 @@ pub(super) struct State {
     settings_keys: HashMap<String, CatalogGroupingKey>,
     query: String,
     chooser: Option<OpenContext>,
-    chooser_members: HashMap<String, OwnedCatalogEntry>,
+    chooser_members: HashMap<String, Arc<OwnedCatalogEntry>>,
 }
 
 #[derive(Clone)]
@@ -804,6 +804,7 @@ impl Bridge {
         let parent_source = inferred_parent.as_ref().map(|parent| parent.source.clone());
         let choices = inferred_parent
             .into_iter()
+            .map(Arc::new)
             .chain(group.members.iter().cloned());
         let rows = choices
             .enumerate()
@@ -1502,6 +1503,7 @@ mod tests {
             ..Default::default()
         };
         let visible = bridge.project_catalog_grouping(&home, std::slice::from_ref(&future));
+        bridge.shared.lock().unwrap().home_showcase = visible.clone();
         let source = SourceIdentity {
             addon_url: owner.into(),
             media_type: "series".into(),
@@ -1518,7 +1520,7 @@ mod tests {
                 related_release_id: "kitsu:704".into(),
                 source_season: 3,
                 related_season: 2,
-                parent_preview: grouping::InferredParentPreview {
+                parent_preview: Box::new(grouping::InferredParentPreview {
                     source: SourceIdentity {
                         addon_url: owner.into(),
                         media_type: "series".into(),
@@ -1529,7 +1531,7 @@ mod tests {
                     background: None,
                     logo: None,
                     release_info: None,
-                },
+                }),
             }],
         };
         assert!(evidence.verified());
@@ -1540,10 +1542,11 @@ mod tests {
                 .groups
                 .get_mut(&display_key(&visible[0]))
                 .unwrap();
-            registered.group.members[0].evidence = Some(evidence.clone());
+            Arc::make_mut(&mut registered.group.members[0]).evidence = Some(evidence.clone());
             registered.group.proven_mapping = vec![Arc::new(evidence)];
         }
         assert!(bridge.open_catalog_group(&visible[0], 7, None, false));
+        assert!(app.get_catalog_grouping_chooser_open());
         assert_eq!(app.get_catalog_grouping_chooser_members().row_count(), 2);
         let parent = app
             .get_catalog_grouping_chooser_members()

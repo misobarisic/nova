@@ -140,7 +140,7 @@ pub enum GroupingProof {
         related_release_id: String,
         source_season: u32,
         related_season: u32,
-        parent_preview: InferredParentPreview,
+        parent_preview: Box<InferredParentPreview>,
     },
     /// The broker validated native-to-canonical episode alignment.
     BrokerAlignment {
@@ -1492,7 +1492,7 @@ pub(crate) fn infer_season_parent(
             related_release_id: relation.source.id.clone(),
             source_season: current.season,
             related_season: relation.season,
-            parent_preview: InferredParentPreview {
+            parent_preview: Box::new(InferredParentPreview {
                 source: SourceIdentity {
                     addon_url: source.addon_url.clone(),
                     media_type: parent_detail.preview.type_.clone(),
@@ -1507,7 +1507,7 @@ pub(crate) fn infer_season_parent(
                     .year_str()
                     .filter(|value| value.len() <= 64)
                     .map(serde_json::Value::String),
-            },
+            }),
         }],
         season_partitions: vec![],
         source_inventory_fingerprint: Some(episode_inventory_fingerprint(
