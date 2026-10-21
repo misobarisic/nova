@@ -467,7 +467,7 @@ mod tests {
             related_release_id: "kitsu:2".into(),
             source_season: 3,
             related_season: 2,
-            parent_preview: super::super::InferredParentPreview {
+            parent_preview: Box::new(super::super::InferredParentPreview {
                 source: SourceIdentity {
                     addon_url: source.addon_url.clone(),
                     media_type: "series".into(),
@@ -478,7 +478,7 @@ mod tests {
                 background: None,
                 logo: None,
                 release_info: None,
-            },
+            }),
         }];
         cache.remember(&source, 7, Some(inferred.clone()));
         assert_eq!(
