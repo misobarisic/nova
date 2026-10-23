@@ -315,7 +315,7 @@ export component DetailPage {
         if (root.kb_zone == 3 && root.det_content() == 2) {
             if (root.kb_ci == 2 && root.kb_ep >= 0 && root.kb_ep < root.episode_rows.length) {
                 let entry = root.episode_rows[root.kb_ep];
-                root.open_ep_menu(root.kb_ep, entry.watched, entry.progress); return true;
+                root.open_ep_menu(root.episode_page_start + root.kb_ep, entry.watched, entry.progress); return true;
             }
             if (root.kb_ci == 0 && root.kb_s >= 0 && root.kb_s < root.season_cards.length) {
                 root.open_season_menu(root.kb_s, root.season_cards[root.kb_s].watched); return true;
@@ -495,7 +495,7 @@ export component DetailPage {
                     root.kb_edit = true;
                 } else {
                     if (root.kb_ep >= 0 && root.kb_ep < root.episode_rows.length) {
-                        root.episode_picked(root.kb_ep);
+                        root.episode_picked(root.episode_page_start + root.kb_ep);
                     }
                 }
             }
@@ -895,7 +895,7 @@ export component DetailPage {
                     if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 2
                         && root.kb_ep >= 0 && root.kb_ep < root.episode_rows.length) {
                         root.kb_active = true;
-                        root.episode_toggle_watched(root.kb_ep);
+                        root.episode_toggle_watched(root.episode_page_start + root.kb_ep);
                         accept
                     } else {
                         reject
@@ -1305,7 +1305,7 @@ export component DetailPage {
                                             // Measure the complete paragraph separately so
                                             // the displayed text can fit the animated viewport
                                             // and elide whole lines instead of clipping glyphs.
-                                            height: root.synopsis_expanded ? synopsis_measure.preferred-height + 1px : Math.min(synopsis_measure.preferred-height + 1px, root.narrow ? 80px : 84px);
+                                            height: root.synopsis_expanded ? synopsis_measure.preferred-height + 1px : Math.min(synopsis_measure.preferred-height + 1px, InterfaceStyle.tv ? 112px : root.narrow ? 80px : 84px);
                                             animate height {
                                                 duration: DetailContent.restoring_navigation ? 0ms : Anim.transition_slide;
                                                 easing: ease-in-out;
@@ -1316,7 +1316,7 @@ export component DetailPage {
                                                 y: 0px;
                                                 width: root.synopsis_width - (root.narrow ? 32px : 48px);
                                                 text: root.selected_description != "" ? root.selected_description : @tr("No description provided by the addon.");
-                                                font-size: root.narrow ? 15px : 18px;
+                                                font-size: InterfaceStyle.tv ? 24px : root.narrow ? 15px : 18px;
                                                 wrap: word-wrap;
                                                 visible: false;
                                             }
@@ -1327,13 +1327,13 @@ export component DetailPage {
                                                 height: 100%;
                                                 text: synopsis_measure.text;
                                                 color: Theme.current.text_episode_metadata;
-                                                font-size: root.narrow ? 15px : 18px;
+                                                font-size: InterfaceStyle.tv ? 24px : root.narrow ? 15px : 18px;
                                                 wrap: word-wrap;
                                                 overflow: elide;
                                                 vertical-alignment: top;
                                             }
                                         }
-                                        if synopsis_measure.preferred-height > (root.narrow ? 80px : 84px): Rectangle {
+                                        if synopsis_measure.preferred-height > (InterfaceStyle.tv ? 112px : root.narrow ? 80px : 84px): Rectangle {
                                             height: 28px;
                                             Text {
                                                 text: root.synopsis_expanded ? @tr("Show less") : @tr("Read more");

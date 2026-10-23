@@ -49,7 +49,15 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
     app.window().show().unwrap();
     // Keep every card footer visible below the taller search toolbar; the
     // accessibility query excludes children clipped outside the viewport.
-    for width in [320, 390, 620, 1280] {
+    for (tv, width) in [
+        (false, 320),
+        (false, 390),
+        (false, 620),
+        (false, 1280),
+        (true, 960),
+        (true, 1920),
+    ] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
         app.window().set_size(slint::PhysicalSize::new(width, 2000));
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
         let cards = elements(&app, "ep_card");
@@ -72,7 +80,7 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
                         let origin = card.absolute_position();
                         let bounds = card.size();
                         p.x >= origin.x - 0.5
-                            && p.y >= origin.y + 45.0
+                            && p.y >= origin.y + if tv { 62.0 } else { 45.0 }
                             && p.x + size.width <= origin.x + bounds.width + 0.5
                             && p.y + size.height <= origin.y + bounds.height - 10.0
                     }),
@@ -81,6 +89,7 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
             }
         }
     }
+    app.global::<nova::InterfaceStyle>().set_tv(false);
     // Missing artwork and synopsis metadata retain the full card canvas.
     // Mix metadata availability to cover the wide grid's shared row layout.
     app.set_episode_rows(

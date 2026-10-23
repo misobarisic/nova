@@ -185,7 +185,7 @@ export component DetailEpisodesModule inherits Window {
                             Text {
                                 text: s.name;
                                 color: Theme.current.text_bright;
-                                font-size: 17px;
+                                font-size: InterfaceStyle.tv ? 22px : 17px;
                                 font-weight: 700;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -413,7 +413,9 @@ export component DetailEpisodesModule inherits Window {
                     width: root.ep_card_w;
                     // Keep the full canvas even when artwork and
                     // synopsis metadata are unavailable.
-                    height: Math.max(240px, self.width * 0.43);
+                    // TV metadata grows with its measured content, leaving a clear
+                    // band for the number/watched badges above long titles.
+                    height: Math.max(InterfaceStyle.tv ? Math.max(240px, episode_content.preferred-height + 82px) : 240px, self.width * 0.43);
                     // Hard containment: on some renderer
                     // paths overflowing text is painted
                     // past its element instead of being
@@ -539,7 +541,7 @@ export component DetailEpisodesModule inherits Window {
                     if e.ep_no != "": Rectangle {
                         x: 14px; y: 14px;
                         width: episode_badge.preferred-width + 24px;
-                        height: 30px;
+                        height: InterfaceStyle.tv ? 36px : 30px;
                         border-radius: 15px;
                         background: Theme.current.episode_number_badge;
                         border-width: 1.5px;
@@ -549,7 +551,7 @@ export component DetailEpisodesModule inherits Window {
                             height: 100%;
                             text: e.ep_no;
                             color: Theme.current.text_bright;
-                            font-size: 14px;
+                            font-size: InterfaceStyle.tv ? 20px : 14px;
                             font-weight: 700;
                             vertical-alignment: center;
                         }
@@ -558,13 +560,13 @@ export component DetailEpisodesModule inherits Window {
                     if e.watched: episode_watched := Rectangle {
                         x: parent.width - self.width - 14px;
                         y: 14px;
-                        width: 30px; height: 30px;
+                        width: InterfaceStyle.tv ? 36px : 30px; height: InterfaceStyle.tv ? 36px : 30px;
                         border-radius: 15px;
                         background: Theme.current.watched_badge;
                         IcCheck {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 18px; height: InterfaceStyle.tv ? 26px : 18px;
+                            width: InterfaceStyle.tv ? 22px : 18px; height: self.width;
                             fill: Theme.current.episode_card;
                         }
                     }
@@ -653,7 +655,7 @@ export component DetailEpisodesModule inherits Window {
                         if e.details != "": episode_synopsis := Text {
                             text: e.details;
                             color: Theme.current.text_settings;
-                            font-size: 14px;
+                            font-size: InterfaceStyle.tv ? 20px : 14px;
                             height: 2 * self.font-size * 1.4;
                             vertical-alignment: top;
                             wrap: word-wrap;
@@ -663,7 +665,7 @@ export component DetailEpisodesModule inherits Window {
                         // Completed episodes keep the watched disc; only
                         // unfinished playback needs a resume rail.
                         if !e.watched && e.progress > 0: episode_progress := HorizontalLayout {
-                            height: 20px;
+                            height: InterfaceStyle.tv ? 28px : 20px;
                             spacing: 10px;
                             Rectangle {
                                 horizontal-stretch: 1;
@@ -685,7 +687,7 @@ export component DetailEpisodesModule inherits Window {
                             episode_percentage := Text {
                                 text: @tr("{}%", Math.round(Math.max(0, Math.min(1, e.progress)) * 100));
                                 color: Theme.current.text_bright;
-                                font-size: 14px;
+                                font-size: InterfaceStyle.tv ? 20px : 14px;
                                 vertical-alignment: center;
                             }
                         }

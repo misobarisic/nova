@@ -15,9 +15,9 @@
 //! The mesh's own membership lives in the synced `peers` domain, so the list
 //! of paired endpoints propagates by the same anti-entropy exchange as any
 //! other record (additions and removals alike). Deletions are tombstones, and
-//! a tombstone is only reclaimed once every current peer has acknowledged a
-//! sync since it was created (`sync:peer_acks`, local only), so a device that
-//! was offline for any length can never resurrect a deleted record.
+//! membership tombstones remain until explicit pairing supersedes them.
+//! Ordinary record tombstones are reclaimed only after current peers ack
+//! (`sync:peer_acks`, local only). Name/presence recency never grants membership.
 //!
 //! Sync is opt-in: nothing binds a socket until the app reads
 //! [`read_settings`], sees `enabled`, and calls [`install`]/[`SyncEngine::setup`].
@@ -1820,6 +1820,17 @@ pub(crate) fn ack_floor(peers: &[String], acks: &PeerAcks) -> AckFloor {
     }
 }
 
+const SELF_AUTHORIZED_KEY: &str = "sync:self_authorized_at";
+
+fn self_removal_is_current(store: &Store, removal: Version) -> bool {
+    let grant = store
+        .extra_value(SELF_AUTHORIZED_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Version>(&raw).ok());
+    grant.is_none_or(|grant| removal.newer_than(&grant))
+}
+
 /// Value stored for one peer. `name` is empty for peers added manually;
 /// `added_at` is the time the peer entered the mesh (synced, so every device
 /// orders the list identically).
@@ -1829,6 +1840,46 @@ struct PeerValue {
     name: String,
     #[serde(default)]
     added_at: u64,
+    /// Explicit membership grant, preserved by routine name/presence updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorized_at: Option<Version>,
+}
+
+/// Membership recency is independent of presence/name recency. Legacy peers
+/// have only their original added_at; absent evidence cannot defeat a removal.
+fn peer_authority(record: &Record) -> Version {
+    if record.is_deleted() {
+        return record.version;
+    }
+    let value = record
+        .value
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<PeerValue>(raw).ok())
+        .unwrap_or_default();
+    value
+        .authorized_at
+        .filter(|grant| !grant.newer_than(&record.version))
+        .unwrap_or_else(|| {
+            Version::new(
+                value.added_at.saturating_mul(1000).min(record.version.ts),
+                0,
+                0,
+                false,
+            )
+        })
+}
+
+fn resolve_peer(local: Option<&Record>, remote: &Record) -> Option<Record> {
+    let Some(local) = local else {
+        return Some(remote.clone());
+    };
+    let ours = peer_authority(local);
+    let theirs = peer_authority(remote);
+    if theirs.newer_than(&ours) || (theirs == ours && remote.version.newer_than(&local.version)) {
+        Some(remote.clone())
+    } else {
+        None
+    }
 }
 
 /// Live value of a peer record (tombstones omitted).
@@ -1866,7 +1917,7 @@ fn peer_upsert(
     // An empty or self-referential name carries no label; it must never clear a
     // name already learned for a live peer.
     let name = name.map(str::trim).filter(|n| !n.is_empty() && *n != id);
-    if existing.is_some() && name.is_none() {
+    if existing.is_some() && name.is_none() && !resurrect {
         return false;
     }
     let added_at = existing
@@ -1874,19 +1925,39 @@ fn peer_upsert(
         .map(|p| p.added_at)
         .filter(|a| *a != 0)
         .unwrap_or(ts);
-    let name = name.unwrap_or("");
+    let name = name.unwrap_or_else(|| existing.as_ref().map_or("", |peer| peer.name.as_str()));
     if existing
         .as_ref()
         .is_some_and(|p| p.name == name && p.added_at == added_at)
+        && !resurrect
     {
         return false;
     }
+    let authorized_at = if resurrect {
+        Some(Version::from_hlc(
+            store.clock().tick(now_ms(), ts.saturating_mul(1000)),
+            dev,
+            false,
+        ))
+    } else {
+        existing.as_ref().and_then(|peer| peer.authorized_at)
+    };
     let value = serde_json::to_string(&PeerValue {
         name: name.to_string(),
         added_at,
+        authorized_at,
     })
     .unwrap_or_else(|_| "{}".to_string());
-    store.set(DOMAIN_PEERS, id, Some(value), ts, dev)
+    let changed = store.set(DOMAIN_PEERS, id, Some(value), ts, dev);
+    if changed && resurrect {
+        // Both incoming invitation hosts and outgoing/manual additions pass
+        // here. Commit our participation grant atomically with peer trust.
+        store.queue_extra(
+            SELF_AUTHORIZED_KEY,
+            Some(serde_json::to_string(&authorized_at.unwrap()).expect("grant serializes")),
+        );
+    }
+    changed
 }
 
 /// Peer ids in mesh order: most recently added first, id as a tiebreak. Both
@@ -2099,6 +2170,94 @@ pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn membership_removal_beats_later_presence_and_explicit_pairing_restores_it() {
+        let mut a = Store::default();
+        let mut b = Store::default();
+        assert!(peer_upsert(&mut a, "peer", Some("old"), 0, 1, true, true));
+        b.apply(
+            DOMAIN_PEERS,
+            "peer",
+            a.record(DOMAIN_PEERS, "peer").unwrap().clone(),
+        );
+        a.set(DOMAIN_PEERS, "peer", None, 0, 1);
+        let removal = a.record(DOMAIN_PEERS, "peer").unwrap().clone();
+        // Advance B's clock past removal without granting it membership.
+        b.apply("unrelated", "clock", removal.clone());
+        assert!(peer_upsert(
+            &mut b,
+            "peer",
+            Some("renamed"),
+            0,
+            2,
+            false,
+            false
+        ));
+        let refresh = b.record(DOMAIN_PEERS, "peer").unwrap().clone();
+        assert!(refresh.version.newer_than(&removal.version));
+        assert!(!a.apply(DOMAIN_PEERS, "peer", refresh));
+        assert_eq!(
+            a.outbound(&b.digest())
+                .iter()
+                .filter(|r| r.domain == DOMAIN_PEERS)
+                .count(),
+            1
+        );
+        assert!(b.apply(DOMAIN_PEERS, "peer", removal.clone()));
+        assert!(b.record(DOMAIN_PEERS, "peer").unwrap().is_deleted());
+        a.gc(u64::MAX, 0, store::AckFloor::NoPeers);
+        assert_eq!(a.record(DOMAIN_PEERS, "peer"), Some(&removal));
+        assert!(peer_upsert(
+            &mut b,
+            "peer",
+            Some("paired again"),
+            0,
+            2,
+            true,
+            true
+        ));
+        assert!(a.apply(
+            DOMAIN_PEERS,
+            "peer",
+            b.record(DOMAIN_PEERS, "peer").unwrap().clone()
+        ));
+        assert!(!a.apply(DOMAIN_PEERS, "peer", removal.clone()));
+        assert_eq!(read_peer_value(&a, "peer").unwrap().name, "paired again");
+        assert!(
+            !self_removal_is_current(&b, removal.version),
+            "incoming host peer_upsert renews self grant too"
+        );
+    }
+
+    #[test]
+    fn legacy_presence_cannot_override_removal_and_self_grants_ignore_stale_removals() {
+        let mut store = Store::default();
+        let removal = Record {
+            value: None,
+            version: Version::new(20_000, 0, 1, true),
+        };
+        store.apply(DOMAIN_PEERS, "peer", removal.clone());
+        assert!(!store.apply(
+            DOMAIN_PEERS,
+            "peer",
+            Record {
+                value: Some(r#"{"name":"renamed","added_at":10}"#.into()),
+                version: Version::new(30_000, 0, 2, false),
+            }
+        ));
+        store.queue_extra(
+            SELF_AUTHORIZED_KEY,
+            Some(serde_json::to_string(&Version::new(25_000, 0, 1, false)).unwrap()),
+        );
+        assert!(!self_removal_is_current(&store, removal.version));
+        assert!(self_removal_is_current(
+            &store,
+            Version::new(30_000, 0, 2, true)
+        ));
+        assert_eq!(ALPN, b"nova/sync/5");
+        assert_eq!(PAIR_ALPN, b"nova/pair/4");
+    }
 
     #[test]
     fn local_edits_debounce_and_continuous_edits_have_a_ceiling() {

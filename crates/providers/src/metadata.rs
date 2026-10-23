@@ -298,9 +298,11 @@ fn cache_ttl(result: &EnrichmentResult) -> u64 {
         return 30;
     }
     // A confirmed identity can still have unpublished episode data. Keep the
-    // durable mapping, but revisit sparse details on the next fetch instead
-    // of freezing generic titles/missing images for thirty days.
-    if !result.supplemental_seasons.is_empty()
+    // durable mapping, but revisit series inventories (including currently
+    // complete/ended ones) and sparse details. A stable native response must
+    // not freeze new supplemental seasons for thirty days.
+    if result.details.media.media_type != "movie"
+        || !result.supplemental_seasons.is_empty()
         || result.details.episodes.iter().any(|episode| {
             result
                 .episode_metadata
@@ -2750,21 +2752,19 @@ mod tests {
             assert_eq!(state.storage_get(key), Some(raw));
             assert_eq!(partial.connections[0].media_id, "tt100");
         }
-        // Published episode fields return the same identity to the long-lived
-        // cache; movies with no episodes also keep the existing lifetime.
+        // Even a fully published series can gain episodes/seasons while its
+        // native response remains unchanged. Revalidate it without deleting
+        // the durable identity/artwork fallback; movies keep the long TTL.
         state
             .storage_set(
                 key,
                 &serde_json::to_string(&(now() - PARTIAL_CACHE_TTL - 1, &complete)).unwrap(),
             )
             .unwrap();
-        assert_eq!(
-            cached_result(state.as_ref(), key).unwrap().episode_metadata["fixture:ep:1"]
-                .title
-                .as_deref(),
-            Some("Opening")
-        );
+        assert!(cached_result(state.as_ref(), key).is_none());
+        assert!(state.storage_get(key).is_some());
         let mut movie = complete;
+        movie.details.media.media_type = "movie".into();
         movie.details.episodes.clear();
         assert_eq!(cache_ttl(&movie), CONFIRMED_CACHE_TTL);
     }

@@ -1,4 +1,4 @@
-import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
+import { SmartCollectionsBridge, SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
 
 import { SearchField } from "../ui/searchfield.slint";
 
@@ -251,6 +251,36 @@ export component SettingsCategoriesModule inherits Window {
                     }
                 }
             }
+            SectionHeader { label: @tr("Smart collections"); }
+            SettingsCard {
+                SettingsRow {
+                    row-title: @tr("New smart collection");
+                    PillButton {
+                        label: @tr("Create"); roomy: true;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 4 && SettingsContent.kb_cr == SettingsBridge.category_rows.length;
+                        clicked => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 4;
+                            SettingsContent.kb_cr = SettingsBridge.category_rows.length;
+                            SmartCollectionsBridge.edit("");
+                        }
+                    }
+                }
+                for row[i] in SmartCollectionsBridge.rows: SettingsRow {
+                    row-title: row.name;
+                    PillButton {
+                        label: @tr("Edit"); roomy: true;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 4 && SettingsContent.kb_cr == SettingsBridge.category_rows.length + 1 + i;
+                        clicked => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 4;
+                            SettingsContent.kb_cr = SettingsBridge.category_rows.length + 1 + i;
+                            SmartCollectionsBridge.edit(row.id);
+                        }
+                    }
+                }
+            }
+
         }
     }
 }

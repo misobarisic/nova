@@ -164,8 +164,9 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
         settle(&app);
         let settings = app.global::<nova_ui_shared::SettingsBridge>();
         let content = (*app).global::<nova_ui_shared::SettingsContent>();
-        let chapter_row =
-            content.invoke_kb_player_speed_row() + if format == 1 { 5 } else { 4 } + 7;
+        // Subtitle controls grow independently of the chapter/episode rows.
+        // The shared boundary keeps this fixture on the actual chapter action.
+        let chapter_row = content.invoke_kb_player_stream_filters_row() - 4;
         assert!(
             ElementHandle::find_by_accessible_label(&app, "Show chapters on timeline")
                 .next()

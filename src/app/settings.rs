@@ -1455,7 +1455,7 @@ mod tests {
             );
             store.apply(
                 DOMAIN_LIBRARY,
-                "startup-remote",
+                &library::library_key("movie", "startup-remote"),
                 nova_sync::Record {
                     value: Some(
                         serde_json::json!({

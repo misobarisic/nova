@@ -214,3 +214,64 @@ fn episode_page_renders_totals_and_picks_globally() {
         failures.join("\n  ")
     );
 }
+
+#[test]
+fn keyboard_episode_actions_use_global_page_indices() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::keyboard_episode_actions_use_global_page_indices"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_modal_visible(true);
+    app.set_detail_tab(3);
+    app.set_modal_episodes(true);
+    app.set_season_names(Rc::new(VecModel::from(vec![s("Season 1")])).into());
+    app.set_episode_rows(Rc::new(VecModel::from(vec![episode(51), episode(52)])).into());
+    app.set_episode_page_start(50);
+    app.set_episode_page(1);
+    app.set_episode_page_count(2);
+    app.set_episode_total(52);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.show().unwrap();
+    let settle = || {
+        for _ in 0..10 {
+            for element in i_slint_backend_testing::ElementQuery::from_root(&app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = element.size();
+            }
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        }
+    };
+    settle();
+    app.set_detail_kb_zone(3);
+    app.set_detail_kb_ci(2);
+    app.set_detail_kb_ep(1);
+    (*app)
+        .global::<nova_ui_shared::DetailContent>()
+        .invoke_focus_shell();
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let observed = picked.clone();
+    app.on_episode_picked(move |index| observed.borrow_mut().push(index));
+    let watched = Rc::new(RefCell::new(Vec::new()));
+    let observed = watched.clone();
+    app.on_episode_toggle_watched(move |index| observed.borrow_mut().push(index));
+    for text in [
+        slint::SharedString::from("w"),
+        slint::platform::Key::Return.into(),
+    ] {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        settle();
+    }
+    assert_eq!(*watched.borrow(), vec![51]);
+    assert_eq!(*picked.borrow(), vec![51]);
+}

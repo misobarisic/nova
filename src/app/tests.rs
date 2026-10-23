@@ -870,6 +870,28 @@ mod library_tests {
     }
 
     #[test]
+    fn library_membership_and_removal_use_media_type_and_id() {
+        let mut items = Vec::new();
+        assert!(upsert_library(
+            &mut items,
+            entry("123", "movie", "Film", "", "")
+        ));
+        assert!(upsert_library(
+            &mut items,
+            entry("123", "series", "Show", "", "")
+        ));
+        assert!(!upsert_library(
+            &mut items,
+            entry("123", "movie", "Updated film", "", "")
+        ));
+        assert_eq!(items.len(), 2);
+        assert!(remove_library_entry(&mut items, "movie", "123"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].type_, "series");
+        assert_eq!(items[0].name, "Show");
+    }
+
+    #[test]
     fn upsert_dedupes_by_id_and_removal_drops_entry() {
         let mut items = vec![entry("tt1", "movie", "Alpha", "2020", "u1")];
         // Same id overwrites in place (kept position), returns "not added".
@@ -890,8 +912,8 @@ mod library_tests {
         assert_eq!(items[1].id, "tt2");
 
         // Removal by id.
-        assert!(remove_library_entry(&mut items, "tt1"));
-        assert!(!remove_library_entry(&mut items, "tt1"));
+        assert!(remove_library_entry(&mut items, "movie", "tt1"));
+        assert!(!remove_library_entry(&mut items, "movie", "tt1"));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "tt2");
         let _ = std::mem::take(&mut items);

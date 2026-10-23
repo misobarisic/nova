@@ -274,7 +274,10 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
         owner
             .lock()
             .unwrap()
-            .record(&sync::profile_domain(sync::DOMAIN_LIBRARY), ORIGINAL)
+            .record(
+                &sync::profile_domain(sync::DOMAIN_LIBRARY),
+                &library::library_key("series", ORIGINAL)
+            )
             .unwrap()
             .is_deleted()
     );

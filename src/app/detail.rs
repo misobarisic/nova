@@ -5,6 +5,25 @@ use std::time::Instant;
 const STREAM_PAGE_SIZE: usize = 25;
 const STREAM_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
+/// History anchors use the latest observed episode, including completed ones,
+/// rather than the next unwatched episode advertised by Continue Watching.
+fn last_watched_episode<'a>(state: &Shared, modal: &'a ModalItem) -> Option<&'a Video> {
+    modal
+        .videos
+        .iter()
+        .filter(|video| catalog_detail::allows(state, modal, &video.id))
+        .filter_map(|video| {
+            let progress = state
+                .progress
+                .get(&progress_map_key(&modal.id, &video.id))?;
+            (video.season.is_some()
+                && (progress.position_secs > 0.0 || progress.watched || progress.play_count > 0))
+                .then_some((video, progress))
+        })
+        .max_by_key(|(video, progress)| (progress.updated_at_secs, video.id.as_str()))
+        .map(|(video, _)| video)
+}
+
 static WATCH_ACTION_BOOT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{:032x}-{:08x}",
@@ -313,9 +332,9 @@ impl Bridge {
         app.set_selected_poster(Image::default());
         app.set_player_poster(Image::default());
 
-        app.set_in_library(self.library_contains(&preview.id));
+        app.set_in_library(self.library_contains(&preview.type_, &preview.id));
         self.refresh_detail_library_watched();
-        if self.library_contains(&preview.id) {
+        if self.library_contains(&preview.type_, &preview.id) {
             self.sync_modal_category_flags();
         }
 
@@ -1507,9 +1526,12 @@ impl Bridge {
                 .iter()
                 .find(|video| video.id == m.request_id)
                 .and_then(|video| video.thumbnail.clone());
+            let selected_season = m.seasons.get(m.season_index).copied();
             m.videos = videos;
             m.seasons = seasons;
-            m.season_index = m.season_index.min(m.seasons.len().saturating_sub(1));
+            m.season_index = selected_season
+                .and_then(|season| m.seasons.iter().position(|&s| s == season))
+                .unwrap_or_else(|| m.season_index.min(m.seasons.len().saturating_sub(1)));
             let idx = m.season_index;
             let names = m
                 .seasons
@@ -2238,40 +2260,51 @@ impl Bridge {
             self.start_stream_search(id);
             return;
         }
-        // Same-entry reopen: restore the saved season instead of season 0.
-        let snapshot = self
-            .shared
-            .lock()
-            .unwrap()
-            .detail_snapshots
-            .get(&id)
-            .cloned();
-        let (season_names, season_idx) = {
+        let (first_population, previous_season) = {
             let mut state = self.shared.lock().unwrap();
-            let scoped = state.catalog_detail.active();
             let m = match state.modal_item.as_mut() {
                 Some(m) if m.id == id => m,
                 _ => return,
             };
+            let first_population = m.seasons.is_empty();
+            let previous_season = m.seasons.get(m.season_index).copied();
             m.videos = videos;
             m.seasons = seasons;
-            m.season_index = snapshot
-                .as_ref()
+            (first_population, previous_season)
+        };
+        // Resolve proven native/canonical history before choosing an opening
+        // season, just as episode rows and the primary action do.
+        if self.sync_reconcile_progress_aliases() {
+            self.refresh_library_progress_ui();
+        }
+        let (season_names, season_idx) = {
+            let mut state = self.shared.lock().unwrap();
+            let m = state.modal_item.as_ref().unwrap();
+            let season = if first_population && !state.catalog_detail.active() {
+                last_watched_episode(&state, m)
+                    .and_then(|video| video.season)
+                    .or_else(|| state.detail_snapshots.get(&id).and_then(|s| s.season))
+            } else {
+                previous_season
+            };
+            let scoped = state.catalog_detail.active();
+            let m = state.modal_item.as_mut().unwrap();
+            m.season_index = season
                 .filter(|_| !scoped)
-                .and_then(|s| s.season)
-                .and_then(|sv| m.seasons.iter().position(|&x| x == sv))
+                .and_then(|season| m.seasons.iter().position(|&s| s == season))
                 .unwrap_or(0);
-            let idx = m.season_index;
+            if first_population {
+                // Opening selects only the season; playback-return handles
+                // selecting a page/episode and requesting a scroll separately.
+                m.episode_page = 0;
+            }
             let names = m
                 .seasons
                 .iter()
                 .map(|&s| SharedString::from(season_label(s)))
                 .collect::<Vec<_>>();
-            (names, idx)
+            (names, m.season_index)
         };
-        if self.sync_reconcile_progress_aliases() {
-            self.refresh_library_progress_ui();
-        }
         if let Some(app) = self.app() {
             app.set_modal_episodes(true);
             app.set_detail_deep_stream(false);
@@ -2846,22 +2879,7 @@ impl Bridge {
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            let video = modal
-                .videos
-                .iter()
-                .filter(|video| catalog_detail::allows(&state, modal, &video.id))
-                .filter_map(|video| {
-                    let progress = state
-                        .progress
-                        .get(&progress_map_key(&modal.id, &video.id))?;
-                    (video.season.is_some()
-                        && (progress.position_secs > 0.0
-                            || progress.watched
-                            || progress.play_count > 0))
-                        .then_some((video, progress))
-                })
-                .max_by_key(|(video, progress)| (progress.updated_at_secs, video.id.as_str()))
-                .map(|(video, _)| video.clone());
+            let video = last_watched_episode(&state, modal).cloned();
             video.and_then(|video| {
                 let modal = state.modal_item.as_ref()?;
                 let visible = catalog_detail::seasons(&state, modal);
@@ -5413,6 +5431,209 @@ mod tests {
         assert!(app.get_stream_selector_open());
         assert!(app.get_detail_deep_stream());
         assert!(!app.get_episode_context().is_empty());
+        close();
+        // Ordinary opening resumes only the latest watched season. A deep
+        // episode must not select its page/card or request a scroll, and newer
+        // empty/unrelated history must not displace real viewing progress.
+        let resume_preview = MetaPreview {
+            id: "resume-series".into(),
+            ..preview.clone()
+        };
+        let mut resume_item = MetaItem {
+            preview: resume_preview.clone(),
+            status: Some("Continuing".into()),
+            videos: (1..=60)
+                .map(|episode| Video {
+                    id: format!("resume-series:2:{episode}"),
+                    season: Some(2),
+                    episode: Some(episode),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        for season in [1, 3] {
+            resume_item.videos.push(Video {
+                id: format!("resume-series:{season}:1"),
+                season: Some(season),
+                episode: Some(1),
+                ..Default::default()
+            });
+        }
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            for (series, episode, timestamp, watched) in [
+                ("resume-series", "resume-series:1:1", 100, true),
+                ("resume-series", "resume-series:2:57", 200, true),
+                ("resume-series", "resume-series:3:1", 300, false),
+                ("resume-series", "missing-episode", 400, true),
+                ("other-series", "resume-series:3:1", 500, true),
+            ] {
+                state.progress.insert(
+                    progress_map_key(series, episode),
+                    EpisodeProgress {
+                        series_id: series.into(),
+                        episode_id: episode.into(),
+                        updated_at_secs: timestamp,
+                        watched,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let assert_season_only = |season_index| {
+            assert_eq!(app.get_season_combo_idx(), season_index);
+            assert_eq!(app.get_episode_page(), 0);
+            assert_eq!(app.get_detail_kb_ep(), 0);
+            assert_eq!(app.get_detail_episode_reveal_request(), 0);
+            assert!(!app.get_stream_selector_open());
+        };
+        write_episodes_cache_for("series", "resume-series", &resume_item.videos);
+        bridge.open_preview(resume_preview.clone(), 0, false, None, false);
+        assert_season_only(1);
+        bridge.season_picked(0);
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        bridge.apply_episode_meta(
+            "resume-series".into(),
+            Some(resume_item.clone()),
+            true,
+            token,
+        );
+        assert_season_only(0); // a background response preserves a manual choice
+        close();
+        bridge.open_preview(resume_preview.clone(), 0, false, None, false);
+        assert_season_only(1); // newer history takes priority over the saved season
+        // Specials sort last. Removing and then rediscovering an earlier
+        // numbered season must retain the selected season's identity.
+        let mut changed_inventory = resume_item.clone();
+        changed_inventory.videos.push(Video {
+            id: "resume-series:0:1".into(),
+            season: Some(0),
+            episode: Some(1),
+            ..Default::default()
+        });
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        bridge.apply_episode_meta(
+            "resume-series".into(),
+            Some(changed_inventory.clone()),
+            true,
+            token.clone(),
+        );
+        assert_season_only(1);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .seasons,
+            [1, 2, 3, 0]
+        );
+        changed_inventory
+            .videos
+            .retain(|video| video.season.is_some_and(|season| season >= 2));
+        bridge.apply_episode_meta(
+            "resume-series".into(),
+            Some(changed_inventory.clone()),
+            true,
+            token.clone(),
+        );
+        assert_season_only(0);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .seasons[0],
+            2
+        );
+        changed_inventory.videos.push(Video {
+            id: "resume-series:1:1".into(),
+            season: Some(1),
+            episode: Some(1),
+            ..Default::default()
+        });
+        bridge.apply_episode_meta("resume-series".into(), Some(changed_inventory), true, token);
+        assert_season_only(1);
+        close();
+        // Recency, not the highest season number, also handles a rewatch.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let progress = state
+                .progress
+                .get_mut(&progress_map_key("resume-series", "resume-series:1:1"))
+                .unwrap();
+            progress.watched = false;
+            progress.position_secs = 30.0;
+            progress.updated_at_secs = 600;
+        }
+        bridge.open_preview(resume_preview.clone(), 0, false, None, false);
+        assert_season_only(0);
+        bridge.season_picked(2);
+        close();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .progress
+            .retain(|_, progress| progress.series_id != "resume-series");
+        bridge.open_preview(resume_preview.clone(), 0, false, None, false);
+        assert_season_only(2); // without history, keep a valid saved season
+        close();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .detail_snapshots
+            .remove("resume-series");
+        bridge.open_preview(resume_preview.clone(), 0, false, None, false);
+        assert_season_only(0);
+        close();
+        // A cold first population follows the same rule when metadata arrives.
+        resume_item.preview.id = "cold-resume".into();
+        bridge.shared.lock().unwrap().progress.insert(
+            progress_map_key("cold-resume", "resume-series:2:57"),
+            EpisodeProgress {
+                series_id: "cold-resume".into(),
+                episode_id: "resume-series:2:57".into(),
+                play_count: 1,
+                updated_at_secs: 700,
+                ..Default::default()
+            },
+        );
+        bridge.open_preview(resume_item.preview.clone(), 0, false, None, false);
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        bridge.apply_episode_meta("cold-resume".into(), Some(resume_item), false, token);
+        assert_season_only(1);
         close();
         // A first visit has no target yet, so it offers episode selection
         // while loading, rather than advertising a speculative Start action.

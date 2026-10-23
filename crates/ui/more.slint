@@ -316,7 +316,7 @@ export component MorePage inherits Rectangle {
         active: root.active && JournalBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
-        safe-bottom: root.safe-bottom + (root.external_navigation && root.narrow ? 68px : 0px);
+        safe-bottom: root.safe-bottom;
         safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
         safe-right: root.safe-right;
         back => { JournalBridge.open = false; entry_focus.start(); }
@@ -328,7 +328,7 @@ export component MorePage inherits Rectangle {
         active: root.active && QueueBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
-        safe-bottom: root.safe-bottom + (root.external_navigation && root.narrow ? 68px : 0px);
+        safe-bottom: root.safe-bottom;
         safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
         safe-right: root.safe-right;
         back => { QueueBridge.open = false; entry_focus.start(); }
@@ -340,7 +340,7 @@ export component MorePage inherits Rectangle {
         active: root.active && BookmarksBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
-        safe-bottom: root.safe-bottom + (root.external_navigation && root.narrow ? 68px : 0px);
+        safe-bottom: root.safe-bottom;
         safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
         safe-right: root.safe-right;
         back => { BookmarksBridge.open = false; entry_focus.start(); }

@@ -338,6 +338,8 @@ struct Shared {
     library_poster_inflight: HashSet<(String, String, String)>,
     /// Session-only refresh state, independent of legacy header/episode caches.
     metadata_prefetch: HashMap<(String, String), MetadataPrefetch>,
+    /// Aggregate background episode-inventory budget (revision, next batch).
+    saved_episode_refresh_next: Option<(u64, std::time::Instant)>,
     /// Saved library items (My Library), order = insertion order.
     entries: Vec<LibraryEntry>,
     /// Current image-cache settings (mirrored from the KV store).

@@ -18,9 +18,9 @@ enum Action {
     Keep,
 }
 
-fn action_for(want: bool, held: bool) -> Action {
+fn action_for(want: bool, held: bool, attempted: bool) -> Action {
     match (want, held) {
-        (true, false) => Action::Acquire,
+        (true, false) if !attempted => Action::Acquire,
         (false, true) => Action::Release,
         _ => Action::Keep,
     }
@@ -56,6 +56,7 @@ struct InhibitState {
     cookie: Option<u32>,
     /// logind inhibitor: dropping the fd releases the block.
     login_fd: Option<OwnedFd>,
+    attempted: bool,
 }
 
 impl InhibitState {
@@ -64,6 +65,7 @@ impl InhibitState {
             conn: None,
             cookie: None,
             login_fd: None,
+            attempted: false,
         }
     }
 
@@ -75,11 +77,14 @@ impl InhibitState {
 static STATE: Mutex<InhibitState> = Mutex::new(InhibitState::empty());
 
 /// Converge screen inhibition towards `want` (playing video). Transition-only:
-/// steady states make no D-Bus calls. Safe from the UI thread; a call blocks
-/// for one round trip at most, and only on flips.
+/// steady states make no D-Bus calls. Failed acquisition is retried only after
+/// pause/close; the initial attempt may contact both buses.
 pub fn converge_idle_inhibit(want: bool) {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    match action_for(want, state.held()) {
+    if !want {
+        state.attempted = false;
+    }
+    match action_for(want, state.held(), state.attempted) {
         Action::Keep => {}
         Action::Release => {
             if let (Some(conn), Some(cookie)) = (state.conn.clone(), state.cookie)
@@ -92,39 +97,40 @@ pub fn converge_idle_inhibit(want: bool) {
             state.login_fd = None;
         }
         Action::Acquire => {
-            let conn = match state.conn.clone() {
-                Some(conn) => conn,
-                None => match zbus::blocking::Connection::session() {
-                    Ok(conn) => {
-                        state.conn = Some(conn.clone());
-                        conn
-                    }
-                    Err(e) => {
-                        eprintln!("nova player: no session bus for idle inhibit: {e}");
-                        return;
-                    }
-                },
-            };
-            // Preferred path: the desktop's screen saver inhibitor.
-            match ScreenSaverProxyBlocking::new(&conn)
-                .map(|proxy| proxy.inhibit("nova", "Video playback"))
-            {
-                Ok(Ok(cookie)) => {
+            // One attempt per playing interval; unavailable services must not
+            // block/log on every player tick. Pause/close permits another try.
+            state.attempted = true;
+            let session = state
+                .conn
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(zbus::blocking::Connection::session);
+            match session.and_then(|conn| {
+                let cookie =
+                    ScreenSaverProxyBlocking::new(&conn)?.inhibit("nova", "Video playback")?;
+                Ok((conn, cookie))
+            }) {
+                Ok((conn, cookie)) => {
+                    state.conn = Some(conn);
                     state.cookie = Some(cookie);
                     return;
                 }
-                Ok(Err(e)) | Err(e) => {
+                Err(e) => {
                     eprintln!("nova player: screensaver inhibit unavailable ({e}); trying logind");
                 }
             }
-            // Fallback: systemd-logind idle block (bare window managers).
-            match LoginManagerProxyBlocking::new(&conn)
-                .map(|proxy| proxy.inhibit("idle", "nova", "Video playback", "block"))
-            {
-                Ok(Ok(fd)) => {
-                    state.login_fd = Some(fd.into());
-                }
-                Ok(Err(e)) | Err(e) => {
+            // logind is on the system bus, including when no session bus is
+            // available. The returned fd owns the inhibitor independently.
+            match zbus::blocking::Connection::system().and_then(|conn| {
+                LoginManagerProxyBlocking::new(&conn)?.inhibit(
+                    "idle",
+                    "nova",
+                    "Video playback",
+                    "block",
+                )
+            }) {
+                Ok(fd) => state.login_fd = Some(fd.into()),
+                Err(e) => {
                     eprintln!("nova player: logind idle inhibit unavailable: {e}");
                     state.conn = None;
                 }
@@ -139,9 +145,10 @@ mod tests {
 
     #[test]
     fn transitions_only() {
-        assert_eq!(action_for(true, false), Action::Acquire);
-        assert_eq!(action_for(false, true), Action::Release);
-        assert_eq!(action_for(true, true), Action::Keep);
-        assert_eq!(action_for(false, false), Action::Keep);
+        assert_eq!(action_for(true, false, false), Action::Acquire);
+        assert_eq!(action_for(true, false, true), Action::Keep);
+        assert_eq!(action_for(false, true, true), Action::Release);
+        assert_eq!(action_for(true, true, true), Action::Keep);
+        assert_eq!(action_for(false, false, false), Action::Keep);
     }
 }

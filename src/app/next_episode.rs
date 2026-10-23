@@ -74,8 +74,9 @@ impl Bridge {
                     .modal_item
                     .as_ref()
                     .filter(|m| m.id == playing.series_id)
-                    .map(|m| &m.videos)
-                    .unwrap_or(&state.remote_playback.receiver_videos);
+                    .map(|m| &m.videos)?;
+                // Detached receivers have inventory but no local source-picker
+                // context. Only offer actions that choose_next_episode can run.
                 successor(videos, &playing.episode_id, today_days()).cloned()
             });
             next.and_then(|next| {
@@ -423,6 +424,19 @@ mod tests {
             state.cache_settings.prefetch_next_episode_streams = true;
         }
         app.set_position(1320.0);
+        bridge.refresh_next_episode_prompt();
+        assert!(app.get_next_episode_visible());
+        // Receiver inventory alone cannot execute the local source-picker action.
+        let modal = bridge.shared.lock().unwrap().modal_item.take().unwrap();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .receiver_videos = modal.videos.clone();
+        bridge.refresh_next_episode_prompt();
+        assert!(!app.get_next_episode_visible());
+        bridge.shared.lock().unwrap().modal_item = Some(modal);
         bridge.refresh_next_episode_prompt();
         assert!(app.get_next_episode_visible());
         let old_token = app.get_next_episode_token();

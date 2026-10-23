@@ -33,13 +33,13 @@ use crate::merge::{Record, Version};
 use crate::store::{Digest, Outbound, Store};
 use crate::{RemoteCallback, SyncStatus};
 
-/// ALPN for the sync protocol (`/4` = isolated profile namespaces; postcard frames retain
-/// per-domain digest hashes and compression).
-pub const ALPN: &[u8] = b"nova/sync/4";
+/// Typed library identities and authorization-based peer membership. The
+/// postcard layout is unchanged; older merge semantics are incompatible.
+pub const ALPN: &[u8] = b"nova/sync/5";
 /// ALPN for the one-shot "you have been removed" notice. Separate from the sync
 /// ALPN so the sync wire schema (postcard, non-self-describing) is unchanged.
 pub const REMOVE_ALPN: &[u8] = b"nova/remove/1";
-const PROTO: u8 = 4;
+const PROTO: u8 = 5;
 /// Upper bound on a whole exchange (connect is timed out separately by the
 /// caller). Generous: a first sync of a large library over a relay can take a
 /// while, and aborting mid-flight drops the connection under the peer.
@@ -496,7 +496,7 @@ fn apply_frames(
     store: &mut Store,
     frames: &[Wire],
     self_id: &str,
-    acks: &crate::PeerAcks,
+    _acks: &crate::PeerAcks,
 ) -> Applied {
     let mut changed: Vec<String> = Vec::new();
     let mut removed_us = false;
@@ -508,25 +508,15 @@ fn apply_frames(
                     // A peer's list includes us; never add ourselves as a peer.
                     // A tombstone here means the sender removed us.
                     if entry.key == self_id {
-                        if entry.deleted {
+                        if entry.deleted
+                            && crate::self_removal_is_current(store, entry.to_record().version)
+                        {
                             removed_us = true;
                         }
                         continue;
                     }
-                    // A third party's tombstone must not delete a peer we have
-                    // directly synced with since the tombstone was created: that
-                    // peer is demonstrably alive, so the removal is stale.
-                    if entry.deleted
-                        && acks
-                            .get(&entry.key)
-                            .is_some_and(|ack| ack.newer_than(entry.hlc()))
-                    {
-                        tracing::debug!(
-                            peer = crate::short_id(&entry.key),
-                            "ignored stale peer tombstone; ack newer than removal"
-                        );
-                        continue;
-                    }
+                    // Store resolves membership by explicit authorization,
+                    // never by later name updates or successful sync acks.
                 }
                 if store.apply(domain, &entry.key, entry.to_record()) {
                     any = true;
@@ -2206,7 +2196,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_third_party_peer_tombstone_is_ignored_when_we_synced_recently() {
+    fn peer_removal_is_authoritative_even_after_a_recent_sync() {
         let base = crate::now_ms().saturating_sub(100_000);
         let mut store = Store::default();
         store.apply(
@@ -2232,8 +2222,8 @@ mod tests {
             store
                 .records(crate::DOMAIN_PEERS)
                 .iter()
-                .any(|(k, _)| k == "peer-x"),
-            "a live peer we synced with since the removal must be kept"
+                .all(|(k, _)| k != "peer-x"),
+            "a successful sync is not permission to undo a removal"
         );
     }
 

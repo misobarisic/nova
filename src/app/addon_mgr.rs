@@ -701,6 +701,7 @@ impl Bridge {
             self.prefetch_library_meta();
         }
 
+        self.refresh_saved_episode_metadata();
         let mut state = self.shared.lock().unwrap();
 
         // The picker and its definitions use the same browse inventory. A

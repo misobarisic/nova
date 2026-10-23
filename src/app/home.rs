@@ -2799,6 +2799,7 @@ impl Bridge {
         self.dispatch_upcoming_posters();
         self.ensure_home_showcase_loaded();
         self.ensure_home_catalog_rows_loaded();
+        self.refresh_saved_episode_metadata();
     }
 
     // ---- Upcoming calendar -------------------------------------------

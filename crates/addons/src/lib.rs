@@ -186,7 +186,7 @@ impl Addon {
     /// URL of `GET /catalog/{type}/{id}.json` with optional extra parameters
     /// (e.g. `search` or `genre`).
     ///
-    /// Extras are encoded as `key=value` path segments, the form Stremio
+    /// Extras are encoded as `key=value` pairs in one `&`-separated path segment, the form Stremio
     /// addons (e.g. Cinemeta) actually route on:
     /// `…/catalog/movie/top/search=batman.json`.
     pub fn catalog_url(&self, type_: &str, id: &str, extra: &[(&str, &str)]) -> String {
@@ -197,7 +197,7 @@ impl Addon {
                 .iter()
                 .map(|(k, v)| format!("{k}={}", Self::encode_segment(v)))
                 .collect();
-            format!("catalog/{type_}/{id}/{}.json", segments.join("/"))
+            format!("catalog/{type_}/{id}/{}.json", segments.join("&"))
         };
         self.join(&path).to_string()
     }
@@ -614,6 +614,19 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].label(), "1080p");
         assert_eq!(got[1].label(), "Only Title");
+    }
+
+    #[test]
+    fn catalog_combines_extras_in_one_segment() {
+        let addon = Addon::new("https://example.com/manifest.json").unwrap();
+        assert_eq!(
+            addon.catalog_url(
+                "movie",
+                "top",
+                &[("genre", "Action & Adventure"), ("skip", "100")]
+            ),
+            "https://example.com/catalog/movie/top/genre=Action%20%26%20Adventure&skip=100.json"
+        );
     }
 
     #[test]

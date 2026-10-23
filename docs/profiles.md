@@ -46,7 +46,7 @@ account domains `profiles` and `profile_deletions` carry profile names and
 permanent retirement markers. The active selection never filters record
 exchange: every paired device synchronizes every profile. Inactive profile
 records materialize into durable snapshots without changing the screen or local
-selection. `nova/sync/4` and `nova/pair/3` isolate these semantics from older
+selection. `nova/sync/5` and `nova/pair/4` isolate these semantics from older
 clients; all paired devices need an updated Nova. The postcard schema is unchanged.
 
 The deterministic legacy ID is `default`. Its untouched name has a neutral

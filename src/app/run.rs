@@ -1519,6 +1519,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "desktop")]
     let tick_window = desktop_window.clone();
     let mut episode_day = today_days();
+    let mut episode_inventory_check = std::time::Instant::now();
     _timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
@@ -1536,6 +1537,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if today != episode_day {
                 episode_day = today;
                 tick_bridge.refresh_library_progress_ui();
+            }
+            if episode_inventory_check.elapsed() >= Duration::from_secs(60) {
+                episode_inventory_check = std::time::Instant::now();
+                tick_bridge.refresh_saved_episode_metadata();
             }
             let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());
             tick_player.tick();

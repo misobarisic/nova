@@ -23,7 +23,7 @@ a rejected selection cannot become active after restarting the app.
 With sync enabled, paired devices share the desired addon list, settings and
 package descriptors. A device missing an archive automatically requests it
 from a currently paired peer. Package bytes travel over the separate
-`nova/addon-package/1` protocol; ordinary records retain `nova/sync/4`. Transfer
+`nova/addon-package/1` protocol; ordinary records retain `nova/sync/5`. Transfer
 is limited to 8 MiB, cancellable and timed out; removal from the paired mesh
 revokes transfer authorization. The receiving app validates the ZIP and its
 SHA-256, ID and version before making it available. If no peer has the package,

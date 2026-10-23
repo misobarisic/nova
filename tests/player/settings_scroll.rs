@@ -110,14 +110,21 @@ fn settings_pages_slide_fade_and_resize_in_both_directions() {
 
         // Exercise every category, including the very different natural sizes
         // of a speed slider, decoder choices, track list and subtitle controls.
-        for (row, first_label) in [
-            (3, "Use global default"),
-            (1, "Use global default"),
-            (4, "Use global defaults"),
-            (2, "HW+"),
-            (0, "Use global default"),
-            (5, "Use global default"),
+        for (row, first_label, subtitle_style) in [
+            (3, "Use global default", false),
+            (1, "Use global default", false),
+            (0, "Use global defaults", true),
+            (2, "HW+", false),
+            (0, "Use global default", false),
+            (4, "Use global default", false),
         ] {
+            // Appearance is now a shortcut inside Subtitles. Measure its
+            // transition against that actual parent page, then unwind to root.
+            if subtitle_style {
+                key(&app, slint::platform::Key::Return);
+                advance_menu(&app, 300);
+            }
+            let root_height = card.size().height;
             for _ in 0..row {
                 key(&app, slint::platform::Key::DownArrow);
             }
@@ -160,7 +167,14 @@ fn settings_pages_slide_fade_and_resize_in_both_directions() {
                     .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
                     .is_none()
             );
-            let root_row = button(&app, "Subtitles");
+            let root_row = button(
+                &app,
+                if subtitle_style {
+                    "Appearance & timing"
+                } else {
+                    "Subtitles"
+                },
+            );
             advance_menu(&app, 50);
             let returning_x = root_row.absolute_position().x;
             assert!(root_row.computed_opacity() > 0.0 && root_row.computed_opacity() < 1.0);
@@ -172,6 +186,10 @@ fn settings_pages_slide_fade_and_resize_in_both_directions() {
                 0,
                 "navigation must not edit title preferences"
             );
+            if subtitle_style {
+                key(&app, slint::platform::Key::Escape);
+                advance_menu(&app, 300);
+            }
         }
         // A short landscape viewport clamps all long pages, but on larger
         // screens their differing natural heights must remain visible.
@@ -371,10 +389,8 @@ fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
 
     fn open_style(app: &nova::AppWindow) {
         open_settings(app);
-        // Reveal the last category even in a short landscape menu.
-        for _ in 0..4 {
-            key(app, slint::platform::Key::DownArrow);
-        }
+        // Subtitles owns the Appearance & timing shortcut at its first slot.
+        key(app, slint::platform::Key::Return);
         key(app, slint::platform::Key::Return);
     }
 
@@ -450,6 +466,7 @@ fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
             assert!(!app.global::<nova::SliderGesture>().get_hovered());
             key(&app, slint::platform::Key::Escape);
             key(&app, slint::platform::Key::Escape);
+            key(&app, slint::platform::Key::Escape);
 
             // Reopening after an edit must accept a new, independent vertical
             // gesture. Native touch exercises the delayed press/cancel path.
@@ -492,6 +509,7 @@ fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
             );
             assert!(!app.global::<nova::SliderGesture>().get_active());
             assert!(!app.global::<nova::SliderGesture>().get_hovered());
+            key(&app, slint::platform::Key::Escape);
             key(&app, slint::platform::Key::Escape);
             key(&app, slint::platform::Key::Escape);
         }

@@ -21,9 +21,9 @@ use crate::frame;
 use crate::store::Store;
 use crate::ticket::match_code;
 
-/// ALPN for the pairing protocol (`/3` = devices supporting isolated profile namespaces).
-pub const ALPN: &[u8] = b"nova/pair/3";
-const PROTO: u8 = 3;
+/// Pair only devices supporting typed library keys and membership grants.
+pub const ALPN: &[u8] = b"nova/pair/4";
+const PROTO: u8 = 4;
 /// How long an invite stays valid.
 pub const INVITE_TTL_SECS: u64 = 15 * 60;
 /// Keep at most this many outstanding invites.

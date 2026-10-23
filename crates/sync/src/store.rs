@@ -506,7 +506,12 @@ impl Store {
             remote.value = Some(value);
         }
         let slot = self.domains.entry(domain.to_string()).or_default();
-        match resolve(slot.get(key), &remote) {
+        let resolved = if domain == crate::DOMAIN_PEERS {
+            crate::resolve_peer(slot.get(key), &remote)
+        } else {
+            resolve(slot.get(key), &remote)
+        };
+        match resolved {
             Some(record) => {
                 slot.insert(key.to_string(), record);
                 self.dirty.insert((domain.to_string(), key.to_string()));
@@ -514,6 +519,40 @@ impl Store {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Remove a legacy physical record whose authority has been retained by
+    /// the caller in the same transaction (for example a migration barrier).
+    pub fn remove_migrated_record(&mut self, domain: &str, key: &str) {
+        if self
+            .domains
+            .get_mut(domain)
+            .is_some_and(|rows| rows.remove(key).is_some())
+        {
+            self.dirty.insert((domain.to_owned(), key.to_owned()));
+            self.pending_domains.insert(domain.to_owned());
+        }
+    }
+
+    /// Atomically rekey legacy records without inventing user edits. Capture
+    /// every source before removing any: an opaque old ID may equal another
+    /// row's new key. The next save commits removals and merged targets together.
+    pub fn migrate_record_keys(&mut self, domain: &str, keys: &[(String, String)]) {
+        let records: Vec<_> = keys
+            .iter()
+            .filter(|(from, to)| from != to)
+            .filter_map(|(from, to)| {
+                self.record(domain, from)
+                    .cloned()
+                    .map(|record| (from.clone(), to.clone(), record))
+            })
+            .collect();
+        for (from, _, _) in &records {
+            self.remove_migrated_record(domain, from);
+        }
+        for (_, to, record) in records {
+            self.apply(domain, &to, record);
         }
     }
 
@@ -549,6 +588,10 @@ impl Store {
             let peer_keys = peer.get(domain);
             for (key, record) in keys {
                 let send = match peer_keys.and_then(|m| m.get(key)) {
+                    // A membership removal can outrank a later name update.
+                    // Exchange unequal versions so that authorization, rather
+                    // than transport recency, decides the winner on both ends.
+                    Some(version) if domain == crate::DOMAIN_PEERS => record.version != *version,
                     Some(version) => record.version.newer_than(version),
                     None => true,
                 };
@@ -629,6 +672,11 @@ impl Store {
         }
         let mut removed: Vec<(String, String)> = Vec::new();
         for (domain, keys) in self.domains.iter_mut() {
+            // A removed device may return after every current peer has acked.
+            // Only explicit pairing may supersede this authorization barrier.
+            if domain == crate::DOMAIN_PEERS {
+                continue;
+            }
             keys.retain(|key, r| {
                 if !r.is_deleted() || now_ms.saturating_sub(r.version.ts) <= max_age_ms {
                     return true;

@@ -16,8 +16,8 @@ pub(super) fn register_collections() {
 fn register_for(owner: &profiles::ProfileStore) {
     owner.register_collection(
         "library",
-        storage::CollectionKind::Array {
-            id_field: "id".into(),
+        storage::CollectionKind::CompositeArray {
+            id_fields: vec!["type_".into(), "id".into()],
         },
     );
     owner.register_collection(EPISODE_PROGRESS_KEY, storage::CollectionKind::Object);

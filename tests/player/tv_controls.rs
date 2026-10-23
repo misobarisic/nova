@@ -345,6 +345,8 @@ fn tv_resume_dialog_and_media_buttons_have_explicit_actions() {
     key(&app, slint::platform::Key::Return);
     app.set_resume_prompt_visible(true);
     settle(&app);
+    key(&app, slint::platform::Key::LeftArrow);
+    key(&app, slint::platform::Key::RightArrow);
     key(&app, slint::platform::Key::Return);
     assert_eq!(&*choices.borrow(), &[false, true]);
     app.set_resume_prompt_visible(true);

@@ -539,7 +539,7 @@ fn external_ingress_publishes_mesh_records_without_source_or_tracker_upload_auth
             let store = owner.lock().unwrap();
             assert!(
                 store
-                    .record(DOMAIN_LIBRARY, "tt100")
+                    .record(DOMAIN_LIBRARY, &library::library_key("series", "tt100"))
                     .and_then(|r| r.value.as_ref())
                     .is_some()
             );
@@ -2490,7 +2490,7 @@ fn ordered_external_writer_preserves_surrounding_local_saves_and_remote_origin()
             let store = owner.lock().unwrap();
             assert!(
                 store
-                    .record(DOMAIN_LIBRARY, "tt100")
+                    .record(DOMAIN_LIBRARY, &library::library_key("series", "tt100"))
                     .unwrap()
                     .value
                     .is_some()

@@ -160,6 +160,139 @@ fn locate_catalog_anchor(
         .unwrap_or_else(|| anchor.index.min(projected.len().saturating_sub(1)))
 }
 
+const SAVED_EPISODE_BATCH: usize = 4;
+const SAVED_EPISODE_BATCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const SAVED_EPISODE_RECENT_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const SAVED_EPISODE_OLD_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const SAVED_EPISODE_FAILURE_INTERVAL: Duration = Duration::from_secs(2 * 60);
+
+type MetadataOwners = Vec<(String, u64)>;
+
+struct SavedEpisodeRefresh {
+    type_: String,
+    id: String,
+    sources: VecDeque<String>,
+    interval: Duration,
+}
+
+fn metadata_owners(state: &Shared) -> MetadataOwners {
+    state
+        .installed
+        .iter()
+        .filter(|addon| addon.enabled && addon.available && addon.manifest.has_meta())
+        .map(|addon| (addon.url.clone(), addon.generation))
+        .collect()
+}
+
+fn reserve_saved_episode_refresh(
+    state: &mut Shared,
+    revision: u64,
+    now: std::time::Instant,
+    wall_now: u64,
+) -> VecDeque<SavedEpisodeRefresh> {
+    if state.restoring_models
+        || state.loading_addons
+        || state
+            .saved_episode_refresh_next
+            .is_some_and(|(rev, at)| rev == revision && now < at)
+        || state
+            .metadata_prefetch
+            .values()
+            .any(|job| job.retry_at.is_none())
+    {
+        return VecDeque::new();
+    }
+    let mut history = HashMap::<&str, u64>::new();
+    for progress in state
+        .progress
+        .values()
+        .filter(|p| p.watched || p.position_secs > 0.0 || p.play_count > 0)
+    {
+        history
+            .entry(&progress.series_id)
+            .and_modify(|at| *at = (*at).max(progress.updated_at_secs))
+            .or_insert(progress.updated_at_secs);
+    }
+    let mut candidates = state
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            if entry.type_ == "movie"
+                || entry.type_.is_empty()
+                || entry.id.is_empty()
+                || entry.watch_status != WatchStatus::Auto
+            {
+                return None;
+            }
+            let last_watched = *history.get(entry.id.as_str())?;
+            let previous = state
+                .metadata_prefetch
+                .get(&(entry.type_.clone(), entry.id.clone()));
+            if previous.is_some_and(|job| {
+                job.revision == revision && job.retry_at.is_none_or(|at| now < at)
+            }) {
+                return None;
+            }
+            let sources = state
+                .installed
+                .iter()
+                .filter(|addon| {
+                    addon.enabled
+                        && addon.available
+                        && addon.manifest.accepts("meta", &entry.type_, &entry.id)
+                })
+                .filter_map(|addon| Addon::new(&addon.url).ok())
+                .map(|addon| addon.meta_url(&entry.type_, &entry.id))
+                .collect::<VecDeque<_>>();
+            if sources.is_empty() {
+                return None;
+            }
+            let interval = if wall_now.saturating_sub(last_watched) < 30 * 24 * 3600 {
+                SAVED_EPISODE_RECENT_INTERVAL
+            } else {
+                SAVED_EPISODE_OLD_INTERVAL
+            };
+            Some((
+                previous.and_then(|job| job.retry_at),
+                std::cmp::Reverse(last_watched),
+                SavedEpisodeRefresh {
+                    type_: entry.type_.clone(),
+                    id: entry.id.clone(),
+                    sources,
+                    interval,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    // Reserve half the budget for overdue recently watched titles. The other
+    // half rotates through unvisited/oldest deadlines, so a large old library
+    // neither blocks an active show's next refresh nor loses its own turn.
+    candidates.sort_by_key(|(deadline, watched, job)| (*deadline, *watched, job.id.clone()));
+    let mut urgent = Vec::new();
+    let mut index = 0;
+    while index < candidates.len() && urgent.len() < SAVED_EPISODE_BATCH / 2 {
+        if candidates[index].0.is_some()
+            && candidates[index].2.interval == SAVED_EPISODE_RECENT_INTERVAL
+        {
+            urgent.push(candidates.remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    urgent.extend(candidates);
+    let candidates = urgent;
+    let mut work = VecDeque::new();
+    for (_, _, job) in candidates.into_iter().take(SAVED_EPISODE_BATCH) {
+        if reserve_metadata_prefetch(state, &job.type_, &job.id, revision, now) {
+            work.push_back(job);
+        }
+    }
+    if !work.is_empty() {
+        state.saved_episode_refresh_next = Some((revision, now + SAVED_EPISODE_BATCH_INTERVAL));
+    }
+    work
+}
+
 fn reserve_metadata_prefetch(
     state: &mut Shared,
     type_: &str,
@@ -1173,6 +1306,142 @@ impl Bridge {
             })
             .collect();
         self.prefetch_meta_pairs(pairs);
+    }
+
+    /// Revalidate watched saved series even when their cache looks complete.
+    /// Completion/Ended is derived from that same inventory and cannot be used
+    /// to decide that a title will never gain a new season.
+    pub(super) fn refresh_saved_episode_metadata(&self) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        if !remote_playback::is_foreground()
+            || !app.window().is_visible()
+            || app.window().is_minimized()
+            || (!app.get_show_home() && !app.get_show_library())
+            || app.get_player_open()
+            || app.get_modal_visible()
+        {
+            return;
+        }
+        let revision = nova_providers::metadata_revision();
+        let (work, owners) = {
+            let mut state = self.shared.lock().unwrap();
+            let owners = metadata_owners(&state);
+            let work = reserve_saved_episode_refresh(
+                &mut state,
+                revision,
+                std::time::Instant::now(),
+                now_secs(),
+            );
+            (work, owners)
+        };
+        self.run_saved_episode_refresh(work, owners, revision);
+    }
+
+    fn finish_saved_episode_refresh(&self, job: &SavedEpisodeRefresh, success: bool) {
+        if let Some(prefetch) = self
+            .shared
+            .lock()
+            .unwrap()
+            .metadata_prefetch
+            .get_mut(&(job.type_.clone(), job.id.clone()))
+        {
+            prefetch.retry_at = Some(
+                std::time::Instant::now()
+                    + if success {
+                        job.interval
+                    } else {
+                        SAVED_EPISODE_FAILURE_INTERVAL
+                    },
+            );
+        }
+    }
+
+    fn run_saved_episode_refresh(
+        &self,
+        mut work: VecDeque<SavedEpisodeRefresh>,
+        owners: MetadataOwners,
+        revision: u64,
+    ) {
+        let Some(mut job) = work.pop_front() else {
+            return;
+        };
+        let current = {
+            let state = self.shared.lock().unwrap();
+            remote_playback::is_foreground()
+                && self.app().is_some_and(|app| {
+                    app.window().is_visible()
+                        && !app.window().is_minimized()
+                        && (app.get_show_home() || app.get_show_library())
+                        && !app.get_player_open()
+                        && !app.get_modal_visible()
+                })
+                && metadata_owners(&state) == owners
+                && revision == nova_providers::metadata_revision()
+        };
+        if !current {
+            self.finish_saved_episode_refresh(&job, false);
+            for pending in &work {
+                self.finish_saved_episode_refresh(pending, false);
+            }
+            self.shared.lock().unwrap().saved_episode_refresh_next = None;
+            return;
+        }
+        let eligible = self.shared.lock().unwrap().entries.iter().any(|entry| {
+            entry.id == job.id
+                && entry.type_ == job.type_
+                && entry.watch_status == WatchStatus::Auto
+        });
+        let Some(url) = job.sources.pop_front().filter(|_| eligible) else {
+            self.finish_saved_episode_refresh(&job, false);
+            self.run_saved_episode_refresh(work, owners, revision);
+            return;
+        };
+        // Detail or another metadata request may publish while this slower
+        // background fetch is in flight. Keep that newer inventory intact.
+        let baseline = storage::get_str(&episodes_key(&job.type_, &job.id));
+        let bridge = self.clone();
+        net::fetch_bytes(url, move |result| {
+            let item = result
+                .ok()
+                .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                .filter(|item| meta_matches_request(item, &job.type_, &job.id));
+            // Publication is UI-thread/profile gated: old profile completions
+            // cannot mutate replacement Shared state or its caches. Validate
+            // the source generation/inventory again after the HTTP/broker work.
+            let _ = profiles::invoke_from_event_loop(move || {
+                let current = {
+                    let state = bridge.shared.lock().unwrap();
+                    metadata_owners(&state) == owners
+                        && revision == nova_providers::metadata_revision()
+                        && storage::get_str(&episodes_key(&job.type_, &job.id)) == baseline
+                        && state.entries.iter().any(|entry| {
+                            entry.id == job.id
+                                && entry.type_ == job.type_
+                                && entry.watch_status == WatchStatus::Auto
+                        })
+                };
+                if !current {
+                    bridge.finish_saved_episode_refresh(&job, false);
+                    bridge.run_saved_episode_refresh(work, owners, revision);
+                    return;
+                }
+                if item
+                    .as_ref()
+                    .is_some_and(|item| bridge.cache_background_meta(&job.type_, &job.id, item) > 0)
+                {
+                    bridge.finish_saved_episode_refresh(&job, true);
+                    bridge.sync_reconcile_progress_aliases();
+                    bridge.request_progress_projection();
+                } else {
+                    // A failed/empty source must not replace the known episode
+                    // list; try the next accepting addon within the same slot.
+                    work.push_front(job);
+                }
+                bridge.run_saved_episode_refresh(work, owners, revision);
+            });
+        });
     }
 
     pub(super) fn pick_addon(&self, label: &str) {
@@ -3271,6 +3540,387 @@ mod tests {
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
             assert_eq!(app.get_search_text(), input);
             assert_eq!(bridge.shared.lock().unwrap().search, input.trim());
+        }
+    }
+
+    fn refresh_test_addon(url: &str) -> Installed {
+        Installed {
+            url: url.into(),
+            label: "Episodes".into(),
+            enabled: true,
+            configure_ok: None,
+            available: true,
+            generation: 1,
+            manifest: serde_json::from_value(serde_json::json!({
+                "id":"episodes", "name":"Episodes", "version":"1", "types":["series"],
+                "resources":["meta"], "catalogs":[]
+            }))
+            .unwrap(),
+        }
+    }
+
+    fn refresh_test_entry(state: &mut Shared, id: &str, watched_at: u64) {
+        state.entries.push(
+            serde_json::from_value(serde_json::json!({
+                "id":id, "type_":"series", "name":id, "description":"Already cached"
+            }))
+            .unwrap(),
+        );
+        let episode_id = format!("{id}:2:1");
+        state.progress.insert(
+            progress_map_key(id, &episode_id),
+            EpisodeProgress {
+                series_id: id.into(),
+                episode_id,
+                watched: true,
+                updated_at_secs: watched_at,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn saved_episode_refresh_bounds_work_rotates_and_prioritizes_overdue_active_shows() {
+        let mut state = Shared::default();
+        state
+            .installed
+            .push(refresh_test_addon("https://episodes.invalid"));
+        let now = std::time::Instant::now();
+        let wall = 100 * 24 * 3600;
+        refresh_test_entry(&mut state, "active", wall);
+        for index in 0..500 {
+            refresh_test_entry(&mut state, &format!("old-{index:03}"), 1);
+        }
+        let first = reserve_saved_episode_refresh(&mut state, 1, now, wall);
+        assert_eq!(first.len(), 4);
+        assert_eq!(first[0].id, "active");
+        assert_eq!(first[0].interval, SAVED_EPISODE_RECENT_INTERVAL);
+        assert_eq!(first[1].interval, SAVED_EPISODE_OLD_INTERVAL);
+        assert!(
+            reserve_saved_episode_refresh(&mut state, 2, now + Duration::from_secs(3600), wall)
+                .is_empty(),
+            "pending work coalesces even across inventory revisions"
+        );
+        for job in &first {
+            state
+                .metadata_prefetch
+                .get_mut(&(job.type_.clone(), job.id.clone()))
+                .unwrap()
+                .retry_at = Some(now + job.interval);
+        }
+        assert!(
+            reserve_saved_episode_refresh(&mut state, 1, now + Duration::from_secs(299), wall)
+                .is_empty()
+        );
+        let second =
+            reserve_saved_episode_refresh(&mut state, 1, now + SAVED_EPISODE_BATCH_INTERVAL, wall);
+        assert_eq!(second.len(), 4);
+        assert!(
+            second
+                .iter()
+                .all(|job| first.iter().all(|old| old.id != job.id))
+        );
+        for job in &second {
+            state
+                .metadata_prefetch
+                .get_mut(&(job.type_.clone(), job.id.clone()))
+                .unwrap()
+                .retry_at = Some(now + job.interval);
+        }
+        let third =
+            reserve_saved_episode_refresh(&mut state, 1, now + SAVED_EPISODE_RECENT_INTERVAL, wall);
+        assert_eq!(third.len(), 4);
+        assert_eq!(
+            third[0].id, "active",
+            "hundreds of unvisited old titles cannot starve an overdue active show"
+        );
+        assert!(
+            third.iter().skip(1).all(|job| first
+                .iter()
+                .chain(second.iter())
+                .all(|old| old.id != job.id)),
+            "old titles still get their fair share"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn saved_episode_refresh_discovers_home_without_detail_and_rejects_stale_responses() {
+        const ROOT: &str = "NOVA_SAVED_EPISODE_REFRESH_TEST";
+        let Ok(root) = std::env::var(ROOT) else {
+            let base = std::env::temp_dir().join(format!(
+                "nova-episode-refresh-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            for mode in [
+                "success",
+                "source",
+                "removed",
+                "profile",
+                "empty",
+                "superseded",
+            ] {
+                let root = base.join(mode);
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .env(ROOT, &root).env("NOVA_EPISODE_REFRESH_MODE", mode)
+                    .env("XDG_CACHE_HOME", root.join("cache"))
+                    .args(["--exact", "app::catalog::tests::saved_episode_refresh_discovers_home_without_detail_and_rejects_stale_responses", "--nocapture"])
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            fs::remove_dir_all(base).unwrap();
+            return;
+        };
+        use std::io::{Read, Write};
+        let mode = std::env::var("NOVA_EPISODE_REFRESH_MODE").unwrap();
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        if mode == "profile" {
+            profiles::initialize().unwrap();
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let received = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let (seen, ready, stop) = (received.clone(), release.clone(), done.clone());
+        let server_mode = mode.clone();
+        let server = thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let len = socket.read(&mut request).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..len])
+                        .contains("/meta/series/refresh-show.json")
+                );
+                seen.fetch_add(1, Ordering::Release);
+                while !ready.load(Ordering::Acquire) && !stop.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let videos = if server_mode == "empty" {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([
+                        {"id":"refresh-show:1:1","season":1,"episode":1,"released":"2020-01-01"},
+                        {"id":"refresh-show:2:1","season":2,"episode":1,"released":"2020-02-01"},
+                        {"id":"refresh-show:2:2","season":2,"episode":2,"released":"2020-02-08"}
+                    ])
+                };
+                let body = serde_json::to_vec(&serde_json::json!({"meta":{"id":"refresh-show","type":"series","name":"Show","videos":videos}})).unwrap();
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        let app = AppWindow::new().unwrap();
+        app.show().unwrap();
+        app.set_show_home(true);
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let cached: Vec<Video> = serde_json::from_value(serde_json::json!([
+            {"id":"refresh-show:1:1","season":1,"episode":1,"released":"2020-01-01","thumbnail":"https://known.invalid/one.jpg"},
+            {"id":"refresh-show:2:1","season":2,"episode":1,"released":"2020-02-01","thumbnail":"https://known.invalid/two.jpg"}
+        ])).unwrap();
+        // The fixture has complete cached artwork as well as episode data.
+        // Otherwise Home's independent Watch history poster-repair path also
+        // requests meta, obscuring the refresh scheduler's coalescing check.
+        let poster = "https://known.invalid/poster.jpg";
+        for url in [
+            poster,
+            "https://known.invalid/one.jpg",
+            "https://known.invalid/two.jpg",
+        ] {
+            decoded_cache_insert(
+                &sized_cache_key(url, Some(DISPLAY_POSTER_SIDE)),
+                SharedPixelBuffer::<Rgba8Pixel>::new(1, 1),
+            );
+        }
+        write_episodes_cache_for("series", "refresh-show", &cached);
+        write_meta_header_for(
+            "series",
+            "refresh-show",
+            &MetaHeader {
+                description: "Cached text".into(),
+                poster_url: poster.into(),
+                ..Default::default()
+            },
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.installed.push(refresh_test_addon(&url));
+            refresh_test_entry(&mut state, "refresh-show", now_secs());
+            state.entries[0].poster_url = poster.into();
+            state.progress.insert(
+                progress_map_key("refresh-show", "refresh-show:1:1"),
+                EpisodeProgress {
+                    series_id: "refresh-show".into(),
+                    episode_id: "refresh-show:1:1".into(),
+                    watched: true,
+                    updated_at_secs: now_secs().saturating_sub(1),
+                    ..Default::default()
+                },
+            );
+            write_progress_map(&state.progress);
+        }
+        bridge.persist_library();
+        persistence::flush().unwrap();
+        bridge.migrate_viewing_activity();
+        bridge.rebuild_continue_list();
+        bridge.apply_home_to_ui();
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        assert!(bridge.shared.lock().unwrap().artwork_recovery.is_empty());
+        bridge.prefetch_library_meta();
+        assert!(
+            bridge.shared.lock().unwrap().metadata_prefetch.is_empty(),
+            "the old populated-cache prefetch skips this title"
+        );
+        remote_playback::playback_foreground(false);
+        bridge.refresh_saved_episode_metadata();
+        assert!(
+            bridge.shared.lock().unwrap().metadata_prefetch.is_empty(),
+            "background apps do not refresh"
+        );
+        remote_playback::playback_foreground(true);
+        // A real Home revisit starts the refresh without opening Detail.
+        bridge.show_home_page();
+        bridge.refresh_saved_episode_metadata();
+        let weak = app.as_weak();
+        let check = bridge.clone();
+        let seen = received.clone();
+        let ready = release.clone();
+        let mode_check = mode.clone();
+        let changed = Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
+        let started = std::time::Instant::now();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(20),
+            move || {
+                let app = weak.upgrade().unwrap();
+                if seen.load(Ordering::Acquire) > 0 && changed.get().is_none() {
+                    match mode_check.as_str() {
+                        "source" => check.shared.lock().unwrap().installed[0].generation += 1,
+                        "removed" => check.shared.lock().unwrap().entries.clear(),
+                        "profile" => {
+                            let id = profiles::create("Other").unwrap();
+                            let prepared = profiles::prepare_activation(&id).unwrap();
+                            let session = check.sessions.prepare(&id, Shared::default());
+                            check.sessions.publish(session.clone());
+                            profiles::commit_session(prepared, &session);
+                        }
+                        "superseded" => {
+                            let mut newer =
+                                read_episodes_cache_for("series", "refresh-show").unwrap();
+                            for episode in [2, 3] {
+                                newer.push(Video {
+                                    id: format!("refresh-show:2:{episode}"),
+                                    season: Some(2),
+                                    episode: Some(episode),
+                                    ..Default::default()
+                                });
+                            }
+                            write_episodes_cache_for("series", "refresh-show", &newer);
+                        }
+                        _ => {}
+                    }
+                    changed.set(Some(std::time::Instant::now()));
+                    ready.store(true, Ordering::Release);
+                }
+                let complete = if mode_check == "success" {
+                    app.get_home_new_episodes().row_count() == 1
+                } else {
+                    changed
+                        .get()
+                        .is_some_and(|at| at.elapsed() > Duration::from_secs(1))
+                };
+                if complete || started.elapsed() > Duration::from_secs(10) {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        slint::run_event_loop().unwrap();
+        done.store(true, Ordering::Release);
+        release.store(true, Ordering::Release);
+        server.join().unwrap();
+        assert_eq!(
+            received.load(Ordering::Acquire),
+            1,
+            "revisits/ticks must coalesce"
+        );
+        assert!(!app.get_modal_visible());
+        if mode == "success" {
+            assert_eq!(
+                app.get_home_new_episodes().row_count(),
+                1,
+                "fresh S2E2 must appear without opening Detail"
+            );
+            let videos = read_episodes_cache_for("series", "refresh-show").unwrap();
+            assert_eq!(videos.len(), 3);
+            for old in &cached {
+                assert_eq!(
+                    videos.iter().find(|v| v.id == old.id).unwrap().thumbnail,
+                    old.thumbnail
+                );
+            }
+            bridge.refresh_saved_episode_metadata();
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .metadata_prefetch
+                    .values()
+                    .all(|job| job.retry_at.is_some())
+            );
+        } else {
+            assert_eq!(app.get_home_new_episodes().row_count(), 0);
+            if mode != "profile" {
+                assert_eq!(
+                    read_episodes_cache_for("series", "refresh-show")
+                        .unwrap()
+                        .len(),
+                    if mode == "superseded" { 4 } else { 2 },
+                    "invalid/empty refresh must preserve the cached inventory"
+                );
+                assert!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .metadata_prefetch
+                        .values()
+                        .all(|job| job.retry_at.is_some())
+                );
+            }
         }
     }
 

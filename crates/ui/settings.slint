@@ -1,5 +1,6 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
-import { CatalogGroupingBridge, StreamFiltersBridge, SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
+import { InterfaceStyle, SmartCollectionsBridge, CatalogGroupingBridge, StreamFiltersBridge, SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
+import { SmartCollectionsEditor } from "smart-collections.slint";
 import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
@@ -20,7 +21,7 @@ export component SettingsPage {
         SettingsContent.shell_width = root.width;
         SettingsContent.detail_width = root.detail_width;
     }
-    public function focus_shell() { nav_scope.focus(); }
+    public function focus_shell() { if SmartCollectionsBridge.editor_open { smart_editor.focus_shell(); } else { nav_scope.focus(); } }
 
     in property <bool> standalone_sync: false;
     function apply_page_mode() {
@@ -740,6 +741,7 @@ export component SettingsPage {
         root.system_back();
     }
     function system_back() {
+        if SmartCollectionsBridge.editor_open { smart_editor.go_back(); return; }
         if root.addon_config_open {
             if root.plugin_clear_confirm { root.plugin_clear_confirm = false; }
             else if root.addon_text_editor >= 0 { root.addon_text_editor = -1; }
@@ -788,7 +790,7 @@ export component SettingsPage {
     }
 
     function kb_has_addons() -> bool { return root.addon_rows.length > 0; }
-    function kb_has_cats() -> bool { return root.category_rows.length > 0; }
+    function kb_category_action_count() -> int { return root.category_rows.length + 1 + SmartCollectionsBridge.rows.length; }
     // Cache rows: 0 images, 1 enable, 2 format, 3 quality, 4-7 image sizes,
     // 8 memory, 9 re-encode button, 10 clear. Sizes and memory remain available when disk
     // caching or re-encoding is off. Rows 9/10 activate on Enter
@@ -877,8 +879,8 @@ export component SettingsPage {
         if (root.kb_ar >= root.addon_rows.length) {
             root.kb_ar = Math.max(0, root.addon_rows.length - 1);
         }
-        if (root.kb_cr >= root.category_rows.length) {
-            root.kb_cr = Math.max(0, root.category_rows.length - 1);
+        if (root.kb_cr >= root.kb_category_action_count()) {
+            root.kb_cr = root.kb_category_action_count() - 1;
         }
         if (!root.animations && root.kb_anr > 0) { root.kb_anr = 0; }
         if (root.kb_hr >= root.kb_cache_n()) {
@@ -1157,13 +1159,13 @@ export component SettingsPage {
                 root.kb_nudge(-50px);
             }
         } else if (root.kb_zone == 3) {
-            if (root.kb_has_cats()) {
+            if (root.kb_category_action_count() > 0) {
                 root.kb_zone = 4;
                 root.kb_cr = 0;
                 root.kb_nudge(-150px);
             }
         } else if (root.kb_zone == 4) {
-            if (root.kb_cr + 1 < root.category_rows.length) {
+            if (root.kb_cr + 1 < root.kb_category_action_count()) {
                 root.kb_cr += 1;
                 root.kb_nudge(-50px);
             }
@@ -1772,7 +1774,9 @@ export component SettingsPage {
                 root.category_input = "";
             }
         } else if (root.kb_zone == 4) {
-            root.category_removed(root.kb_cr);
+            if root.kb_cr < root.category_rows.length { root.category_removed(root.kb_cr); }
+            else if root.kb_cr == root.category_rows.length { SmartCollectionsBridge.edit(""); }
+            else { SmartCollectionsBridge.edit(SmartCollectionsBridge.rows[root.kb_cr - root.category_rows.length - 1].id); }
         } else if (root.kb_zone == 5) {
             if (!root.kb_cache_available(root.kb_hr)) { return; }
             if (root.kb_hr == 9) {
@@ -1870,6 +1874,8 @@ export component SettingsPage {
     changed addon_rows => { root.kb_clamp_all(); }
     changed downloads_rows => { root.kb_clamp_all(); }
     changed category_rows => { root.kb_clamp_all(); }
+    private property <int> smart_collection_count: SmartCollectionsBridge.rows.length;
+    changed smart_collection_count => { root.kb_clamp_all(); }
     changed home_catalog_rows => { root.kb_clamp_all(); }
     changed home_row_catalog_rows => { root.kb_clamp_all(); }
     changed cache_enabled => {
@@ -1921,7 +1927,7 @@ export component SettingsPage {
         // would interrupt an editor clicked during the first attached frame.
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
-            enabled: root.active;
+            enabled: root.active && !SmartCollectionsBridge.editor_open;
             width: 100%;
             height: 100%;
             init => {
@@ -2534,7 +2540,7 @@ export component SettingsPage {
         addon_config_panel := Rectangle {
             x: root.safe-left + (parent.width - root.safe-left - root.safe-right - self.width) / 2;
             y: root.safe-top + (parent.height - root.safe-top - root.safe-bottom - self.height) / 2;
-            width: Math.min(1080px, parent.width - root.safe-left - root.safe-right - (root.phone_layout ? 0px : 48px));
+            width: Math.min(InterfaceStyle.tv ? 1440px : 1080px, parent.width - root.safe-left - root.safe-right - (root.phone_layout ? 0px : 48px));
             height: root.phone_layout ? parent.height - root.safe-top - root.safe-bottom : Math.min(root.plugin_setting_rows.length > 0 ? 840px : 370px, parent.height - root.safe-top - root.safe-bottom - 32px);
             background: Theme.current.canvas;
             border-width: 1px;
@@ -2695,7 +2701,7 @@ export component SettingsPage {
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 4px;
                                 Text { text: root.addon_config_label; color: Theme.current.text_bright; font-size: 22px; font-weight: 700; wrap: word-wrap; }
-                                Text { text: @tr("Addon configuration"); color: Theme.current.text_settings; font-size: 14px; }
+                                Text { text: @tr("Addon configuration"); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 14px; wrap: word-wrap; }
                             }
                             PillButton {
                                 label: ""; width: 44px; roomy: true; accessible-label: @tr("Close");
@@ -2730,15 +2736,19 @@ export component SettingsPage {
                         }
                         if root.addon_config_capabilities && !root.addon_config_streams && !root.addon_config_metadata: Text {
                             text: @tr("This addon provides no content while both options are off.");
-                            color: Theme.current.text_settings; font-size: 13px; wrap: word-wrap;
+                            color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 13px; wrap: word-wrap;
                         }
                         // Switch columns from the actual panel width, not the device class.
                         // Item identity and persisted fields stay on the leaf rows.
                         GridLayout {
+                        // Wrapped headings have no intrinsic minimum width. Fill
+                        // the panel even when only the preferences group exists.
+                        width: 100%; horizontal-stretch: 1;
                         spacing: 18px;
                         for column in [0, 1]: VerticalLayout {
-                            col: config_scroll.visible-width >= 760px && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? column : 0;
-                            row: config_scroll.visible-width >= 760px && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? 0 : column;
+                            horizontal-stretch: 1;
+                            col: config_scroll.visible-width >= (InterfaceStyle.tv ? 1120px : 760px) && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? column : 0;
+                            row: config_scroll.visible-width >= (InterfaceStyle.tv ? 1120px : 760px) && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? 0 : column;
                             alignment: start;
                             spacing: 0px;
                         for group[group_index] in root.plugin_setting_rows: config_group := Rectangle {
@@ -2755,8 +2765,8 @@ export component SettingsPage {
                                     IcSettingsGear { width: 24px; height: 24px; fill: Theme.current.text_settings; }
                                     VerticalLayout {
                                         spacing: 4px;
-                                        Text { text: @tr("Stream preferences"); color: Theme.current.text_bright; font-size: 17px; font-weight: 700; }
-                                        Text { text: @tr("Customize how streams are found and played."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                        Text { text: @tr("Stream preferences"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 17px; font-weight: 700; wrap: InterfaceStyle.tv ? word-wrap : no-wrap; }
+                                        Text { text: @tr("Customize how streams are found and played."); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
                                     }
                                 }
                                 for field[index] in root.plugin_setting_rows: config_row := VerticalLayout {
@@ -2774,8 +2784,8 @@ export component SettingsPage {
                                     spacing: self.visible ? 6px : 0px;
                                     if field.kind == "host-preferences": VerticalLayout {
                                         spacing: 6px; vertical-stretch: 0; alignment: start;
-                                        Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
-                                        Text { text: field.summary; color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+                                        Text { text: field.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+                                        Text { text: field.summary; color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
                                     }
                                     if config_focus.preference_link(index): Rectangle { height: 1px; background: Theme.current.control_border; }
                                     if config_focus.preference_link(index): Rectangle {
@@ -2792,8 +2802,8 @@ export component SettingsPage {
                                             }
                                             VerticalLayout {
                                                 horizontal-stretch: 1; spacing: 4px;
-                                                Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; wrap: word-wrap; }
-                                                if field.summary != "": Text { text: field.summary; color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                                Text { text: field.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
+                                                if field.summary != "": Text { text: field.summary; color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
                                             }
                                             if config_focus.preference_editing != field.key: IcChevronRight { width: 20px; height: 20px; fill: Theme.current.text_settings; }
                                             if config_focus.preference_editing == field.key: IcChevronDown { width: 20px; height: 20px; fill: Theme.current.text_settings; }
@@ -2802,18 +2812,18 @@ export component SettingsPage {
                                     }
                                     if field.kind == "sort-header" && config_focus.preference_editing == field.key: VerticalLayout {
                                         spacing: 4px;
-                                        Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
-                                        Text { text: @tr("Higher priority first. Unknown values last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                        Text { text: field.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 700; wrap: InterfaceStyle.tv ? word-wrap : no-wrap; }
+                                        Text { text: @tr("Higher priority first. Unknown values last."); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
                                     }
                                     if field.kind == "priority-header" && config_focus.preference_editing == field.key: VerticalLayout {
                                         spacing: 4px;
-                                        Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
-                                        Text { text: @tr("First choice ranks highest. Unlabelled releases stay last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                        Text { text: field.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 700; wrap: InterfaceStyle.tv ? word-wrap : no-wrap; }
+                                        Text { text: @tr("First choice ranks highest. Unlabelled releases stay last."); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
                                     }
                                     if field.kind == "sort-criterion" || field.kind == "priority-criterion": Text {
                                         text: (field.selected + 1) + ". " + field.label;
                                         color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings;
-                                        font-size: 14px; wrap: word-wrap;
+                                        font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap;
                                     }
                                     if field.kind == "sort-criterion" || field.kind == "priority-criterion": HorizontalLayout {
                                         spacing: 6px;
@@ -2839,7 +2849,7 @@ export component SettingsPage {
                                     if field.kind == "collection-header": HorizontalLayout {
                                         spacing: 12px;
                                         IcExtension { width: 24px; height: 24px; fill: Theme.current.text_settings; }
-                                        Text { text: field.collection_label; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; wrap: word-wrap; }
+                                        Text { text: field.collection_label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 17px; font-weight: 700; wrap: word-wrap; }
                                     }
                                     if field.kind == "collection-picker" || field.kind == "priority-picker": Dropdown {
                                         border-color: self.kb_current ? Theme.current.focus_ring : Theme.current.control_border;
@@ -2869,8 +2879,8 @@ export component SettingsPage {
                                             }
                                             VerticalLayout {
                                                 horizontal-stretch: 1; spacing: 3px; alignment: center;
-                                                Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; wrap: word-wrap; }
-                                                if field.item_role == "enabled": Text { text: @tr("Configured"); color: Theme.current.text_settings; font-size: 12px; }
+                                                Text { text: field.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
+                                                if field.item_role == "enabled": Text { text: @tr("Configured"); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; }
                                             }
                                             if field.has_editor: PillButton {
                                                 label: ""; width: 44px; roomy: true;
@@ -2909,7 +2919,7 @@ export component SettingsPage {
                                             }
                                         }
                                         spacing: 6px;
-                                        Text { text: field.label; color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                                        Text { text: field.label; color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
                                         collection_input := SearchField {
                                             property <int> save_version: config_focus.save_version;
                                             changed save_version => { if config_focus.selected == index && config_focus.action == 1 { root.plugin_setting_changed(root.addon_config_url, field.key, self.full-text); } }
@@ -2930,7 +2940,7 @@ export component SettingsPage {
                                             clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, collection_input.full-text); }
                                         }
                                     }
-                                    if field.collection == "" && config_focus.preference_editing == field.key && field.kind != "collection-header" && field.kind != "collection-picker" && field.kind != "sort-header" && field.kind != "sort-criterion" && field.kind != "priority-header" && field.kind != "priority-criterion" && field.kind != "priority-picker": Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                                    if field.collection == "" && config_focus.preference_editing == field.key && field.kind != "collection-header" && field.kind != "collection-picker" && field.kind != "sort-header" && field.kind != "sort-criterion" && field.kind != "priority-header" && field.kind != "priority-criterion" && field.kind != "priority-picker": Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
                                     if field.collection == "" && config_focus.preference_editing == field.key && field.kind == "boolean": ToggleSwitch {
                                         active-thumb-color: Theme.current.on_accent;
                                         name: field.label; checked: field.checked;
@@ -2968,12 +2978,12 @@ export component SettingsPage {
                             HorizontalLayout {
                                 padding: 14px; spacing: 10px;
                                 IcCheck { width: 20px; height: 20px; fill: Theme.current.focus_ring; }
-                                Text { text: @tr("Selections saved automatically. Save text fields after editing."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                Text { text: @tr("Selections saved automatically. Save text fields after editing."); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
                             }
                         }
                         }
                         }
-                        if root.plugin_settings_notice != "": Text { text: root.plugin_settings_notice; color: Theme.current.text_settings; wrap: word-wrap; }
+                        if root.plugin_settings_notice != "": Text { text: root.plugin_settings_notice; color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 14px; wrap: word-wrap; }
                         if root.plugin_setting_rows.length > 0: VerticalLayout {
                             property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected >= root.plugin_setting_rows.length;
                             changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y,self.height); } }
@@ -2983,7 +2993,7 @@ export component SettingsPage {
                         }
                         if root.plugin_clear_confirm: VerticalLayout {
                             spacing: 8px;
-                            Text { text: @tr("Remove this configuration on all synced devices?"); color: Theme.current.text_settings; wrap: word-wrap; }
+                            Text { text: @tr("Remove this configuration on all synced devices?"); color: Theme.current.text_settings; font-size: InterfaceStyle.tv ? 18px : 14px; wrap: word-wrap; }
                             VerticalLayout {
                                 spacing: 8px;
                                 PillButton { width: 100%; wrap_label: true; label: @tr("Cancel"); roomy: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; } }
@@ -3000,7 +3010,7 @@ export component SettingsPage {
             }
         }
     }
-    SettingSyncModal {
+    if !SmartCollectionsBridge.editor_open: SettingSyncModal {
         narrow: root.phone_layout;
         safe-top: root.safe-top; safe-bottom: root.safe-bottom;
         safe-left: root.safe-left; safe-right: root.safe-right;
@@ -3084,6 +3094,15 @@ export component SettingsPage {
                 }
             }
         }
+    }
+
+    smart_editor := SmartCollectionsEditor {
+        visible: SmartCollectionsBridge.editor_open;
+        active: root.active && SmartCollectionsBridge.editor_open;
+        width: 100%; height: 100%; narrow: root.phone_layout;
+        safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+        safe-left: root.safe-left; safe-right: root.safe-right;
+        closed => { root.kb_clamp_all(); root.kb_zone = 4; nav_scope.focus(); }
     }
 
     if !root.active: TouchArea {

@@ -85,42 +85,30 @@ fn assert_editor_form_containment(app: &nova_ui::AppWindow) {
     }
 }
 fn assert_collection_rail_rows_do_not_overlap(app: &nova_ui::AppWindow) {
-    let header = ElementHandle::find_by_element_id(app, "SmartCollectionsRail::rail_header")
-        .next()
-        .expect("collection rail heading row");
     let chips = ElementHandle::find_by_element_id(app, "SmartCollectionsRail::rail")
         .next()
-        .expect("collection chip viewport");
-    let pos = header.absolute_position();
-    let size = header.size();
+        .expect("saved collection filter chips");
+    assert!(chips.size().height >= 44.0);
     assert!(
-        chips.absolute_position().y >= pos.y + size.height + 9.0,
-        "heading and actions must finish before the chip row begins"
+        ElementHandle::find_by_element_id(app, "SmartCollectionsRail::rail_header")
+            .next()
+            .is_none()
     );
-    for text in header
-        .query_descendants()
-        .match_type_name("Text")
-        .find_all()
-    {
-        let row = text.absolute_position();
-        let row_size = text.size();
+    for label in ["Create", "Edit", "Edit collection"] {
         assert!(
-            row.y >= pos.y - 0.5 && row.y + row_size.height <= pos.y + size.height + 0.5,
-            "rail header text stays inside its own row"
+            ElementHandle::find_by_accessible_label(app, label)
+                .all(|item| item.accessible_role() != Some(AccessibleRole::Button)),
+            "collection management belongs in Settings, not Library: {label}"
         );
     }
-    for control in header
-        .query_descendants()
-        .match_predicate(|item| item.accessible_role() == Some(AccessibleRole::Button))
-        .find_all()
-    {
-        let row = control.absolute_position();
-        let row_size = control.size();
-        assert!(
-            row.y >= pos.y - 0.5 && row.y + row_size.height <= pos.y + size.height + 0.5,
-            "rail actions stay above the chips"
-        );
-    }
+}
+
+fn open_collection_settings(app: &nova_ui::AppWindow) {
+    app.set_show_library(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(1);
+    app.set_settings_detail_open(true);
+    settle(app);
 }
 
 #[test]
@@ -133,6 +121,7 @@ fn portrait_and_desktop_editor_keeps_fields_and_save_reachable() {
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = fixture();
+    open_collection_settings(&app);
     let smart = app.global::<SmartCollectionsBridge>();
     let saved = Rc::new(RefCell::new(Vec::new()));
     let recorded = saved.clone();
@@ -193,10 +182,10 @@ fn portrait_and_desktop_editor_keeps_fields_and_save_reachable() {
 }
 
 #[test]
-fn selection_uses_rule_id_and_back_dismisses_editor_without_resetting_category() {
+fn selection_uses_rule_id_and_settings_owns_editor() {
     if !crate::isolation::run(concat!(
         module_path!(),
-        "::selection_uses_rule_id_and_back_dismisses_editor_without_resetting_category"
+        "::selection_uses_rule_id_and_settings_owns_editor"
     )) {
         return;
     }
@@ -242,15 +231,54 @@ fn selection_uses_rule_id_and_back_dismisses_editor_without_resetting_category()
     settle(&app);
     button(&app, "Short sci-fi").mock_single_click(slint::platform::PointerEventButton::Left);
     settle(&app);
-    button(&app, "Edit").mock_single_click(slint::platform::PointerEventButton::Left);
-    settle(&app);
+    assert_eq!(selected.borrow().as_slice(), &["stable-scifi"]);
+    open_collection_settings(&app);
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        settle(&app);
+        reveal(&app, "Create").mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert!(smart.get_editor_open());
+        assert_eq!(smart.get_editing_id(), "");
+        key(&app, slint::platform::Key::Escape.into());
+        assert!(!smart.get_editor_open());
+        reveal(&app, "Edit").mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert!(smart.get_editor_open());
+        assert_eq!(smart.get_editing_id(), "stable-scifi");
+        key(&app, slint::platform::Key::Escape.into());
+        assert!(!smart.get_editor_open());
+        assert!(app.get_show_settings() && !app.get_show_library());
+        assert_eq!(app.get_library_filter_category(), "Weekend");
+    }
+    // Settings' keyboard traversal must reach Create and each saved rule,
+    // including when there are no manual categories.
+    app.global::<nova_ui_shared::SettingsBridge>()
+        .set_kb_zone(4);
+    (*app)
+        .global::<nova_ui_shared::SettingsContent>()
+        .set_kb_cr(0);
+    app.global::<nova_ui_shared::SettingsBridge>()
+        .invoke_focus_shell();
+    key(&app, slint::platform::Key::DownArrow.into());
+    key(&app, slint::platform::Key::Return.into());
     assert!(smart.get_editor_open());
+    assert_eq!(smart.get_editing_id(), "stable-scifi");
     key(&app, slint::platform::Key::Escape.into());
     assert!(!smart.get_editor_open());
-    assert!(app.get_show_library() && !app.get_show_home());
-    assert_eq!(app.get_library_filter_category(), "Weekend");
     assert_eq!(selected.borrow().as_slice(), &["stable-scifi"]);
-    assert_eq!(edited.borrow().as_slice(), &["stable-scifi"]);
+    assert_eq!(
+        edited.borrow().as_slice(),
+        &[
+            "",
+            "stable-scifi",
+            "",
+            "stable-scifi",
+            "",
+            "stable-scifi",
+            "stable-scifi"
+        ]
+    );
 }
 
 #[test]
@@ -263,6 +291,7 @@ fn sync_comparison_back_stays_inside_the_collection_editor() {
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = fixture();
+    open_collection_settings(&app);
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     let smart = app.global::<SmartCollectionsBridge>();
     smart.set_editor_open(true);
@@ -273,17 +302,70 @@ fn sync_comparison_back_stays_inside_the_collection_editor() {
     sync.set_selected_title("Smart collections".into());
     sync.set_open(true);
     settle(&app);
-    assert!(
-        ElementHandle::find_by_accessible_label(&app, "Sync status")
-            .next()
-            .is_some()
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Sync status").count(),
+        1,
+        "the editor owns the only sync comparison dialog"
     );
     key(&app, slint::platform::Key::Escape.into());
     assert!(!sync.get_open());
     assert!(smart.get_editor_open());
-    assert!(app.get_show_library());
+    assert!(app.get_show_settings());
     key(&app, slint::platform::Key::Escape.into());
     assert!(!smart.get_editor_open());
+
+    // Covered Settings buttons in the desktop editor margins must stay inert.
+    app.window().set_size(slint::PhysicalSize::new(1280, 960));
+    let settings = app.global::<nova_ui_shared::SettingsBridge>();
+    settings.set_category_rows(
+        Rc::new(slint::VecModel::from(vec![nova_ui_shared::CategoryRow {
+            name: "Keep me".into(),
+        }]))
+        .into(),
+    );
+    let removals = Rc::new(RefCell::new(Vec::new()));
+    let recorded = removals.clone();
+    settings.on_category_removed(move |index| recorded.borrow_mut().push(index));
+    settle(&app);
+    let remove = reveal(&app, "Remove");
+    let pos = remove.absolute_position();
+    let size = remove.size();
+    let position = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    smart.set_editor_open(true);
+    settle(&app);
+    let form = ElementHandle::find_by_element_id(&app, "SmartCollectionsEditor::form")
+        .next()
+        .unwrap();
+    assert!(position.x > form.absolute_position().x + form.size().width);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: -300.0,
+        });
+    settle(&app);
+    assert!(
+        removals.borrow().is_empty(),
+        "covered category remains untouched"
+    );
+    assert_eq!(
+        remove.absolute_position(),
+        pos,
+        "wheel cannot scroll covered Settings"
+    );
+    assert!(smart.get_editor_open());
 }
 
 #[test]
@@ -405,11 +487,17 @@ fn render_smart_collection_previews() {
             step.set(step.get() + 1);
             match step.get() {
                 1 | 3 => {
+                    app.set_show_library(false);
+                    app.set_show_settings(true);
+                    app.set_settings_selected_id(1);
+                    app.set_settings_detail_open(true);
                     app.global::<SmartCollectionsBridge>().set_editor_open(true);
                 }
                 2 => {
                     app.global::<SmartCollectionsBridge>()
                         .set_editor_open(false);
+                    app.set_show_settings(false);
+                    app.set_show_library(true);
                     app.window().set_size(slint::PhysicalSize::new(390, 844));
                 }
                 4 => {
@@ -422,4 +510,52 @@ fn render_smart_collection_previews() {
         },
     );
     app.run().unwrap();
+}
+
+#[test]
+fn all_titles_is_revealed_when_keyboard_returns_from_overflowing_collections() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::all_titles_is_revealed_when_keyboard_returns_from_overflowing_collections"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = fixture();
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.global::<SmartCollectionsBridge>().set_rows(
+        Rc::new(slint::VecModel::from(
+            (0..8)
+                .map(|index| SmartCollectionRow {
+                    id: format!("collection-{index}").into(),
+                    name: format!("A long collection name {index}").into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_library_kb_zone(4);
+    app.global::<nova_ui_shared::LibraryBridge>()
+        .invoke_focus_shell();
+    settle(&app);
+    // Accessibility queries omit clipped controls. Retain the mounted chip
+    // before scrolling so the offscreen precondition tests its actual position.
+    let all = button(&app, "All titles");
+    for _ in 0..8 {
+        key(&app, slint::platform::Key::RightArrow.into());
+    }
+    assert!(all.absolute_position().x < 0.0);
+    for _ in 0..8 {
+        key(&app, slint::platform::Key::LeftArrow.into());
+    }
+    let all = button(&app, "All titles");
+    let rail = ElementHandle::find_by_element_id(&app, "SmartCollectionsRail::rail")
+        .next()
+        .unwrap();
+    assert!(all.absolute_position().x >= rail.absolute_position().x - 1.0);
+    assert!(
+        all.absolute_position().x + all.size().width
+            <= rail.absolute_position().x + rail.size().width + 1.0
+    );
 }

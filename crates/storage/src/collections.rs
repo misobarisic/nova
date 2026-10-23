@@ -14,6 +14,7 @@ static POLICIES: LazyLock<Mutex<BTreeMap<String, CollectionKind>>> =
 pub enum CollectionKind {
     Object,
     Array { id_field: String },
+    CompositeArray { id_fields: Vec<String> },
 }
 
 /// App-owned names remain outside the storage leaf. Registration affects
@@ -95,6 +96,26 @@ fn decode_row(bytes: &[u8]) -> Result<Row, Error> {
     };
     serde_json::from_str(&raw).map_err(schema)
 }
+fn row_identity(value: &Value, kind: &CollectionKind) -> Result<String, Error> {
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| schema("array row requires a string identity"))
+    };
+    match kind {
+        CollectionKind::Array { id_field } => Ok(field(id_field)?.to_owned()),
+        CollectionKind::CompositeArray { id_fields } if !id_fields.is_empty() => {
+            let parts = id_fields
+                .iter()
+                .map(|name| field(name))
+                .collect::<Result<Vec<_>, _>>()?;
+            serde_json::to_string(&parts).map_err(schema)
+        }
+        _ => Err(schema("invalid array identity policy")),
+    }
+}
+
 fn parse_rows(raw: &str, kind: &CollectionKind) -> Result<BTreeMap<String, Row>, Error> {
     let value: Value = serde_json::from_str(raw).map_err(schema)?;
     match (kind, value) {
@@ -102,14 +123,13 @@ fn parse_rows(raw: &str, kind: &CollectionKind) -> Result<BTreeMap<String, Row>,
             .into_iter()
             .map(|(key, value)| (key, Row { order: 0, value }))
             .collect()),
-        (CollectionKind::Array { id_field }, Value::Array(values)) => {
+        (
+            CollectionKind::Array { .. } | CollectionKind::CompositeArray { .. },
+            Value::Array(values),
+        ) => {
             let mut rows = BTreeMap::new();
             for (order, value) in values.into_iter().enumerate() {
-                let id = value
-                    .get(id_field)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| schema("array row requires a string identity"))?
-                    .to_owned();
+                let id = row_identity(&value, kind)?;
                 if rows.insert(id, Row { order, value }).is_some() {
                     return Err(schema("duplicate collection row identity"));
                 }
@@ -147,10 +167,10 @@ fn stored_rows(
         ));
     }
     match &desc.kind {
-        CollectionKind::Array { id_field } => {
+        CollectionKind::Array { .. } | CollectionKind::CompositeArray { .. } => {
             let mut orders = Vec::with_capacity(rows.len());
             for (id, row) in &rows {
-                if row.value.get(id_field).and_then(Value::as_str) != Some(id.as_str()) {
+                if row_identity(&row.value, &desc.kind)? != *id {
                     return Err(schema(
                         "collection identity mismatch; original data retained",
                     ));
@@ -182,7 +202,7 @@ pub(super) fn read(
         CollectionKind::Object => {
             Value::Object(rows.into_iter().map(|(id, row)| (id, row.value)).collect())
         }
-        CollectionKind::Array { .. } => {
+        CollectionKind::Array { .. } | CollectionKind::CompositeArray { .. } => {
             let mut rows = rows.into_values().collect::<Vec<_>>();
             rows.sort_by_key(|row| row.order);
             Value::Array(rows.into_iter().map(|row| row.value).collect())
@@ -233,7 +253,15 @@ pub(super) fn prepare(
         ));
     }
     if desc.as_ref().is_some_and(|desc| desc.kind != kind) {
-        return Err(schema("collection kind changed"));
+        // Refining a single-field identity is an atomic rekey, not a lossy
+        // rewrite: validate all old rows under the old descriptor first and
+        // remove their physical keys in the same transaction as new rows.
+        let refinement = matches!((&desc.as_ref().unwrap().kind, &kind),
+            (CollectionKind::Array { id_field }, CollectionKind::CompositeArray { id_fields })
+                if id_fields.contains(id_field));
+        if !refinement {
+            return Err(schema("collection kind changed"));
+        }
     }
     let old = if next.is_none() {
         // Explicit deletion remains possible even when a payload is corrupt.
@@ -251,8 +279,10 @@ pub(super) fn prepare(
         BTreeMap::new()
     };
     let mut current = next.map(|raw| parse_rows(raw, &kind)).transpose()?;
-    if matches!(kind, CollectionKind::Array { .. })
-        && let Some(current) = &mut current
+    if matches!(
+        kind,
+        CollectionKind::Array { .. } | CollectionKind::CompositeArray { .. }
+    ) && let Some(current) = &mut current
     {
         retain_stable_order(&old, current);
     }
@@ -425,6 +455,48 @@ mod tests {
     fn value(db: &Database, key: &str) -> Value {
         serde_json::from_str(&read_from(db, key).unwrap().unwrap().0).unwrap()
     }
+    #[test]
+    fn composite_identity_migrates_existing_rows_and_keeps_same_id_types() {
+        let (dir, db) = database();
+        let key = "test:collection:typed-array";
+        register_collection(
+            key,
+            CollectionKind::Array {
+                id_field: "id".into(),
+            },
+        );
+        let old = serde_json::json!([{"id":"123","type_":"movie","name":"Film"}]);
+        write_to(&db, &[(key.into(), Some(old.to_string()))], false).unwrap();
+        register_collection(
+            key,
+            CollectionKind::CompositeArray {
+                id_fields: vec!["type_".into(), "id".into()],
+            },
+        );
+        let next = serde_json::json!([
+            {"id":"123","type_":"movie","name":"Film"},
+            {"id":"123","type_":"series","name":"Show"}
+        ]);
+        write_to(&db, &[(key.into(), Some(next.to_string()))], false).unwrap();
+        assert_eq!(value(&db, key), next);
+        let duplicates = serde_json::json!([next[0].clone(), next[0].clone()]);
+        assert!(write_to(&db, &[(key.into(), Some(duplicates.to_string()))], false).is_err());
+        assert_eq!(
+            value(&db, key),
+            next,
+            "invalid writes must retain previous rows"
+        );
+        drop(db);
+        let db = Database::open(dir.path().join("test.redb")).unwrap();
+        assert_eq!(value(&db, key), next);
+        let txn = db.begin_read().unwrap();
+        assert_eq!(
+            physical_ids(&txn, key).unwrap().len(),
+            2,
+            "legacy physical row removed"
+        );
+    }
+
     #[test]
     fn migration_updates_only_changed_rows_and_preserves_order_after_reopen() {
         let (dir, db) = database();

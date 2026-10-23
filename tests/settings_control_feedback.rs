@@ -119,6 +119,13 @@ mod tv_controls {
         import { Dropdown } from "../crates/ui/dropdown.slint";
         import { MenuSheet } from "../crates/ui/menusheet.slint";
         export { InterfaceStyle, Anim } from "@NovaUiShared";
+        export component NumericReadoutProbe inherits Window {
+            width: 400px; height: 100px; default-font-family: "Roboto";
+            in-out property <float> value: 512;
+            in-out property <string> suffix: " MB";
+            out property <length> text_width: measure.preferred-width;
+            measure := Text { text: Math.round(root.value) + root.suffix; font-size: 20px; visible: false; }
+        }
         export component TvControlsProbe inherits Window {
             width: 900px; height: 700px;
             out property <int> selection: -1;
@@ -147,6 +154,58 @@ mod tv_controls {
         app.window()
             .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    }
+
+    #[test]
+    fn tv_numeric_readout_contains_large_values_and_units() {
+        if !crate::isolation::run(concat!(
+            module_path!(),
+            "::tv_numeric_readout_contains_large_values_and_units"
+        )) {
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        // Only use the inline probe to measure text through its public property;
+        // geometry queries target the real build-generated settings UI.
+        let measure = NumericReadoutProbe::new().unwrap();
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::InterfaceStyle>().set_tv(true);
+        app.global::<nova::Anim>().set_enabled(false);
+        app.set_show_home(false);
+        app.set_show_settings(true);
+        app.set_cache_enabled(true);
+        app.set_settings_selected_id(2);
+        app.set_settings_detail_open(true);
+        // Include the complete image-cache page so the memory row is mounted
+        // and not excluded by the accessibility viewport filter.
+        app.window().set_size(slint::PhysicalSize::new(1280, 4000));
+        app.show().unwrap();
+        for value in [32.0, 128.0, 512.0] {
+            app.set_cache_lru_mb(value);
+            measure.set_value(value);
+            for _ in 0..10 {
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+            }
+            let label = format!("{value:.0} MB");
+            let readout =
+                i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "ValueBox")
+                    .find(|container| {
+                        container
+                            .query_descendants()
+                            .match_predicate(|_| true)
+                            .find_all()
+                            .iter()
+                            .any(|text| text.accessible_label().as_deref() == Some(label.as_str()))
+                    })
+                    .expect("image-cache memory ValueBox containing its visible value");
+            assert!(
+                readout.size().width >= measure.get_text_width() + 23.5,
+                "TV readout must retain horizontal padding for {label}: box={}, measured text={}",
+                readout.size().width,
+                measure.get_text_width()
+            );
+            assert!(readout.absolute_position().x + readout.size().width <= 1280.5);
+        }
     }
 
     #[test]

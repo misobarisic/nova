@@ -1,40 +1,134 @@
-//! Best-effort writes to the system clipboard.
-//!
-//! Shared by the app's copy actions: Settings → Sync ("Copy identity", "Copy
-//! invite code") and Settings → Addons ("Copy link", which is where an addon's
-//! install URL lives now that the row no longer prints it).
+//! Best-effort clipboard writes shared by identity, invite and addon actions.
 
-/// Copy `text` to the system clipboard. Best effort: a missing helper tool (or
-/// a JNI failure on Android) is logged and otherwise ignored — the copy is a
-/// convenience, never a step the caller must succeed at.
 pub(crate) fn copy_to_clipboard(text: &str) {
     #[cfg(target_os = "android")]
-    {
-        if let Err(e) = crate::player::set_clipboard(text) {
-            eprintln!("nova: {e}");
-        }
+    if let Err(error) = crate::player::set_clipboard(text) {
+        eprintln!("nova: {error}");
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "windows")]
+    if let Err(error) = windows_clipboard(text) {
+        eprintln!("nova: clipboard: {error}");
+    }
+    #[cfg(not(any(target_os = "android", target_os = "windows")))]
     {
-        use std::io::Write;
+        #[cfg(target_os = "macos")]
+        let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
+        #[cfg(not(target_os = "macos"))]
         let candidates: &[(&str, &[&str])] = &[
             ("wl-copy", &[]),
             ("xclip", &["-selection", "clipboard"]),
             ("xsel", &["--clipboard", "--input"]),
         ];
-        for (program, args) in candidates {
-            if let Ok(mut child) = std::process::Command::new(program)
-                .args(*args)
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-            {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                let _ = child.wait();
-                return;
+        copy_with_helpers(text, candidates);
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "windows")))]
+fn copy_with_helpers(text: &str, candidates: &[(&str, &[&str])]) -> bool {
+    use std::io::Write;
+    for (program, args) in candidates {
+        let Ok(mut child) = std::process::Command::new(program)
+            .args(*args)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        else {
+            continue;
+        };
+        // Close stdin before waiting: clipboard helpers may wait for EOF.
+        let written = child
+            .stdin
+            .take()
+            .is_some_and(|mut stdin| stdin.write_all(text.as_bytes()).is_ok());
+        let succeeded = child.wait().is_ok_and(|status| status.success());
+        if written && succeeded {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn windows_clipboard(text: &str) -> std::io::Result<()> {
+    use std::ffi::c_void;
+    type Handle = *mut c_void;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn OpenClipboard(window: Handle) -> i32;
+        fn CloseClipboard() -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(format: u32, memory: Handle) -> Handle;
+        fn GetActiveWindow() -> Handle;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalAlloc(flags: u32, bytes: usize) -> Handle;
+        fn GlobalLock(memory: Handle) -> Handle;
+        fn GlobalUnlock(memory: Handle) -> i32;
+        fn GlobalFree(memory: Handle) -> Handle;
+    }
+    // Win32 requires movable global memory and transfers ownership only after
+    // SetClipboardData succeeds. RAII covers every earlier failure path.
+    struct Memory(Handle);
+    impl Drop for Memory {
+        fn drop(&mut self) {
+            unsafe {
+                GlobalFree(self.0);
             }
         }
-        let _ = text;
+    }
+    struct Clipboard;
+    impl Drop for Clipboard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+    let utf16: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: allocation is sized for utf16, locking yields writable memory,
+    // and all handles remain owned until the documented clipboard transfer.
+    unsafe {
+        let memory = Memory(GlobalAlloc(0x0002, std::mem::size_of_val(utf16.as_slice())));
+        if memory.0.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let buffer = GlobalLock(memory.0).cast::<u16>();
+        if buffer.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        std::ptr::copy_nonoverlapping(utf16.as_ptr(), buffer, utf16.len());
+        GlobalUnlock(memory.0);
+        // Supply the application's active HWND: EmptyClipboard makes it the
+        // owner, which SetClipboardData requires for delayed ownership rules.
+        if OpenClipboard(GetActiveWindow()) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _clipboard = Clipboard;
+        if EmptyClipboard() == 0 || SetClipboardData(13, memory.0).is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        std::mem::forget(memory);
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix, not(target_os = "android")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn helper_failure_falls_through_and_stdin_is_closed() {
+        let root = std::env::temp_dir().join(format!("nova-clipboard-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("copied");
+        // Pass the path as a shell argument, never as executable text.
+        let args = ["-c", "cat > \"$1\"", "clipboard", output.to_str().unwrap()];
+        assert!(copy_with_helpers(
+            "Unicode: č 🎬",
+            &[("sh", &["-c", "cat >/dev/null; exit 1"]), ("sh", &args),]
+        ));
+        assert_eq!(std::fs::read_to_string(output).unwrap(), "Unicode: č 🎬");
+        assert!(!copy_with_helpers("x", &[("sh", &["-c", "exit 1"])]));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

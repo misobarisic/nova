@@ -882,7 +882,9 @@ export component NumericSetting inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> focused: false;
     callback changed(float);
-    preferred-width: 252px; min-width: 0px; height: InterfaceStyle.tv ? 56px : 44px;
+    preferred-width: InterfaceStyle.tv ? 320px : 252px; min-width: 0px; height: InterfaceStyle.tv ? 56px : 44px;
+    // Measure the actual formatted value so units and larger numbers fit.
+    numeric_value_measure := Text { text: Math.round(root.value) + root.suffix; font-size: 20px; visible: false; }
     HorizontalLayout {
         spacing: 4px;
         PillButton { label: "−"; enabled: root.enabled && root.value > root.minimum; compact: true; btn_min_width: 44px;
@@ -890,7 +892,7 @@ export component NumericSetting inherits Rectangle {
         MiniSlider { min-width: 36px; horizontal-stretch: 1; enabled: root.enabled; focused: root.focused;
             value <=> root.value; minimum: root.minimum; maximum: root.maximum; step: root.step;
             changed(v) => { root.changed(v); } }
-        ValueBox { width: root.suffix == "" ? 36px : 68px; height: InterfaceStyle.tv ? 56px : 44px; text: Math.round(root.value) + root.suffix; }
+        ValueBox { width: InterfaceStyle.tv ? Math.max(64px, numeric_value_measure.preferred-width + 24px) : root.suffix == "" ? 36px : 68px; height: InterfaceStyle.tv ? 56px : 44px; text: Math.round(root.value) + root.suffix; }
         PillButton { label: "+"; enabled: root.enabled && root.value < root.maximum; compact: true; btn_min_width: 44px;
             clicked => { root.value = Math.min(root.maximum, root.value + root.step); root.changed(root.value); } }
     }

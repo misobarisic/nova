@@ -2742,7 +2742,7 @@ export component AppWindow inherits Window {
         home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); }
         library_picked => { root.navigate_section(2); } more_picked => { root.navigate_section(3); }
     }
-    if !root.profiles_require_selection && (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_return_pending) && !root.remote_controls_open && (!root.remote_devices_open || root.more_return_pending) && !root.modal_visible: family_bottom_nav := BottomNav {
+    if !root.profiles_require_selection && (root.more_open || root.more_return_pending) && !root.journal_open && !root.watch_queue_open && !root.bookmarks_open && root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_return_pending) && !root.remote_controls_open && (!root.remote_devices_open || root.more_return_pending) && !root.modal_visible: family_bottom_nav := BottomNav {
         y: root.height - self.height; width: root.width;
         active: 3; kb_zone: root.more_focus_zone; kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
         safe-bottom: root.safe-area-insets.bottom; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
@@ -2824,7 +2824,9 @@ export component AppWindow inherits Window {
                     Rectangle {
                         width: InterfaceStyle.tv ? 144px : 100px; height: InterfaceStyle.tv ? 56px : 40px; border-radius: 8px; background: Theme.current.accent;
                         accessible-role: button; accessible-label: @tr("Resume");
-                        border-width: InterfaceStyle.tv && root.resume_focus == 1 ? 2px : 0px; border-color: Theme.current.focus_ring;
+                        // The accent fill and focus_ring share a colour; use the
+                        // on-accent foreground to keep remote focus visible.
+                        border-width: InterfaceStyle.tv && root.resume_focus == 1 ? 2px : 0px; border-color: Theme.current.on_accent;
                         Text { text: @tr("Resume"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : root.default-font-size; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { width: 100%; height: 100%; clicked => { root.resume_focus = 1; root.resume_choice(true); } }
                     }

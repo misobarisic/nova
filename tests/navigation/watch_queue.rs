@@ -453,3 +453,51 @@ fn render_journal_and_queue_previews() {
     );
     app.run().unwrap();
 }
+
+#[test]
+fn queue_header_actions_are_reachable_in_both_tab_directions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::queue_header_actions_are_reachable_in_both_tab_directions"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_more_open(true);
+    let queue = app.global::<nova::QueueBridge>();
+    queue.set_rows(Rc::new(VecModel::from(fixture())).into());
+    let cleared = Rc::new(RefCell::new(0));
+    let observed = cleared.clone();
+    queue.on_clear_watched(move || *observed.borrow_mut() += 1);
+    let played = Rc::new(RefCell::new(Vec::new()));
+    let observed = played.clone();
+    queue.on_play(move |id| observed.borrow_mut().push(id.to_string()));
+    queue.set_open(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.show().unwrap();
+    settle(&app);
+    // From the first row, Up reaches Play first and Right reaches Clear watched.
+    key(&app, slint::platform::Key::UpArrow);
+    key(&app, slint::platform::Key::RightArrow);
+    key(&app, slint::platform::Key::Return);
+    assert_eq!(*cleared.borrow(), 1);
+    // Shift+Tab goes back to Play first, rather than cycling row actions forward.
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Shift.into(),
+        });
+    key(&app, slint::platform::Key::Tab);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Shift.into(),
+        });
+    key(&app, slint::platform::Key::Return);
+    assert_eq!(played.borrow().as_slice(), &["episode-a"]);
+    key(&app, slint::platform::Key::Tab);
+    key(&app, slint::platform::Key::Return);
+    assert_eq!(*cleared.borrow(), 2);
+}

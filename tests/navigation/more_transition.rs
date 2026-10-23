@@ -981,6 +981,16 @@ fn new_more_pages_animate_both_directions_reverse_reopen_and_respect_motion_off(
                     .unwrap();
                 tap(&app, button(&app, label));
                 let child = page(&app, component);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+                    0,
+                    "{component}/{width}: More subpages hide the phone navigation bar"
+                );
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
+                    usize::from(width >= 700),
+                    "{component}/{width}: desktop navigation remains available"
+                );
                 let start_x = child.absolute_position().x - origin;
                 if enabled && transitions {
                     assert!(
@@ -1013,6 +1023,19 @@ fn new_more_pages_animate_both_directions_reverse_reopen_and_respect_motion_off(
                         .set_title_id("example-title".into());
                     tick_local_pages(&app, 20);
                     local_page_back(&app);
+                    if enabled && transitions {
+                        assert_eq!(
+                            app.global::<nova::BookmarksBridge>().get_title_id(),
+                            "example-title",
+                            "the outgoing title stays mounted during its return"
+                        );
+                        assert_eq!(
+                            ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+                            0,
+                            "inner bookmark return must keep the phone bar hidden"
+                        );
+                        tick_local_pages(&app, 400);
+                    }
                     assert!(
                         app.global::<nova::BookmarksBridge>()
                             .get_title_id()
@@ -1022,10 +1045,20 @@ fn new_more_pages_animate_both_directions_reverse_reopen_and_respect_motion_off(
                         app.global::<nova::BookmarksBridge>().get_open(),
                         "Back leaves the title before the archive"
                     );
+                    assert_eq!(
+                        ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+                        0,
+                        "returning to the bookmark archive must keep the phone bar hidden"
+                    );
                     assert!((child.absolute_position().x - origin).abs() < 0.5);
                 }
                 local_page_back(&app);
                 assert!(app.get_more_open() && !app.get_show_home());
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+                    usize::from(width < 700),
+                    "{component}/{width}: Back restores More navigation"
+                );
                 if enabled && transitions {
                     tick_local_pages(&app, 90);
                     assert!(child.absolute_position().x > origin + 0.1);

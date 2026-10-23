@@ -488,3 +488,123 @@ fn render_configuration_reference_previews() {
     );
     slint::run_event_loop().unwrap();
 }
+
+// TV references use the native renderer, bundled fonts and both shipped
+// languages. Enable explicitly; ordinary integration runs remain headless.
+#[test]
+fn render_tv_readability_previews() {
+    if !crate::isolation::run(concat!(module_path!(), "::render_tv_readability_previews")) {
+        return;
+    }
+    let Some(dir) = std::env::var_os("NOVA_TV_PREVIEW_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_selected_title("A series with a long episode title".into());
+    app.set_episode_rows(Rc::new(VecModel::from(vec![nova::EpisodeRow {
+        text: "A Friend for This Crimson Demon Girl! With a Very Long Episode Title".into(),
+        details: "As Kazuma notices that Darkness has not come back since negotiating with Alderp, Megumin brings in a cat that she found in the street.".into(),
+        ep_no: "S2 E12".into(),
+        date: "September 30, 2026".into(),
+        runtime: "24m".into(),
+        progress: 0.45,
+        ..Default::default()
+    }])).into());
+    app.set_episode_total(1);
+    app.set_season_names(Rc::new(VecModel::from(vec!["Season 2".into()])).into());
+    app.set_addon_config_capabilities(false);
+    app.set_addon_config_label("Example addon".into());
+    app.set_plugin_setting_rows(Rc::new(VecModel::from(full_configuration())).into());
+    app.show().unwrap();
+    let timer = slint::Timer::default();
+    let mut tick = 0usize;
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(500),
+        move || {
+            let scene = tick / 3;
+            let phase = tick % 3;
+            let language = if scene / 10 == 0 { "en" } else { "hr" };
+            let (width, height) = if (scene / 5) % 2 == 0 {
+                (960, 540)
+            } else {
+                (1920, 1080)
+            };
+            let view = scene % 5;
+            if phase == 0 {
+                slint::select_bundled_translation(language).unwrap();
+                app.window()
+                    .set_size(slint::PhysicalSize::new(width, height));
+                app.set_resume_prompt_visible(false);
+                app.set_addon_config_open(false);
+                app.set_modal_visible(false);
+                app.set_show_home(view == 0 || view >= 3);
+                app.set_show_settings(view == 2);
+                if view == 1 {
+                    app.set_modal_episodes(true);
+                    app.set_detail_tab(3);
+                    app.set_modal_visible(true);
+                } else if view == 2 {
+                    app.set_addon_config_open(true);
+                } else if view >= 3 {
+                    app.set_resume_prompt_visible(true);
+                }
+            } else if phase == 1 {
+                if view == 1 {
+                    if let Some(card) =
+                        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::ep_card")
+                            .next()
+                    {
+                        (*app)
+                            .global::<nova_ui_shared::DetailContent>()
+                            .invoke_scroll_list_to_top(card.absolute_position().y - 100.0);
+                    }
+                } else if view >= 3 {
+                    let text: SharedString = if view == 3 {
+                        slint::platform::Key::LeftArrow
+                    } else {
+                        slint::platform::Key::RightArrow
+                    }
+                    .into();
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                            text: text.clone(),
+                        });
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+                }
+            } else {
+                let name = [
+                    "sidebar",
+                    "episodes",
+                    "addon-config",
+                    "start-over",
+                    "resume",
+                ][view];
+                let snapshot = app.window().take_snapshot().unwrap();
+                image::save_buffer(
+                    dir.join(format!("tv-{language}-{width}x{height}-{name}.png")),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            tick += 1;
+            if tick == 60 {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    slint::run_event_loop().unwrap();
+    slint::select_bundled_translation("en").unwrap();
+}

@@ -239,13 +239,13 @@ impl Bridge {
         }
     }
 
-    pub(super) fn library_contains(&self, id: &str) -> bool {
+    pub(super) fn library_contains(&self, type_: &str, id: &str) -> bool {
         self.shared
             .lock()
             .unwrap()
             .entries
             .iter()
-            .any(|e| e.id == id)
+            .any(|e| e.id == id && e.type_ == type_)
     }
 
     fn current_library_entry(&self, index: usize) -> Option<LibraryEntry> {
@@ -534,15 +534,19 @@ impl Bridge {
     /// leave watched history unchanged.
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
         if let Some(entry) = self.current_library_entry(index) {
-            self.library_entry_status_action(&entry.id, status);
+            self.library_entry_status_action(&entry.type_, &entry.id, status);
         }
     }
 
-    fn library_entry_status_action(&self, entry_id: &str, status: i32) {
+    fn library_entry_status_action(&self, type_: &str, entry_id: &str, status: i32) {
         if status == 3 || status == 4 {
             let entry = {
                 let state = self.shared.lock().unwrap();
-                state.entries.iter().find(|e| e.id == entry_id).cloned()
+                state
+                    .entries
+                    .iter()
+                    .find(|e| e.id == entry_id && e.type_ == type_)
+                    .cloned()
             };
             let Some(entry) = entry else { return };
             let episodes = read_episodes_cache_for(&entry.type_, entry_id).unwrap_or_default();
@@ -583,7 +587,11 @@ impl Bridge {
         };
         let changed = {
             let mut state = self.shared.lock().unwrap();
-            match state.entries.iter_mut().find(|e| e.id == entry_id) {
+            match state
+                .entries
+                .iter_mut()
+                .find(|e| e.id == entry_id && e.type_ == type_)
+            {
                 Some(e)
                     if e.watch_status != watch_status || e.imported_tracking_status.is_some() =>
                 {
@@ -608,10 +616,13 @@ impl Bridge {
     pub(super) fn detail_library_action(&self, action: i32) {
         let entry = {
             let state = self.shared.lock().unwrap();
-            state
-                .modal_item
-                .as_ref()
-                .and_then(|item| state.entries.iter().find(|e| e.id == item.id).cloned())
+            state.modal_item.as_ref().and_then(|item| {
+                state
+                    .entries
+                    .iter()
+                    .find(|e| e.id == item.id && e.type_ == item.type_)
+                    .cloned()
+            })
         };
         let Some(entry) = entry else { return };
         match action {
@@ -626,12 +637,12 @@ impl Bridge {
                 );
                 self.library_entry_watch_action(&entry, if watched { 2 } else { 1 });
             }
-            1 => self.library_entry_status_action(&entry.id, 1),
-            2 => self.library_entry_status_action(&entry.id, 2),
-            3 => self.library_entry_status_action(&entry.id, 0),
+            1 => self.library_entry_status_action(&entry.type_, &entry.id, 1),
+            2 => self.library_entry_status_action(&entry.type_, &entry.id, 2),
+            3 => self.library_entry_status_action(&entry.type_, &entry.id, 0),
             4 => self.toggle_current_in_library(),
-            5 => self.library_entry_status_action(&entry.id, 3),
-            6 => self.library_entry_status_action(&entry.id, 4),
+            5 => self.library_entry_status_action(&entry.type_, &entry.id, 3),
+            6 => self.library_entry_status_action(&entry.type_, &entry.id, 4),
             _ => {}
         }
     }
@@ -715,7 +726,10 @@ impl Bridge {
                 m.background_url.clone(),
                 m.genres.clone(),
                 m.description.clone(),
-                state.entries.iter().any(|e| e.id == m.id),
+                state
+                    .entries
+                    .iter()
+                    .any(|e| e.id == m.id && e.type_ == m.type_),
             )
         };
 
@@ -845,6 +859,7 @@ impl Bridge {
             app.set_library_duplicates_open(false);
             return;
         }
+        let target_type = state.modal_item.as_ref().unwrap().type_.clone();
         let selected = if index >= 0 {
             index
         } else {
@@ -857,7 +872,7 @@ impl Bridge {
                 state
                     .entries
                     .iter()
-                    .find(|entry| entry.id == card.id.as_str())
+                    .find(|entry| entry.id == card.id.as_str() && entry.type_ == target_type)
                     .cloned()
             });
         if index == -1 {
@@ -867,7 +882,7 @@ impl Bridge {
             if state
                 .entries
                 .iter()
-                .any(|entry| entry.id == target.as_str())
+                .any(|entry| entry.id == target.as_str() && entry.type_ == target_type)
             {
                 app.set_in_library(true);
                 return;
@@ -906,7 +921,7 @@ impl Bridge {
         if state
             .entries
             .iter()
-            .any(|entry| entry.id == target.as_str())
+            .any(|entry| entry.id == target.as_str() && entry.type_ == target_type)
         {
             app.set_library_duplicates_open(false);
             app.set_in_library(true);
@@ -935,7 +950,7 @@ impl Bridge {
                 .entry(progress_map_key(&copy.series_id, &copy.episode_id))
                 .or_insert(copy);
         }
-        remove_library_entry(&mut state.entries, &entry.id);
+        remove_library_entry(&mut state.entries, &entry.type_, &entry.id);
         upsert_library(&mut state.entries, replacement);
         drop(state);
         app.set_library_duplicates_open(false);
@@ -1168,6 +1183,7 @@ impl Bridge {
         // Unlike Discover, this is not gated by "Prefetch episode metadata":
         // My Library is the user's own curated list and should be ready.
         self.prefetch_library_meta();
+        self.refresh_saved_episode_metadata();
     }
 
     pub(super) fn add_category_to_ui(&self, name: &str) {
@@ -1349,10 +1365,18 @@ fn confirm_detail_library_add(app: &AppWindow) {
     app.set_detail_library_save_request(app.get_detail_library_save_request().wrapping_add(1));
 }
 
-/// Add/overwrite an entry in place, keeping entries unique by `id` and
+/// Collision-free native title identity shared by storage rows and sync keys.
+pub(super) fn library_key(type_: &str, id: &str) -> String {
+    serde_json::to_string(&(type_, id)).expect("string tuple serializes")
+}
+
+/// Add/overwrite an entry in place, keeping entries unique by `(type_, id)` and
 /// preserving insertion order. Returns true when the entry was newly added.
 pub(crate) fn upsert_library(entries: &mut Vec<LibraryEntry>, entry: LibraryEntry) -> bool {
-    if let Some(existing) = entries.iter_mut().find(|e| e.id == entry.id) {
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|e| e.id == entry.id && e.type_ == entry.type_)
+    {
         *existing = entry;
         false
     } else {
@@ -1414,9 +1438,9 @@ fn toggle_display_group_category(
 }
 
 /// Remove an entry by `id`. Returns true when something was removed.
-pub(crate) fn remove_library_entry(entries: &mut Vec<LibraryEntry>, id: &str) -> bool {
+pub(crate) fn remove_library_entry(entries: &mut Vec<LibraryEntry>, type_: &str, id: &str) -> bool {
     let before = entries.len();
-    entries.retain(|e| e.id != id);
+    entries.retain(|e| e.id != id || e.type_ != type_);
     entries.len() != before
 }
 /// Persisted library entries (empty when absent/unreadable).

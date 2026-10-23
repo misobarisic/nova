@@ -141,6 +141,9 @@ pub struct TorrentStats {
     pub peers: usize,
     /// Completion fraction 0..=1 over the selected files.
     pub progress: f32,
+    /// Exact byte counts for the selected file (or selected torrent files).
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
 }
 
 /// One torrent this session is (or was) streaming.
@@ -1644,6 +1647,8 @@ fn to_torrent_stats(
         down_bps,
         peers,
         progress,
+        downloaded_bytes: progress_bytes,
+        total_bytes,
     }
 }
 
@@ -2828,6 +2833,8 @@ mod tests {
         assert!(selected_file_is_complete(&stats, 0, 4));
         let selected = to_torrent_stats(&stats, Some((0, 10)));
         assert_eq!(selected.progress, 0.5);
+        assert_eq!(selected.downloaded_bytes, 5);
+        assert_eq!(selected.total_bytes, 10);
     }
 
     #[test]

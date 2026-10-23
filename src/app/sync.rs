@@ -3,7 +3,7 @@
 //! Bridges the app's data model onto `nova-sync`'s generic record store:
 //!
 //! * **Decompose** — each persisted collection is split into per-record keys
-//!   (`library/{id}`, `progress/{key}`, `addons/{url}`, `settings/{field}`,
+//!   (`library/{[type,id]}`, `progress/{key}`, `addons/{url}`, `settings/{field}`,
 //!   `category/{name}`) and pushed with [`notify_*`] whenever the app
 //!   persists. Removed keys become tombstones (detected by diffing against
 //!   the store).
@@ -80,7 +80,97 @@ pub(super) fn migrate_legacy_profiles() -> nova_sync::Result<()> {
     for domain in SCOPED_DOMAINS {
         store.migrate_domain(domain, &nova_sync::profile_domain("default", domain))?;
     }
+    let legacy_keys = store.extra_value("sync:library_keys_v2")?.is_none();
+    for domain in store.domains() {
+        if nova_sync::parse_profile_domain(&domain).is_some_and(|(_, base)| base == DOMAIN_LIBRARY)
+        {
+            if legacy_keys {
+                migrate_library_removals(&mut store, &domain)?;
+            }
+            migrate_library_keys(&mut store, &domain)?;
+        }
+    }
+    store.queue_extra("sync:library_keys_v2", Some("true".into()));
     store.save()
+}
+
+/// Run once before networking can introduce canonical typed keys. Bare
+/// tombstone keys cannot be distinguished from opaque native IDs that happen
+/// to look like JSON tuples, so preserve their authority outside that namespace.
+fn migrate_library_removals(store: &mut nova_sync::Store, domain: &str) -> nova_sync::Result<()> {
+    let key = format!("sync:library_legacy_removals:{domain}");
+    let mut barriers: std::collections::BTreeMap<String, nova_sync::Version> = store
+        .extra_value(&key)?
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    let versions = store.digest().remove(domain).unwrap_or_default();
+    for (id, version) in versions {
+        if store
+            .record(domain, &id)
+            .is_some_and(|row| row.is_deleted())
+        {
+            if barriers.get(&id).is_none_or(|old| version.newer_than(old)) {
+                barriers.insert(id.clone(), version);
+            }
+            store.remove_migrated_record(domain, &id);
+        }
+    }
+    store.queue_extra(&key, Some(serde_json::to_string(&barriers)?));
+    Ok(())
+}
+
+/// Upgrade legacy bare IDs and their materialized baseline without restamping
+/// user actions. Untyped legacy tombstones remain deletion barriers: historical
+/// removal addressed every type sharing that ID, including offline peers.
+fn migrate_library_keys(store: &mut nova_sync::Store, domain: &str) -> nova_sync::Result<()> {
+    let baseline_key = format!("sync:baseline:{domain}");
+    if let Some(raw) = store.extra_value(&baseline_key)? {
+        let baseline: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw)?;
+        let mut typed = std::collections::BTreeMap::new();
+        for (key, value) in baseline {
+            let entry: LibraryEntry = serde_json::from_str(&value)?;
+            let canonical = library::library_key(&entry.type_, &entry.id);
+            if key == canonical || !typed.contains_key(&canonical) {
+                typed.insert(canonical, value);
+            }
+        }
+        store.queue_extra(&baseline_key, Some(serde_json::to_string(&typed)?));
+    }
+    let barriers: std::collections::BTreeMap<String, nova_sync::Version> = store
+        .extra_value(&format!("sync:library_legacy_removals:{domain}"))?
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    let entries = store
+        .records(domain)
+        .into_iter()
+        .map(|(key, raw)| serde_json::from_str::<LibraryEntry>(&raw).map(|entry| (key, entry)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rekeys = entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            let canonical = library::library_key(&entry.type_, &entry.id);
+            (key == &entry.id && key != &canonical).then(|| (key.clone(), canonical))
+        })
+        .collect::<Vec<_>>();
+    store.migrate_record_keys(domain, &rekeys);
+    for (_, entry) in entries {
+        let canonical = library::library_key(&entry.type_, &entry.id);
+        // A startup-captured legacy removal carries its original clock. Never
+        // infer legacy authority from a current typed key that resembles an ID.
+        if let Some(version) = barriers.get(&entry.id) {
+            store.apply(
+                domain,
+                &canonical,
+                nova_sync::Record {
+                    value: None,
+                    version: *version,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 // Origin is scoped to synchronous work on this thread, not a global flag that
@@ -223,7 +313,13 @@ fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::R
                 DOMAIN_LIBRARY,
                 entries
                     .iter()
-                    .map(|e| Ok((e.id.clone(), serde_json::to_string(e)?, 0)))
+                    .map(|e| {
+                        Ok((
+                            library::library_key(&e.type_, &e.id),
+                            serde_json::to_string(e)?,
+                            0,
+                        ))
+                    })
                     .collect::<Result<_, serde_json::Error>>()?,
             )]
         }
@@ -351,6 +447,9 @@ fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::R
         return Err(
             storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),
         );
+    }
+    if key == "library" {
+        migrate_library_keys(&mut store, &profile_domain(DOMAIN_LIBRARY))?;
     }
     let mut changed = store.has_dirty_records();
     if let Some(activity) = activity_update {
@@ -1245,7 +1344,10 @@ fn tombstone_deleted_profile_domain(
 fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Result<()> {
     let owner = nova_sync::local_store()?;
     let (records, basis, deleted) = {
-        let store = owner.lock().unwrap();
+        let mut store = owner.lock().unwrap();
+        if base == DOMAIN_LIBRARY {
+            migrate_library_keys(&mut store, domain)?;
+        }
         (
             if base == activity_sync::STATS {
                 Vec::new()
@@ -1958,6 +2060,13 @@ impl Bridge {
         let Some(engine) = projection_store() else {
             return;
         };
+        {
+            let mut store = engine.0.lock().unwrap();
+            if let Err(error) = migrate_library_keys(&mut store, &profile_domain(DOMAIN_LIBRARY)) {
+                storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                return;
+            }
+        }
         let mut entries: Vec<LibraryEntry> = engine
             .records(DOMAIN_LIBRARY)
             .iter()
@@ -2958,6 +3067,130 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_library_migration_preserves_clocks_baselines_and_legacy_removals() {
+        let mut store = nova_sync::Store::default();
+        let domain = nova_sync::profile_domain("typed-test", DOMAIN_LIBRARY);
+        let baseline_key = format!("sync:baseline:{domain}");
+        // This is a socket/storage-free Store test: provide both local extras
+        // that migration reads instead of falling through to the global DB.
+        store.queue_extra(
+            &format!("sync:library_legacy_removals:{domain}"),
+            Some("{}".into()),
+        );
+        let film = serde_json::json!({"id":"123", "type_":"movie", "name":"Film"}).to_string();
+        let show = serde_json::json!({"id":"123", "type_":"series", "name":"Show"}).to_string();
+        store.queue_extra(
+            &baseline_key,
+            Some(serde_json::json!({"123":film}).to_string()),
+        );
+        store.set(&domain, "123", Some(film.clone()), 0, 1);
+        let original = store.record(&domain, "123").unwrap().clone();
+        migrate_library_keys(&mut store, &domain).unwrap();
+        let movie_key = library::library_key("movie", "123");
+        let series_key = library::library_key("series", "123");
+        assert!(store.record(&domain, "123").is_none());
+        assert_eq!(store.record(&domain, &movie_key), Some(&original));
+        let baseline: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&store.extra_value(&baseline_key).unwrap().unwrap()).unwrap();
+        assert_eq!(baseline.get(&movie_key), Some(&film));
+        let rows = [(movie_key.clone(), film, 0), (series_key.clone(), show, 0)];
+        nova_sync::prepare_snapshot(&mut store, 1, &domain, &rows, None, false, false).unwrap();
+        assert_eq!(store.records(&domain).len(), 2);
+        // A real typed delete removes only the movie, preserving its series.
+        nova_sync::prepare_snapshot(&mut store, 1, &domain, &rows[1..], None, false, false)
+            .unwrap();
+        assert!(store.record(&domain, &movie_key).unwrap().is_deleted());
+        assert!(!store.record(&domain, &series_key).unwrap().is_deleted());
+        // A legacy bare-ID deletion still defeats older records from an
+        // offline device upgraded later. A later explicit add may defeat it.
+        store.set(&domain, "123", None, 0, 2);
+        let removal = store.record(&domain, "123").unwrap().clone();
+        let mut legacy = nova_sync::Store::default();
+        let barriers_key = format!("sync:library_legacy_removals:{domain}");
+        legacy.queue_extra(&barriers_key, Some("{}".into()));
+        legacy.apply(&domain, "123", removal.clone());
+        migrate_library_removals(&mut legacy, &domain).unwrap();
+        assert!(legacy.record(&domain, "123").is_none());
+        store.remove_migrated_record(&domain, "123");
+        store.queue_extra(&barriers_key, legacy.extra_value(&barriers_key).unwrap());
+        migrate_library_keys(&mut store, &domain).unwrap();
+        assert_eq!(store.record(&domain, &series_key), Some(&removal));
+        store.set(&domain, &series_key, Some(rows[1].1.clone()), 0, 1);
+        migrate_library_keys(&mut store, &domain).unwrap();
+        assert!(!store.record(&domain, &series_key).unwrap().is_deleted());
+    }
+
+    #[test]
+    fn legacy_live_rekey_preserves_ids_equal_to_another_titles_typed_key() {
+        for reverse in [false, true] {
+            let mut store = nova_sync::Store::default();
+            let domain = nova_sync::profile_domain("legacy-collision", DOMAIN_LIBRARY);
+            store.queue_extra(&format!("sync:baseline:{domain}"), Some("{}".into()));
+            store.queue_extra(
+                &format!("sync:library_legacy_removals:{domain}"),
+                Some("{}".into()),
+            );
+            let opaque = library::library_key("movie", "x");
+            let mut rows = vec![("x".to_owned(), "movie"), (opaque.clone(), "series")];
+            if reverse {
+                rows.reverse();
+            }
+            for (id, type_) in rows {
+                store.set(
+                    &domain,
+                    &id,
+                    Some(serde_json::json!({"id":id,"type_":type_,"name":type_}).to_string()),
+                    0,
+                    1,
+                );
+            }
+            migrate_library_keys(&mut store, &domain).unwrap();
+            assert_eq!(store.records(&domain).len(), 2);
+            let film: LibraryEntry = serde_json::from_str(
+                store
+                    .record(&domain, &opaque)
+                    .unwrap()
+                    .value
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap();
+            let show: LibraryEntry = serde_json::from_str(
+                store
+                    .record(&domain, &library::library_key("series", &opaque))
+                    .unwrap()
+                    .value
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(film.type_, "movie");
+            assert_eq!(show.type_, "series");
+            assert_eq!(show.id, opaque);
+        }
+    }
+
+    #[test]
+    fn typed_tombstone_cannot_remove_an_unrelated_title_with_a_tuple_shaped_id() {
+        let mut store = nova_sync::Store::default();
+        let domain = nova_sync::profile_domain("tuple-test", DOMAIN_LIBRARY);
+        store.queue_extra(&format!("sync:baseline:{domain}"), Some("{}".into()));
+        store.queue_extra(
+            &format!("sync:library_legacy_removals:{domain}"),
+            Some("{}".into()),
+        );
+        let opaque_id = library::library_key("movie", "x");
+        let series_key = library::library_key("series", &opaque_id);
+        let raw = serde_json::json!({"id":opaque_id,"type_":"series","name":"Unrelated show"})
+            .to_string();
+        store.set(&domain, &series_key, Some(raw), 0, 1);
+        store.set(&domain, &opaque_id, None, 0, 1);
+        migrate_library_keys(&mut store, &domain).unwrap();
+        assert!(!store.record(&domain, &series_key).unwrap().is_deleted());
+        assert!(store.record(&domain, &opaque_id).unwrap().is_deleted());
+    }
+
+    #[test]
     fn inactive_profiles_materialize_without_changing_local_selection() {
         const ROOT: &str = "NOVA_SYNC_PROFILE_TEST_ROOT";
         let Some(root) = std::env::var_os(ROOT) else {
@@ -2990,7 +3223,7 @@ mod tests {
             let mut store = owner.lock().unwrap();
             store.set(
                 &bob_library,
-                "show",
+                &library::library_key("movie", "show"),
                 Some(serde_json::to_string(&entry("show", 1)).unwrap()),
                 0,
                 9,
@@ -3034,7 +3267,7 @@ mod tests {
             store.set("profile_deletions", "bob", Some("1".into()), 0, 9);
             store.apply(
                 &bob_library,
-                "stale",
+                &library::library_key("movie", "stale"),
                 nova_sync::Record {
                     value: Some(serde_json::to_string(&entry("stale", 2)).unwrap()),
                     version: nova_sync::Version::new(nova_config::now_ms(), 0, 9, false),
@@ -3053,7 +3286,12 @@ mod tests {
         let retired_digest = {
             let store = owner.lock().unwrap();
             assert!(store.records(&bob_library).is_empty());
-            assert!(store.record(&bob_library, "stale").unwrap().is_deleted());
+            assert!(
+                store
+                    .record(&bob_library, &library::library_key("movie", "stale"))
+                    .unwrap()
+                    .is_deleted()
+            );
             assert!(!store.pending_domains().contains(&bob_library));
             for outbound in store.outbound(&stale_peer.digest()) {
                 stale_peer.apply(&outbound.domain, &outbound.key, outbound.record);
@@ -3151,7 +3389,7 @@ mod tests {
         saved.type_ = "series".into();
         source.set(
             &profile_domain(DOMAIN_LIBRARY),
-            series,
+            &library::library_key("series", series),
             Some(serde_json::to_string(&saved).unwrap()),
             0,
             2,
@@ -3171,9 +3409,12 @@ mod tests {
             }
             target.apply(
                 &profile_domain(DOMAIN_LIBRARY),
-                series,
+                &library::library_key("series", series),
                 source
-                    .record(&profile_domain(DOMAIN_LIBRARY), series)
+                    .record(
+                        &profile_domain(DOMAIN_LIBRARY),
+                        &library::library_key("series", series),
+                    )
                     .unwrap()
                     .clone(),
             );

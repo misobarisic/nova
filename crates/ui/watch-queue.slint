@@ -47,15 +47,20 @@ export component WatchQueuePage inherits Rectangle {
     private property <int> selected: 0;
     private property <int> action: 0;
     private property <int> row-count: QueueBridge.rows.length;
-    changed row-count => { root.selected = Math.max(0, Math.min(root.selected, root.row-count - 1)); }
+    changed row-count => { root.selected = Math.max(-1, Math.min(root.selected, root.row-count - 1)); if root.selected < 0 { root.action = Math.min(1, root.action); } }
     changed active => { if root.active { page_focus.focus(); } }
     function activate() {
-        if !root.active || root.selected < 0 || root.selected >= QueueBridge.rows.length { return; }
+        if !root.active || QueueBridge.rows.length == 0 || root.selected >= QueueBridge.rows.length { return; }
+        if root.selected < 0 {
+            if root.action == 0 { QueueBridge.play(QueueBridge.rows[0].id); }
+            else { QueueBridge.clear_watched(); }
+            return;
+        }
         let id = QueueBridge.rows[root.selected].id;
         if root.action == 0 { QueueBridge.play(id); }
         else if root.action == 1 { QueueBridge.move(id, -1); root.selected = Math.max(0, root.selected - 1); }
         else if root.action == 2 { QueueBridge.move(id, 1); root.selected = Math.min(QueueBridge.rows.length - 1, root.selected + 1); }
-        else { QueueBridge.remove(id); }
+        else if root.action == 3 { QueueBridge.remove(id); }
     }
     function reveal(top: length, h: length) {
         if top < -queue_scroll.content-y { queue_scroll.content-y = -top; }
@@ -69,12 +74,24 @@ export component WatchQueuePage inherits Rectangle {
             if e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape { if !e.repeat { root.back(); } accept }
             else if e.text == Key.UpArrow || e.text == Key.DownArrow {
                 SettingsStyle.keyboard-mode = true;
-                root.selected = Math.max(0, Math.min(QueueBridge.rows.length - 1, root.selected + (e.text == Key.UpArrow ? -1 : 1))); accept
-            } else if e.text == Key.LeftArrow || e.text == Key.RightArrow || e.text == Key.Tab {
+                root.selected = Math.max(-1, Math.min(QueueBridge.rows.length - 1, root.selected + (e.text == Key.UpArrow ? -1 : 1)));
+                if root.selected < 0 { root.action = Math.min(1, root.action); queue_scroll.content-y = 0px; }
+                accept
+            } else if e.text == Key.Tab {
                 SettingsStyle.keyboard-mode = true;
-                root.action = Math.mod(root.action + (e.text == Key.LeftArrow ? 3 : 1), 4); accept
+                let count = 2 + QueueBridge.rows.length * 4;
+                let current = root.selected < 0 ? root.action : 2 + root.selected * 4 + root.action;
+                let next = Math.mod(current + (e.modifiers.shift ? count - 1 : 1), count);
+                root.selected = next < 2 ? -1 : Math.floor((next - 2) / 4);
+                root.action = next < 2 ? next : Math.mod(next - 2, 4);
+                if root.selected < 0 { queue_scroll.content-y = 0px; }
+                accept
+            } else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                SettingsStyle.keyboard-mode = true;
+                let count = root.selected < 0 ? 2 : 4;
+                root.action = Math.mod(root.action + (e.text == Key.LeftArrow ? count - 1 : 1), count); accept
             } else if e.text == Key.Return || e.text == " " { SettingsStyle.keyboard-mode = true; if !e.repeat { root.activate(); } accept }
-            else if e.text == Key.Delete { if !e.repeat && root.selected < QueueBridge.rows.length { QueueBridge.remove(QueueBridge.rows[root.selected].id); } accept }
+            else if e.text == Key.Delete { if !e.repeat && root.selected >= 0 && root.selected < QueueBridge.rows.length { QueueBridge.remove(QueueBridge.rows[root.selected].id); } accept }
             else { reject }
         }
         queue_column := VerticalLayout {
@@ -99,8 +116,8 @@ export component WatchQueuePage inherits Rectangle {
                             Text { text: @tr("Mix movies and episodes from different shows. Choose a stream whenever you're ready."); font-size: 14px; color: Theme.current.text_secondary; wrap: word-wrap; }
                             if QueueBridge.rows.length > 0: HorizontalLayout {
                                 spacing: 10px;
-                                TrackingButton { text: @tr("Play first"); primary: true; clicked => { QueueBridge.play(QueueBridge.rows[0].id); } }
-                                TrackingButton { text: @tr("Clear watched"); quiet: true; clicked => { QueueBridge.clear_watched(); } }
+                                TrackingButton { text: @tr("Play first"); primary: true; border-width: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? Theme.current.accent_vivid : Theme.current.border_overlay; clicked => { QueueBridge.play(QueueBridge.rows[0].id); } }
+                                TrackingButton { text: @tr("Clear watched"); quiet: true; border-width: root.selected < 0 && root.action == 1 && SettingsStyle.keyboard-mode ? 2px : 0px; border-color: Theme.current.accent_vivid; clicked => { QueueBridge.clear_watched(); } }
                                 if !root.narrow: Rectangle { horizontal-stretch: 1; }
                             }
                         }

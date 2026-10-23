@@ -1041,9 +1041,8 @@ impl DownloadCoordinator {
         };
         job.phase = DownloadPhase::Downloading;
         job.bytes_per_second = stats.down_bps;
-        if let Some(total) = job.total_bytes {
-            job.bytes_downloaded = (total as f64 * stats.progress as f64).round() as u64;
-        }
+        job.total_bytes = (stats.total_bytes > 0).then_some(stats.total_bytes);
+        job.bytes_downloaded = stats.downloaded_bytes;
         job.updated_at = crate::download::unix_timestamp();
         if state.last_persist.elapsed() >= Duration::from_secs(2) {
             persist_manifest(&state.manifest);
@@ -3474,6 +3473,26 @@ mod tests {
             remove: Arc::new(AtomicBool::new(false)),
             finished: Arc::new(AtomicBool::new(finished)),
         });
+    }
+
+    #[test]
+    fn torrent_progress_populates_unknown_total_before_completion() {
+        let coordinator = DownloadCoordinator::new(temp_root("torrent-byte-progress"));
+        install_active(&coordinator, "torrent", DownloadPhase::Downloading, false);
+        assert_eq!(coordinator.job("torrent").unwrap().total_bytes, None);
+        coordinator.update_torrent_progress(
+            "torrent",
+            TorrentStats {
+                downloaded_bytes: 25,
+                total_bytes: 100,
+                progress: 0.25,
+                ..Default::default()
+            },
+        );
+        let job = coordinator.job("torrent").unwrap();
+        assert_eq!(job.total_bytes, Some(100));
+        assert_eq!(job.bytes_downloaded, 25);
+        assert_eq!(DownloadCoordinator::progress_fraction(&job), 0.25);
     }
 
     #[test]
