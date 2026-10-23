@@ -99,7 +99,21 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
     );
     app.set_library(Rc::new(VecModel::from((0..60).map(card).collect::<Vec<_>>())).into());
     app.window().show().unwrap();
-    for width in [320, 390, 1280] {
+    for (width, saved_collections) in [false, true]
+        .into_iter()
+        .flat_map(|saved| [320, 390, 1280].map(move |width| (width, saved)))
+    {
+        app.global::<nova::SmartCollectionsBridge>().set_rows(
+            Rc::new(VecModel::from(if saved_collections {
+                vec![nova::SmartCollectionRow {
+                    id: s("weekend"),
+                    name: s("Weekend"),
+                }]
+            } else {
+                vec![]
+            }))
+            .into(),
+        );
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         for list in [false, true] {
             app.set_library_list_view(list);
@@ -140,16 +154,28 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
             );
             let filter_y = element(&app, "filter_rail").absolute_position().y;
             assert!(filter_y < original_filter_y - 40.0);
-            let smart = element(&app, "smart_rail");
-            let smart_y = smart.absolute_position().y;
-            assert!(
-                (smart_y - viewport_pos.y).abs() < 0.5,
-                "smart collection controls pin first"
-            );
-            assert!(
-                (filter_y - smart_y - smart.size().height - 14.0).abs() < 0.5,
-                "category filters pin immediately below the smart collection rail"
-            );
+            if saved_collections {
+                let smart = element(&app, "smart_rail");
+                let smart_y = smart.absolute_position().y;
+                assert!(
+                    (smart_y - viewport_pos.y).abs() < 0.5,
+                    "saved collection filters pin first"
+                );
+                assert!(
+                    (filter_y - smart_y - smart.size().height - 14.0).abs() < 0.5,
+                    "category filters pin immediately below saved collections"
+                );
+            } else {
+                assert!(
+                    ElementHandle::find_by_element_id(&app, "LibraryPage::smart_rail")
+                        .next()
+                        .is_none()
+                );
+                assert!(
+                    (filter_y - viewport_pos.y - 14.0).abs() < 0.5,
+                    "category filters keep the standard layout gap without saved collections: {filter_y}, {viewport_pos:?}"
+                );
+            }
             let controls_y = element(&app, "library_sort_controls").absolute_position().y;
             assert!(controls_y > filter_y);
             drag_up(
@@ -166,7 +192,12 @@ fn library_hero_collapses_with_pinned_controls_and_stable_scroll_geometry() {
                 "second drag preserves exact distance at width={width}, list={list}: {}",
                 app.get_library_scroll_y()
             );
-            assert!((element(&app, "smart_rail").absolute_position().y - smart_y).abs() < 0.5);
+            if saved_collections {
+                assert!(
+                    (element(&app, "smart_rail").absolute_position().y - viewport_pos.y).abs()
+                        < 0.5
+                );
+            }
             assert!((element(&app, "filter_rail").absolute_position().y - filter_y).abs() < 0.5);
             assert!(
                 (element(&app, "library_sort_controls").absolute_position().y - controls_y).abs()

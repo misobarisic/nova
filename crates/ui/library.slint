@@ -92,7 +92,7 @@ export component LibraryPage {
     // Library watched-state context menu: 1 mark series watched,
     // 2 mark series unwatched.
     callback library_watch_action(int, int);
-    // Library status pin: 0 automatic, 1 On Hold, 2 Dropped.
+    // Library status: 0 automatic, 1 On Hold, 2 Dropped, 3/4 activity, 5 Plan to Watch.
     callback library_status_action(int, int);
     callback remove_library_item(int);
 
@@ -596,6 +596,10 @@ export component LibraryPage {
                                         activated => { root.library_watch_action(i, card.watched ? 2 : 1); }
                                     }
                                     MenuSeparator {}
+                                    MenuItem {
+                                        title: @tr("Mark as Plan to Watch");
+                                        activated => { root.library_status_action(i, 5); }
+                                    }
                                     MenuItem {
                                         title: @tr("Mark on hold");
                                         activated => { root.library_status_action(i, 1); }
@@ -1133,6 +1137,7 @@ export component LibraryPage {
             items: [
                 { label: @tr("Open"), enabled: true },
                 { label: root.menu_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
+                { label: @tr("Mark as Plan to Watch"), enabled: true },
                 { label: @tr("Mark on hold"), enabled: true },
                 { label: @tr("Mark dropped"), enabled: true },
                 { label: @tr("Back to automatic"), enabled: true },
@@ -1152,15 +1157,17 @@ export component LibraryPage {
                 } else if (a == 1) {
                     root.library_watch_action(root.menu_idx, root.menu_watched ? 2 : 1);
                 } else if (a == 2) {
-                    root.library_status_action(root.menu_idx, 1);
+                    root.library_status_action(root.menu_idx, 5);
                 } else if (a == 3) {
-                    root.library_status_action(root.menu_idx, 2);
+                    root.library_status_action(root.menu_idx, 1);
                 } else if (a == 4) {
+                    root.library_status_action(root.menu_idx, 2);
+                } else if (a == 5) {
                     root.library_status_action(root.menu_idx, 0);
                 } else if (a == 6) {
-                    root.library_status_action(root.menu_idx, root.menu_activity_action);
-                } else {
                     root.remove_library_item(root.menu_idx);
+                } else if (a == 7) {
+                    root.library_status_action(root.menu_idx, root.menu_activity_action);
                 }
                 root.close_menu();
             }

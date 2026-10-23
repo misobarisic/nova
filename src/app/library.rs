@@ -549,7 +549,7 @@ impl Bridge {
     /// Main thread: library card context-menu status action. `index` is
     /// into the current (filter-narrowed) library view; `status`: 0 back
     /// to automatic, 1 pin On Hold, 2 pin Dropped, 3 await return,
-    /// 4 resume viewing. Pins override the derived bucket; activity actions
+    /// 4 resume viewing, 5 pin Plan to Watch. Pins override the derived bucket; activity actions
     /// leave watched history unchanged.
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
         if let Some(entry) = self.current_library_entry(index) {
@@ -601,6 +601,7 @@ impl Bridge {
         let watch_status = match status {
             1 => WatchStatus::OnHold,
             2 => WatchStatus::Dropped,
+            5 => WatchStatus::PlanToWatch,
             0 => WatchStatus::Auto,
             _ => return,
         };
@@ -631,7 +632,7 @@ impl Bridge {
     /// Detail actions resolve the saved identity directly: a library filter
     /// may hide this entry or change after its status is edited.
     /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove,
-    /// 5 await return, 6 resume viewing.
+    /// 5 await return, 6 resume viewing, 7 Plan to Watch.
     pub(super) fn detail_library_action(&self, action: i32) {
         let entry = {
             let state = self.shared.lock().unwrap();
@@ -662,6 +663,7 @@ impl Bridge {
             4 => self.toggle_current_in_library(),
             5 => self.library_entry_status_action(&entry.type_, &entry.id, 3),
             6 => self.library_entry_status_action(&entry.type_, &entry.id, 4),
+            7 => self.library_entry_status_action(&entry.type_, &entry.id, 5),
             _ => {}
         }
     }

@@ -576,6 +576,19 @@ mod playback_tests {
         assert_eq!(WatchStatus::default(), WatchStatus::Auto);
         assert_eq!(WatchStatus::OnHold.badge_label(), Some("On Hold"));
         assert_eq!(WatchStatus::Auto.badge_label(), None);
+        assert_eq!(
+            WatchStatus::PlanToWatch.badge_label(),
+            Some("Plan to Watch")
+        );
+        for (status, ordinary, subscribed) in [
+            (WatchStatus::Auto, true, true),
+            (WatchStatus::PlanToWatch, false, true),
+            (WatchStatus::OnHold, false, false),
+            (WatchStatus::Dropped, false, false),
+        ] {
+            assert_eq!(status.allows_episode_refresh(false), ordinary);
+            assert_eq!(status.allows_episode_refresh(true), subscribed);
+        }
     }
 
     #[test]

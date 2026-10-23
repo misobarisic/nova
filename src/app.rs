@@ -955,7 +955,7 @@ pub(crate) struct AddonStore {
 // ---------------------------------------------------------------------------
 
 /// Manual watch status for a library item. `Auto` (default) derives the
-/// bucket from playback progress; `OnHold`/`Dropped` pin the item to that
+/// bucket from playback progress; other statuses pin the item to that
 /// bucket regardless of progress. Set from the library card context menu.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) enum WatchStatus {
@@ -964,15 +964,23 @@ pub(crate) enum WatchStatus {
     Auto,
     OnHold,
     Dropped,
+    PlanToWatch,
 }
 
 impl WatchStatus {
+    /// Planning suppresses active-viewing refreshes, but an explicit reminder
+    /// still needs fresh release metadata on foreground and background paths.
+    fn allows_episode_refresh(self, has_reminder: bool) -> bool {
+        self == Self::Auto || (self == Self::PlanToWatch && has_reminder)
+    }
+
     /// Badge label shown on the card while pinned (`None` when automatic).
     fn badge_label(self) -> Option<&'static str> {
         match self {
             WatchStatus::Auto => None,
             WatchStatus::OnHold => Some("On Hold"),
             WatchStatus::Dropped => Some("Dropped"),
+            WatchStatus::PlanToWatch => Some("Plan to Watch"),
         }
     }
 }

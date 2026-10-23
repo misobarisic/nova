@@ -5266,7 +5266,7 @@ dependencies = [
 
 [[package]]
 name = "nova"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "addons",
  "chrono",

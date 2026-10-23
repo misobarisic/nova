@@ -150,6 +150,13 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     click(&app, label(&app, "Mark watched"));
     assert_eq!(*actions.borrow(), [(1, 1)]);
     assert_eq!(*opened.borrow(), [1], "menu taps must not open the title");
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let record = statuses.clone();
+    app.on_library_status_action(move |i, a| record.borrow_mut().push((i, a)));
+    click(&app, elements(&app, "library_card_menu").remove(1));
+    click(&app, label(&app, "Mark as Plan to Watch"));
+    assert_eq!(*statuses.borrow(), [(1, 5)]);
+    assert_eq!(*opened.borrow(), [1]);
     click(&app, label(&app, "Search library"));
     assert!(app.get_library_search_open());
     app.set_library_query("test".into());

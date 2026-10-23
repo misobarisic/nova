@@ -164,7 +164,9 @@ pub(super) fn refresh_owner_metadata(
         .values()
         .filter(|s| {
             entries.iter().any(|e| {
-                e.id == s.title_id && e.type_ == s.type_ && e.watch_status == WatchStatus::Auto
+                e.id == s.title_id
+                    && e.type_ == s.type_
+                    && e.watch_status.allows_episode_refresh(true)
             })
         })
         .take(4)

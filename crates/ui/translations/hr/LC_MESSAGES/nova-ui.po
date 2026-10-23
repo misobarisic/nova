@@ -337,6 +337,9 @@ msgstr "Označite kao pogledano"
 msgid "Mark on hold"
 msgstr "Stavite na čekanje"
 
+msgid "Mark as Plan to Watch"
+msgstr "Označite za pogledati"
+
 msgid "Mark dropped"
 msgstr "Označite kao odbačeno"
 

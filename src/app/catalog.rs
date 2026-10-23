@@ -217,16 +217,16 @@ fn reserve_saved_episode_refresh(
         .entries
         .iter()
         .filter_map(|entry| {
-            if entry.type_ == "movie"
-                || entry.type_.is_empty()
-                || entry.id.is_empty()
-                || entry.watch_status != WatchStatus::Auto
-            {
+            if entry.type_ == "movie" || entry.type_.is_empty() || entry.id.is_empty() {
                 return None;
             }
             let owner = profiles::ProfileStore::capture();
-            let scheduled = release_reminders::subscribed(&owner, &entry.type_, &entry.id)
-                || smart_offline::enabled_title(&owner, &entry.type_, &entry.id);
+            let has_reminder = release_reminders::subscribed(&owner, &entry.type_, &entry.id);
+            if !entry.watch_status.allows_episode_refresh(has_reminder) {
+                return None;
+            }
+            let scheduled =
+                has_reminder || smart_offline::enabled_title(&owner, &entry.type_, &entry.id);
             let last_watched = history
                 .get(entry.id.as_str())
                 .copied()

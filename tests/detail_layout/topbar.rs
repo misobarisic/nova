@@ -148,6 +148,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
 
     for (label, action) in [
         ("Mark watched", 0),
+        ("Mark as Plan to Watch", 7),
         ("Mark on hold", 1),
         ("Mark dropped", 2),
         ("Back to automatic", 3),
@@ -172,7 +173,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
             .next()
             .is_none()
     );
-    assert_eq!(actions.borrow().len(), 4);
+    assert_eq!(actions.borrow().len(), 5);
 
     click(&app, element(&app, "DetailPage::library_options_button"));
     click_label(&app, "Categories");

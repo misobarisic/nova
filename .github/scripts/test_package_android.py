@@ -4,6 +4,7 @@ import tempfile
 import struct
 import tomllib
 import unittest
+import warnings
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -213,6 +214,89 @@ class AndroidPackagingTests(unittest.TestCase):
                     self.assertEqual(apk.read("AndroidManifest.xml"), binary_manifest(enabled=extract))
                     self.assertTrue(all(apk.getinfo(name).compress_type == (ZIP_DEFLATED if extract else ZIP_STORED)
                                         for name in apk.namelist() if packaging.native_entry(name)))
+
+    def split_inputs(self):
+        inputs = {}
+        for abi in sorted(packaging.ABIS):
+            inputs[abi] = self.root / f"{abi}.apk"
+            packaging.filter_apk(self.source, inputs[abi], {abi})
+        return inputs
+
+    def test_parallel_builds_merge_into_all_four_release_variants(self):
+        inputs = self.split_inputs()
+        # Runners need not produce identical ZIP timestamps or old signatures.
+        for abi, source in inputs.items():
+            with ZipFile(source, "a") as apk:
+                apk.writestr("META-INF/CERT.SF", abi.encode())
+        merged = self.root / "merged.apk"
+        packaging.merge_apks(dict(reversed(list(inputs.items()))), merged)
+        packaging.verify_payload(self.source, merged, packaging.ABIS)
+        for suffix, abis in packaging.VARIANTS.items():
+            with self.subTest(variant=suffix):
+                output = self.root / f"release{suffix}.apk"
+                extract = suffix == "-universal"
+                packaging.filter_apk(merged, output, abis, extract_native_libs=extract)
+                packaging.verify_payload(self.source, output, abis, extract_native_libs=extract)
+
+    def test_parallel_merge_rejects_conflicting_shared_payloads(self):
+        for name, compression, data in (
+            ("classes.dex", ZIP_DEFLATED, b"different bytecode"),
+            ("classes.dex", ZIP_STORED, b"shared bytecode"),
+            ("AndroidManifest.xml", ZIP_DEFLATED, binary_manifest(enabled=True)),
+            ("META-INF/NOTICE", ZIP_STORED, b"different licenses"),
+        ):
+            with self.subTest(entry=name, compression=compression):
+                inputs = self.split_inputs()
+                broken = self.root / "conflicting.apk"
+
+                def corrupt(entry, original):
+                    if entry.filename == name:
+                        entry.compress_type = compression
+                        return entry, data
+                    return entry, original
+
+                self.rewrite(inputs["x86_64"], broken, corrupt)
+                inputs["x86_64"] = broken
+                with self.assertRaisesRegex(RuntimeError, "Shared APK payload differs"):
+                    packaging.merge_apks(inputs, self.root / "merged.apk")
+
+    def test_parallel_merge_rejects_missing_shared_entries_and_duplicate_entries(self):
+        inputs = self.split_inputs()
+        broken = self.root / "missing-shared.apk"
+        self.rewrite(inputs["x86_64"], broken, lambda entry, data:
+                     None if entry.filename == "classes.dex" else (entry, data))
+        with self.assertRaisesRegex(RuntimeError, "Shared APK entry set differs"):
+            packaging.merge_apks(dict(inputs, x86_64=broken), self.root / "merged.apk")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with ZipFile(inputs["x86_64"], "a") as apk:
+                apk.writestr("classes.dex", b"duplicated")
+        with self.assertRaisesRegex(RuntimeError, "duplicate ZIP entries"):
+            packaging.merge_apks(inputs, self.root / "merged.apk")
+
+    def test_parallel_merge_requires_exact_abi_inputs_and_native_architectures(self):
+        inputs = self.split_inputs()
+        output = self.root / "merged.apk"
+        with self.assertRaisesRegex(RuntimeError, "cover exactly"):
+            packaging.merge_apks({"arm64-v8a": inputs["arm64-v8a"]}, output)
+        with self.assertRaisesRegex(RuntimeError, "APK ABIs"):
+            packaging.merge_apks(dict(inputs, x86_64=inputs["arm64-v8a"]), output)
+        broken = self.root / "wrong-native.apk"
+        self.rewrite(inputs["x86_64"], broken, lambda entry, data:
+                     (entry, b"not an ELF library") if entry.filename.endswith("libnova.so")
+                     else (entry, data))
+        with self.assertRaisesRegex(RuntimeError, "wrong architecture"):
+            packaging.merge_apks(dict(inputs, x86_64=broken), output)
+
+    def test_parallel_input_arguments_require_each_abi_once(self):
+        self.assertEqual(packaging.abi_apks([]), {})
+        arguments = [f"{abi}={abi}.apk" for abi in sorted(packaging.ABIS)]
+        self.assertEqual(packaging.abi_apks(arguments),
+                         {abi: Path(f"{abi}.apk") for abi in packaging.ABIS})
+        for invalid in (arguments[:1], arguments + arguments[:1],
+                        ["unsupported=file.apk"], ["arm64-v8a="], ["arm64-v8a"]):
+            with self.subTest(arguments=invalid), self.assertRaises(ValueError):
+                packaging.abi_apks(invalid)
 
     def test_universal_verification_allows_only_the_intended_transformations(self):
         universal = self.root / "universal.apk"

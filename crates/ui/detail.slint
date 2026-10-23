@@ -713,6 +713,7 @@ export component DetailPage {
 
     property <[SheetItem]> library_menu_items: [
         { label: root.library_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
+        { label: @tr("Mark as Plan to Watch"), enabled: true },
         { label: @tr("Mark on hold"), enabled: true },
         { label: @tr("Mark dropped"), enabled: true },
         { label: @tr("Back to automatic"), enabled: true },
@@ -729,9 +730,15 @@ export component DetailPage {
 
     function library_menu_picked(a: int) {
         root.close_menu();
-        if (a == 4) { root.open_categories(); }
-        else if (a == 7) { root.menu_kind = 3; }
-        else { root.library_action(a == 6 ? (root.library_activity_action == 4 ? 6 : 5) : a == 5 ? 4 : a); }
+        if (a == 0) { root.library_action(0); }
+        else if (a == 1) { root.library_action(7); }
+        else if (a == 2) { root.library_action(1); }
+        else if (a == 3) { root.library_action(2); }
+        else if (a == 4) { root.library_action(3); }
+        else if (a == 5) { root.open_categories(); }
+        else if (a == 6) { root.library_action(4); }
+        else if (a == 7) { root.library_action(root.library_activity_action == 4 ? 6 : 5); }
+        else if (a == 8) { root.menu_kind = 3; }
     }
 
     function request_stream_action(id: string) {

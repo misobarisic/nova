@@ -2769,6 +2769,36 @@ mod home_return_tests {
         assert_eq!(owner.lock().unwrap().digest(), outgoing_digest);
         app.set_player_open(false);
 
+        // Manual planning keeps a partially watched title out of active rails
+        // without deleting its resume point, history, categories or sync data.
+        let progress_before_planning = serde_json::to_value(read_progress_map()).unwrap();
+        let activity_before_planning = read_viewing_activity();
+        let categories_before_planning =
+            bridge.shared.lock().unwrap().entries[0].categories.clone();
+        bridge.library_status_action(0, 5);
+        assert_eq!(
+            app.get_library().row_data(0).unwrap().status,
+            "Plan to Watch"
+        );
+        assert_eq!(app.get_home_continue().row_count(), 0);
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        let planned = read_persisted_library();
+        assert_eq!(planned[0].watch_status, WatchStatus::PlanToWatch);
+        assert_eq!(planned[0].categories, categories_before_planning);
+        assert_eq!(
+            serde_json::to_value(read_progress_map()).unwrap(),
+            progress_before_planning
+        );
+        assert_eq!(read_viewing_activity(), activity_before_planning);
+        // The existing automatic action restores normal progress classification.
+        bridge.library_status_action(0, 0);
+        assert_eq!(app.get_library().row_data(0).unwrap().status, "Watching");
+        assert_eq!(app.get_home_continue().row_count(), 1);
+        assert_eq!(
+            serde_json::to_value(read_progress_map()).unwrap(),
+            progress_before_planning
+        );
+
         let snapshot = storage::get_str(VIEWING_ACTIVITY_KEY).unwrap();
         {
             let mut store = owner.lock().unwrap();

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Package universal and per-ABI APKs from one cargo-apk2 build."""
+"""Package release APKs from parallel per-ABI or one universal cargo-apk2 build."""
+import argparse
 import copy
 import os
 import re
@@ -7,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import tomllib
+from contextlib import ExitStack
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
@@ -180,31 +182,88 @@ def check_abis(entries, expected):
         raise RuntimeError(f"APK missing native libraries: {sorted(missing)}")
 
 
+def validate_native_payload(apk, abis):
+    entries = apk.namelist()
+    if len(set(entries)) != len(entries):
+        raise RuntimeError("Source APK has duplicate ZIP entries")
+    if "AndroidManifest.xml" not in entries:
+        raise RuntimeError("Source APK has no compiled AndroidManifest.xml")
+    check_abis(entries, abis)
+    # Check actual packaged bytes: swapped ABI directories pass filename checks
+    # but fail when Android loads the library.
+    for abi in sorted(abis):
+        elf_class, machine = ABI_ELF[abi]
+        for library in NATIVE_LIBRARIES:
+            name = f"lib/{abi}/{library}"
+            with apk.open(name) as native:
+                header = native.read(20)
+            if (
+                len(header) != 20
+                or header[:6] != b"\x7fELF" + bytes((elf_class, 1))
+                or int.from_bytes(header[18:20], "little") != machine
+            ):
+                raise RuntimeError(f"APK native library has wrong architecture: {name}")
+
+
+def abi_apks(arguments):
+    sources = {}
+    for argument in arguments:
+        abi, separator, path = argument.partition("=")
+        if abi not in ABIS or not separator or not path:
+            raise ValueError(f"Expected ABI=PATH for one of {', '.join(sorted(ABIS))}")
+        if abi in sources:
+            raise ValueError(f"Duplicate APK input for {abi}")
+        sources[abi] = Path(path)
+    if sources and sources.keys() != ABIS:
+        raise ValueError(f"APK inputs must cover exactly {', '.join(sorted(ABIS))}")
+    return sources
+
+
+def merge_apks(sources, output):
+    """Combine native payloads only when all builds have identical shared code.
+
+    ZIP timestamps and signatures may differ between runners. DEX, resources,
+    manifest, licenses and their compression must match exactly. Never select
+    one runner's conflicting application payload silently.
+    """
+    if sources.keys() != ABIS:
+        raise RuntimeError(f"APK inputs must cover exactly {', '.join(sorted(ABIS))}")
+    with ExitStack() as stack:
+        apks = {abi: stack.enter_context(ZipFile(sources[abi])) for abi in sorted(ABIS)}
+        for abi, apk in apks.items():
+            validate_native_payload(apk, {abi})
+
+        def shared(apk):
+            return {entry.filename: entry for entry in apk.infolist()
+                    if not entry.filename.startswith("lib/") and not signature_entry(entry.filename)}
+
+        canonical = next(iter(apks.values()))
+        common = shared(canonical)
+        for abi, apk in apks.items():
+            entries = shared(apk)
+            if entries.keys() != common.keys():
+                raise RuntimeError(f"Shared APK entry set differs for {abi}")
+            for name, entry in entries.items():
+                if (entry.compress_type != common[name].compress_type
+                        or apk.read(entry) != canonical.read(common[name])):
+                    raise RuntimeError(f"Shared APK payload differs for {abi}: {name}")
+        with ZipFile(output, "w") as result:
+            result.comment = canonical.comment
+            for entry in common.values():
+                result.writestr(copy.copy(entry), canonical.read(entry))
+            for abi, apk in apks.items():
+                for entry in apk.infolist():
+                    if entry.filename.startswith(f"lib/{abi}/"):
+                        result.writestr(copy.copy(entry), apk.read(entry))
+
+
 def filter_apk(source, output, abis, *, extract_native_libs=False):
     # Rebuilding the ZIP also removes the APK v2/v3 signing block. Old JAR
     # signatures are removed explicitly; license files under META-INF stay.
     with ZipFile(source) as original, ZipFile(output, "w") as result:
         result.comment = original.comment
-        entries = original.infolist()
-        if len({entry.filename for entry in entries}) != len(entries):
-            raise RuntimeError("Source APK has duplicate ZIP entries")
-        if extract_native_libs and not any(entry.filename == "AndroidManifest.xml" for entry in entries):
-            raise RuntimeError("Source APK has no compiled AndroidManifest.xml")
-        check_abis([entry.filename for entry in entries], ABIS)
-        # Validate the packaged bytes rather than a checkout of nova-vendor:
-        # swapped ABI directories otherwise pass filename checks and fail on-device.
-        for abi, (elf_class, machine) in ABI_ELF.items():
-            for library in NATIVE_LIBRARIES:
-                name = f"lib/{abi}/{library}"
-                with original.open(name) as native:
-                    header = native.read(20)
-                if (
-                    len(header) != 20
-                    or header[:6] != b"\x7fELF" + bytes((elf_class, 1))
-                    or int.from_bytes(header[18:20], "little") != machine
-                ):
-                    raise RuntimeError(f"APK native library has wrong architecture: {name}")
-        for entry in entries:
+        validate_native_payload(original, ABIS)
+        for entry in original.infolist():
             if keep_entry(entry.filename, abis):
                 data = original.read(entry)
                 copied = copy.copy(entry)
@@ -316,27 +375,43 @@ def signer_certificates(apksigner, apk):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--abi-apk", action="append", default=[], metavar="ABI=PATH",
+                        help="Repeat for all three ABIs to assemble parallel builds")
+    try:
+        sources = abi_apks(parser.parse_args().abi_apk)
+    except ValueError as error:
+        parser.error(str(error))
     profile = os.environ.get("NOVA_RELEASE_PROFILE", "release")
     source = Path(os.environ.get("CARGO_TARGET_DIR", "target")) / profile / "apk" / "nova.apk"
-    if not source.is_file():
-        raise RuntimeError(f"Missing built APK for profile {profile}: {source}")
+    inputs = sources.values() if sources else [source]
     tools = Path(os.environ["ANDROID_HOME"]) / "build-tools" / "35.0.0"
     zipalign, apksigner = tools / "zipalign", tools / "apksigner"
     with Path("Cargo.toml").open("rb") as handle:
         version = tomllib.load(handle)["package"]["version"]
-    verify_version(run(tools / "aapt2", "dump", "badging", source), version)
-    verify_native_manifest(run(tools / "aapt", "dump", "xmltree", source, "AndroidManifest.xml"))
-    verify_native_layout(source)
+    original_signers = None
+    for apk in inputs:
+        if not apk.is_file():
+            raise RuntimeError(f"Missing built APK for profile {profile}: {apk}")
+        verify_version(run(tools / "aapt2", "dump", "badging", apk), version)
+        verify_native_manifest(run(tools / "aapt", "dump", "xmltree", apk, "AndroidManifest.xml"))
+        verify_native_layout(apk)
+        signers = signer_certificates(apksigner, apk)
+        if original_signers is not None and signers != original_signers:
+            raise RuntimeError(f"Signing certificates differ between APK inputs: {apk}")
+        original_signers = signers
     keystore, password = signing_key(Path("Cargo.toml"), profile)
     if not keystore.is_file():
         raise RuntimeError("Configured Android release keystore does not exist")
     env = dict(os.environ, NOVA_APK_KEYSTORE_PASSWORD=password)
-    original_signers = signer_certificates(apksigner, source)
     tag = os.environ["GITHUB_REF_NAME"].removeprefix("v").replace("/", "-")
     dist = Path("dist")
     dist.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nova-apk-") as temporary:
         work = Path(temporary)
+        if sources:
+            source = work / "merged.apk"
+            merge_apks(sources, source)
         for suffix, abis in VARIANTS.items():
             extract_native_libs = suffix == "-universal"
             unsigned, aligned = work / "unsigned.apk", work / "aligned.apk"
@@ -359,7 +434,8 @@ def main():
             ), extract_native_libs=extract_native_libs)
             mode = "compressed/extracted" if extract_native_libs else "stored/direct-loaded"
             print(f"Verified {output}: {', '.join(sorted(abis))} · {mode}")
-    print(f"Packaged all {len(VARIANTS)} APKs from one universal build")
+    origin = "three parallel ABI builds" if sources else "one universal build"
+    print(f"Packaged all {len(VARIANTS)} APKs from {origin}")
 
 
 if __name__ == "__main__":

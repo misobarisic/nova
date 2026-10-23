@@ -24,8 +24,8 @@ android-build:
 android-build-release:
 	cargo apk2 build $(ANDROID_ARGS) --profile $(RELEASE_PROFILE)
 
-# Build the stored/aligned three-ABI intermediate once. package-android.py
-# derives compressed/extracted universal and direct-loading per-ABI releases.
+# Local three-ABI alternative to CI's parallel single-ABI builds. The release
+# packager accepts either input to produce the same four APK variants.
 android-build-release-universal:
 	cargo apk2 build --no-default-features --features android$(UPDATE_FEATURES) --lib -p nova --profile $(RELEASE_PROFILE)
 

@@ -176,11 +176,22 @@ jobs:
 
   android-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    name: Build Android APKs (universal, arm64-v8a, armeabi-v7a, x86_64)
+    name: Build Android ${{ matrix.abi }} APK
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+          - abi: x86_64
+            target: x86_64-linux-android
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -203,14 +214,54 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
-      - name: Test read-only Android runtime packaging
-        run: nix develop .#android --command python3 -B android/test_runtime_packaging.py
+      - name: Build release APK for this ABI
+        env:
+          ANDROID_TARGET: ${{ matrix.target }}
+        run: >-
+          nix develop .#android --command make android-build-release
+          ANDROID_TARGET="$ANDROID_TARGET" RELEASE_PROFILE="$NOVA_RELEASE_PROFILE"
 
-      - name: Build universal APK once
-        run: nix develop .#android --command make android-build-release-universal RELEASE_PROFILE="$NOVA_RELEASE_PROFILE"
+      - name: Upload ABI build input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-android-input-${{ matrix.abi }}
+          path: target/${{ env.NOVA_RELEASE_PROFILE }}/apk/nova.apk
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Derive, align, sign, and verify all APKs
-        run: nix develop .#android --command python3 .github/scripts/package-android.py
+  android-package:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Assemble Android APKs (three ABIs and compressed universal)
+    needs: [android-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Download all ABI inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: nova-android-input-*
+          path: android-inputs
+          merge-multiple: false
+
+      - name: Merge, align, sign, and verify all APKs
+        run: >-
+          nix develop .#android --command python3 .github/scripts/package-android.py
+          --abi-apk arm64-v8a=android-inputs/nova-android-input-arm64-v8a/nova.apk
+          --abi-apk armeabi-v7a=android-inputs/nova-android-input-armeabi-v7a/nova.apk
+          --abi-apk x86_64=android-inputs/nova-android-input-x86_64/nova.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -314,7 +365,7 @@ jobs:
   release:
     name: Publish tag release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [android-build, linux-build, windows-build]
+    needs: [android-package, linux-build, windows-build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
