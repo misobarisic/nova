@@ -383,3 +383,99 @@ fn local_library_saves_pop_in_place_and_do_not_replay_on_open_or_sync() {
     }
     assert_eq!(*adds.borrow(), 15);
 }
+
+#[test]
+fn release_reminders_live_in_options_with_explicit_modes_and_safe_back() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::release_reminders_live_in_options_with_explicit_modes_and_safe_back"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (width, tv) in [(390, false), (1280, false), (960, true)] {
+        let app = nova::AppWindow::new().unwrap();
+        app.set_touch_menus(true);
+        app.set_animations(false);
+        app.set_anim_transitions(false);
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        app.set_show_home(false);
+        app.set_modal_visible(true);
+        app.set_in_library(true);
+        app.set_selected_title("A series".into());
+        let tracking = Rc::new(RefCell::new(0));
+        let tracked = tracking.clone();
+        app.on_tracking_show(move || *tracked.borrow_mut() += 1);
+        let modes = Rc::new(RefCell::new(Vec::new()));
+        let recorded = modes.clone();
+        let calendar = app.global::<nova::CalendarBridge>();
+        calendar.on_set_detail_reminder(move |mode| recorded.borrow_mut().push(mode));
+        app.show().unwrap();
+        settle();
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Remind me")
+                .next()
+                .is_none(),
+            "hero reminder must be removed"
+        );
+        click(&app, element(&app, "DetailPage::library_options_button"));
+        click_label(&app, "Release reminders");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Each new episode")
+                .next()
+                .is_some()
+        );
+        // The new sheet owns keyboard input on desktop as well as TV. Its
+        // safe initial selection is Cancel, followed by Full season above it.
+        for text in [slint::platform::Key::UpArrow, slint::platform::Key::Return] {
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: text.into() });
+        }
+        settle();
+        assert_eq!(*modes.borrow(), vec![2]);
+        assert!(app.get_modal_visible());
+        for text in [
+            slint::platform::Key::LeftArrow,
+            slint::platform::Key::Return,
+        ] {
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: text.into() });
+        }
+        assert_eq!(
+            *tracking.borrow(),
+            1,
+            "closing the mode chooser restores Detail keyboard navigation"
+        );
+        calendar.set_detail_reminder_mode(2);
+        click(&app, element(&app, "DetailPage::library_options_button"));
+        click_label(&app, "Release reminders");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "✓ Full season released")
+                .next()
+                .is_some()
+        );
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        settle();
+        assert!(app.get_modal_visible());
+        assert_eq!(
+            *modes.borrow(),
+            vec![2],
+            "Back cannot change the subscription"
+        );
+        app.set_detail_is_movie(true);
+        click(&app, element(&app, "DetailPage::library_options_button"));
+        click_label(&app, "Release reminders");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Each new episode")
+                .next()
+                .is_none(),
+            "movies cannot open episode reminders"
+        );
+        app.hide().unwrap();
+    }
+}

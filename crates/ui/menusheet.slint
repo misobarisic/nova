@@ -23,6 +23,7 @@ export component MenuSheet inherits Rectangle {
     // Keep the component mounted: `open` controls interaction immediately,
     // while the retained layer finishes its exit before disappearing.
     in property <bool> open: false;
+    in property <bool> keyboard_navigation: InterfaceStyle.tv;
     in property <string> sheet_title: "";
     in property <[SheetItem]> items: [];
     // Bottom system-bar inset (Android gesture/nav bar), bound by the
@@ -56,7 +57,7 @@ export component MenuSheet inherits Rectangle {
         exit_t.stop();
         if (root.open) {
             root.retained = true;
-            if InterfaceStyle.tv { root.tv-index = root.items.length; menu_scope.focus(); }
+            if root.keyboard_navigation { root.tv-index = root.items.length; menu_scope.focus(); }
             if (root.motion_enabled) {
                 // Defer the first target until the hidden baseline is painted.
                 enter_t.start();
@@ -99,13 +100,13 @@ export component MenuSheet inherits Rectangle {
     // the safe initial selection; disabled actions can never be invoked.
     property <int> tv-index: 0;
     menu_scope := FocusScope {
-        enabled: InterfaceStyle.tv && root.open;
+        enabled: root.keyboard_navigation && root.open;
         key-pressed(e) => {
-            if !InterfaceStyle.tv || !root.open { reject }
-            else if e.text == Key.UpArrow || e.text == Key.DownArrow {
+            if !root.keyboard_navigation || !root.open { reject }
+            else if e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.Tab {
                 SettingsStyle.keyboard-mode = true;
-                root.tv-index = Math.clamp(root.tv-index + (e.text == Key.UpArrow ? -1 : 1), 0, root.items.length);
-                menu_scroll.content-y = -Math.max(0px, (root.tv-index + 1) * 68px - menu_scroll.visible-height);
+                root.tv-index = Math.clamp(root.tv-index + (e.text == Key.UpArrow || (e.text == Key.Tab && e.modifiers.shift) ? -1 : 1), 0, root.items.length);
+                menu_scroll.content-y = -Math.max(0px, (root.tv-index + 1) * (InterfaceStyle.tv ? 68px : 52px) - menu_scroll.visible-height);
                 accept
             } else if e.text == Key.Return || e.text == " " {
                 if !e.repeat {
@@ -199,7 +200,7 @@ export component MenuSheet inherits Rectangle {
                             for it[i] in root.items: Rectangle {
                                 height: InterfaceStyle.tv ? 64px : 48px;
                                 border-radius: 8px;
-                                border-width: InterfaceStyle.tv && root.tv-index == i ? 2px : 0px;
+                                border-width: root.keyboard_navigation && (InterfaceStyle.tv || SettingsStyle.keyboard-mode) && root.tv-index == i ? 2px : 0px;
                                 border-color: Theme.current.focus_ring;
                                 background: btn_touch.has-hover ? Theme.current.control_hover : transparent;
                                 // Expose the row to the accessibility tree (and
@@ -231,7 +232,7 @@ export component MenuSheet inherits Rectangle {
                         height: InterfaceStyle.tv ? 64px : 48px;
                         vertical-stretch: 0;
                         border-radius: 8px;
-                        border-width: InterfaceStyle.tv && root.tv-index == root.items.length ? 2px : 0px;
+                        border-width: root.keyboard_navigation && (InterfaceStyle.tv || SettingsStyle.keyboard-mode) && root.tv-index == root.items.length ? 2px : 0px;
                         border-color: Theme.current.focus_ring;
                         background: cancel_touch.has-hover ? Theme.current.control_hover : transparent;
 

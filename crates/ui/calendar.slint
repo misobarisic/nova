@@ -4,6 +4,7 @@ import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav } from "sidenav.slint";
 import { PageHeader } from "page-header.slint";
+import { MenuSheet } from "menusheet.slint";
 import { SectionHeader } from "settings-controls.slint";
 
 
@@ -132,6 +133,14 @@ component PlannerPeriod inherits Rectangle {
 }
 export component CalendarPage inherits Rectangle {
     private property <bool> tools-open: false;
+    private property <string> reminder-target;
+    private property <int> reminder-target-mode;
+    private property <[string]> current-reminder-keys: CalendarBridge.reminder_keys;
+    changed current-reminder-keys => { if root.reminder-target != "" { root.reminder-target = ""; page_scope.focus(); } }
+    function choose-reminder(index: int) {
+        root.reminder-target-mode = CalendarBridge.reminder_modes[index];
+        root.reminder-target = CalendarBridge.reminder_keys[index];
+    }
     private property <int> tools-focus <=> CalendarBridge.tools_focus;
     private property <int> tools-input-request;
     private property <bool> tools-editing: false;
@@ -139,7 +148,7 @@ export component CalendarPage inherits Rectangle {
         if root.tools-focus == 8 || root.tools-focus == 9 || root.tools-focus == 17 { root.tools-input-request += 1; }
         else { page_scope.focus(); }
     }
-    function close-layer() { if root.tools-open && root.tools-editing { page_scope.focus(); root.tools-editing = false; } else if root.tools-open { root.tools-open = false; root.tv-control = 9; page_scope.focus(); } else { root.back(); } }
+    function close-layer() { if root.reminder-target != "" { root.reminder-target = ""; page_scope.focus(); } else if root.tools-open && root.tools-editing { page_scope.focus(); root.tools-editing = false; } else if root.tools-open { root.tools-open = false; root.tv-control = 9; page_scope.focus(); } else { root.back(); } }
     function next-tool(d: int) {
         let count = 18 + CalendarBridge.reminder_keys.length * 2;
         let candidate = Math.mod(root.tools-focus + d + count,count);
@@ -161,7 +170,7 @@ export component CalendarPage inherits Rectangle {
         else if root.tools-focus >= 18 {
             let index = Math.floor((root.tools-focus - 18) / 2);
             if index < CalendarBridge.reminder_keys.length {
-                if Math.mod(root.tools-focus - 18, 2) == 0 { CalendarBridge.toggle_subscription(CalendarBridge.reminder_keys[index]); }
+                if Math.mod(root.tools-focus - 18, 2) == 0 { root.choose-reminder(index); }
                 else { CalendarBridge.select_export_title(CalendarBridge.reminder_keys[index]); }
             }
         }
@@ -313,7 +322,11 @@ export component CalendarPage inherits Rectangle {
     width: 100%; height: 100%;
     init => { root.last_back = root.system_back_request; self.focus(); }
     capture-key-pressed(e) => {
-        if root.tools-open && (e.text == Key.Back || e.text == Key.Escape) { if !e.repeat { root.close-layer(); } accept }
+        if root.reminder-target != "" {
+            if e.text == Key.Back || e.text == Key.Escape { if !e.repeat { root.close-layer(); } accept }
+            else { reject }
+        }
+        else if root.tools-open && (e.text == Key.Back || e.text == Key.Escape) { if !e.repeat { root.close-layer(); } accept }
         else if root.tools-open && e.text == Key.Tab {
             root.next-tool(e.modifiers.shift ? -1 : 1); root.focus-tool(); accept
         }
@@ -491,7 +504,7 @@ export component CalendarPage inherits Rectangle {
                     for label[i] in CalendarBridge.reminder_labels: VerticalLayout {
                         spacing: 6px;
                         Text { font-size: InterfaceStyle.tv ? 20px : 14px; text: label; wrap: word-wrap; color: Theme.current.text_bright;  }
-                        PlannerButton { label: CalendarBridge.reminder_subscribed[i] ? @tr("Stop release reminders") : @tr("Remind me"); selected: CalendarBridge.reminder_subscribed[i]; reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == 18 + i * 2; picked => { CalendarBridge.toggle_subscription(CalendarBridge.reminder_keys[i]); } }
+                        PlannerButton { label: CalendarBridge.reminder_modes[i] == 2 ? @tr("Full season released") : CalendarBridge.reminder_subscribed[i] ? @tr("Each new episode") : @tr("Remind me"); selected: CalendarBridge.reminder_subscribed[i]; reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == 18 + i * 2; picked => { root.choose-reminder(i); } }
                         PlannerButton { label: CalendarBridge.export_selected[i] ? @tr("Selected for export") : @tr("Select for export"); selected: CalendarBridge.export_selected[i]; reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == 19 + i * 2; picked => { CalendarBridge.select_export_title(CalendarBridge.reminder_keys[i]); } }
                     }
                 }
@@ -499,6 +512,21 @@ export component CalendarPage inherits Rectangle {
         }
     }
     if !root.narrow && !root.external_navigation: SideNav { kb_zone: InterfaceStyle.tv ? (root.tv-zone == -1 ? 0 : -1) : 0; kb_nav: root.tv-nav; active: 4; viewport-width: root.width; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }
+    }
+    MenuSheet {
+        open: root.active && root.tools-open && root.reminder-target != "";
+        keyboard_navigation: true;
+        width: 100%; height: 100%;
+        safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
+        max_h: root.height * 0.85;
+        sheet_title: @tr("Release reminders");
+        items: [
+            { label: (root.reminder-target-mode == 0 ? "✓ " : "") + @tr("Off"), enabled: true },
+            { label: (root.reminder-target-mode == 1 ? "✓ " : "") + @tr("Each new episode"), enabled: true },
+            { label: (root.reminder-target-mode == 2 ? "✓ " : "") + @tr("Full season released"), enabled: true },
+        ];
+        picked(mode) => { let key = root.reminder-target; root.reminder-target = ""; page_scope.focus(); CalendarBridge.set_subscription_mode(key, mode); }
+        closed => { root.close-layer(); }
     }
     if !root.active: TouchArea {
         width: 100%; height: 100%;

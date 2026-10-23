@@ -153,7 +153,7 @@ pub extern "system" fn Java_dev_misob_nova_NovaReleaseJobService_nativeAcknowled
         if keys.len() > 1000
             || keys
                 .iter()
-                .any(|key| serde_json::from_str::<(String, String, String)>(key).is_err())
+                .any(|key| !release_reminders::valid_receipt(key))
         {
             return Err("invalid notification identities".into());
         }

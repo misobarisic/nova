@@ -48,6 +48,7 @@ fn reminder_tools_fit_phone_and_tv_back_closes_one_layer() {
             "A saved series — paused (On Hold / Dropped)".into(),
         ])));
         calendar.set_reminder_subscribed(ModelRc::new(VecModel::from(vec![true])));
+        calendar.set_reminder_modes(ModelRc::new(VecModel::from(vec![1])));
         calendar.set_export_selected(ModelRc::new(VecModel::from(vec![false])));
         calendar.set_export_start("2026-10-23".into());
         calendar.set_export_end("2027-01-21".into());
@@ -78,13 +79,51 @@ fn reminder_tools_fit_phone_and_tv_back_closes_one_layer() {
             key(&app, Key::Return.into());
             assert_eq!(*actions.borrow(), vec![0]);
         }
+        let chosen_modes = Rc::new(RefCell::new(Vec::new()));
+        let recorded = chosen_modes.clone();
+        calendar.on_set_subscription_mode(move |key, mode| {
+            recorded.borrow_mut().push((key.to_string(), mode))
+        });
+        calendar.set_tools_focus(18);
+        key(&app, Key::Return.into());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Full season released")
+                .next()
+                .is_some()
+        );
+        key(&app, Key::UpArrow.into());
+        key(&app, Key::Return.into());
+        assert_eq!(
+            *chosen_modes.borrow(),
+            vec![("[\"series\",\"one\"]".to_string(), 2)]
+        );
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        calendar.set_tools_focus(18);
+        key(&app, Key::Return.into());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Full season released")
+                .next()
+                .is_some(),
+            "reminder choice reopens before Back"
+        );
+        key(&app, Key::Back.into());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert!(
+            ElementHandle::find_by_element_id(&app, "CalendarPage::tools-panel")
+                .next()
+                .is_some(),
+            "Back closes only the reminder choice"
+        );
+        assert_eq!(chosen_modes.borrow().len(), 1);
         calendar.set_tools_focus(8);
         key(&app, Key::Return.into());
         key(&app, "0".into());
         assert!(calendar.get_export_start().ends_with('0'));
         key(&app, Key::Back.into());
         assert!(
-            ElementHandle::find_by_accessible_label(&app, "Done")
+            ElementHandle::find_by_element_id(&app, "CalendarPage::tools-panel")
                 .next()
                 .is_some(),
             "Back leaves date editing before closing the panel"
@@ -92,7 +131,7 @@ fn reminder_tools_fit_phone_and_tv_back_closes_one_layer() {
         key(&app, Key::Back.into());
         assert!(app.get_show_calendar());
         assert!(
-            ElementHandle::find_by_accessible_label(&app, "Done")
+            ElementHandle::find_by_element_id(&app, "CalendarPage::tools-panel")
                 .next()
                 .is_none()
         );

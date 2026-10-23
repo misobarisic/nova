@@ -316,6 +316,7 @@ pub fn tr(english: &str) -> &str {
         "Set a PIN first." => "Najprije postavite PIN.",
         "Enter PIN to continue." => "Unesite PIN za nastavak.",
         "Released today" => "Objavljeno danas",
+        "Full season released" => "Cijela sezona objavljena",
         " — paused (On Hold / Dropped)" => " — pauzirano (Na čekanju / Odbačeno)",
         " — paused (not in Library)" => " — pauzirano (nije u zbirci)",
         "Allow notifications in Android settings, then enable delivery again" => {

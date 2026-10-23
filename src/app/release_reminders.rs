@@ -83,8 +83,32 @@ pub(super) struct State {
 pub(super) struct Subscription {
     pub type_: String,
     pub title_id: String,
+    #[serde(default)]
+    mode: ReminderMode,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ReminderMode {
+    #[default]
+    NewEpisodes,
+    FullSeason,
+}
+impl ReminderMode {
+    fn from_ui(mode: i32) -> Option<Self> {
+        match mode {
+            1 => Some(Self::NewEpisodes),
+            2 => Some(Self::FullSeason),
+            _ => None,
+        }
+    }
+    fn ui(self) -> i32 {
+        match self {
+            Self::NewEpisodes => 1,
+            Self::FullSeason => 2,
+        }
+    }
 }
 pub(super) fn title_key(type_: &str, id: &str) -> String {
     serde_json::to_string(&(type_, id)).expect("title identity")
@@ -218,6 +242,15 @@ struct Event {
     watched: bool,
     #[serde(default)]
     aliases: Vec<String>,
+    // A season receipt is distinct from episode delivery, while key/episode_id
+    // always point at a real episode for Open and Android notification taps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notice: Option<String>,
+}
+impl Event {
+    fn receipt(&self) -> &str {
+        self.notice.as_deref().unwrap_or(&self.key)
+    }
 }
 fn proven_aliases(video: &Video) -> Vec<String> {
     let mut aliases = confirmed_episode_stream_ids(video);
@@ -293,6 +326,7 @@ fn events(
                             .get(&progress_map_key(&title.id, &id))
                             .is_some_and(|p| p.watched)
                     }),
+                notice: None,
             });
         }
     }
@@ -310,6 +344,225 @@ fn events(
     result.sort_by(|a, b| (&a.time.date(), &a.key).cmp(&(&b.time.date(), &b.key)));
     result.dedup_by(|a, b| a.key == b.key);
     Ok((result, undated))
+}
+
+const SEASON_PROOF: &str = "novaSeasonCompletion";
+
+/// Retain only explicit provider evidence, under the same guarded publication
+/// as the canonical episode cache. A provider's split/renumbered season cannot
+/// donate its count to a different saved numbering region.
+pub(super) fn annotate_season_completion(item: &MetaItem, videos: &mut [Video]) {
+    let mut counts: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for fields in [&item.preview.extra, &item.extra] {
+        if let Some(seasons) = fields.get("seasons").and_then(serde_json::Value::as_array) {
+            for season in seasons.iter().take(1000) {
+                let number = season
+                    .get("season_number")
+                    .or_else(|| season.get("seasonNumber"))
+                    .or_else(|| season.get("season"));
+                if let Some(number) = number
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|number| u32::try_from(number).ok())
+                {
+                    for key in ["episode_count", "episodeCount"] {
+                        if let Some(count) = season.get(key) {
+                            counts.entry(number).or_default().push(proof_count(count));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut source = HashMap::new();
+    for video in &item.videos {
+        source
+            .entry((&video.id, video.season, video.episode_number()))
+            .and_modify(|candidate| *candidate = None)
+            .or_insert(Some(video));
+    }
+    for video in videos {
+        video.extra.remove(SEASON_PROOF);
+        let Some(Some(fresh)) = source.get(&(&video.id, video.season, video.episode_number()))
+        else {
+            continue;
+        };
+        let mut expected = video
+            .season
+            .and_then(|season| counts.get(&season))
+            .cloned()
+            .unwrap_or_default();
+        for key in [
+            "seasonEpisodeCount",
+            "season_episode_count",
+            "expectedSeasonEpisodeCount",
+        ] {
+            if let Some(count) = fresh.extra.get(key) {
+                expected.push(proof_count(count));
+            }
+        }
+        let finale = ["isSeasonFinale", "seasonFinale", "is_season_finale"]
+            .iter()
+            .any(|key| fresh.extra.get(*key).and_then(serde_json::Value::as_bool) == Some(true))
+            || fresh
+                .extra
+                .get("episodeType")
+                .or_else(|| fresh.extra.get("episode_type"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind.to_ascii_lowercase().as_str(),
+                        "season_finale" | "season finale" | "finale"
+                    )
+                });
+        if finale {
+            expected.push(fresh.episode_number().unwrap_or(0));
+        }
+        if !expected.is_empty() {
+            expected.sort_unstable();
+            expected.dedup();
+            video
+                .extra
+                .insert(SEASON_PROOF.into(), serde_json::json!(expected));
+        }
+    }
+}
+fn proof_count(value: &serde_json::Value) -> u32 {
+    value
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| (1..=10_000).contains(value))
+        .unwrap_or(0)
+}
+fn season_notices(
+    title: &LibraryEntry,
+    videos: &[Video],
+    episodes: &[Event],
+    now: i64,
+) -> Vec<Event> {
+    let mut seasons: BTreeMap<u32, Vec<&Video>> = BTreeMap::new();
+    for video in videos {
+        if let Some(season) = video.season.filter(|season| *season > 0) {
+            seasons.entry(season).or_default().push(video);
+        }
+    }
+    let today = chrono::DateTime::from_timestamp(now, 0)
+        .expect("current time")
+        .with_timezone(&Local)
+        .date_naive();
+    let mut notices = Vec::new();
+    for (season, rows) in seasons {
+        let expected: HashSet<u32> = rows
+            .iter()
+            .filter_map(|row| row.extra.get(SEASON_PROOF))
+            .filter_map(serde_json::Value::as_array)
+            .flatten()
+            .map(proof_count)
+            .collect();
+        if expected.len() != 1 {
+            continue;
+        }
+        let count = *expected.iter().next().unwrap();
+        if count == 0 || rows.len() != count as usize {
+            continue;
+        }
+        let numbered: BTreeMap<_, _> = rows
+            .iter()
+            .filter_map(|row| row.episode_number().map(|number| (number, *row)))
+            .collect();
+        if numbered.len() != count as usize || numbered.keys().copied().ne(1..=count) {
+            continue;
+        }
+        let ids: HashSet<_> = numbered.values().map(|row| row.id.as_str()).collect();
+        if ids.len() != count as usize || ids.contains("") {
+            continue;
+        }
+        let dated: Option<Vec<_>> = numbered
+            .values()
+            .map(|row| {
+                let time = row.released.as_deref().and_then(ReleaseTime::parse)?;
+                let released = match time {
+                    ReleaseTime::Day(day) => day <= today,
+                    ReleaseTime::Exact(at) => at <= now,
+                };
+                released.then_some(time)
+            })
+            .collect();
+        let Some(dated) = dated else {
+            continue;
+        };
+        let by_id: HashMap<_, _> = episodes
+            .iter()
+            .map(|event| (&event.episode_id, event))
+            .collect();
+        let real: Option<Vec<_>> = numbered
+            .values()
+            .map(|row| by_id.get(&row.id).copied())
+            .collect();
+        let Some(real) = real else {
+            continue;
+        };
+        let Some(first) = real.iter().find(|event| !event.watched) else {
+            continue;
+        };
+        let mut notice = (**first).clone();
+        // The last scheduled release, including weekly finales, establishes the
+        // release day. The first unwatched actual episode is the navigation target.
+        notice.time = dated
+            .into_iter()
+            .max_by_key(|time| {
+                (
+                    time.date(),
+                    match time {
+                        ReleaseTime::Day(_) => i64::MAX,
+                        ReleaseTime::Exact(at) => *at,
+                    },
+                )
+            })
+            .unwrap();
+        notice.summary = format!(
+            "{} — {} {}",
+            title.name,
+            text::tr("Full season released"),
+            season
+        );
+        notice.aliases.clear();
+        notice.notice =
+            Some(serde_json::to_string(&("season", &title.type_, &title.id, season)).unwrap());
+        notices.push(notice);
+    }
+    notices
+}
+fn delivery_events(owner: &profiles::ProfileStore, now: i64) -> Result<Vec<Event>, String> {
+    let (episodes, _) = events(owner, true, "", None)?;
+    let subs = subscriptions(owner)?;
+    let titles: Vec<LibraryEntry> = load(owner, "library")?;
+    let mut notices = Vec::new();
+    for title in titles {
+        let Some(sub) = subs.get(&title_key(&title.type_, &title.id)) else {
+            continue;
+        };
+        let matching: Vec<_> = episodes
+            .iter()
+            .filter(|event| event.type_ == title.type_ && event.title_id == title.id)
+            .cloned()
+            .collect();
+        if sub.mode == ReminderMode::NewEpisodes {
+            notices.extend(matching);
+        } else if !matching.is_empty() {
+            let videos: Vec<Video> = load(owner, &episodes_key(&title.type_, &title.id))?;
+            notices.extend(season_notices(&title, &videos, &matching, now));
+        }
+    }
+    Ok(notices)
+}
+#[cfg(any(target_os = "android", test))]
+pub(super) fn valid_receipt(key: &str) -> bool {
+    serde_json::from_str::<(String, String, String)>(key).is_ok()
+        || serde_json::from_str::<(String, String, String, u32)>(key).is_ok_and(
+            |(tag, media_type, title_id, season)| {
+                tag == "season" && !media_type.is_empty() && !title_id.is_empty() && season > 0
+            },
+        )
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -341,7 +594,7 @@ fn native_events(state: &Delivery) -> Vec<&Event> {
     state
         .visible
         .iter()
-        .filter(|event| !state.dismissed.contains(&event.key))
+        .filter(|event| !state.dismissed.contains(event.receipt()))
         .collect()
 }
 #[cfg(target_os = "android")]
@@ -373,14 +626,17 @@ fn reconcile_delivery(
     local_seconds: u32,
 ) -> bool {
     state.visible.retain(|old| {
-        all.iter().any(|e| e.key == old.key && !e.watched)
-            && state
-                .delivered
-                .get(&old.key)
-                .is_some_and(|at| now.saturating_sub(*at) <= 24 * 3600)
+        all.iter().any(|e| {
+            e.receipt() == old.receipt()
+                && !e.watched
+                && !matches!(e.time, ReleaseTime::Exact(at) if at > now)
+        }) && state
+            .delivered
+            .get(old.receipt())
+            .is_some_and(|at| now.saturating_sub(*at) <= 24 * 3600)
     });
     for visible in &mut state.visible {
-        if let Some(current) = all.iter().find(|e| e.key == visible.key) {
+        if let Some(current) = all.iter().find(|e| e.receipt() == visible.receipt()) {
             *visible = current.clone();
         }
     }
@@ -393,7 +649,8 @@ fn reconcile_delivery(
         .iter()
         .filter(|e| {
             !e.watched
-                && !state.delivered.contains_key(&e.key)
+                && !matches!(e.time, ReleaseTime::Exact(at) if at > now)
+                && !state.delivered.contains_key(e.receipt())
                 && !state
                     .proofs
                     .values()
@@ -407,10 +664,10 @@ fn reconcile_delivery(
         return false;
     }
     for event in &due {
-        state.delivered.insert(event.key.clone(), now);
+        state.delivered.insert(event.receipt().to_string(), now);
         state
             .proofs
-            .insert(event.key.clone(), event.aliases.clone());
+            .insert(event.receipt().to_string(), event.aliases.clone());
     }
     let alert = state.digest_day != Some(local_day);
     state.visible.extend(due);
@@ -660,7 +917,7 @@ impl Bridge {
             cancel_pending_notification_tap();
             return;
         }
-        if let Ok((all, _)) = events(&owner, true, "", None)
+        if let Ok(all) = delivery_events(&owner, Utc::now().timestamp())
             && all.iter().any(|event| event.key == key && !event.watched)
         {
             self.calendar_release_picked(key.into());
@@ -674,6 +931,12 @@ impl Bridge {
         let b = self.clone();
         app.global::<crate::CalendarBridge>()
             .on_toggle_detail(move || b.toggle_release_subscription());
+        let b = self.clone();
+        app.global::<crate::CalendarBridge>()
+            .on_set_detail_reminder(move |mode| b.set_detail_reminder_mode(mode));
+        let b = self.clone();
+        app.global::<crate::CalendarBridge>()
+            .on_set_subscription_mode(move |key, mode| b.set_subscription_mode(&key, mode));
         let b = self.clone();
         app.global::<crate::CalendarBridge>()
             .on_reminder_action(move |action| b.release_reminder_action(action));
@@ -719,6 +982,15 @@ impl Bridge {
                 .is_some_and(|m| subscribed(&owner, &m.type_, &m.id)),
         );
         let subs = subscriptions(&owner).unwrap_or_default();
+        bridge.set_detail_reminder_mode(
+            current
+                .as_ref()
+                .and_then(|item| {
+                    subs.get(&title_key(&item.type_, &item.id))
+                        .map(|sub| sub.mode.ui())
+                })
+                .unwrap_or(0),
+        );
         let state: Delivery = load(&owner, DELIVERY_KEY).unwrap_or_default();
         bridge.set_delivery_enabled(state.enabled);
         bridge.set_android_notifications(cfg!(target_os = "android"));
@@ -730,17 +1002,20 @@ impl Bridge {
                     .into(),
             );
         }
-        let selected = {
+        let (selected, owner_changed) = {
             let mut shared = self.shared.lock().unwrap();
-            if shared.release_reminders.owner != owner.id() {
+            let owner_changed = shared.release_reminders.owner != owner.id();
+            if owner_changed {
                 shared.release_reminders = State {
                     owner: owner.id().into(),
                     ..Default::default()
                 };
                 bridge.set_export_ready(false);
                 bridge.set_export_preview("".into());
+                bridge
+                    .set_reminder_keys(Rc::new(VecModel::from(Vec::<SharedString>::new())).into());
             }
-            shared.release_reminders.selected.clone()
+            (shared.release_reminders.selected.clone(), owner_changed)
         };
         let mut titles: Vec<LibraryEntry> = load(&owner, "library").unwrap_or_default();
         titles.retain(|e| {
@@ -750,10 +1025,12 @@ impl Bridge {
         let mut keys = Vec::<SharedString>::new();
         let mut labels = Vec::<SharedString>::new();
         let mut flags = Vec::new();
+        let mut modes = Vec::new();
         let mut selections = Vec::new();
         for title in titles {
             let key = title_key(&title.type_, &title.id);
             flags.push(subs.contains_key(&key));
+            modes.push(subs.get(&key).map(|sub| sub.mode.ui()).unwrap_or(0));
             selections.push(selected.contains(&key));
             let paused = matches!(
                 title.watch_status,
@@ -785,6 +1062,7 @@ impl Bridge {
                     format!("{}{}", sub.title_id, text::tr(" — paused (not in Library)")).into(),
                 );
                 flags.push(true);
+                modes.push(sub.mode.ui());
                 selections.push(false);
             }
         }
@@ -794,6 +1072,7 @@ impl Bridge {
                 keys.remove(index);
                 labels.remove(index);
                 flags.remove(index);
+                modes.remove(index);
                 selections.remove(index);
             }
         }
@@ -801,6 +1080,7 @@ impl Bridge {
         keys.truncate(50);
         labels.truncate(50);
         flags.truncate(50);
+        modes.truncate(50);
         selections.truncate(50);
         if bridge.get_tools_focus() >= 18 {
             let old_focus = bridge.get_tools_focus();
@@ -813,9 +1093,12 @@ impl Bridge {
                 .unwrap_or(14);
             bridge.set_tools_focus(next);
         }
-        bridge.set_reminder_keys(Rc::new(VecModel::from(keys)).into());
+        if owner_changed || !bridge.get_reminder_keys().iter().eq(keys.iter().cloned()) {
+            bridge.set_reminder_keys(Rc::new(VecModel::from(keys)).into());
+        }
         bridge.set_reminder_labels(Rc::new(VecModel::from(labels)).into());
         bridge.set_reminder_subscribed(Rc::new(VecModel::from(flags)).into());
+        bridge.set_reminder_modes(Rc::new(VecModel::from(modes)).into());
         bridge.set_export_selected(Rc::new(VecModel::from(selections)).into());
         bridge.set_reminder_status(
             text::release_reminder_status(
@@ -825,9 +1108,7 @@ impl Bridge {
             )
             .into(),
         );
-        let eligible = events(&owner, true, "", None)
-            .map(|(events, _)| events)
-            .unwrap_or_default();
+        let eligible = delivery_events(&owner, Utc::now().timestamp()).unwrap_or_default();
         bridge.set_digest_text(
             state
                 .visible
@@ -835,7 +1116,7 @@ impl Bridge {
                 .filter_map(|e| {
                     eligible
                         .iter()
-                        .find(|current| current.key == e.key && !current.watched)
+                        .find(|current| current.receipt() == e.receipt() && !current.watched)
                 })
                 .map(|e| e.summary.as_str())
                 .collect::<Vec<_>>()
@@ -862,6 +1143,31 @@ impl Bridge {
     }
     fn toggle_subscription_key(&self, key: &str) {
         let owner = profiles::ProfileStore::capture();
+        let mode = if subscriptions(&owner).is_ok_and(|subs| subs.contains_key(key)) {
+            0
+        } else {
+            1
+        };
+        self.set_subscription_mode(key, mode);
+    }
+    fn set_detail_reminder_mode(&self, mode: i32) {
+        let Some(item) = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .clone()
+            .filter(|item| item.type_ != "movie")
+        else {
+            return;
+        };
+        self.set_subscription_mode(&title_key(&item.type_, &item.id), mode);
+    }
+    fn set_subscription_mode(&self, key: &str, mode: i32) {
+        if !(0..=2).contains(&mode) {
+            return;
+        }
+        let owner = profiles::ProfileStore::capture();
         let Ok((type_, id)) = serde_json::from_str::<(String, String)>(key) else {
             return;
         };
@@ -871,15 +1177,17 @@ impl Bridge {
         let result = (|| -> Result<(), String> {
             let mut subs = subscriptions(&owner)?;
             let key = title_key(&type_, &id);
-            if subs.remove(&key).is_none() {
-                subs.insert(
-                    key,
-                    Subscription {
+            if let Some(mode) = ReminderMode::from_ui(mode) {
+                subs.entry(key)
+                    .and_modify(|sub| sub.mode = mode)
+                    .or_insert(Subscription {
                         type_,
                         title_id: id,
+                        mode,
                         extra: BTreeMap::new(),
-                    },
-                );
+                    });
+            } else {
+                subs.remove(&key);
             }
             owner
                 .persist_snapshot(
@@ -953,9 +1261,12 @@ impl Bridge {
             }
             4 => {
                 if let Err(error) = mutate_delivery(&owner, |state| {
-                    state
-                        .dismissed
-                        .extend(state.visible.iter().map(|event| event.key.clone()));
+                    state.dismissed.extend(
+                        state
+                            .visible
+                            .iter()
+                            .map(|event| event.receipt().to_string()),
+                    );
                     state.visible.clear();
                     Ok(())
                 }) {
@@ -967,11 +1278,12 @@ impl Bridge {
             }
             5 => {
                 let state: Delivery = load(&owner, DELIVERY_KEY).unwrap_or_default();
-                if let Some(event) = state
-                    .visible
-                    .first()
-                    .filter(|e| profile_policy::allows_title(&owner, &e.type_, &e.title_id))
-                {
+                let eligible = delivery_events(&owner, Utc::now().timestamp()).unwrap_or_default();
+                if let Some(event) = state.visible.iter().find_map(|visible| {
+                    eligible
+                        .iter()
+                        .find(|event| event.receipt() == visible.receipt() && !event.watched)
+                }) {
                     self.calendar_release_picked(event.key.clone().into());
                 }
             }
@@ -1199,8 +1511,8 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
         .map(|key| owner.read(key).map(|raw| (key, raw)))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    let (all, _) = events(owner, true, "", None)?;
     let now = Local::now();
+    let all = delivery_events(owner, now.timestamp())?;
     let before = serde_json::to_string(&state).unwrap();
     let _alert = reconcile_delivery(
         &mut state,
@@ -1233,9 +1545,13 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
             .map(|profile| profile.name)
             .unwrap_or_else(|| "Nova".into());
         let native = native_events(&state);
-        let keys =
-            serde_json::to_string(&native.iter().map(|event| &event.key).collect::<Vec<_>>())
-                .unwrap();
+        let keys = serde_json::to_string(
+            &native
+                .iter()
+                .map(|event| event.receipt())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         let body = if native.is_empty() {
             String::new()
         } else {
@@ -1275,10 +1591,286 @@ mod tests {
             time: ReleaseTime::parse(raw).unwrap(),
             watched: false,
             aliases: Vec::new(),
+            notice: None,
         }
     }
     fn day() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 23).unwrap()
+    }
+    fn season_fixture() -> (LibraryEntry, MetaItem, Vec<Event>, i64) {
+        let title =
+            serde_json::from_value(serde_json::json!({"id":"show","type_":"series","name":"Show"}))
+                .unwrap();
+        let item: MetaItem = serde_json::from_value(serde_json::json!({
+            "id":"show","type":"series","name":"Show",
+            "seasons":[{"season_number":1,"episode_count":2}],
+            "videos":[
+                {"id":"show:1:1","season":1,"episode":1,"released":"2026-10-16"},
+                {"id":"show:1:2","season":1,"episode":2,"released":"2026-10-23"}
+            ]
+        }))
+        .unwrap();
+        let events = item
+            .videos
+            .iter()
+            .map(|video| {
+                let mut e = event(&video.id, video.released.as_deref().unwrap());
+                e.key = serde_json::to_string(&("series", "show", &video.id)).unwrap();
+                e
+            })
+            .collect();
+        let now = Local::now().with_timezone(&Utc).timestamp();
+        // The date-only cases use a fixed local noon, independent of the
+        // machine's timezone. Exact release checks below use UTC timestamps.
+        let now =
+            chrono::TimeZone::from_local_datetime(&Local, &day().and_hms_opt(12, 0, 0).unwrap())
+                .single()
+                .map(|at| at.timestamp())
+                .unwrap_or(now);
+        (title, item, events, now)
+    }
+    #[test]
+    fn subscription_modes_are_backward_compatible_and_round_trip_unknown_fields() {
+        let old: Subscription = serde_json::from_value(
+            serde_json::json!({"type_":"series","title_id":"show","future":7}),
+        )
+        .unwrap();
+        assert_eq!(old.mode, ReminderMode::NewEpisodes);
+        assert_eq!(ReminderMode::from_ui(2), Some(ReminderMode::FullSeason));
+        assert_eq!(ReminderMode::from_ui(0), None);
+        let mut season = old;
+        season.mode = ReminderMode::FullSeason;
+        let saved = serde_json::to_value(&season).unwrap();
+        assert_eq!(saved["mode"], "full_season");
+        assert_eq!(saved["future"], 7);
+        assert_eq!(
+            serde_json::from_value::<Subscription>(saved)
+                .unwrap()
+                .mode
+                .ui(),
+            2
+        );
+    }
+    #[test]
+    fn full_season_requires_explicit_consistent_complete_released_inventory() {
+        let (title, item, episodes, now) = season_fixture();
+        let notices = |item: &MetaItem, episodes: &[Event]| {
+            let mut videos = item.videos.clone();
+            annotate_season_completion(item, &mut videos);
+            season_notices(&title, &videos, episodes, now)
+        };
+        let season = notices(&item, &episodes);
+        assert_eq!(season.len(), 1);
+        assert_eq!(season[0].key, episodes[0].key);
+        assert_eq!(season[0].episode_id, "show:1:1");
+        assert_eq!(season[0].time, ReleaseTime::Day(day()));
+        assert!(valid_receipt(season[0].receipt()));
+        assert_ne!(season[0].receipt(), season[0].key);
+        let mut no_proof = item.clone();
+        no_proof.preview.extra.remove("seasons");
+        no_proof.extra.remove("seasons");
+        no_proof.status = Some("Ended".into());
+        no_proof.videos.push(Video {
+            id: "show:2:1".into(),
+            season: Some(2),
+            episode: Some(1),
+            released: Some("2027-01-01".into()),
+            ..Default::default()
+        });
+        assert!(
+            notices(&no_proof, &episodes).is_empty(),
+            "ended/later season and an aired cached prefix are not completion proof"
+        );
+        no_proof.videos.pop();
+        no_proof.videos[1]
+            .extra
+            .insert("isSeasonFinale".into(), true.into());
+        assert_eq!(
+            notices(&no_proof, &episodes).len(),
+            1,
+            "a weekly finale completes the season"
+        );
+        no_proof.videos[1].extra.remove("isSeasonFinale");
+        no_proof.videos[1]
+            .extra
+            .insert("episode_type".into(), "finale".into());
+        assert_eq!(
+            notices(&no_proof, &episodes).len(),
+            1,
+            "TMDB episode_type finale is explicit completion evidence"
+        );
+        no_proof.videos[1].extra.remove("episode_type");
+        no_proof.videos[1]
+            .extra
+            .insert("is_season_finale".into(), true.into());
+        assert_eq!(notices(&no_proof, &episodes).len(), 1);
+        let mut gap = item.clone();
+        gap.videos.remove(0);
+        assert!(notices(&gap, &episodes).is_empty());
+        let mut missing_date = item.clone();
+        missing_date.videos[0].released = None;
+        assert!(notices(&missing_date, &episodes).is_empty());
+        let mut future = item.clone();
+        future.videos[1].released = Some("2026-10-24".into());
+        assert!(notices(&future, &episodes).is_empty());
+        future.videos[1].released = Some(
+            chrono::DateTime::from_timestamp(now + 1, 0)
+                .unwrap()
+                .to_rfc3339(),
+        );
+        assert!(
+            notices(&future, &episodes).is_empty(),
+            "a same-day future timestamp is unreleased"
+        );
+        let mut conflict = item.clone();
+        conflict.videos[1]
+            .extra
+            .insert("seasonEpisodeCount".into(), 3.into());
+        assert!(notices(&conflict, &episodes).is_empty());
+        let mut duplicate = item.clone();
+        duplicate.videos[1].episode = Some(1);
+        assert!(notices(&duplicate, &episodes).is_empty());
+        duplicate = item.clone();
+        duplicate.videos[1].id = duplicate.videos[0].id.clone();
+        assert!(
+            notices(&duplicate, &episodes).is_empty(),
+            "distinct numbered slots need distinct real episode identities"
+        );
+        let mut watched = episodes.clone();
+        watched.iter_mut().for_each(|event| event.watched = true);
+        assert!(notices(&item, &watched).is_empty());
+        let mut moved = item.videos.clone();
+        moved[1].season = Some(2);
+        annotate_season_completion(&item, &mut moved);
+        assert!(
+            !moved[1].extra.contains_key(SEASON_PROOF),
+            "source counts cannot cross canonical numbering changes"
+        );
+        assert!(season_notices(&title, &moved, &episodes, now).is_empty());
+    }
+    #[test]
+    fn season_receipts_are_separate_from_episodes_and_navigation_stays_real() {
+        let (title, item, mut episodes, now) = season_fixture();
+        let mut videos = item.videos.clone();
+        annotate_season_completion(&item, &mut videos);
+        let mut state = Delivery {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(reconcile_delivery(
+            &mut state,
+            &episodes,
+            now,
+            day(),
+            12 * 3600
+        ));
+        let season = season_notices(&title, &videos, &episodes, now);
+        assert!(!reconcile_delivery(
+            &mut state,
+            &season,
+            now,
+            day(),
+            12 * 3600
+        ));
+        assert_eq!(
+            state.delivered.len(),
+            2,
+            "episode and season have independent receipts"
+        );
+        let receipt = season[0].receipt().to_owned();
+        let mut restarted: Delivery =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        episodes[0].watched = true;
+        let updated = season_notices(&title, &videos, &episodes, now);
+        assert_eq!(updated[0].episode_id, "show:1:2");
+        assert_eq!(updated[0].receipt(), receipt);
+        assert!(!reconcile_delivery(
+            &mut restarted,
+            &updated,
+            now + 1,
+            day(),
+            13 * 3600
+        ));
+        assert_eq!(restarted.visible[0].key, episodes[1].key);
+        dismiss_native(&mut restarted, &[receipt]);
+        assert!(native_events(&restarted).is_empty());
+        let mut ledger = ExportLedger {
+            namespace: "portable".into(),
+            ..Default::default()
+        };
+        let ics = export_ics(
+            &mut ledger,
+            &episodes,
+            day() - chrono::Duration::days(7),
+            day(),
+            now,
+        );
+        assert_eq!(
+            ics.matches("BEGIN:VEVENT").count(),
+            2,
+            "season mode never replaces episode ICS events"
+        );
+        assert!(
+            ledger
+                .entries
+                .values()
+                .all(|entry| entry.event.notice.is_none())
+        );
+        assert!(!valid_receipt("[\"other\",\"series\",\"show\",1]"));
+        assert!(!valid_receipt("[\"season\",\"series\",\"show\",0]"));
+    }
+    #[test]
+    fn exact_release_waits_until_timestamp_and_deduplicates_after_restart() {
+        let at =
+            chrono::TimeZone::from_local_datetime(&Local, &day().and_hms_opt(20, 0, 0).unwrap())
+                .single()
+                .expect("unambiguous evening")
+                .timestamp();
+        let release = event(
+            "evening",
+            &chrono::DateTime::from_timestamp(at, 0)
+                .unwrap()
+                .to_rfc3339(),
+        );
+        let mut state = Delivery {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(!reconcile_delivery(
+            &mut state,
+            std::slice::from_ref(&release),
+            at - 11 * 3600,
+            day(),
+            9 * 3600
+        ));
+        assert!(!reconcile_delivery(
+            &mut state,
+            std::slice::from_ref(&release),
+            at - 1,
+            day(),
+            20 * 3600 - 1
+        ));
+        assert!(state.delivered.is_empty());
+        assert!(state.proofs.is_empty());
+        assert!(state.visible.is_empty());
+        assert!(reconcile_delivery(
+            &mut state,
+            std::slice::from_ref(&release),
+            at,
+            day(),
+            20 * 3600
+        ));
+        let mut restarted: Delivery =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert!(!reconcile_delivery(
+            &mut restarted,
+            std::slice::from_ref(&release),
+            at + 1,
+            day(),
+            20 * 3600 + 1
+        ));
+        assert_eq!(restarted.delivered.len(), 1);
+        assert_eq!(restarted.visible.len(), 1);
     }
     #[test]
     fn digest_restart_late_refresh_date_changes_and_travel_never_repeat() {
@@ -1647,6 +2239,36 @@ mod tests {
                     nova_config::app_cache_dir().join("reminder-test-downloads"),
                 ),
             );
+            bridge.refresh_release_reminders();
+            let first_keys = app.global::<crate::CalendarBridge>().get_reminder_keys();
+            assert_eq!(first_keys.row_data(0).as_deref(), Some(key.as_str()));
+            bridge.refresh_release_reminders();
+            assert!(
+                first_keys == app.global::<crate::CalendarBridge>().get_reminder_keys(),
+                "unchanged refresh retains the ModelRc allocation and an open mode menu"
+            );
+            bob.persist_snapshot(KEY, &raw, false).unwrap();
+            // Publish actual activation sessions without starting unrelated
+            // network services; exercise the production Bridge refresh itself.
+            for id in [bob.id(), alice.id()] {
+                let incoming = profiles::prepare_activation(id).unwrap();
+                let session = bridge.sessions.prepare(id, Shared::default());
+                bridge.sessions.publish(session.clone());
+                profiles::commit_session(incoming, &session);
+                let previous = app.global::<crate::CalendarBridge>().get_reminder_keys();
+                bridge.refresh_release_reminders();
+                let current = app.global::<crate::CalendarBridge>().get_reminder_keys();
+                assert!(
+                    previous.iter().eq(current.iter()),
+                    "both profiles expose identical title keys"
+                );
+                assert!(
+                    previous != current,
+                    "profile activation must invalidate a previous profile's mode menu even with identical keys"
+                );
+                bridge.refresh_release_reminders();
+                assert!(current == app.global::<crate::CalendarBridge>().get_reminder_keys());
+            }
             mutate_delivery(&alice, |state| {
                 state.enabled = true;
                 Ok(())
@@ -1655,6 +2277,21 @@ mod tests {
             blocked_action(&alice, "ui-disable", || bridge.release_reminder_action(0));
             assert!(!load::<Delivery>(&alice, DELIVERY_KEY).unwrap().enabled);
             blocked_action(&alice, "ui-dismiss", || bridge.release_reminder_action(4));
+            bridge.set_subscription_mode(&key, 2);
+            let mode_raw = alice.read(KEY).unwrap().unwrap();
+            assert_eq!(
+                subscriptions(&alice).unwrap()[&key].mode,
+                ReminderMode::FullSeason
+            );
+            let mode_record = records(&mode_raw).unwrap();
+            let synced: Subscription = serde_json::from_str(&mode_record[0].1).unwrap();
+            assert_eq!(synced.mode, ReminderMode::FullSeason);
+            assert_eq!(synced.extra["future"], 7);
+            bridge.set_subscription_mode(&key, 1);
+            assert_eq!(
+                subscriptions(&alice).unwrap()[&key].mode,
+                ReminderMode::NewEpisodes
+            );
             blocked_action(&alice, "ui-unsubscribe", || {
                 bridge.toggle_subscription_key(&key)
             });

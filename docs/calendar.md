@@ -36,7 +36,11 @@ Next episode retains Home's future-only, caught-up semantics.
 
 Each release carries its media type, series ID, and
 episode ID; opening a card revalidates those identifiers and opens real series
-details. Series details include Remind me, also available in the library menu.
+details. Series details' top-right options menu includes Remind me, also
+available in the library menu. Each show offers Off, New episodes or Full season
+released; the choice follows that profile's synced subscription. Existing
+subscriptions retain New episodes. Full season includes weekly seasons once the
+finale has released, as well as seasons released together.
 Calendar → Manage reminders / Export calendar manages subscriptions and exports.
 Subscriptions follow typed title identities and sync separately for each profile.
 On Hold/Dropped or removed library titles retain a paused subscription; explicit
@@ -57,6 +61,32 @@ timezone/DST changes and corrected dates; a delivered episode does not alert
 again when metadata moves it. The reminder panel shows refresh state and the
 latest successful refresh time. Subscribed and smart-offline titles join the
 bounded library metadata refresh even when they have never been watched.
+
+Full-season delivery requires explicit provider evidence: a positive expected
+season episode count, or an explicit finale marker identifying that season's
+last episode. Nova then requires every numbered episode from 1 through that
+count, a valid release date for every episode, and no future release (including
+a future timestamp later today). Conflicting counts, gaps, duplicate episode
+numbers and unknown dates keep the season pending. An Ended series status, a
+later season or an entirely aired cached prefix alone does not establish that
+the cached season is complete. Providers without completion evidence cannot
+produce full-season reminders; their ordinary episode reminders and ICS exports
+remain available.
+
+The guarded episode-cache publication retains explicit `seasons` entries with
+`season_number`/`seasonNumber`/`season` and `episode_count`/`episodeCount`, or
+video extensions `seasonEpisodeCount`, `season_episode_count`,
+`expectedSeasonEpisodeCount`, `isSeasonFinale`, `seasonFinale`,
+`is_season_finale` and finale `episodeType`/`episode_type`, under
+`Video.extra.novaSeasonCompletion`. Default Cinemeta metadata generally lacks
+these explicit completion hints, so Nova does not guess a season's final count.
+Evidence is retained
+only when the original and canonical episode identities and numbering agree,
+so split or renumbered provider seasons cannot donate a misleading count.
+Existing caches acquire these hints during their next metadata refresh.
+Season delivery has its own durable receipt, independent of episode receipts.
+Open and Android taps still use the first unwatched real episode in that season.
+Changing the reminder mode does not change the per-episode ICS export.
 
 Android requests notification permission when device delivery is enabled. Denial
 leaves subscriptions and calendar export usable. A persisted 15-minute

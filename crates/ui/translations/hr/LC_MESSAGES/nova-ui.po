@@ -5255,3 +5255,12 @@ msgstr "Otključajte na TV-u."
 
 msgid "Select"
 msgstr "Odaberi"
+
+msgid "Release reminders"
+msgstr "Podsjetnici za objave"
+
+msgid "Each new episode"
+msgstr "Svaka nova epizoda"
+
+msgid "Full season released"
+msgstr "Cijela sezona objavljena"

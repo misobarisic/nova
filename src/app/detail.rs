@@ -5209,7 +5209,8 @@ pub(super) fn write_episode_meta_cache_guarded(
     let mut item = item.clone();
     item.videos.retain(|v| v.season.is_some());
     let known = read_episodes_cache_for(type_, id).unwrap_or_default();
-    let videos = nova_providers::reconcile_episode_metadata(&item, &known);
+    let mut videos = nova_providers::reconcile_episode_metadata(&item, &known);
+    release_reminders::annotate_season_completion(&item, &mut videos);
     Some(write_episodes_cache_for(type_, id, &videos))
 }
 

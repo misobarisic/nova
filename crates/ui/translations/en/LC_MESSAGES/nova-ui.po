@@ -1663,3 +1663,12 @@ msgstr "Skipped expired or unsupported values"
 
 msgid "Select"
 msgstr "Select"
+
+msgid "Release reminders"
+msgstr "Release reminders"
+
+msgid "Each new episode"
+msgstr "Each new episode"
+
+msgid "Full season released"
+msgstr "Full season released"
