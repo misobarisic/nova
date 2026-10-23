@@ -1,4 +1,4 @@
-import { StreamFiltersBridge, SettingsBridge, SettingsContent, SettingsSync, Theme, SettingsStyle, InterfaceStyle } from "@NovaUiShared";
+import { CastBridge, StreamFiltersBridge, SettingsBridge, SettingsContent, SettingsSync, Theme, SettingsStyle, InterfaceStyle } from "@NovaUiShared";
 import { SettingSyncBadge } from "../ui/settings-sync.slint";
 
 import { KbMark } from "../ui/kbnav.slint";
@@ -700,18 +700,18 @@ export component SettingsPlayerModule inherits Window {
                     ToggleSwitch {
                         name: @tr("Keep controls visible while paused");
                         checked <=> SettingsBridge.keep_controls_visible_while_paused;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() - 2;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_paused_controls_row();
                         toggled => {
                             SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                             SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() - 2;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_paused_controls_row();
                             SettingsContent.schedule_setting("keep_controls_visible_while_paused");
                         }
                     }
                 }
             }
 
-            SettingsCard {
+            if CastBridge.available: SettingsCard {
                 SettingsRow {
                     setting-key: "casting_remux_buffer";
                     row-title: @tr("Casting remux buffer");

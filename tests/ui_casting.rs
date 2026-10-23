@@ -30,6 +30,7 @@ fn key(app: &nova::AppWindow, key: Key) {
 fn setup(width: u32, height: u32) -> nova::AppWindow {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::CastBridge>().set_available(true);
     app.global::<nova::Anim>().set_enabled(false);
     app.window()
         .set_size(slint::PhysicalSize::new(width, height));
@@ -37,6 +38,66 @@ fn setup(width: u32, height: u32) -> nova::AppWindow {
     app.global::<nova::CastBridge>().set_open(true);
     settle(&app);
     app
+}
+
+#[test]
+fn released_ui_hides_casting_on_every_page_and_in_settings_search() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::released_ui_hides_casting_on_every_page_and_in_settings_search"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    assert!(!app.global::<nova::CastBridge>().get_available());
+    app.show().unwrap();
+    for page in 0..3 {
+        app.set_show_home(page == 0);
+        app.set_modal_visible(page == 1);
+        app.set_player_open(page == 2);
+        app.set_playback_started(page == 2);
+        app.set_osd_visible(true);
+        settle(&app);
+        assert!(
+            ElementHandle::find_by_element_type_name(&app, "CastButton")
+                .next()
+                .is_none(),
+            "page {page}"
+        );
+    }
+    app.set_player_open(false);
+    app.set_modal_visible(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(5);
+    app.set_settings_detail_open(true);
+    settle(&app);
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Casting remux buffer")
+            .next()
+            .is_none()
+    );
+    app.set_settings_detail_open(false);
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
+    app.set_settings_search_query("remux buffer".into());
+    settle(&app);
+    assert!(
+        ElementQuery::from_root(&app)
+            .match_predicate(|item| item.accessible_id().as_deref() == Some("settings:player"))
+            .find_first()
+            .is_none()
+    );
+    // Even stale model state cannot render the retained picker in a release.
+    app.global::<nova::CastBridge>().set_open(true);
+    settle(&app);
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "CastingPanel")
+            .next()
+            .is_none()
+    );
 }
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, label)

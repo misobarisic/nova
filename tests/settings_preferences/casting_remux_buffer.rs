@@ -49,6 +49,7 @@ fn casting_remux_buffer_choices_fit_translate_and_route_keyboard_and_sync_scope(
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::CastBridge>().set_available(true);
     app.global::<nova::Anim>().set_enabled(false);
     app.set_show_home(false);
     app.set_show_settings(true);

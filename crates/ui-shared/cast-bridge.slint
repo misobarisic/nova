@@ -2,6 +2,8 @@ export struct CastDeviceRow { id: string, name: string, protocol: string, availa
 // Session-only receiver state. URLs, credentials and native playback state never cross this bridge.
 export struct CastTextTrackRow { id: int, name: string }
 export global CastBridge {
+    // Disabled in shipped builds. Kept mutable for isolated implementation tests.
+    in-out property <bool> available: false;
     in-out property <bool> open;
     in-out property <int> back_request;
     in-out property <int> restore_focus;

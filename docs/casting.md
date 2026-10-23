@@ -1,4 +1,15 @@
-# External receiver playback
+# External receiver playback (disabled)
+
+Casting is disabled starting with v0.0.40. Shipped builds hide its buttons,
+picker, and remux setting; install no casting callbacks; and cannot hand media
+to an external receiver. Android no longer registers its casting foreground
+service. Paired Nova playback and watch parties remain available.
+
+The implementation and its isolated tests remain in the repository for future
+work. `src/app/casting.rs::ENABLED` disables runtime entry points, and
+`CastBridge.available` defaults to false for UI and keyboard/search routing.
+There is no user preference or environment override to enable casting. The
+following sections document the retained implementation, not released behavior.
 
 Nova can select a Google Cast or UPnP/DLNA video receiver from Home, a title's
 Detail page, or the built-in video player. These receivers are independent of

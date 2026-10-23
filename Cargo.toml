@@ -87,7 +87,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.39"
+version = "0.0.40"
 edition = "2024"
 license.workspace = true
 
@@ -290,11 +290,8 @@ foreground_service_type = "dataSync"
 name = ".NovaAuthService"
 foreground_service_type = "dataSync"
 
-# External receiver playback owns its LAN relay independently of Activity/PiP.
-[[package.metadata.android.application.service]]
-name = ".NovaCastService"
-exported = false
-foreground_service_type = "connectedDevice"
+# Casting service registration is intentionally omitted while casting is disabled.
+# The implementation remains in android/java/dev/misob/nova/NovaCastService.java.
 
 # Periodic background sync, driven by JobScheduler (min 15 min). Runs a
 # bounded sync pass with no Activity present; see android_bg.rs / sync_headless.

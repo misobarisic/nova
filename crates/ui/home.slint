@@ -1745,7 +1745,7 @@ export component HomePage {
 
     private property <int> tv_featured_control: 0;
     function kb_up() {
-        if root.view == 0 && root.kb_zone == 0 { root.kb_zone = 7; return; }
+        if CastBridge.available && root.view == 0 && root.kb_zone == 0 { root.kb_zone = 7; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.kb_zone = 0; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week back.
@@ -3215,6 +3215,6 @@ export component HomePage {
             closed => { root.close_menu(); }
         }
     }
-    CastButton { focused: root.kb_active && root.kb_zone == 7; x: Math.max(0px, parent.width - self.width - 16px - root.safe-right); y: root.safe-top + 12px; }
+    if CastBridge.available: CastButton { focused: root.kb_active && root.kb_zone == 7; x: Math.max(0px, parent.width - self.width - 16px - root.safe-right); y: root.safe-top + 12px; }
 
 }

@@ -25,10 +25,6 @@ sync your library between devices without a Nova account.
   [iroh](https://iroh.computer), paired-device remote playback, and watch
   parties. Party stream recommendations highlight matching sources already
   available through your own addons.
-- **Casting:** choose Google Cast or DLNA receivers from Home, Detail or the
-  player, with receiver controls and compatible packet-copy remuxing. Casting
-  uses the source codecs without audio/video transcoding; supported formats
-  and device limitations are described in [casting behavior](docs/casting.md).
 - **Profiles:** separate libraries, progress, addons and preferences, with
   optional PINs and restricted title/source allowlists.
 - **Calendar and reminders:** browse upcoming releases, choose reminders for
@@ -44,7 +40,7 @@ sync your library between devices without a Nova account.
 
 For details, see [library behavior](docs/library-behavior.md),
 [player behavior](docs/player-behavior.md), [Smart downloads](docs/smart-downloads.md),
-[casting behavior](docs/casting.md),
+[retained casting implementation (disabled)](docs/casting.md),
 [watch parties](docs/watch-party.md), [profiles](docs/profiles.md),
 [Calendar](docs/calendar.md), [backups](docs/backups.md),
 [anime tracking](docs/tracking-behavior.md), [Stremio sync](docs/stremio-sync.md)

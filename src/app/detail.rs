@@ -4085,18 +4085,21 @@ pub(crate) fn public_stream_id(id: &str) -> bool {
         return true;
     }
     let parts = id.split(':').collect::<Vec<_>>();
-    let positive = |number: &str| {
+    // Season zero is the standard public identity for specials. Requiring a
+    // positive season makes another addon's metadata look like a private ID.
+    let unsigned = |number: &str| {
         !number.is_empty()
             && number.bytes().all(|c| c.is_ascii_digit())
-            && number.parse::<u32>().is_ok_and(|n| n > 0)
+            && number.parse::<u32>().is_ok()
     };
+    let positive = |number: &str| unsigned(number) && number.parse::<u32>().is_ok_and(|n| n > 0);
     match parts.as_slice() {
         [head, season, episode] if nova_providers::ExternalId::parse(head).is_some() => {
-            positive(season) && positive(episode)
+            unsigned(season) && positive(episode)
         }
         ["tmdb" | "mal" | "anilist", number] => positive(number),
         ["tmdb" | "mal" | "anilist", number, season, episode] => {
-            positive(number) && positive(season) && positive(episode)
+            positive(number) && unsigned(season) && positive(episode)
         }
         _ => false,
     }
@@ -4880,6 +4883,66 @@ mod source_lookup_tests {
         }
         assert_eq!(modal.request_id, "anikoto:ep:source-episode-one");
         assert_eq!(modal.videos[0].season, Some(1));
+    }
+
+    #[test]
+    fn specials_keep_public_ids_when_metadata_belongs_to_another_addon() {
+        for id in [
+            "tt0994314:0:1",
+            "tmdb:31724:0:1",
+            "mal:1575:0:1",
+            "anilist:1575:0:1",
+        ] {
+            assert!(public_stream_id(id), "{id}");
+        }
+        for id in [
+            "tt0994314:0:0",
+            "tt0994314:-1:1",
+            "tt0994314:0:-1",
+            "tmdb:0:0:1",
+            "tmdb:31724:4294967296:1",
+            "native:episode:special",
+        ] {
+            assert!(!public_stream_id(id), "{id}");
+        }
+        for name in ["Torrentio", "AIOStreams"] {
+            let addon = Installed {
+                url: format!("https://{}.example/configured", name.to_ascii_lowercase()),
+                label: name.into(),
+                enabled: true,
+                configure_ok: Some(false),
+                available: true,
+                generation: 1,
+                manifest: serde_json::from_value(serde_json::json!({
+                    "id":name,"name":name,"version":"1","types":["series"],
+                    "resources":[{"name":"stream","types":["series"],"idPrefixes":["tt"]}]
+                }))
+                .unwrap(),
+            };
+            let donor = Some("https://metadata.example/addon");
+            let canonical = "tt0994314:0:1";
+            assert_eq!(
+                stream_endpoint_owned(&addon, "series", canonical, None, &[], donor),
+                Some(format!("{}/stream/series/{canonical}.json", addon.url))
+            );
+            // A confirmed public special can also resolve a private donor ID;
+            // an unresolved private ID must still never leave its owner.
+            assert_eq!(
+                stream_endpoint_owned(
+                    &addon,
+                    "series",
+                    "native:episode:special",
+                    None,
+                    &[canonical.into()],
+                    donor
+                ),
+                Some(format!("{}/stream/series/{canonical}.json", addon.url))
+            );
+            assert!(
+                stream_endpoint_owned(&addon, "series", "native:episode:special", None, &[], donor)
+                    .is_none()
+            );
+        }
     }
 
     #[test]

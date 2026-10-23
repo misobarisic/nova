@@ -90,7 +90,29 @@ fn paused_controls_toggle_translates_and_keeps_neighboring_keyboard_rows() {
                     "previous row remains confidence"
                 );
                 app.set_intro_skip_confidence_index(2);
-                key(&app, slint::platform::Key::DownArrow);
+                key(&app, slint::platform::Key::UpArrow);
+                app.set_intro_skip_mode_index(2);
+                key(&app, slint::platform::Key::LeftArrow);
+                assert_eq!(app.get_intro_skip_mode_index(), 1);
+                key(&app, slint::platform::Key::Return);
+                assert_eq!(app.get_intro_skip_mode_index(), 2);
+                key(&app, slint::platform::Key::UpArrow);
+                app.set_auto_next_episode(true);
+                key(&app, slint::platform::Key::LeftArrow);
+                assert!(!app.get_auto_next_episode());
+                key(&app, slint::platform::Key::Return);
+                assert!(app.get_auto_next_episode());
+                key(&app, slint::platform::Key::UpArrow);
+                app.set_show_chapters(true);
+                key(&app, slint::platform::Key::LeftArrow);
+                assert!(!app.get_show_chapters());
+                key(&app, slint::platform::Key::Return);
+                assert!(app.get_show_chapters());
+                // Return to confidence, then pass the paused-controls row
+                // directly into stream rules; no hidden casting row intervenes.
+                for _ in 0..3 {
+                    key(&app, slint::platform::Key::DownArrow);
+                }
                 key(&app, slint::platform::Key::DownArrow);
                 key(&app, slint::platform::Key::DownArrow);
                 key(&app, slint::platform::Key::LeftArrow);

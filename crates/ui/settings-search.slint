@@ -1,4 +1,4 @@
-import { SettingsBridge, SettingsContent } from "@NovaUiShared";
+import { CastBridge, SettingsBridge, SettingsContent } from "@NovaUiShared";
 
 export struct SettingsSearchTarget {
     key: string,
@@ -28,7 +28,7 @@ export global SettingsSearch {
                 let episode = self.candidate("episode_start_behavior", @tr("Episode playback"), @tr("Start over") + " " + @tr("Resume") + " " + @tr("Ask") + " Episode playback Start over Resume Ask", 9, 1);
                 if self.matches(episode) { return episode; }
                 let remux_buffer = self.candidate("casting_remux_buffer", @tr("Casting remux buffer"), "Casting remux buffer RAM memory media segments budget 32 64 128 256 MiB", 9, SettingsContent.kb_player_stream_filters_row() - 1);
-                if self.matches(remux_buffer) { return remux_buffer; }
+                if CastBridge.available && self.matches(remux_buffer) { return remux_buffer; }
                 if SettingsBridge.player_backend_index == 0 {
                     let folder = self.candidate("screenshot_show_folder", @tr("Screenshot folder"), @tr("Show folders") + " Screenshot folder Pictures Nova Show folders", 9, SettingsContent.kb_player_speed_row() + 3);
                     if self.matches(folder) { return folder; }
@@ -55,7 +55,7 @@ export global SettingsSearch {
                     if self.matches(audio) { return audio; }
                     let subtitle = self.candidate("default_subtitle_language", @tr("Preferred subtitle languages"), "Preferred subtitle languages Default subtitle language", 9, SettingsContent.kb_player_subtitle_language_row());
                     if self.matches(subtitle) { return subtitle; }
-                    let paused_controls = self.candidate("keep_controls_visible_while_paused", @tr("Keep controls visible while paused"), "Keep controls visible while paused OSD playback controls hide", 9, SettingsContent.kb_player_stream_filters_row() - 2);
+                    let paused_controls = self.candidate("keep_controls_visible_while_paused", @tr("Keep controls visible while paused"), "Keep controls visible while paused OSD playback controls hide", 9, SettingsContent.kb_player_paused_controls_row());
                     if self.matches(paused_controls) { return paused_controls; }
                     let prefetch = self.candidate("prefetch_next_episode_streams", @tr("Prefetch next episode streams"), "Prefetch next episode streams", 9, SettingsContent.kb_player_speed_row() + 1);
                     if self.matches(prefetch) { return prefetch; }

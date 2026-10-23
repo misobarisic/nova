@@ -190,20 +190,20 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     );
     assert_eq!(app.get_detail_kb_top(), 0);
 
-    // Casting remains available; hidden saved-only controls are skipped.
+    // Disabled casting and hidden saved-only controls are skipped.
     app.set_detail_kb_zone(0);
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::RightArrow.into(),
         });
     settle();
-    assert_eq!(app.get_detail_kb_top(), 1);
+    assert_eq!(app.get_detail_kb_top(), 0);
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::RightArrow.into(),
         });
     settle();
-    assert_eq!(app.get_detail_kb_top(), 1);
+    assert_eq!(app.get_detail_kb_top(), 0);
 
     // Movies retain both actions, with directional access to saving.
     app.set_detail_is_movie(true);

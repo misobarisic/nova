@@ -1,4 +1,8 @@
 //! External receiver ownership, delivery and background polling. This is separate from paired Nova.
+
+// Deliberately no environment or user setting can enable this release.
+const ENABLED: bool = false;
+
 use super::*;
 use nova_cast::{
     CastErrorKind, Device, MediaLoad, PlaybackState, ReceiverCommand, ReceiverSession,
@@ -421,6 +425,11 @@ impl Bridge {
     pub(super) fn install_casting(&self) {
         let Some(app) = self.app() else { return };
         let ui = app.global::<crate::CastBridge>();
+        ui.set_available(ENABLED);
+        // Retained for future work; casting is disabled in shipped builds.
+        if !ENABLED {
+            return;
+        }
         let b = self.clone();
         ui.on_show(move || b.cast_show());
         let b = self.clone();
@@ -695,6 +704,9 @@ impl Bridge {
         subtitles: &[String],
         position: f64,
     ) -> bool {
+        if !ENABLED {
+            return false;
+        }
         let descriptor = if std::path::Path::new(url).is_file() {
             let path = PathBuf::from(url);
             if path
@@ -788,6 +800,9 @@ impl Bridge {
         action: &nova_playback_api::PlaybackAction,
     ) -> Option<Result<(), String>> {
         use nova_playback_api::PlaybackAction;
+        if !ENABLED {
+            return None;
+        }
         let state = self.shared.lock().unwrap();
         if !state.casting.active {
             return None;

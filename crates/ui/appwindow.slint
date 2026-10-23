@@ -3108,6 +3108,6 @@ export component AppWindow inherits Window {
 
     }
 
-    if CastBridge.open || root.casting_visual_retained: casting_panel := CastingPanel { width: 100%; height: 100%; safe_bottom: root.safe-area-insets.bottom; safe_top: root.safe-area-insets.top; safe_left: root.safe-area-insets.left; safe_right: root.safe-area-insets.right; touch: root.is_android; visual_closed => { if !CastBridge.open { root.casting_visual_retained = false; root.preserve_back_focus(); root.restart_osd_hide(); CastBridge.restore_focus += 1; } } }
+    if CastBridge.available && (CastBridge.open || root.casting_visual_retained): casting_panel := CastingPanel { width: 100%; height: 100%; safe_bottom: root.safe-area-insets.bottom; safe_top: root.safe-area-insets.top; safe_left: root.safe-area-insets.left; safe_right: root.safe-area-insets.right; touch: root.is_android; visual_closed => { if !CastBridge.open { root.casting_visual_retained = false; root.preserve_back_focus(); root.restart_osd_hide(); CastBridge.restore_focus += 1; } } }
 
 }
