@@ -1,0 +1,45 @@
+export struct CastDeviceRow { id: string, name: string, protocol: string, available: bool }
+// Session-only receiver state. URLs, credentials and native playback state never cross this bridge.
+export struct CastTextTrackRow { id: int, name: string }
+export global CastBridge {
+    in-out property <bool> open;
+    in-out property <int> back_request;
+    in-out property <int> restore_focus;
+    in-out property <bool> searching;
+    in-out property <bool> connecting;
+    in-out property <bool> active;
+    in-out property <bool> selected;
+    in-out property <bool> replacement;
+    in-out property <bool> stale;
+    in-out property <bool> unverified;
+    in-out property <bool> uncertain;
+    in-out property <bool> recovery_available;
+    in-out property <string> target_id;
+    in-out property <string> target_name;
+    in-out property <string> title;
+    in-out property <string> time_text;
+    in-out property <string> status;
+    in-out property <string> error;
+    in-out property <image> artwork;
+    in-out property <[CastDeviceRow]> devices;
+    in-out property <float> position;
+    in-out property <float> duration;
+    in-out property <float> volume;
+    in-out property <bool> paused;
+    in-out property <bool> muted;
+    in-out property <bool> can_pause;
+    in-out property <bool> can_seek;
+    in-out property <bool> can_volume;
+    in-out property <bool> can_mute;
+    in-out property <bool> can_text_tracks;
+    in-out property <[CastTextTrackRow]> text_tracks;
+    in-out property <int> selected_text_track;
+    in-out property <string> subtitle_notice;
+    callback show();
+    callback refresh();
+    callback manual(string);
+    callback select(string);
+    callback cancel();
+    callback replace(bool);
+    callback action(string, float);
+}

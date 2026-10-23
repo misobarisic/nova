@@ -222,6 +222,9 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_profiles_error("".into());
         }
+        if profiles::current_id() == id {
+            self.cast_shutdown();
+        }
         match profiles::delete(id) {
             Ok(()) => self.refresh_profiles(),
             Err(error) => self.profile_error(error),
@@ -270,6 +273,7 @@ impl Bridge {
                 .map_or(true, |p| p.require_pin_on_entry)
         {
             profile_policy::set_entry_blocked(true);
+            self.cast_shutdown();
             self.cancel_pending_playback();
             self.cancel_sleep_timer();
             self.player.close();
@@ -304,6 +308,7 @@ impl Bridge {
             // outgoing player or actors. Failure leaves the selected session live.
             let prepared = PreparedProfile::load(self, id)?;
             let incoming = profiles::prepare_activation(id)?;
+            self.cast_shutdown();
             self.cancel_season_download();
             self.shared.lock().unwrap().catalog_detail.clear();
             self.party_leave();

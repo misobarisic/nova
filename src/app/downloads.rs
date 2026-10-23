@@ -1078,7 +1078,12 @@ impl DownloadCoordinator {
         let mut removed = Vec::new();
         let jobs = std::mem::take(&mut state.manifest.jobs);
         for mut job in jobs {
-            if ids.contains(&job.id) {
+            if ids.contains(&job.id)
+                && !job
+                    .artifact_path
+                    .as_ref()
+                    .is_some_and(|path| super::casting::path_leased(path))
+            {
                 job.intro_request = None;
                 job.intro_timings = None;
                 state.resolvers.remove(&job.id);

@@ -80,6 +80,7 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    CastBridge,
     OfflineBridge,
     BackupBridge,
     CatalogGroupingBridge,

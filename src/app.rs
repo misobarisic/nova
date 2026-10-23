@@ -27,7 +27,7 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG_ZSTD: &[u8] =
 include!(concat!(env!("OUT_DIR"), "/nova_license_catalog_size.rs"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 14] = [
+    const WORKSPACE_CRATES: [&str; 17] = [
         "nova",
         "addons",
         "nova-providers",
@@ -39,6 +39,9 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         "nova-media",
         "nova-player",
         "nova-playback-api",
+        "nova-cast",
+        "nova-cast-media",
+        "nova-remux",
         "nova-sync",
         "nova-tracking",
         "nova-stremio",
@@ -282,6 +285,7 @@ struct Shared {
     addon_subtitles: subtitles::State,
     pending_subtitle_hints: Vec<(String, String)>,
     remote_playback: remote_playback::State,
+    casting: casting::State,
     party: party::State,
     stream_prefetch: stream_prefetch::Cache,
     stream_preferences: stream_preferences::State,
@@ -793,10 +797,12 @@ mod addon_browser;
 mod addon_mgr;
 mod addon_packages;
 mod addon_picker;
+mod android_cast;
 mod bookmarks;
 mod bridge;
 mod cache_gc;
 mod calendar;
+mod casting;
 mod catalog;
 mod catalog_detail;
 mod catalog_grouping;

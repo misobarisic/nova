@@ -4153,6 +4153,95 @@ mod tests {
     }
 
     #[test]
+    fn casting_remux_buffer_syncs_validated_choices_and_preserves_device_override() {
+        let key = "casting_remux_buffer";
+        assert!(setting_can_override(key));
+        let local = CacheSettings {
+            casting_remux_buffer: nova_config::CastingRemuxBuffer::Mib128,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(fields[key], "\"128_mib\"");
+        let remote = vec![(key.into(), "\"256_mib\"".into())];
+        let merged = merge_settings_fields(&local, &remote);
+        assert_eq!(
+            merged.casting_remux_buffer,
+            nova_config::CastingRemuxBuffer::Mib256
+        );
+        assert_eq!(
+            merged.keep_controls_visible_while_paused,
+            local.keep_controls_visible_while_paused
+        );
+        let mut local = local;
+        local
+            .sync_overrides
+            .insert(key.into(), serde_json::json!("128_mib"));
+        let merged = merge_settings_fields(&local, &remote);
+        assert_eq!(
+            merged.casting_remux_buffer,
+            nova_config::CastingRemuxBuffer::Mib128
+        );
+        assert_eq!(merged.sync_overrides[key], serde_json::json!("256_mib"));
+        let published: HashMap<_, _> = settings_fields_for_records(&merged, &remote)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(published[key], "\"256_mib\"");
+    }
+
+    #[test]
+    fn paused_controls_sync_independently_and_support_device_override() {
+        let local = CacheSettings {
+            keep_controls_visible_while_paused: true,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields
+                .get("keep_controls_visible_while_paused")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert!(setting_can_override("keep_controls_visible_while_paused"));
+        let merged = merge_settings_fields(
+            &local,
+            &[("keep_controls_visible_while_paused".into(), "false".into())],
+        );
+        assert!(!merged.keep_controls_visible_while_paused);
+        assert_eq!(merged.auto_next_episode, local.auto_next_episode);
+        assert_eq!(merged.show_chapters, local.show_chapters);
+        let mut overridden = local;
+        overridden.sync_overrides.insert(
+            "keep_controls_visible_while_paused".into(),
+            serde_json::json!(true),
+        );
+        let remote = vec![("keep_controls_visible_while_paused".into(), "false".into())];
+        let merged = merge_settings_fields(&overridden, &remote);
+        assert!(
+            merged.keep_controls_visible_while_paused,
+            "device value remains effective"
+        );
+        assert_eq!(
+            merged.sync_overrides["keep_controls_visible_while_paused"],
+            serde_json::json!(false)
+        );
+        let published: HashMap<_, _> = settings_fields_for_records(&merged, &remote)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            published["keep_controls_visible_while_paused"], "false",
+            "local override must never publish into account settings"
+        );
+    }
+
+    #[test]
     fn automatic_next_episode_syncs_independently_and_supports_override() {
         let local = CacheSettings {
             auto_next_episode: true,

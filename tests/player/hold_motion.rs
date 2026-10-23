@@ -82,6 +82,9 @@ fn held_speed_ignores_motion_and_restores_without_waking_controls() {
                 LogicalPosition::new(300.0, 850.0),
             ] {
                 app.set_osd_visible(visible);
+                // Each scenario starts with a fresh real OSD grace period;
+                // setting the same visibility twice does not imply activity.
+                app.invoke_restart_osd_hide();
                 advance(250);
                 // Force the deferred factory's geometry before publishing
                 // the session rate, just as the rendered player is mounted

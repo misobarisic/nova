@@ -3749,6 +3749,12 @@ impl Bridge {
             })
         };
         if let Some(url) = browser_url {
+            if self.shared.lock().unwrap().casting.selected {
+                self.set_stream_hint(Some(StreamHint::Fixed(
+                    "Browser links cannot be cast. Choose a direct media source.",
+                )));
+                return;
+            }
             if detail_extras::web_url(&url).is_none() || crate::player::open_browser(&url).is_err()
             {
                 self.set_stream_hint(Some(StreamHint::Fixed(

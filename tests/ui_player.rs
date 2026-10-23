@@ -50,3 +50,6 @@ mod party;
 
 #[path = "player/tools.rs"]
 mod tools;
+
+#[path = "player/paused_controls.rs"]
+mod paused_controls;

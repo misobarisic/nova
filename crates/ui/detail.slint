@@ -1,3 +1,5 @@
+import { CastButton } from "casting.slint";
+import { CastBridge } from "@NovaUiShared";
 import { CatalogGroupingBridge, DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
 
 import { OfflineBridge, QueueBridge, DetailContent, DetailBridge, CalendarBridge } from "@NovaUiShared";
@@ -303,7 +305,7 @@ export component DetailPage {
     // changing these indices from backend data must not move the scroller.
     // kb_edit stays local (transient edit mode).
     in-out property <int> kb_zone: 0;
-    in-out property <int> kb_top: 0; // 0 back, 1 sync/Tracking, 2 library options
+    in-out property <int> kb_top: 0; // 0 back, 1 cast, 2 sync/Tracking, 3 library options
     in-out property <int> kb_tab: 0;
     in-out property <int> kb_ci: 2; // picker control: 0 season, 1 filter, 2 grid
     in-out property <int> kb_ep: 0;
@@ -344,7 +346,7 @@ export component DetailPage {
     }
 
     function det_top_visible(i: int) -> bool {
-        return i == 0 || (root.in_library && (i == 1 || i == 2));
+        return i == 0 || i == 1 || (root.in_library && (i == 2 || i == 3));
     }
 
     function det_top_fix() {
@@ -352,7 +354,7 @@ export component DetailPage {
     }
 
     function det_top_right() {
-        if (root.in_library) { root.kb_top = Math.min(2, root.kb_top + 1); }
+        root.kb_top = Math.min(root.in_library ? 3 : 1, root.kb_top + 1);
     }
 
     function det_top_left() {
@@ -475,9 +477,10 @@ export component DetailPage {
         if (root.kb_zone == 0) {
             if (root.kb_top == 0) {
                 if root.tracking_open { root.tracking_back(); } else { root.back(); }
-            } else if (root.kb_top == 1 && root.in_library) {
-                root.tracking_show();
+            } else if (root.kb_top == 1) { CastBridge.show();
             } else if (root.kb_top == 2 && root.in_library) {
+                root.tracking_show();
+            } else if (root.kb_top == 3 && root.in_library) {
                 root.open_library_menu();
             }
         } else if (root.kb_zone == 1) {
@@ -985,11 +988,12 @@ export component DetailPage {
                     spacing: root.narrow ? 6px : 10px;
                     alignment: end;
 
+                    CastButton { focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 1; }
                     if root.in_library: tracking_button := TopIconButton {
                         narrow: root.narrow;
                         accessible-role: button;
                         accessible-label: @tr("Tracking");
-                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 1;
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 2;
                         clicked => { root.tracking_show(); }
                         IcSync {
                             x: (parent.width - self.width) / 2;
@@ -1002,8 +1006,8 @@ export component DetailPage {
                         narrow: root.narrow;
                         accessible-role: button;
                         accessible-label: @tr("Library options");
-                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 2;
-                        clicked => { root.kb_active = false; root.kb_top = 2; root.open_library_menu(); }
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 3;
+                        clicked => { root.kb_active = false; root.kb_top = 3; root.open_library_menu(); }
                         IcMoreHoriz {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;

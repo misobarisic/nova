@@ -29,6 +29,7 @@ export component PillButton inherits Rectangle {
     // Opt in for long translated actions in constrained configuration sheets.
     in property <bool> wrap_label: false;
     callback clicked();
+    public function focus_control() { key_focus.focus(); }
     // Expose the label to the accessibility tree (and headless tests, which
     // locate a specific pill by label rather than by traversal index).
     accessible-role: button;

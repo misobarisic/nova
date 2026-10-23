@@ -1,3 +1,5 @@
+import { CastButton } from "casting.slint";
+import { CastBridge } from "@NovaUiShared";
 import { RemotePlayingSection } from "remote-controls.slint";
 import { InterfaceStyle, SettingsBridge, RemoteBridge, Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
 
@@ -1743,6 +1745,7 @@ export component HomePage {
 
     private property <int> tv_featured_control: 0;
     function kb_up() {
+        if root.view == 0 && root.kb_zone == 0 { root.kb_zone = 7; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.kb_zone = 0; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week back.
@@ -1757,6 +1760,7 @@ export component HomePage {
     }
 
     function kb_down() {
+        if root.kb_zone == 7 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 0 && root.featured_count > 0) { root.kb_zone = 6; land_scroll.content-y = 0px; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week forward.
@@ -1812,6 +1816,7 @@ export component HomePage {
     }
 
     function kb_left() {
+        if root.kb_zone == 7 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.max(0, root.tv_featured_control - 1); return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: the previous day.
@@ -1839,6 +1844,7 @@ export component HomePage {
     }
 
     function kb_right() {
+        if root.kb_zone == 7 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.min(root.featured_count > 1 ? 3 : 1, root.tv_featured_control + 1); return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: the next day.
@@ -1866,6 +1872,7 @@ export component HomePage {
     }
 
     function kb_enter() {
+        if root.kb_zone == 7 { CastBridge.show(); return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) {
             if (root.tv_featured_control == 0) { root.featured_watch_now(); }
             else if (root.tv_featured_control == 1) { root.featured_picked(); }
@@ -3208,4 +3215,6 @@ export component HomePage {
             closed => { root.close_menu(); }
         }
     }
+    CastButton { focused: root.kb_active && root.kb_zone == 7; x: Math.max(0px, parent.width - self.width - 16px - root.safe-right); y: root.safe-top + 12px; }
+
 }

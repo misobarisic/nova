@@ -347,8 +347,8 @@ playback offers Stay paused (default) or Auto continue. Auto continue resumes
 only a video that was playing before leaving; manually paused videos stay
 paused. Stay paused still opens/reloads the source at the saved position and
 prefetches media through mpv’s normal cache; it does not wait for Play before
-loading. Playback time and audio remain paused. Paused Android controls do not
-auto-hide; press Play to continue.
+loading. Playback time and audio remain paused. By default, paused Android controls stay visible; press Play to continue.
+The paused-controls preference below can restore their ordinary idle hide delay.
 
 The `CacheSettings.android_auto_continue` preference is device-local and never
 synced; older settings default to false. Rotation alone does not change pause
@@ -384,6 +384,46 @@ speed and leaves OSD visibility unchanged.
 
 Implementation and headless input coverage: `crates/ui/player.slint` and
 `tests/player/{gestures,double_tap,hold_motion}.rs`.
+
+## Casting remux buffer
+
+Settings → Player → **Casting remux buffer** selects a 32, 64, 128 or 256 MiB
+budget for retained media segments when casting needs packet-copy remuxing.
+The default is 32 MiB on Android and 64 MiB on desktop, including older settings
+without this field. Processing buffers and other app memory are additional;
+this setting does not cap total app RAM. A larger budget retains more media
+without changing codec support or enabling transcoding.
+
+The choice persists and syncs through the ordinary settings record, supports a
+device override, and applies to the next casting session. It is available for
+both local-player backend choices because casting can start from a title's
+stream picker independently of local playback. `CacheSettings.casting_remux_buffer`
+uses the validated `nova_config::CastingRemuxBuffer` enum; `.bytes()` supplies
+the captured presentation budget. Settings coverage is in
+`tests/settings_preferences/casting_remux_buffer.rs`.
+
+## Controls while paused
+
+Settings → Player → **Keep controls visible while paused** controls whether the
+built-in player's OSD stays visible while paused. The default preserves existing
+behavior: on for Android, off for desktop. Older settings without the field use
+that platform default. Explicit choices persist and sync through the existing
+settings records, with the usual optional device override.
+
+When off, paused controls fade after five seconds of inactivity; playing controls
+still fade after three seconds with either choice. Pointer, touch and navigation
+input reveal controls and restart the delay. Open player menus, loading/error
+screens and active scrubbing retain controls; closing a menu or ending a scrub
+starts a fresh delay. Idle keyboard/TV focus alone does not pin the controls.
+Explicit Back/tap dismissal and playback shortcuts that keep a hidden OSD hidden
+still work with the preference on. Changing the preference during a pause updates
+the timer immediately without waking explicitly hidden controls.
+
+The timer lives in `crates/ui/appwindow.slint`; `src/app/run.rs` handles activity
+notifications and native cursor/frame-rate updates. `PlayerOverlay` publishes
+its transient menu/scrub hold through `PlayerOsdBridge.osd_auto_hide_blocked`.
+Headless regressions live in `tests/player/paused_controls.rs` and
+`tests/settings_preferences/paused_controls.rs`.
 
 ## Playback defaults and title preferences
 

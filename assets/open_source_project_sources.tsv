@@ -9,6 +9,10 @@ Nova torrent crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/mai
 Nova media crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/media
 Nova providers crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/providers
 Nova player crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/player
+Nova casting crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/cast
+Nova cast media crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/cast-media
+Nova packet-copy remux crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/remux
+oxicast 0.0.3 (Nova IPv6 and diagnostic patch)	MIT OR Apache-2.0	https://github.com/denniskribl/oxicast/tree/99e41cb1531a43190713e9a3f4ad50ac52c79b96
 Nova sync crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/sync
 Nova native media build recipe	Pinned Nix source build	https://github.com/misobarisic/nova/tree/main/nix/native-media
 Native media provenance and hashes	Per-component licenses	https://github.com/misobarisic/nova/tree/main/nix/native-media

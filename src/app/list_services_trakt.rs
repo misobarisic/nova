@@ -108,11 +108,25 @@ impl Bridge {
         paused: bool,
         stopped: bool,
     ) {
+        let native = self.player.screenshot_session();
+        self.list_services_playback_observation(
+            target, position, duration, paused, stopped, native,
+        );
+    }
+
+    pub(in crate::app) fn list_services_playback_observation(
+        &self,
+        target: &PlaybackTarget,
+        position: f64,
+        duration: f64,
+        paused: bool,
+        stopped: bool,
+        native: u64,
+    ) {
         if !duration.is_finite() || duration <= 0.0 || !position.is_finite() || position < 0.0 {
             return;
         }
         let h = self.list_services();
-        let native = self.player.screenshot_session();
         let replay = h
             .playback_end
             .lock()

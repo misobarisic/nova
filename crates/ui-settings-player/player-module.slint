@@ -692,6 +692,51 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                SettingsRow {
+                    setting-key: "keep_controls_visible_while_paused";
+                    row-title: @tr("Keep controls visible while paused");
+                    row-desc: @tr("When off, controls fade after five seconds of inactivity. Input shows them again.");
+                    ToggleSwitch {
+                        name: @tr("Keep controls visible while paused");
+                        checked <=> SettingsBridge.keep_controls_visible_while_paused;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() - 2;
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() - 2;
+                            SettingsContent.schedule_setting("keep_controls_visible_while_paused");
+                        }
+                    }
+                }
+            }
+
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "casting_remux_buffer";
+                    row-title: @tr("Casting remux buffer");
+                    row-desc: @tr("Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session.");
+                    remux_buffer := Dropdown {
+                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                        model: ["32 MiB", "64 MiB", "128 MiB", "256 MiB"];
+                        accessible-role: combobox;
+                        accessible-label: @tr("Casting remux buffer");
+                        accessible-value: self.model[self.current-index];
+                        current-index <=> SettingsBridge.casting_remux_buffer_index;
+                        roomy: true;
+                        private property <bool> row-focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() - 1;
+                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                        selected(_) => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() - 1;
+                            SettingsContent.schedule_setting("casting_remux_buffer");
+                        }
+                    }
+                }
+            }
+
             SectionHeader { label: @tr("Universal stream filters"); }
             SettingsCard {
                 StreamRuleToggle {

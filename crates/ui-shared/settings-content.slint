@@ -96,9 +96,9 @@ export global SettingsContent {
     // this calculation shared so leaf focus marks and shell arrows agree.
     public pure function kb_player_stream_filters_row() -> int {
         if SettingsBridge.player_backend_index == 0 {
-            return SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 12;
+            return SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 14;
         }
-        return SettingsBridge.is_android ? 2 : 3;
+        return SettingsBridge.is_android ? 3 : 4;
     }
     public pure function stream_filter_codec_key(codec: int) -> string {
         return codec == 0 ? "avc" : codec == 1 ? "hevc" : codec == 2 ? "av1" : codec == 3 ? "vp9" : "other";

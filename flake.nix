@@ -32,14 +32,18 @@
       # Pinned native release inputs; Nix verifies and caches each archive.
       nativeMedia = import ./nix/native-media { inherit system; pkgs = pkgsAndroid; };
       androidMedia = pkgs.runCommand "nova-android-media" { } ''
-        mkdir -p "$out"
+        mkdir -p "$out/include"
         ln -s ${nativeMedia.bundle-android-arm64}/lib "$out/arm64-v8a"
         ln -s ${nativeMedia.bundle-android-armv7}/lib "$out/armeabi-v7a"
         ln -s ${nativeMedia.bundle-android-x86_64}/lib "$out/x86_64"
+        ln -s ${nativeMedia.bundle-android-arm64}/include "$out/include/arm64-v8a"
+        ln -s ${nativeMedia.bundle-android-armv7}/include "$out/include/armeabi-v7a"
+        ln -s ${nativeMedia.bundle-android-x86_64}/include "$out/include/x86_64"
       '';
       windowsMedia = pkgs.runCommand "nova-windows-media" { } ''
         mkdir -p "$out"
         ln -s ${nativeMedia.bundle-mingw-x86_64}/lib "$out/64"
+        ln -s ${nativeMedia.bundle-mingw-x86_64}/include "$out/include"
         ln -s ${nativeMedia.bundle-mingw-x86_64}/share/nova-native "$out/metadata"
         ln -s ${nativeMedia.bundle-mingw-x86_64}/share/licenses "$out/licenses"
         cp ${nativeMedia.bundle-mingw-x86_64}/share/nova-native/sources.json "$out/SOURCES"
@@ -102,6 +106,7 @@
           libxrandr
           vulkan-loader
 	  mpv
+          ffmpeg
         ] ++
         (
           lib.optionals pkgs.stdenv.hostPlatform.isLinux
@@ -121,9 +126,9 @@
             cargo-sweep
           ]);
           hardeningDisable = ["fortify"];
-          # ffmpeg-sys-next regenerates its FFI bindings with bindgen at build
-          # time: it needs libclang and, inside a nix shell, the libc/kernel
-          # headers that gcc finds only through its wrapper.
+          # Native C/FFmpeg and bindgen consumers need matching development
+          # headers; inside a Nix shell libc/kernel headers are otherwise
+          # visible only through the compiler wrapper.
           env =
             (lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
@@ -151,6 +156,7 @@
             freetype
             fontconfig
             mpv
+            ffmpeg.dev
             fontconfig
             runtime-libs
             lld

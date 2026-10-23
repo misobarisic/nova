@@ -95,6 +95,14 @@ impl State {
 }
 
 impl Bridge {
+    pub(super) fn cast_sleep_tick(&self, finished: Option<(u64, MediaIdentity)>) -> bool {
+        let mut state = self.shared.lock().unwrap();
+        let timer = &mut state.sleep_timer;
+        timer.mode.is_some()
+            && (timer.expired(crate::player::elapsed_realtime_ms())
+                || finished.is_some_and(|(id, item)| timer.eof(&item, id)))
+    }
+
     /// The temporary close grant must never survive into an asynchronous picker.
     pub(super) fn sleep_timer_finish_successor_close(&self) {
         self.shared.lock().unwrap().sleep_timer.successor = None;
@@ -116,7 +124,9 @@ impl Bridge {
         let item = self
             .current_playback_identity()
             .ok_or_else(|| text::tr("Sleep timer unavailable").to_owned())?;
-        if !self.app().is_some_and(|app| app.get_player_open()) {
+        if !self.shared.lock().unwrap().casting.active
+            && !self.app().is_some_and(|app| app.get_player_open())
+        {
             return Err(text::tr("Sleep timer unavailable").into());
         }
         if (self.party_active() && !matches!(mode, SleepTimerMode::Minutes(_)))
@@ -190,6 +200,10 @@ impl Bridge {
         movie
     }
     pub(super) fn refresh_sleep_timer(&self) -> bool {
+        if self.shared.lock().unwrap().casting.active {
+            self.publish_sleep_timer();
+            return false;
+        }
         if self.party_active()
             && matches!(
                 self.shared.lock().unwrap().sleep_timer.mode,

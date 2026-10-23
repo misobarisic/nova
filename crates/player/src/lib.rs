@@ -2777,6 +2777,55 @@ impl Player {
             .unwrap_or(-1)
     }
 
+    /// FFmpeg stream index of the selected audio track, scoped to the loaded source.
+    /// Receiver remuxing must not confuse mpv's user track ID with a demuxer stream index.
+    pub fn selected_audio_stream_index(&self) -> Option<usize> {
+        let mpv = self.state.mpv.lock().ok()?;
+        let mpv = mpv.as_ref()?;
+        let selected = mpv.get_property::<i64>("aid").ok()?;
+        let raw = mpv.get_property::<String>("track-list").ok()?;
+        let tracks: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        tracks
+            .as_array()?
+            .iter()
+            .find(|track| {
+                track.get("type").and_then(|v| v.as_str()) == Some("audio")
+                    && track.get("id").and_then(|v| v.as_i64()) == Some(selected)
+                    && !track
+                        .get("external")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+            })?
+            .get("ff-index")?
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+    }
+
+    /// Selected external subtitle source for a private relay, or `false` for embedded/bitmap tracks.
+    pub fn selected_subtitle_source(&self) -> Option<(bool, String)> {
+        let mpv = self.state.mpv.lock().ok()?;
+        let mpv = mpv.as_ref()?;
+        let selected = mpv.get_property::<i64>("sid").ok()?;
+        let raw = mpv.get_property::<String>("track-list").ok()?;
+        let tracks: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let track = tracks.as_array()?.iter().find(|track| {
+            track.get("type").and_then(|v| v.as_str()) == Some("sub")
+                && track.get("id").and_then(|v| v.as_i64()) == Some(selected)
+        })?;
+        let external = track
+            .get("external")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Some((
+            external,
+            track
+                .get("external-filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+        ))
+    }
+
     pub fn effective_playback_speed(&self) -> f32 {
         let base = self.state.preferences.lock().unwrap().preferences.speed();
         self.state

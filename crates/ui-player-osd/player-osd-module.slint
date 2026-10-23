@@ -3,6 +3,11 @@ import { PlayerOsdBridge } from "@NovaUiShared";
 
 export component PlayerOsdModule inherits Window {
     public function focus_shell() { page.focus_shell(); }
+    // This is computed by the mounted page, not a backend-owned input. A
+    // two-way link would retain the bridge's old value and discard its binding.
+    private property <bool> auto_hide_blocked: page.osd_auto_hide_blocked;
+    changed auto_hide_blocked => { PlayerOsdBridge.osd_auto_hide_blocked = root.auto_hide_blocked; }
+    init => { PlayerOsdBridge.osd_auto_hide_blocked = root.auto_hide_blocked; }
     default-font-family: "Roboto";
     background: transparent;
     width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;

@@ -85,6 +85,172 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here." => {
+            "Emitiranje je dosegnulo ograničenje međuspremnika. Povećajte Međuspremnik za remuksiranje pri emitiranju u postavkama reproduktora, odaberite drugi izvor ili reproducirajte ovdje."
+        }
+        "This receiver cannot accept this streaming format. Choose another source or play here." => {
+            "Ovaj prijamnik ne podržava ovaj format emitiranja. Odaberite drugi izvor ili reproducirajte ovdje."
+        }
+        "This receiver does not support the source codecs. Choose another source or play here." => {
+            "Ovaj prijamnik ne podržava kodeke izvora. Odaberite drugi izvor ili reproducirajte ovdje."
+        }
+        "Changing receiver…" => "Promjena prijamnika…",
+        "Could not confirm receiver ownership. Retry the connection before changing device." => {
+            "Nije potvrđeno vlasništvo nad reprodukcijom na prijamniku. Prije promjene uređaja pokušajte ponovno povezivanje."
+        }
+        "Sleep timer finished. Receiver stop could not be confirmed." => {
+            "Mjerač vremena za spavanje je istekao. Nije potvrđeno zaustavljanje prijamnika."
+        }
+        "Playback position changed while preparing. Try casting again." => {
+            "Položaj reprodukcije promijenio se tijekom pripreme. Ponovno pokušajte emitiranje."
+        }
+        "The receiver may still be playing. Resume local playback anyway?" => {
+            "Prijamnik možda još reproducira. Ipak nastaviti lokalnu reprodukciju?"
+        }
+        "Resume locally anyway" => "Ipak nastavi lokalno",
+        "Retry Stop casting" => "Pokušaj ponovno zaustaviti emitiranje",
+        "Volume down" => "Smanji glasnoću",
+        "Volume up" => "Povećaj glasnoću",
+        "This source cannot resume on the receiver. Play locally or choose another source." => {
+            "Ovaj izvor nije moguće nastaviti na prijamniku. Reproducirajte lokalno ili odaberite drugi izvor."
+        }
+        "Receiver did not confirm the resume position. Local playback was retained." => {
+            "Prijamnik nije potvrdio položaj nastavka. Lokalna reprodukcija je zadržana."
+        }
+        "Selected embedded subtitles cannot be cast. Use external text subtitles or play locally." => {
+            "Odabrane ugrađene titlove nije moguće emitirati. Koristite vanjske tekstualne titlove ili reproducirajte lokalno."
+        }
+        "This receiver cannot display the selected subtitles. Play locally to preserve them." => {
+            "Ovaj prijamnik ne može prikazati odabrane titlove. Za njihovo zadržavanje reproducirajte lokalno."
+        }
+        "Some external subtitles are unavailable on this receiver. Video can continue or you can play locally." => {
+            "Neki vanjski titlovi nisu dostupni na ovom prijamniku. Video se može nastaviti ili ga možete reproducirati lokalno."
+        }
+        "Selected subtitles could not be enabled on this receiver. Play locally to preserve subtitles." => {
+            "Odabrane titlove nije moguće uključiti na ovom prijamniku. Za njihovo zadržavanje reproducirajte lokalno."
+        }
+        "Torrent source is no longer available. Choose the source again." => {
+            "Torrent izvor više nije dostupan. Ponovno odaberite izvor."
+        }
+        "Stop casting before joining a watch party or paired Nova session." => {
+            "Prije pridruživanja zajedničkom gledanju ili uparenoj Nova sesiji zaustavite emitiranje."
+        }
+        "Subtitle" => "Titl",
+        "Cast to a device" => "Emitiraj na uređaj",
+        "Connecting to receiver" => "Povezivanje s prijamnikom",
+        "Connected to {}" => "Povezano s {}",
+        "This device" => "Ovaj uređaj",
+        "Play on this device" => "Reproduciraj na ovom uređaju",
+        "Audio-only receiver" => "Prijamnik podržava samo zvuk",
+        "Use Play here to return playback" => {
+            "Za povratak reprodukcije odaberite Reproduciraj ovdje"
+        }
+        "Play here" => "Reproduciraj ovdje",
+        "Stop casting" => "Zaustavi emitiranje",
+        "Replace playback" => "Zamijeni reprodukciju",
+        "This receiver is already in use. Replace its playback?" => {
+            "Ovaj je prijamnik već u upotrebi. Zamijeniti reprodukciju?"
+        }
+        "Receiver IP address" => "IP adresa prijamnika",
+        "Enter address" => "Unesi adresu",
+        "Search this network once" => "Pretraži ovu mrežu jednom",
+        "Cancel search" => "Otkaži pretraživanje",
+        "Cancel connection" => "Otkaži povezivanje",
+        "No receivers found. Check that both devices are on the same Wi-Fi network." => {
+            "Nema pronađenih prijamnika. Provjerite jesu li oba uređaja na istoj Wi-Fi mreži."
+        }
+        "Try this stream" => "Isprobaj ovaj izvor",
+        "Retry connection" => "Pokušaj ponovno povezivanje",
+        "Forward 10 seconds" => "Naprijed 10 sekundi",
+        "Back 10 seconds" => "Natrag 10 sekundi",
+        "Unmute" => "Uključi zvuk",
+        "Mute" => "Isključi zvuk",
+        "Background casting could not start. Keep Nova open and try again." => {
+            "Emitiranje u pozadini nije pokrenuto. Ostavite Novu otvorenu i pokušajte ponovno."
+        }
+        "Buffering on receiver" => "Učitavanje na prijamniku",
+        "Cannot reach receiver. Check Wi-Fi, VPN and firewall settings." => {
+            "Nije moguće pristupiti prijamniku. Provjerite Wi-Fi, VPN i vatrozid."
+        }
+        "Cannot serve media on this network. Check VPN and firewall settings." => {
+            "Nije moguće dijeliti medij na ovoj mreži. Provjerite VPN i vatrozid."
+        }
+        "Casting stopped" => "Emitiranje je zaustavljeno",
+        "Choose a source again to transfer this playback." => {
+            "Ponovno odaberite izvor za prijenos ove reprodukcije."
+        }
+        "Connected to receiver" => "Povezano s prijamnikom",
+        "Connected. Choose something to watch." => "Povezano. Odaberite što želite gledati.",
+        "Connecting to receiver…" => "Povezivanje s prijamnikom…",
+        "Connection cancelled" => "Povezivanje je otkazano",
+        "Could not confirm receiver stopped. Local playback remains paused. Retry Stop casting." => {
+            "Nije potvrđeno zaustavljanje prijamnika. Lokalna reprodukcija ostaje pauzirana. Ponovite Zaustavi emitiranje."
+        }
+        "Enter a valid receiver IP address." => "Unesite valjanu IP adresu prijamnika.",
+        "Leave the watch party or paired Nova session before casting." => {
+            "Prije emitiranja napustite zajedničko gledanje ili uparenu Nova sesiju."
+        }
+        "Media could not be prepared safely. Choose another source or play locally." => {
+            "Medij nije moguće sigurno pripremiti. Odaberite drugi izvor ili reproducirajte lokalno."
+        }
+        "Media preparation exceeded its storage limit. Free space or choose another source." => {
+            "Priprema medija premašila je ograničenje prostora. Oslobodite prostor ili odaberite drugi izvor."
+        }
+        "Media source is unavailable. Refresh sources and try again." => {
+            "Izvor medija nije dostupan. Osvježite izvore i pokušajte ponovno."
+        }
+        "Paused on receiver" => "Pauzirano na prijamniku",
+        "Playback changed on another device. Reconnect to continue." => {
+            "Reprodukcija je promijenjena s drugog uređaja. Ponovno se povežite za nastavak."
+        }
+        "Playback finished on receiver" => "Reprodukcija je završena na prijamniku",
+        "Playing on receiver" => "Reprodukcija na prijamniku",
+        "Preparing media for receiver…" => "Priprema medija za prijamnik…",
+        "Receiver changed. Choose the source again." => {
+            "Prijamnik je promijenjen. Ponovno odaberite izvor."
+        }
+        "Receiver could not pause safely. Local playback was retained." => {
+            "Prijamnik nije moguće sigurno pauzirati. Lokalna reprodukcija je zadržana."
+        }
+        "Receiver did not confirm playback. Try another source." => {
+            "Prijamnik nije potvrdio reprodukciju. Pokušajte drugi izvor."
+        }
+        "Receiver did not respond. Check its power and Wi-Fi, then try again." => {
+            "Prijamnik ne odgovara. Provjerite napajanje i Wi-Fi pa pokušajte ponovno."
+        }
+        "Receiver format support is unknown. Try this stream, choose another source or play here." => {
+            "Podrška formata na prijamniku nije poznata. Isprobajte izvor, odaberite drugi ili reproducirajte ovdje."
+        }
+        "Receiver is already in use." => "Prijamnik je već u upotrebi.",
+        "Receiver playback stopped. Choose a source to continue." => {
+            "Reprodukcija na prijamniku je zaustavljena. Odaberite izvor za nastavak."
+        }
+        "Receiver returned an invalid response. Try reconnecting." => {
+            "Prijamnik je vratio nevaljan odgovor. Pokušajte ponovno povezivanje."
+        }
+        "Searching for receivers…" => "Traženje prijamnika…",
+        "Stop casting or choose Play here before changing receiver." => {
+            "Prije promjene prijamnika zaustavite emitiranje ili odaberite Reproduciraj ovdje."
+        }
+        "This HLS source is unsupported. Choose another source or play locally." => {
+            "Ovaj HLS izvor nije podržan. Odaberite drugi izvor ili reproducirajte lokalno."
+        }
+        "This action is unavailable while casting." => {
+            "Ova radnja nije dostupna tijekom emitiranja."
+        }
+        "This receiver does not support this operation." => {
+            "Ovaj prijamnik ne podržava ovu radnju."
+        }
+        "This source cannot be sent to this receiver without transcoding. Choose another source." => {
+            "Ovaj izvor zahtijeva transkodiranje za ovaj prijamnik. Odaberite drugi izvor."
+        }
+        "This source cannot be shared safely. Choose another source." => {
+            "Ovaj izvor nije moguće sigurno dijeliti. Odaberite drugi izvor."
+        }
+        "Browser links cannot be cast. Choose a direct media source." => {
+            "Veze za preglednik nije moguće emitirati. Odaberite izravan medijski izvor."
+        }
+        "Casting" => "Emitiranje",
         "Unlock on TV." => "Otključajte na TV-u.",
         "Skipped expired or unsupported values" => "Preskočene istekle ili nepodržane vrijednosti",
         "Keep downloaded file" => "Zadrži preuzetu datoteku",
@@ -2339,6 +2505,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "casting_remux_buffer" => {
+            serde_json::from_value::<nova_config::CastingRemuxBuffer>(value.clone())
+                .map(|budget| format!("{} MiB", budget.mib()))
+                .unwrap_or_else(|_| tr("Unsupported value").into())
+        }
         "intro_skip_confidence" => match value.as_str() {
             Some("any") => tr("Any (0%)").into(),
             Some("low") => tr("Low (25%)").into(),
@@ -3008,6 +3179,19 @@ mod tests {
             });
         }
         with_language(Language::English, || {
+            for mib in [32, 64, 128, 256] {
+                assert_eq!(
+                    setting_sync_value(
+                        "casting_remux_buffer",
+                        &serde_json::json!(format!("{mib}_mib"))
+                    ),
+                    format!("{mib} MiB")
+                );
+            }
+            assert_eq!(
+                setting_sync_value("casting_remux_buffer", &serde_json::json!("512_mib")),
+                "Unsupported value"
+            );
             assert_eq!(setting_sync_value("quality", &serde_json::json!(60)), "60%");
             assert_eq!(
                 setting_sync_value("language", &serde_json::json!("Croatian")),

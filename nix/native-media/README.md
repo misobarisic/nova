@@ -15,6 +15,16 @@ and assembles native notices from the bundled license files. `flake.nix` maps
 these outputs to the existing `NOVA_ANDROID_LIBS`, `NOVA_NATIVE_CA_BUNDLE`,
 `NOVA_NATIVE_NOTICES` and `MPV_SOURCE` build inputs.
 
+The casting packet-copy C shim compiles against the matching headers already
+present in these bundles. `androidMedia/include/<abi>` exposes each ABI's
+headers alongside its existing library directory; `windowsMedia/include`
+exposes the Windows bundle's headers beside `64/`. `nova-remux/build.rs` selects
+these paths and links the existing shared avformat/avcodec/avutil libraries.
+`NOVA_FFMPEG_INCLUDE` can explicitly override the header directory. Linux uses
+system FFmpeg development headers through pkg-config; the desktop Nix shell
+provides them. No FFmpeg executable, second native build or transcoding encoder
+is added. See [casting behavior](../../docs/casting.md).
+
 The profile includes MKV, HEVC, AV1/dav1d, common playback codecs and subtitles,
 MediaCodec on Android, D3D11 copy-back on Windows, and packet-copy remuxing.
 Android mpv links static NDK libc++/libc++abi explicitly through its C linker.

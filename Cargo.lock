@@ -2112,6 +2112,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.9",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3503,6 +3514,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "igd-next"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4660,6 +4681,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "mdns-sd"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18148fee27e99e76dbf6e137f27727113d31f766e578d1b93a93c3615fca7081"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs",
+ "log",
+ "mio",
+ "socket-pktinfo",
+ "socket2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5266,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "nova"
-version = "0.0.38"
+version = "0.0.39"
 dependencies = [
  "addons",
  "chrono",
@@ -5277,6 +5313,8 @@ dependencies = [
  "iroh",
  "jni 0.21.1",
  "ndk-context",
+ "nova-cast",
+ "nova-cast-media",
  "nova-config",
  "nova-download",
  "nova-list-services",
@@ -5303,12 +5341,45 @@ dependencies = [
  "skrifa",
  "slint",
  "tikv-jemallocator",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
  "url",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "nova-cast"
+version = "0.1.0"
+dependencies = [
+ "if-addrs",
+ "mdns-sd",
+ "oxicast",
+ "reqwest",
+ "roxmltree",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "webpki-roots",
+]
+
+[[package]]
+name = "nova-cast-media"
+version = "0.1.0"
+dependencies = [
+ "nova-cast",
+ "nova-remux",
+ "rand 0.9.5",
+ "reqwest",
+ "rustls",
+ "tempfile",
+ "tracing",
+ "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -5430,6 +5501,14 @@ dependencies = [
  "url",
  "webpki-roots",
  "zip",
+]
+
+[[package]]
+name = "nova-remux"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -6367,6 +6446,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxicast"
+version = "0.0.3"
+dependencies = [
+ "bytes",
+ "prost",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "papaya"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6864,6 +6960,29 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools 0.13.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "pulldown-cmark"
@@ -8242,6 +8361,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "socket-pktinfo"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "927136cc2ae6a1b0e66ac6b1210902b75c3f726db004a73bc18686dcd0dcd22f"
+dependencies = [
+ "libc",
+ "socket2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

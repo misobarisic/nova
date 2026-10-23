@@ -143,6 +143,8 @@ export global SettingsBridge {
     in-out property <bool> android_auto_rotate: true;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> show_chapters: true;
+    in-out property <bool> keep_controls_visible_while_paused: self.is_android;
+    in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;

@@ -363,6 +363,15 @@ impl Bridge {
     }
 
     fn party_begin(&self, invite: Option<String>) {
+        if self.shared.lock().unwrap().casting.reserved() {
+            if let Some(app) = self.app() {
+                app.set_party_error(
+                    text::tr("Stop casting before joining a watch party or paired Nova session.")
+                        .into(),
+                );
+            }
+            return;
+        }
         if self.party_active() {
             return;
         }

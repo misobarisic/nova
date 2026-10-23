@@ -1,3 +1,5 @@
+import { CastButton } from "casting.slint";
+import { CastBridge } from "@NovaUiShared";
 import { SleepTimerMenu } from "sleep-timer.slint";
 import { PlayerOsdBridge, InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, SceneBookmarkRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
@@ -1151,6 +1153,10 @@ export component PlayerOverlay {
     in-out property <[TrackRow]> audio_tracks: [];
     in-out property <[TrackRow]> sub_tracks: [];
     in-out property <int> subtitle_addon_status: 0;
+    // Hold only during an owned interaction. Keyboard navigation alone must
+    // still time out, including on TV when the paused-controls option is off.
+    out property <bool> osd_auto_hide_blocked: root.open_popup != 0
+        || root.pointer_scrubbing || root.tv_scrubbing || SliderGesture.active;
     in-out property <bool> osd_visible: true;
     // Whether faded controls may run their actions. Opacity alone does not
     // remove hit-testing, so handlers check this before acting.
@@ -1354,6 +1360,7 @@ export component PlayerOverlay {
     }
     // Only present, enabled bottom-row controls participate in TV traversal.
     function tv_control_available(index: int) -> bool {
+        if index == 15 { return true; }
         if index == 1 { return root.timeline_control_allowed; }
         if index == 3 || index == 4 { return root.tv_can_seek(); }
         if index == 5 || index == 6 { return !root.narrow; }
@@ -1364,16 +1371,18 @@ export component PlayerOverlay {
     }
     function tv_step_control(direction: int) {
         // Bound the walk: unavailable track/screenshot/party actions cannot trap focus.
-        let first = Math.clamp(root.kb_idx + direction, 1, 11);
+        let first = Math.clamp(root.kb_idx + direction, 1, 15);
         if root.tv_control_available(first) { root.kb_idx = first; return; }
-        let second = Math.clamp(first + direction, 1, 11);
+        let second = Math.clamp(first + direction, 1, 15);
         if root.tv_control_available(second) { root.kb_idx = second; return; }
-        let third = Math.clamp(second + direction, 1, 11);
+        let third = Math.clamp(second + direction, 1, 15);
         if root.tv_control_available(third) { root.kb_idx = third; return; }
-        let fourth = Math.clamp(third + direction, 1, 11);
+        let fourth = Math.clamp(third + direction, 1, 15);
         if root.tv_control_available(fourth) { root.kb_idx = fourth; return; }
-        let fifth = Math.clamp(fourth + direction, 1, 11);
-        if root.tv_control_available(fifth) { root.kb_idx = fifth; }
+        let fifth = Math.clamp(fourth + direction, 1, 15);
+        if root.tv_control_available(fifth) { root.kb_idx = fifth; return; }
+        let sixth = Math.clamp(fifth + direction, 1, 15);
+        if root.tv_control_available(sixth) { root.kb_idx = sixth; }
     }
     // An input held beyond the ordinary three-second timeout stays interactive.
     tv_seek_wake := Timer {
@@ -1473,14 +1482,16 @@ export component PlayerOverlay {
 
     // Preserve existing action indices; speed uses 13, chapter title uses 14.
     function kb_control_max() -> int {
-        return 14;
+        return 15;
     }
 
     // Neighbour control in the strip, skipping buttons absent on this
     // layout: the volume control (2) is gone on Android (volume pinned to
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
-        if root.kb_idx == 14 { return 0; }
+        if root.kb_idx == 15 { return 0; }
+        if root.kb_idx == 14 { return 15; }
+        if root.kb_idx == 1 && !root.chapter_shortcut_available { return 15; }
         if root.kb_idx == 1 && root.chapter_shortcut_available { return 14; }
         if root.kb_idx == 13 { return 9; }
         if root.kb_idx == 10 { return root.party_owns_playback ? 9 : 13; }
@@ -1497,7 +1508,8 @@ export component PlayerOverlay {
 
     function kb_next() -> int {
         if root.kb_idx == 14 { return 1; }
-        if root.kb_idx == 0 && root.chapter_shortcut_available { return 14; }
+        if root.kb_idx == 0 { return 15; }
+        if root.kb_idx == 15 { return root.chapter_shortcut_available ? 14 : 1; }
         if root.kb_idx == 11 { return 11; }
         if root.kb_idx == 9 { return !root.party_owns_playback ? 13 : root.next_episode_shown || root.skip_segment_shown ? 10 : 9; }
         if root.kb_idx == 13 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 13; }
@@ -1542,6 +1554,7 @@ export component PlayerOverlay {
     }
 
     function kb_activate() {
+        if root.kb_idx == 15 { CastBridge.show(); return; }
         if root.kb_idx == 14 { root.open_chapters(); return; }
         if (root.kb_idx == 10 && root.skip_segment_shown) {
             root.skip_segment();
@@ -3444,4 +3457,6 @@ export component PlayerOverlay {
             closed => { root.open_popup = 0; }
         }
     }
+    if root.controls_active: CastButton { focused: root.kb_active && root.kb_idx == 15 && root.open_popup == 0; x: Math.max(root.safe-left, root.width - root.safe-right - self.width - 16px); y: root.safe-top + 12px; }
+
 }

@@ -149,6 +149,11 @@ fn generate_license_catalog() {
         "crates/media/Cargo.toml",
         "crates/providers/Cargo.toml",
         "crates/player/Cargo.toml",
+        "crates/cast/Cargo.toml",
+        "crates/cast-media/Cargo.toml",
+        "crates/remux/Cargo.toml",
+        "vendor/oxicast/Cargo.toml",
+        "vendor/oxicast/NOVA_PATCH.md",
         "crates/sync/Cargo.toml",
     ] {
         println!("cargo:rerun-if-changed={path}");

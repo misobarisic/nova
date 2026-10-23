@@ -116,6 +116,59 @@ impl PlaybackRequest {
     }
 }
 
+/// A read owner for one already-authorized selected torrent file. Clones share one
+/// lease; dropping the final clone schedules selection/cache cleanup off the UI thread.
+/// It never exposes librqbit's general HTTP API or grants access to another file.
+#[derive(Clone)]
+pub struct PlaybackLease {
+    _owner: Arc<PlaybackLeaseOwner>,
+}
+
+struct PlaybackLeaseOwner {
+    inner: Option<Arc<EngineInner>>,
+    id: u64,
+    directory: PathBuf,
+}
+impl Drop for PlaybackLeaseOwner {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        // Move every engine Arc into the job. Keeping a fallback Arc in this
+        // caller could make Runtime's final drop race onto a Tokio/UI thread.
+        let job = Arc::new(Mutex::new(Some((inner, self.id, self.directory.clone()))));
+        let worker = job.clone();
+        if std::thread::Builder::new()
+            .name("torrent-read-release".into())
+            .spawn(move || {
+                if let Some((inner, id, directory)) = worker.lock().unwrap().take() {
+                    inner.release_read_lease(id, &directory);
+                }
+            })
+            .is_err()
+            && let Some((inner, id, directory)) = job.lock().unwrap().take()
+        {
+            inner.release_read_lease(id, &directory);
+        }
+    }
+}
+
+struct ReadLeaseEntry {
+    info_hash: String,
+    torrent_id: TorrentId,
+    file_idx: usize,
+    dir: PathBuf,
+}
+// Also protect free/offline cleanup while an uninstalled engine is retained by a
+// reader. Values count independent leases, rather than their Arc clones.
+static READ_LEASE_DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+fn directory_read_leased(dir: &Path, leased: &[PathBuf]) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    leased
+        .iter()
+        .any(|path| path == &dir || path.starts_with(&dir))
+}
+
 /// Manifest ownership restored before any cache sweep or new transfer.
 #[derive(Clone, Debug)]
 pub struct RetainedDownload {
@@ -234,6 +287,9 @@ struct EngineInner {
     /// Serialize handle selection, activation, removal and cache cleanup.
     operations: Mutex<()>,
     playback_requests: Mutex<Vec<std::sync::Weak<AtomicBool>>>,
+    read_leases: Mutex<HashMap<u64, ReadLeaseEntry>>,
+    next_read_lease_id: AtomicU64,
+    cache_policy: Mutex<TorrentSettings>,
     /// Loopback port librqbit's HTTP API listens on.
     port: u16,
     active: Mutex<HashMap<String, Entry>>,
@@ -364,6 +420,9 @@ impl TorrentEngine {
                     session,
                     operations: Mutex::new(()),
                     playback_requests: Mutex::new(Vec::new()),
+                    read_leases: Mutex::new(HashMap::new()),
+                    next_read_lease_id: AtomicU64::new(1),
+                    cache_policy: Mutex::new(settings.clone()),
                     port,
                     active: Mutex::new(HashMap::new()),
                     retained: Mutex::new(HashMap::new()),
@@ -587,6 +646,56 @@ impl TorrentEngine {
         to_torrent_stats(&stats, None)
     }
 
+    /// Retain the exact file/session resolved for this current request, independently
+    /// of later request cancellation. Acquire before finishing the playback request.
+    pub fn lease_playback(
+        &self,
+        request: &PlaybackRequest,
+        loopback_url: &str,
+    ) -> Result<PlaybackLease, String> {
+        let inner = self.inner.as_ref().ok_or("torrent engine unavailable")?;
+        let _operation = inner.operations.lock().unwrap();
+        if !request.is_current() {
+            return Err("playback superseded".into());
+        }
+        let active = inner.active.lock().unwrap();
+        let (hash, entry) = active
+            .iter()
+            .find(|(_, entry)| {
+                entry.playing
+                    && entry.torrent_id != UNMANAGED
+                    && entry
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.same_request(request))
+                    && loopback_url
+                        == format!(
+                            "http://127.0.0.1:{}/torrents/{}/stream/{}",
+                            inner.port, entry.torrent_id, entry.file_idx
+                        )
+            })
+            .ok_or("torrent source is not owned by this playback request")?;
+        let id = inner.next_read_lease_id.fetch_add(1, Ordering::Relaxed);
+        let directory = std::fs::canonicalize(&entry.dir).unwrap_or_else(|_| entry.dir.clone());
+        inner.read_leases.lock().unwrap().insert(
+            id,
+            ReadLeaseEntry {
+                info_hash: hash.clone(),
+                torrent_id: entry.torrent_id,
+                file_idx: entry.file_idx,
+                dir: entry.dir.clone(),
+            },
+        );
+        READ_LEASE_DIRS.lock().unwrap().push(directory.clone());
+        Ok(PlaybackLease {
+            _owner: Arc::new(PlaybackLeaseOwner {
+                inner: Some(inner.clone()),
+                id,
+                directory,
+            }),
+        })
+    }
+
     /// Release cancelled playback owners after any in-flight activation.
     /// A newer playback request and retained downloads keep their files and
     /// selections. Otherwise pause for replay, or delete when `no_cache` is set.
@@ -693,6 +802,7 @@ impl TorrentEngine {
             settings.down_limit_kbps.saturating_mul(1024),
         ));
         let _operation = inner.operations.lock().unwrap();
+        *inner.cache_policy.lock().unwrap() = settings.clone();
         if settings.no_cache {
             // Turning "no caching" on must also clear what earlier plays left
             // behind. The torrent that is playing (if any) is deleted when it
@@ -703,6 +813,33 @@ impl TorrentEngine {
 }
 
 impl EngineInner {
+    fn has_read_transfer(&self, id: TorrentId, dir: &Path) -> bool {
+        self.read_leases
+            .lock()
+            .unwrap()
+            .values()
+            .any(|lease| Self::transfers_match(lease.torrent_id, &lease.dir, id, dir))
+    }
+    fn release_read_lease(self: &Arc<Self>, id: u64, directory: &Path) {
+        {
+            let _operation = self.operations.lock().unwrap();
+            let lease = self.read_leases.lock().unwrap().remove(&id);
+            {
+                let mut paths = READ_LEASE_DIRS.lock().unwrap();
+                if let Some(index) = paths.iter().position(|path| path == directory) {
+                    paths.swap_remove(index);
+                }
+            }
+            if let Some(lease) = lease {
+                self.refresh_transfer(lease.torrent_id, &lease.info_hash, &lease.dir);
+                let settings = self.cache_policy.lock().unwrap().clone();
+                self.stop_cancelled_playback(&settings);
+                if !settings.no_cache {
+                    self.trim_to_cap(settings.max_mb, "");
+                }
+            }
+        }
+    }
     fn retain_download(&self, download: RetainedDownload) {
         self.retained
             .lock()
@@ -723,6 +860,7 @@ impl EngineInner {
     }
 
     fn stop_cancelled_playback(&self, settings: &TorrentSettings) {
+        *self.cache_policy.lock().unwrap() = settings.clone();
         let stopped: Vec<_> = {
             let mut active = self.active.lock().unwrap();
             active
@@ -754,6 +892,7 @@ impl EngineInner {
 
     fn transfer_needs_running(&self, hash: &str, id: TorrentId, dir: &Path) -> bool {
         self.has_playing_transfer(id, dir)
+            || self.has_read_transfer(id, dir)
             || Self::retained_needs_running(hash, id, dir, &self.retained.lock().unwrap())
     }
 
@@ -887,7 +1026,8 @@ impl EngineInner {
     }
 
     fn active_files_for(&self, id: TorrentId) -> HashSet<usize> {
-        self.active
+        let mut files: HashSet<usize> = self
+            .active
             .lock()
             .unwrap()
             .values()
@@ -898,12 +1038,29 @@ impl EngineInner {
                     && entry.owner.as_ref().is_none_or(PlaybackRequest::is_current)
             })
             .map(|entry| entry.file_idx)
-            .collect()
+            .collect();
+        files.extend(
+            self.read_leases
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|entry| id != UNMANAGED && entry.torrent_id == id)
+                .map(|entry| entry.file_idx),
+        );
+        files
     }
 
     fn only_files_for(&self, id: TorrentId, hash: &str, selected: usize) -> HashSet<usize> {
         let mut only = HashSet::from([selected]);
         only.extend(self.active_files_for(id));
+        only.extend(
+            self.read_leases
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|lease| lease.info_hash == canonical_hash(hash))
+                .map(|lease| lease.file_idx),
+        );
         let retained = self.retained.lock().unwrap();
         only.extend(
             retained
@@ -1162,7 +1319,12 @@ impl EngineInner {
             .unwrap()
             .values()
             .any(|entry| Self::transfers_match(entry.torrent_id, &entry.dir, id, dir));
-        if active_share || retained_share {
+        let leased = READ_LEASE_DIRS.lock().unwrap();
+        if active_share
+            || retained_share
+            || self.has_read_transfer(id, dir)
+            || directory_read_leased(dir, &leased)
+        {
             return;
         }
         let session = self.session.clone();
@@ -1449,6 +1611,10 @@ impl EngineInner {
         else {
             return;
         };
+        let leased = READ_LEASE_DIRS.lock().unwrap();
+        if self.has_read_transfer(id, &dir) || directory_read_leased(&dir, &leased) {
+            return;
+        }
         let retained = self.retained.lock().unwrap();
         let retained_share = retained
             .values()
@@ -1571,6 +1737,7 @@ impl EngineInner {
         if !retained_share {
             self.active.lock().unwrap().retain(|_, active| {
                 active.playing
+                    || self.has_read_transfer(active.torrent_id, &active.dir)
                     || !Self::transfers_match(
                         active.torrent_id,
                         &active.dir,
@@ -1583,7 +1750,13 @@ impl EngineInner {
         let active_share = self.active.lock().unwrap().values().any(|active| {
             Self::transfers_match(active.torrent_id, &active.dir, entry.torrent_id, &entry.dir)
         });
-        if active_share || retained_share {
+        let leased = READ_LEASE_DIRS.lock().unwrap();
+        if active_share
+            || retained_share
+            || self.has_read_transfer(entry.torrent_id, &entry.dir)
+            || directory_read_leased(&entry.dir, &leased)
+        {
+            drop(leased);
             self.refresh_transfer(entry.torrent_id, &entry.info_hash, &entry.dir);
             return Ok(true);
         }
@@ -1865,6 +2038,10 @@ pub fn cache_bytes(dir: &Path) -> u64 {
 /// Delete a torrent's on-disk folder after playback when caching is disabled.
 /// Exposed for the app layer's no-cache path.
 pub fn delete_dir(dir: &Path) {
+    let leased = READ_LEASE_DIRS.lock().unwrap();
+    if directory_read_leased(dir, &leased) {
+        return;
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1958,6 +2135,10 @@ pub fn remove_download_files(
     {
         return Ok(());
     }
+    let leased = READ_LEASE_DIRS.lock().unwrap();
+    if directory_read_leased(&download.directory, &leased) {
+        return Err("torrent is still being played".into());
+    }
     if let Err(error) = std::fs::remove_dir_all(&download.directory)
         && error.kind() != std::io::ErrorKind::NotFound
     {
@@ -2014,8 +2195,10 @@ fn sweep_orphans(dir: &Path, owned: &HashSet<PathBuf>, aggressive: bool) {
     // Canonicalize once so `a/b` vs `a//b` style mismatches can't fake an
     // orphan. Failures fall back to the raw path (never skip deletion over
     // a canonicalization error).
+    let leased = READ_LEASE_DIRS.lock().unwrap();
     let owned: HashSet<PathBuf> = owned
         .iter()
+        .chain(leased.iter())
         .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
         .collect();
     for entry in rd.flatten() {
@@ -2111,6 +2294,9 @@ mod tests {
             session,
             operations: Mutex::new(()),
             playback_requests: Mutex::new(Vec::new()),
+            read_leases: Mutex::new(HashMap::new()),
+            next_read_lease_id: AtomicU64::new(1),
+            cache_policy: Mutex::new(TorrentSettings::default()),
             port: 1,
             active: Mutex::new(HashMap::new()),
             retained: Mutex::new(HashMap::new()),
@@ -2146,6 +2332,231 @@ mod tests {
             file_idx: index,
             complete: true,
         }
+    }
+
+    fn await_read_leases(inner: &EngineInner, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let actual = inner.read_leases.lock().unwrap().len();
+            if actual == count {
+                let _operation = inner.operations.lock().unwrap();
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "read lease release worker did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn read_lease_requires_exact_current_request_and_selected_loopback_file() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<PlaybackLease>();
+        let inner = offline_engine("read-authority");
+        let request = PlaybackRequest::default();
+        let ready = inner
+            .activate_playback(
+                request.clone(),
+                FIXTURE_HASH.into(),
+                "a".into(),
+                TorrentSettings::default(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        let engine = TorrentEngine {
+            inner: Some(inner.clone()),
+        };
+        assert!(
+            engine
+                .lease_playback(&PlaybackRequest::default(), &ready.url)
+                .is_err()
+        );
+        assert!(
+            engine
+                .lease_playback(&request, &ready.url.replace("/stream/0", "/stream/1"))
+                .is_err()
+        );
+        assert!(
+            engine
+                .lease_playback(&request, &format!("{}?other=1", ready.url))
+                .is_err()
+        );
+        let lease = engine.lease_playback(&request, &ready.url).unwrap();
+        request.cancel();
+        assert!(engine.lease_playback(&request, &ready.url).is_err());
+        assert_eq!(inner.read_leases.lock().unwrap().len(), 1);
+        drop(lease);
+        await_read_leases(&inner, 0);
+        inner.stop_cancelled_playback(&TorrentSettings {
+            no_cache: true,
+            ..Default::default()
+        });
+        std::fs::remove_dir_all(&inner.dir).unwrap();
+    }
+
+    #[test]
+    fn read_lease_survives_old_request_cancel_cache_clear_and_retained_removal() {
+        let inner = offline_engine("read-cleanup");
+        let request = PlaybackRequest::default();
+        let no_cache = TorrentSettings {
+            no_cache: true,
+            ..Default::default()
+        };
+        let ready = inner
+            .activate_playback(
+                request.clone(),
+                FIXTURE_HASH.into(),
+                "a".into(),
+                no_cache.clone(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        let dir = inner.dir.join(FIXTURE_HASH);
+        let id = inner
+            .active
+            .lock()
+            .unwrap()
+            .get(FIXTURE_HASH)
+            .unwrap()
+            .torrent_id;
+        let engine = TorrentEngine {
+            inner: Some(inner.clone()),
+        };
+        engine.retain_download(owner("download", &dir, Some(0)));
+        let lease = engine.lease_playback(&request, &ready.url).unwrap();
+        let clone = lease.clone();
+        request.cancel();
+        inner.stop_cancelled_playback(&no_cache);
+        engine.remove_retained("download").unwrap();
+        engine.clear_cache();
+        engine.apply_settings(&no_cache);
+        assert!(dir.exists());
+        assert!(inner.transfer_needs_running(FIXTURE_HASH, id, &dir));
+        assert_eq!(inner.active_files_for(id), HashSet::from([0]));
+        drop(lease);
+        assert_eq!(inner.read_leases.lock().unwrap().len(), 1);
+        assert!(dir.exists());
+        drop(clone);
+        await_read_leases(&inner, 0);
+        assert!(
+            !dir.exists(),
+            "latest no-cache policy cleans the final read owner"
+        );
+        assert!(!inner.active.lock().unwrap().contains_key(FIXTURE_HASH));
+        std::fs::remove_dir_all(&inner.dir).unwrap();
+    }
+
+    #[test]
+    fn read_lease_pins_only_selected_file_across_same_hash_replacement() {
+        let inner = offline_engine("read-replace");
+        let engine = TorrentEngine {
+            inner: Some(inner.clone()),
+        };
+        let old = PlaybackRequest::default();
+        let current = PlaybackRequest::default();
+        let ready = inner
+            .activate_playback(
+                old.clone(),
+                FIXTURE_HASH.into(),
+                "a".into(),
+                TorrentSettings::default(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        let id = inner
+            .active
+            .lock()
+            .unwrap()
+            .get(FIXTURE_HASH)
+            .unwrap()
+            .torrent_id;
+        let dir = inner.dir.join(FIXTURE_HASH);
+        let lease = engine.lease_playback(&old, &ready.url).unwrap();
+        old.cancel();
+        inner
+            .activate_playback(
+                current.clone(),
+                FIXTURE_HASH.into(),
+                "b".into(),
+                TorrentSettings::default(),
+                fixture_selection(1),
+                || {},
+            )
+            .unwrap();
+        assert_eq!(inner.active_files_for(id), HashSet::from([0, 1]));
+        let sibling = dir.join("sibling-download");
+        std::fs::create_dir_all(&sibling).unwrap();
+        engine.retain_download(owner("sibling", &dir, Some(1)));
+        current.cancel();
+        inner.stop_cancelled_playback(&TorrentSettings {
+            no_cache: true,
+            ..Default::default()
+        });
+        assert_eq!(inner.active_files_for(id), HashSet::from([0]));
+        drop(lease);
+        await_read_leases(&inner, 0);
+        assert!(inner.active_files_for(id).is_empty());
+        assert!(dir.exists(), "download sibling keeps its bundle");
+        assert_eq!(
+            inner.only_files_for(id, FIXTURE_HASH, 1),
+            HashSet::from([1])
+        );
+        engine.remove_retained("sibling").unwrap();
+        assert!(!dir.exists());
+        std::fs::remove_dir_all(&inner.dir).unwrap();
+    }
+
+    #[test]
+    fn read_lease_protects_offline_cleanup_and_releases_engine_after_final_clone() {
+        let inner = offline_engine("read-offline");
+        let engine = TorrentEngine {
+            inner: Some(inner.clone()),
+        };
+        let request = PlaybackRequest::default();
+        let ready = inner
+            .activate_playback(
+                request.clone(),
+                FIXTURE_HASH.into(),
+                "a".into(),
+                TorrentSettings::default(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        let dir = inner.dir.join(FIXTURE_HASH);
+        let root = inner.dir.clone();
+        let lease = engine.lease_playback(&request, &ready.url).unwrap();
+        request.cancel();
+        let download = owner("offline", &dir, Some(0));
+        assert!(remove_download_files(&download, &[]).is_err());
+        delete_dir(&dir);
+        sweep_orphans(&root, &HashSet::new(), true);
+        assert!(dir.exists());
+        let weak = Arc::downgrade(&inner);
+        drop(engine);
+        drop(inner);
+        assert!(
+            weak.upgrade().is_some(),
+            "lease keeps the old runtime available after engine uninstall"
+        );
+        let caller = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        caller.block_on(async move { drop(lease) });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while weak.upgrade().is_some() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        remove_download_files(&download, &[]).unwrap();
+        assert!(!dir.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

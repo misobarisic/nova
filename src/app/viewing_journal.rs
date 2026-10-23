@@ -568,13 +568,31 @@ impl Bridge {
             return;
         };
         let readiness = self.player.playback_readiness();
-        let new_completion = self.shared.lock().unwrap().viewing_journal.observe(
-            media.clone(),
-            profiles::ProfileStore::capture(),
+        self.note_journal_observation(
+            media,
             f64::from(app.get_position()),
             f64::from(app.get_duration()),
             !app.get_is_paused() && !readiness.buffering && !readiness.ended,
             f64::from(self.player.effective_playback_speed()),
+        );
+    }
+
+    /// Playback backends supply actual observations without fabricating native-player state.
+    pub(super) fn note_journal_observation(
+        &self,
+        media: nova_playback_api::MediaIdentity,
+        position: f64,
+        duration: f64,
+        playing: bool,
+        speed: f64,
+    ) {
+        let new_completion = self.shared.lock().unwrap().viewing_journal.observe(
+            media.clone(),
+            profiles::ProfileStore::capture(),
+            position,
+            duration,
+            playing,
+            speed,
         );
         if new_completion {
             // Metadata I/O stays outside Shared's lock. The ordinary progress

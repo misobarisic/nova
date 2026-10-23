@@ -1,0 +1,18 @@
+[package]
+name = "nova-cast-media"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+nova-cast = { path = "../cast" }
+nova-remux = { path = "../remux" }
+tracing.workspace = true
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+url = "2"
+rand = "0.9"
+tempfile = "3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
+webpki-roots = "1"

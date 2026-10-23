@@ -1545,6 +1545,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         p.set_subtitle_clearance(fraction, opacity)
     });
 
+    bridge.install_casting();
+
     // Hover previews: the timestamp under the cursor (seekbar) and the
     // volume percentage (volume slider). Formatting lives in Rust because
     // Slint has no int→string conversion for bindings.
@@ -1560,39 +1562,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // OSD auto-hide: show on activity, hide after inactivity — 3 s while
-    // playing, 5 s while paused so the controls linger for resume.
-    // Android keeps paused controls visible so Home/screen-off restoration
-    // presents Play until the user resumes (loading keeps the bar up too).
-    let osd_timer = Rc::new(slint::Timer::default());
+    // AppWindow owns the UI-thread hide timer so pause, interaction and live
+    // preference changes re-arm the same policy used by headless UI tests.
     {
-        let osd_timer = osd_timer.clone();
         let app_weak = app.as_weak();
         #[cfg(target_os = "android")]
         let osd_player = player.clone();
         app.on_osd_mouse_moved(move || {
             if let Some(app) = app_weak.upgrade() {
                 app.set_osd_visible(true);
+                app.invoke_restart_osd_hide();
                 #[cfg(feature = "desktop")]
                 desktop_window::sync_cursor(&app);
-                // Android: the OSD is being woken, so drop the content
-                // frame-rate request now — let the panel go back to its normal
-                // maximum for the fade/controls instead of waiting for a tick.
+                // Release Android's content frame-rate request immediately
+                // when controls wake, before the next native player tick.
                 #[cfg(target_os = "android")]
                 osd_player.notify_osd_activity();
-                // Restart the countdown (longer grace while paused).
-                let timeout = match app.get_is_paused() {
-                    true => Duration::from_secs(5),
-                    false => Duration::from_secs(3),
-                };
-                let aw = app_weak.clone();
-                osd_timer.start(slint::TimerMode::SingleShot, timeout, move || {
-                    if let Some(app) = aw.upgrade()
-                        && (!app.get_is_android() || !app.get_is_paused())
-                    {
-                        app.set_osd_visible(false);
-                    }
-                });
             }
         });
     }
@@ -1714,6 +1699,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::web_log("nova: startup complete, entering event loop");
     let result = app.run();
+    bridge.cast_shutdown();
+    bridge.cast_wait_shutdown();
     #[cfg(feature = "desktop")]
     desktop_window.flush(&app, &player);
     bridge.persist_outgoing_playback();

@@ -87,6 +87,10 @@ use std::sync::{LazyLock, Mutex};
 // Serde helpers
 // ---------------------------------------------------------------------------
 
+pub fn default_keep_controls_visible_while_paused() -> bool {
+    cfg!(target_os = "android")
+}
+
 pub fn default_true() -> bool {
     true
 }
@@ -517,6 +521,64 @@ impl AndroidHwdec {
     }
 }
 
+/// Retained media-segment budget for a casting packet-copy presentation.
+/// Processing buffers and the rest of the app use additional memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CastingRemuxBuffer {
+    #[serde(rename = "32_mib")]
+    Mib32,
+    #[serde(rename = "64_mib")]
+    Mib64,
+    #[serde(rename = "128_mib")]
+    Mib128,
+    #[serde(rename = "256_mib")]
+    Mib256,
+}
+
+impl Default for CastingRemuxBuffer {
+    fn default() -> Self {
+        if cfg!(target_os = "android") {
+            Self::Mib32
+        } else {
+            Self::Mib64
+        }
+    }
+}
+
+impl CastingRemuxBuffer {
+    pub const fn mib(self) -> u32 {
+        match self {
+            Self::Mib32 => 32,
+            Self::Mib64 => 64,
+            Self::Mib128 => 128,
+            Self::Mib256 => 256,
+        }
+    }
+
+    pub const fn bytes(self) -> usize {
+        self.mib() as usize * 1024 * 1024
+    }
+
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Mib32 => 0,
+            Self::Mib64 => 1,
+            Self::Mib128 => 2,
+            Self::Mib256 => 3,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Mib32),
+            1 => Some(Self::Mib64),
+            2 => Some(Self::Mib128),
+            3 => Some(Self::Mib256),
+            _ => None,
+        }
+    }
+}
+
 /// Device-local desktop decoder preference. Windows retains copy-back by
 /// default; Linux starts with direct hardware decoding and normal fallbacks.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -875,6 +937,13 @@ cache_settings_type! {
     /// Show chapter dividers and the current chapter shortcut on the timeline.
     #[serde(default = "default_true")]
     pub show_chapters: bool,
+    /// Keep paused controls visible until explicitly dismissed. Preserve the
+    /// existing Android (on) and desktop (off) behavior for older settings.
+    #[serde(default = "default_keep_controls_visible_while_paused")]
+    pub keep_controls_visible_while_paused: bool,
+    /// Retained casting remux media segments; processing uses additional RAM.
+    #[serde(default)]
+    pub casting_remux_buffer: CastingRemuxBuffer,
     /// Offer an eight-second automatic successor preview at native EOF.
     #[serde(default)]
     pub auto_next_episode: bool,
@@ -1072,6 +1141,8 @@ impl Default for CacheSettings {
             intro_skip_confidence: IntroSkipConfidence::default(),
             prefetch_next_episode_streams: true,
             show_chapters: true,
+            keep_controls_visible_while_paused: default_keep_controls_visible_while_paused(),
+            casting_remux_buffer: CastingRemuxBuffer::default(),
             auto_next_episode: false,
             animations: true,
             anim_transitions: true,
@@ -1755,6 +1826,67 @@ mod tests {
             EpisodeStartBehavior::Resume
         );
         assert_eq!(CacheSettings::default().language.index(), 0);
+    }
+
+    #[test]
+    fn casting_remux_buffer_validates_choices_and_preserves_legacy_platform_defaults() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85}"#;
+        let older: CacheSettings = serde_json::from_str(older).unwrap();
+        assert_eq!(older.casting_remux_buffer, CastingRemuxBuffer::default());
+        assert_eq!(
+            older.casting_remux_buffer.mib(),
+            if cfg!(target_os = "android") { 32 } else { 64 }
+        );
+        for (index, mib) in [32, 64, 128, 256].into_iter().enumerate() {
+            let budget = CastingRemuxBuffer::from_index(index as i32).unwrap();
+            assert_eq!(budget.index(), index as i32);
+            assert_eq!(budget.mib(), mib);
+            assert_eq!(budget.bytes(), mib as usize * 1024 * 1024);
+            let settings = CacheSettings {
+                casting_remux_buffer: budget,
+                ..Default::default()
+            };
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.casting_remux_buffer, budget);
+            assert_eq!(
+                serde_json::to_value(budget).unwrap(),
+                serde_json::json!(format!("{mib}_mib"))
+            );
+        }
+        for invalid in [-1, 4, i32::MAX] {
+            assert!(CastingRemuxBuffer::from_index(invalid).is_none());
+        }
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!("512_mib"),
+            serde_json::Value::Null,
+        ] {
+            assert!(serde_json::from_value::<CastingRemuxBuffer>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn paused_controls_default_matches_platform_and_explicit_values_round_trip() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85}"#;
+        let settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert_eq!(
+            settings.keep_controls_visible_while_paused,
+            cfg!(target_os = "android")
+        );
+        assert_eq!(
+            CacheSettings::default().keep_controls_visible_while_paused,
+            settings.keep_controls_visible_while_paused
+        );
+        for enabled in [false, true] {
+            let settings = CacheSettings {
+                keep_controls_visible_while_paused: enabled,
+                ..Default::default()
+            };
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.keep_controls_visible_while_paused, enabled);
+        }
     }
 
     #[test]

@@ -411,6 +411,7 @@ impl Bridge {
             .unwrap_or_default();
         let token = crate::torrent::PlaybackRequest::default();
         let mut state = self.shared.lock().unwrap();
+        state.casting.capture_destination(&token);
         let remote_context = state.remote_playback.start_context.take();
         state.remote_playback.begin();
         if let Some(media) = &remote_context {
@@ -804,6 +805,7 @@ impl Bridge {
             state.pending_resume_stream = None;
             state.resume_prompt_choice = None;
             state.active_torrent = None;
+            state.casting.clear_source();
         }
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
@@ -822,6 +824,9 @@ impl Bridge {
     }
 
     pub(super) fn cancel_pending_playback(&self) {
+        if self.shared.lock().unwrap().casting.loading {
+            return;
+        }
         let (pending, visible) = self
             .shared
             .lock()
@@ -841,7 +846,7 @@ impl Bridge {
         }
     }
 
-    fn mark_playback_opened(&self, in_app: bool) {
+    pub(super) fn mark_playback_opened(&self, in_app: bool) {
         if !in_app {
             self.preserve_queue_on_close(false);
             self.cancel_queue_run();
@@ -1076,6 +1081,7 @@ impl Bridge {
         nova_config::active_cache_settings().uses_external_player()
             && !self.remote_receiver_playback()
             && !self.party_active()
+            && !self.shared.lock().unwrap().casting.selected
     }
 
     pub(super) fn open_player(&self, url: String) -> bool {
@@ -1509,6 +1515,9 @@ impl Bridge {
     }
 
     fn open_provider_loading(&self, request: &crate::torrent::PlaybackRequest) {
+        if self.shared.lock().unwrap().casting.selected {
+            return;
+        }
         if !self.playback_request_is_current(request)
             || !self.player.wait_for_source("Resolving stream…")
         {
@@ -1763,6 +1772,9 @@ impl Bridge {
         };
 
         self.publish_player_context(&context);
+        if self.cast_source(&request, &url, &headers, &subtitles, start_at) {
+            return true;
+        }
         let preferences = context
             .retry_preferences
             .clone()
@@ -1876,7 +1888,106 @@ impl Bridge {
     /// progress, and finalize history when the player just closed. Reading
     /// the mirrored Slint props keeps this identical on desktop (mpv) and
     /// web (HTML5 video) with no player-module changes.
+    pub(super) fn restore_cast_playback(
+        &self,
+        mut intent: PlaybackIntent,
+        target: Option<PlaybackTarget>,
+    ) -> crate::torrent::PlaybackRequest {
+        let token = crate::torrent::PlaybackRequest::default();
+        intent.token = token.clone();
+        intent.pending = false;
+        intent.in_app = true;
+        intent.detached = false;
+        let context = intent.context.clone();
+        {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(old) = state.playback_intent.take() {
+                old.token.cancel();
+            }
+            state.playback_intent = Some(intent);
+            state.playback = target;
+            state.pending_resume_stream = None;
+            state.casting.capture_destination(&token);
+        }
+        self.publish_player_context(&context);
+        token
+    }
+
+    pub(super) fn mark_cast_opened(&self) {
+        if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+            intent.pending = false;
+            intent.in_app = false;
+        }
+        static OBSERVATION: AtomicU64 = AtomicU64::new(1 << 63);
+        self.shared.lock().unwrap().casting.observation_id =
+            OBSERVATION.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn note_cast_progress(
+        &self,
+        expected: &mut PlaybackTarget,
+        position: f64,
+        duration: f64,
+        paused: bool,
+    ) {
+        if !position.is_finite() || !duration.is_finite() || position < 0.0 || duration < 0.0 {
+            return;
+        }
+        let map = record_cast_progress(
+            &mut self.shared.lock().unwrap(),
+            expected,
+            position,
+            duration,
+            paused,
+        );
+        let target = expected.clone();
+        self.note_journal_observation(
+            nova_playback_api::MediaIdentity {
+                media_type: target
+                    .history
+                    .as_ref()
+                    .map(|h| h.type_.clone())
+                    .unwrap_or_default(),
+                title_id: target.series_id.clone(),
+                episode_id: target.episode_id.clone(),
+                title: target
+                    .history
+                    .as_ref()
+                    .map(|h| h.title.clone())
+                    .unwrap_or_default(),
+                episode: target
+                    .history
+                    .as_ref()
+                    .map(|h| h.episode_label.clone())
+                    .unwrap_or_default(),
+            },
+            position,
+            duration,
+            !paused,
+            1.,
+        );
+        if let Some(map) = map {
+            nova_sync::playback_checkpoint(|| write_progress_map(&map));
+            self.shared.lock().unwrap().casting.progress_dirty = true;
+        }
+        let observation_id = self.shared.lock().unwrap().casting.observation_id;
+        self.list_services_playback_observation(
+            &target,
+            position,
+            duration,
+            paused,
+            false,
+            observation_id,
+        );
+    }
+
     pub(super) fn note_player_progress_from_ui(&self) {
+        {
+            let state = self.shared.lock().unwrap();
+            if state.casting.active || state.casting.loading {
+                return;
+            }
+        }
         let Some(app) = self.app() else {
             return;
         };
@@ -2172,6 +2283,62 @@ pub(super) fn playback_can_resume(progress: &EpisodeProgress) -> bool {
                     .as_ref()
                     .is_some_and(|history| history.rewatch),
         )
+}
+
+/// Receiver observations carry their original target even while a different source is resolving.
+fn record_cast_progress(
+    state: &mut Shared,
+    expected: &mut PlaybackTarget,
+    position: f64,
+    duration: f64,
+    paused: bool,
+) -> Option<HashMap<String, EpisodeProgress>> {
+    if !position.is_finite() || !duration.is_finite() || position < 0.0 || duration < 0.0 {
+        return None;
+    }
+    let mut target = expected.clone();
+    observe_history_playback(&mut target, position, paused);
+    target.last_pos = position;
+    target.last_dur = duration;
+    target.resume_done = true;
+    let now = now_secs();
+    let due = (position - target.last_saved_pos).abs() >= PROGRESS_MIN_DELTA_SECS
+        || (!paused && now.saturating_sub(target.last_saved_at) >= PROGRESS_SAVE_INTERVAL_SECS)
+        || (paused && (position - target.last_saved_pos).abs() > 0.001);
+    let key = progress_map_key(&target.series_id, &target.episode_id);
+    let newly_watched = is_watched_position(position, duration)
+        && !state.progress.get(&key).is_some_and(|p| p.watched);
+    if due || newly_watched {
+        target.last_saved_at = now;
+        target.last_saved_pos = position;
+        let entry = state
+            .progress
+            .entry(key)
+            .or_insert_with(|| EpisodeProgress {
+                series_id: target.series_id.clone(),
+                episode_id: target.episode_id.clone(),
+                ..Default::default()
+            });
+        entry.position_secs = position;
+        entry.duration_secs = duration;
+        entry.updated_at_secs = now;
+        stamp_playback_history(entry, &target.history);
+        if position > 0.0 {
+            entry.unwatched_at_secs = 0;
+        }
+        if newly_watched {
+            entry.watched = true;
+        }
+    }
+    *expected = target.clone();
+    if state
+        .playback
+        .as_ref()
+        .is_some_and(|current| current.session == target.session)
+    {
+        state.playback = Some(target.clone());
+    }
+    (due || newly_watched).then(|| state.progress.clone())
 }
 
 /// Count short, advancing samples only: buffering/pauses contribute nothing,
@@ -3746,5 +3913,54 @@ mod retry_regressions {
             drop(state);
             bridge.finish_playback_request();
         }
+    }
+}
+
+#[cfg(test)]
+mod cast_observation_tests {
+    use super::*;
+    #[test]
+    fn old_receiver_observation_cannot_mark_a_newly_selected_episode() {
+        let mut state = Shared::default();
+        state.playback = Some(PlaybackTarget {
+            series_id: "new-title".into(),
+            episode_id: "new-episode".into(),
+            session: 2,
+            last_pos: 12.,
+            ..Default::default()
+        });
+        let mut old = PlaybackTarget {
+            series_id: "old-title".into(),
+            episode_id: "old-episode".into(),
+            session: 1,
+            ..Default::default()
+        };
+        let map = record_cast_progress(&mut state, &mut old, 990., 1000., false).unwrap();
+        assert!(
+            map.get(&progress_map_key("old-title", "old-episode"))
+                .unwrap()
+                .watched
+        );
+        assert!(!map.contains_key(&progress_map_key("new-title", "new-episode")));
+        let current = state.playback.as_ref().unwrap();
+        assert_eq!(current.session, 2);
+        assert_eq!(current.last_pos, 12.);
+    }
+    #[test]
+    fn nonfinite_receiver_positions_never_rewrite_resume_history() {
+        let mut state = Shared::default();
+        let mut expected = PlaybackTarget {
+            series_id: "title".into(),
+            episode_id: "episode".into(),
+            session: 1,
+            last_pos: 42.,
+            ..Default::default()
+        };
+        assert!(record_cast_progress(&mut state, &mut expected, f64::NAN, 1000., false).is_none());
+        assert!(
+            record_cast_progress(&mut state, &mut expected, 42., f64::INFINITY, false).is_none()
+        );
+        assert_eq!(expected.last_pos, 42.);
+        assert!(state.progress.is_empty());
     }
 }

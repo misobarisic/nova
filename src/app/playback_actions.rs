@@ -27,6 +27,9 @@ impl Bridge {
     }
 
     pub(super) fn execute_playback_action(&self, action: PlaybackAction) -> Result<(), String> {
+        if let Some(result) = self.cast_dispatch_action(&action) {
+            return result;
+        }
         let app = self
             .app()
             .ok_or_else(|| "Playback window is unavailable".to_owned())?;

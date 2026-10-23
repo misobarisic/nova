@@ -328,6 +328,8 @@ impl Bridge {
             app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
             app.set_show_chapters(settings.show_chapters);
+            app.set_keep_controls_visible_while_paused(settings.keep_controls_visible_while_paused);
+            app.set_casting_remux_buffer_index(settings.casting_remux_buffer.index());
             app.set_auto_next_episode(settings.auto_next_episode);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
@@ -608,6 +610,11 @@ impl Bridge {
                 .unwrap_or_default(),
                 prefetch_next_episode_streams: app.get_prefetch_next_episode_streams(),
                 show_chapters: app.get_show_chapters(),
+                keep_controls_visible_while_paused: app.get_keep_controls_visible_while_paused(),
+                casting_remux_buffer: nova_config::CastingRemuxBuffer::from_index(
+                    app.get_casting_remux_buffer_index(),
+                )
+                .unwrap_or_default(),
                 auto_next_episode: app.get_auto_next_episode(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,

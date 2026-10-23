@@ -802,7 +802,14 @@ impl Bridge {
             self.pause_queue();
             return;
         }
-        let native = self.player.screenshot_session();
+        if !app.get_player_open() || !app.get_playback_started() {
+            return;
+        }
+        self.observe_queue_playback(self.player.screenshot_session(), ended);
+    }
+
+    /// Receivers supply their own accepted-load identity and explicit finished reason.
+    pub(super) fn observe_queue_playback(&self, native: u64, ended: bool) {
         let mutation = {
             let mut state = self.shared.lock().unwrap();
             let identity = state.playback.as_ref().and_then(|p| {
@@ -834,9 +841,6 @@ impl Bridge {
             let Some(run) = queue.run.as_mut() else {
                 return;
             };
-            if !app.get_player_open() || !app.get_playback_started() {
-                return;
-            }
             if identity.as_ref() != Some(&run.current) {
                 // The previous player may still be visible during first-item
                 // source selection; only a replacement of an accepted load

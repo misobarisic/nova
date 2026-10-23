@@ -1,3 +1,6 @@
+import { CastButton, CastingPanel } from "casting.slint";
+import { CastBridge } from "@NovaUiShared";
+export { CastBridge }
 import { PillButton } from "settings-controls.slint";
 import { CatalogSourceChooser } from "catalog-source-chooser.slint";
 import { BackupPanel } from "backup.slint";
@@ -42,6 +45,9 @@ import { BottomNav } from "bottomnav.slint";
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    in-out property <bool> casting_open <=> CastBridge.open;
+    property <bool> casting_visual_retained;
+    changed casting_open => { if root.casting_open { root.casting_visual_retained = true; } else { root.restart_osd_hide(); } }
     in-out property <bool> completion_prompt_open <=> CompletionBridge.open;
     in-out property <string> completion_prompt_token <=> CompletionBridge.token;
     in-out property <string> completion_prompt_title <=> CompletionBridge.title;
@@ -683,6 +689,8 @@ export component AppWindow inherits Window {
         android_auto_rotate <=> root.android_auto_rotate;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
         show_chapters <=> root.show_chapters;
+        keep_controls_visible_while_paused <=> root.keep_controls_visible_while_paused;
+        casting_remux_buffer_index <=> root.casting_remux_buffer_index;
         auto_next_episode <=> root.auto_next_episode;
         screenshot_format_index <=> root.screenshot_format_index;
         screenshot_jpeg_quality <=> root.screenshot_jpeg_quality;
@@ -1550,6 +1558,8 @@ export component AppWindow inherits Window {
     in-out property <bool> android_auto_rotate: true;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> show_chapters: true;
+    in-out property <bool> keep_controls_visible_while_paused: self.is_android;
+    in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;
@@ -1981,6 +1991,30 @@ export component AppWindow inherits Window {
     in-out property <bool> try_another_stream_available;
     in-out property <bool> automatic_stream_recovery_visible;
     in-out property <int> subtitle_addon_status: 0;
+    // The timer lives on the UI thread beside the live settings/state. Keeping
+    // a paused OSD visible does not override an explicit Back/tap dismissal.
+    private property <bool> osd_hide_allowed: root.player_open && root.playback_started
+        && !PlayerOsdBridge.osd_auto_hide_blocked && !CastBridge.open
+        && !(root.is_paused && root.keep_controls_visible_while_paused);
+    public function restart_osd_hide() {
+        if root.osd_visible && root.osd_hide_allowed {
+            osd_hide_timer.start();
+            // stop()/start() only change a declarative flag. Their changes can
+            // coalesce, leaving an already-running timer at its old deadline.
+            osd_hide_timer.restart();
+        } else { osd_hide_timer.stop(); }
+    }
+    changed osd_hide_allowed => { root.restart_osd_hide(); }
+    changed is_paused => { root.restart_osd_hide(); }
+    changed osd_visible => { root.restart_osd_hide(); }
+    osd_hide_timer := Timer {
+        interval: root.is_paused ? 5s : 3s;
+        running: false;
+        triggered => {
+            self.stop();
+            if root.osd_hide_allowed { root.osd_visible = false; }
+        }
+    }
     in-out property <bool> osd_visible: true;
     // The OSD scrim's live (animated) opacity, mirrored up from the player
     // overlay via `osd_opacity_changed`. Rust uses it to match the display
@@ -2418,7 +2452,10 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if MoreBridge.pin_open {
+            if root.casting_visual_retained && !CastBridge.open { if e.text == Key.Back { root.system_back_held = true; } accept }
+            else if CastBridge.open {
+                if e.text == Key.Back || e.text == Key.Escape { if !e.repeat && !root.system_back_held { root.system_back_held = true; CastBridge.back_request += 1; } accept } else { reject }
+            } else if MoreBridge.pin_open {
                 if e.text == Key.Back || e.text == Key.Escape {
                     if !e.repeat { MoreBridge.pin_cancel(); root.preserve_back_focus(); page_release_timer.start(); } accept
                 } else { reject }
@@ -2537,9 +2574,9 @@ export component AppWindow inherits Window {
         }
 
         capture-key-released(e) => {
-            if (e.text == Key.Back) {
+            if (e.text == Key.Back || (e.text == Key.Escape && root.system_back_held)) {
                 root.system_back_held = false;
-                root.focus_mounted_page();
+                if !CastBridge.open { root.focus_mounted_page(); }
                 accept
             } else { reject }
         }
@@ -3070,5 +3107,7 @@ export component AppWindow inherits Window {
     if MoreBridge.pin_open: profile_pin_gate := ProfilePinGate { focus-request: root.profile_pin_focus_request; width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; }
 
     }
+
+    if CastBridge.open || root.casting_visual_retained: casting_panel := CastingPanel { width: 100%; height: 100%; safe_bottom: root.safe-area-insets.bottom; safe_top: root.safe-area-insets.top; safe_left: root.safe-area-insets.left; safe_right: root.safe-area-insets.right; touch: root.is_android; visual_closed => { if !CastBridge.open { root.casting_visual_retained = false; root.preserve_back_focus(); root.restart_osd_hide(); CastBridge.restore_focus += 1; } } }
 
 }

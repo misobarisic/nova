@@ -1332,7 +1332,9 @@ impl Bridge {
             }));
             return;
         }
-        if !matches!(request, Request::Snapshot) && self.party_active() {
+        if !matches!(request, Request::Snapshot)
+            && (self.party_active() || self.shared.lock().unwrap().casting.reserved())
+        {
             done(Response::Error(PlaybackError::Busy));
             return;
         }
@@ -2202,6 +2204,15 @@ impl Bridge {
     }
 
     fn open_remote_controls(&self, target: &str) {
+        if self.shared.lock().unwrap().casting.reserved() {
+            if let Some(app) = self.app() {
+                app.set_remote_error(
+                    text::tr("Stop casting before joining a watch party or paired Nova session.")
+                        .into(),
+                );
+            }
+            return;
+        }
         if self.party_active() {
             return;
         }

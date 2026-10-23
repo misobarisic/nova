@@ -37,6 +37,9 @@ members = [
     "crates/media",
     "crates/player",
     "crates/playback-api",
+    "crates/cast",
+    "crates/cast-media",
+    "crates/remux",
     "crates/party",
     "crates/sync",
     "crates/tracking",
@@ -49,6 +52,9 @@ resolver = "3"
 license = "GPL-3.0-or-later"
 
 [patch.crates-io]
+# Keep Cast transport closure side-effect free and support scoped IPv6 hosts.
+# The pinned upstream source and narrow patch are recorded beside its license.
+oxicast = { path = "vendor/oxicast" }
 # Keep desktop mpv/FemtoVG integration while painting COLRv1 emoji with the
 # existing Skrifa/tiny-skia stack. The fork backports the upstream borrow fix
 # onto Slint-compatible 0.27; tiny-skia corrects partial sweep normalization.
@@ -81,7 +87,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.38"
+version = "0.0.39"
 edition = "2024"
 license.workspace = true
 
@@ -129,6 +135,8 @@ nova-media = { path = "crates/media" }
 nova-download = { path = "crates/download" }
 nova-player = { path = "crates/player" }
 nova-playback-api = { path = "crates/playback-api" }
+nova-cast = { path = "crates/cast" }
+nova-cast-media = { path = "crates/cast-media" }
 nova-party = { path = "crates/party" }
 nova-torrent = { path = "crates/torrent" }
 nova-sync = { path = "crates/sync" }
@@ -141,6 +149,7 @@ unicode-normalization = "0.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 sha2 = "0.11"
 url = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The license catalog uses the same zstd implementation as local storage.
 zstd = { version = "0.13", default-features = false }
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
@@ -281,6 +290,12 @@ foreground_service_type = "dataSync"
 name = ".NovaAuthService"
 foreground_service_type = "dataSync"
 
+# External receiver playback owns its LAN relay independently of Activity/PiP.
+[[package.metadata.android.application.service]]
+name = ".NovaCastService"
+exported = false
+foreground_service_type = "connectedDevice"
+
 # Periodic background sync, driven by JobScheduler (min 15 min). Runs a
 # bounded sync pass with no Activity present; see android_bg.rs / sync_headless.
 [[package.metadata.android.application.service]]
@@ -340,6 +355,16 @@ name = "android.permission.FOREGROUND_SERVICE"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+
+# Multicast is held only during an explicit, bounded receiver search.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_WIFI_STATE"
 
 # Partial wake lock held while a transfer is active (the foreground service
 # keeps the process unfrozen; the wake lock keeps the CPU from suspending).

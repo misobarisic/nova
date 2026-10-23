@@ -1672,3 +1672,268 @@ msgstr "Each new episode"
 
 msgid "Full season released"
 msgstr "Full season released"
+
+msgid "Keep controls visible while paused"
+msgstr "Keep controls visible while paused"
+
+msgid "When off, controls fade after five seconds of inactivity. Input shows them again."
+msgstr "When off, controls fade after five seconds of inactivity. Input shows them again."
+
+# External receiver casting
+msgid "Cast to a device"
+msgstr "Cast to a device"
+
+msgid "Connecting to receiver"
+msgstr "Connecting to receiver"
+
+msgid "Connected to {}"
+msgstr "Connected to {}"
+
+msgid "This device"
+msgstr "This device"
+
+msgid "Play on this device"
+msgstr "Play on this device"
+
+msgid "Audio-only receiver"
+msgstr "Audio-only receiver"
+
+msgid "Use Play here to return playback"
+msgstr "Use Play here to return playback"
+
+msgid "Play here"
+msgstr "Play here"
+
+msgid "Stop casting"
+msgstr "Stop casting"
+
+msgid "Replace playback"
+msgstr "Replace playback"
+
+msgid "This receiver is already in use. Replace its playback?"
+msgstr "This receiver is already in use. Replace its playback?"
+
+msgid "Receiver IP address"
+msgstr "Receiver IP address"
+
+msgid "Enter address"
+msgstr "Enter address"
+
+msgid "Search this network once"
+msgstr "Search this network once"
+
+msgid "Cancel search"
+msgstr "Cancel search"
+
+msgid "Cancel connection"
+msgstr "Cancel connection"
+
+msgid "No receivers found. Check that both devices are on the same Wi-Fi network."
+msgstr "No receivers found. Check that both devices are on the same Wi-Fi network."
+
+msgid "Try this stream"
+msgstr "Try this stream"
+
+msgid "Retry connection"
+msgstr "Retry connection"
+
+msgid "Forward 10 seconds"
+msgstr "Forward 10 seconds"
+
+msgid "Back 10 seconds"
+msgstr "Back 10 seconds"
+
+msgid "Unmute"
+msgstr "Unmute"
+
+msgid "Mute"
+msgstr "Mute"
+
+msgid "Background casting could not start. Keep Nova open and try again."
+msgstr "Background casting could not start. Keep Nova open and try again."
+
+msgid "Buffering on receiver"
+msgstr "Buffering on receiver"
+
+msgid "Cannot reach receiver. Check Wi-Fi, VPN and firewall settings."
+msgstr "Cannot reach receiver. Check Wi-Fi, VPN and firewall settings."
+
+msgid "Cannot serve media on this network. Check VPN and firewall settings."
+msgstr "Cannot serve media on this network. Check VPN and firewall settings."
+
+msgid "Casting stopped"
+msgstr "Casting stopped"
+
+msgid "Choose a source again to transfer this playback."
+msgstr "Choose a source again to transfer this playback."
+
+msgid "Connected to receiver"
+msgstr "Connected to receiver"
+
+msgid "Connected. Choose something to watch."
+msgstr "Connected. Choose something to watch."
+
+msgid "Connecting to receiver…"
+msgstr "Connecting to receiver…"
+
+msgid "Connection cancelled"
+msgstr "Connection cancelled"
+
+msgid "Could not confirm receiver stopped. Local playback remains paused. Retry Stop casting."
+msgstr "Could not confirm receiver stopped. Local playback remains paused. Retry Stop casting."
+
+msgid "Enter a valid receiver IP address."
+msgstr "Enter a valid receiver IP address."
+
+msgid "Leave the watch party or paired Nova session before casting."
+msgstr "Leave the watch party or paired Nova session before casting."
+
+msgid "Media could not be prepared safely. Choose another source or play locally."
+msgstr "Media could not be prepared safely. Choose another source or play locally."
+
+msgid "Media preparation exceeded its storage limit. Free space or choose another source."
+msgstr "Media preparation exceeded its storage limit. Free space or choose another source."
+
+msgid "Media source is unavailable. Refresh sources and try again."
+msgstr "Media source is unavailable. Refresh sources and try again."
+
+msgid "Paused on receiver"
+msgstr "Paused on receiver"
+
+msgid "Playback changed on another device. Reconnect to continue."
+msgstr "Playback changed on another device. Reconnect to continue."
+
+msgid "Playback finished on receiver"
+msgstr "Playback finished on receiver"
+
+msgid "Playing on receiver"
+msgstr "Playing on receiver"
+
+msgid "Preparing media for receiver…"
+msgstr "Preparing media for receiver…"
+
+msgid "Receiver changed. Choose the source again."
+msgstr "Receiver changed. Choose the source again."
+
+msgid "Receiver could not pause safely. Local playback was retained."
+msgstr "Receiver could not pause safely. Local playback was retained."
+
+msgid "Receiver did not confirm playback. Try another source."
+msgstr "Receiver did not confirm playback. Try another source."
+
+msgid "Receiver did not respond. Check its power and Wi-Fi, then try again."
+msgstr "Receiver did not respond. Check its power and Wi-Fi, then try again."
+
+msgid "Receiver format support is unknown. Try this stream, choose another source or play here."
+msgstr "Receiver format support is unknown. Try this stream, choose another source or play here."
+
+msgid "Receiver is already in use."
+msgstr "Receiver is already in use."
+
+msgid "Receiver playback stopped. Choose a source to continue."
+msgstr "Receiver playback stopped. Choose a source to continue."
+
+msgid "Receiver returned an invalid response. Try reconnecting."
+msgstr "Receiver returned an invalid response. Try reconnecting."
+
+msgid "Searching for receivers…"
+msgstr "Searching for receivers…"
+
+msgid "Stop casting or choose Play here before changing receiver."
+msgstr "Stop casting or choose Play here before changing receiver."
+
+msgid "This HLS source is unsupported. Choose another source or play locally."
+msgstr "This HLS source is unsupported. Choose another source or play locally."
+
+msgid "This action is unavailable while casting."
+msgstr "This action is unavailable while casting."
+
+msgid "This receiver does not support this operation."
+msgstr "This receiver does not support this operation."
+
+msgid "This source cannot be sent to this receiver without transcoding. Choose another source."
+msgstr "This source cannot be sent to this receiver without transcoding. Choose another source."
+
+msgid "This source cannot be shared safely. Choose another source."
+msgstr "This source cannot be shared safely. Choose another source."
+
+msgid "Browser links cannot be cast. Choose a direct media source."
+msgstr "Browser links cannot be cast. Choose a direct media source."
+
+msgid "Casting"
+msgstr "Casting"
+
+msgid "Playing"
+msgstr "Playing"
+
+msgid "Paused"
+msgstr "Paused"
+
+msgid "The receiver may still be playing. Resume local playback anyway?"
+msgstr "The receiver may still be playing. Resume local playback anyway?"
+
+msgid "Resume locally anyway"
+msgstr "Resume locally anyway"
+
+msgid "Retry Stop casting"
+msgstr "Retry Stop casting"
+
+msgid "Volume down"
+msgstr "Volume down"
+
+msgid "Volume up"
+msgstr "Volume up"
+
+msgid "This source cannot resume on the receiver. Play locally or choose another source."
+msgstr "This source cannot resume on the receiver. Play locally or choose another source."
+
+msgid "Receiver did not confirm the resume position. Local playback was retained."
+msgstr "Receiver did not confirm the resume position. Local playback was retained."
+
+msgid "Selected embedded subtitles cannot be cast. Use external text subtitles or play locally."
+msgstr "Selected embedded subtitles cannot be cast. Use external text subtitles or play locally."
+
+msgid "This receiver cannot display the selected subtitles. Play locally to preserve them."
+msgstr "This receiver cannot display the selected subtitles. Play locally to preserve them."
+
+msgid "Some external subtitles are unavailable on this receiver. Video can continue or you can play locally."
+msgstr "Some external subtitles are unavailable on this receiver. Video can continue or you can play locally."
+
+msgid "Selected subtitles could not be enabled on this receiver. Play locally to preserve subtitles."
+msgstr "Selected subtitles could not be enabled on this receiver. Play locally to preserve subtitles."
+
+msgid "Torrent source is no longer available. Choose the source again."
+msgstr "Torrent source is no longer available. Choose the source again."
+
+msgid "Stop casting before joining a watch party or paired Nova session."
+msgstr "Stop casting before joining a watch party or paired Nova session."
+
+msgid "Subtitle"
+msgstr "Subtitle"
+
+msgid "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here."
+msgstr "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here."
+
+msgid "This receiver cannot accept this streaming format. Choose another source or play here."
+msgstr "This receiver cannot accept this streaming format. Choose another source or play here."
+
+msgid "This receiver does not support the source codecs. Choose another source or play here."
+msgstr "This receiver does not support the source codecs. Choose another source or play here."
+
+msgid "Changing receiver…"
+msgstr "Changing receiver…"
+
+msgid "Could not confirm receiver ownership. Retry the connection before changing device."
+msgstr "Could not confirm receiver ownership. Retry the connection before changing device."
+
+msgid "Sleep timer finished. Receiver stop could not be confirmed."
+msgstr "Sleep timer finished. Receiver stop could not be confirmed."
+
+msgid "Playback position changed while preparing. Try casting again."
+msgstr "Playback position changed while preparing. Try casting again."
+
+msgid "Casting remux buffer"
+msgstr "Casting remux buffer"
+
+msgid "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."
+msgstr "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."

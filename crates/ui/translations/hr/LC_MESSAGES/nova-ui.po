@@ -5321,3 +5321,250 @@ msgid_plural "Delete {n} recovery copies permanently?"
 msgstr[0] "Trajno izbrisati {n} kopiju za oporavak?"
 msgstr[1] "Trajno izbrisati {n} kopije za oporavak?"
 msgstr[2] "Trajno izbrisati {n} kopija za oporavak?"
+
+msgid "Keep controls visible while paused"
+msgstr "Zadrži kontrole vidljivima tijekom pauze"
+
+msgid "When off, controls fade after five seconds of inactivity. Input shows them again."
+msgstr "Kada je isključeno, kontrole nestaju nakon pet sekundi neaktivnosti. Unos ih ponovno prikazuje."
+
+# External receiver casting
+msgid "Cast to a device"
+msgstr "Emitiraj na uređaj"
+
+msgid "Connecting to receiver"
+msgstr "Povezivanje s prijamnikom"
+
+msgid "Connected to {}"
+msgstr "Povezano s {}"
+
+msgid "Play on this device"
+msgstr "Reproduciraj na ovom uređaju"
+
+msgid "Audio-only receiver"
+msgstr "Prijamnik podržava samo zvuk"
+
+msgid "Use Play here to return playback"
+msgstr "Za povratak reprodukcije odaberite Reproduciraj ovdje"
+
+msgid "Play here"
+msgstr "Reproduciraj ovdje"
+
+msgid "Stop casting"
+msgstr "Zaustavi emitiranje"
+
+msgid "This receiver is already in use. Replace its playback?"
+msgstr "Ovaj je prijamnik već u upotrebi. Zamijeniti reprodukciju?"
+
+msgid "Receiver IP address"
+msgstr "IP adresa prijamnika"
+
+msgid "Enter address"
+msgstr "Unesi adresu"
+
+msgid "Search this network once"
+msgstr "Pretraži ovu mrežu jednom"
+
+msgid "Cancel search"
+msgstr "Otkaži pretraživanje"
+
+msgid "Cancel connection"
+msgstr "Otkaži povezivanje"
+
+msgid "No receivers found. Check that both devices are on the same Wi-Fi network."
+msgstr "Nema pronađenih prijamnika. Provjerite jesu li oba uređaja na istoj Wi-Fi mreži."
+
+msgid "Try this stream"
+msgstr "Isprobaj ovaj izvor"
+
+msgid "Retry connection"
+msgstr "Pokušaj ponovno povezivanje"
+
+msgid "Forward 10 seconds"
+msgstr "Naprijed 10 sekundi"
+
+msgid "Back 10 seconds"
+msgstr "Natrag 10 sekundi"
+
+msgid "Background casting could not start. Keep Nova open and try again."
+msgstr "Emitiranje u pozadini nije pokrenuto. Ostavite Novu otvorenu i pokušajte ponovno."
+
+msgid "Buffering on receiver"
+msgstr "Učitavanje na prijamniku"
+
+msgid "Cannot reach receiver. Check Wi-Fi, VPN and firewall settings."
+msgstr "Nije moguće pristupiti prijamniku. Provjerite Wi-Fi, VPN i vatrozid."
+
+msgid "Cannot serve media on this network. Check VPN and firewall settings."
+msgstr "Nije moguće dijeliti medij na ovoj mreži. Provjerite VPN i vatrozid."
+
+msgid "Casting stopped"
+msgstr "Emitiranje je zaustavljeno"
+
+msgid "Choose a source again to transfer this playback."
+msgstr "Ponovno odaberite izvor za prijenos ove reprodukcije."
+
+msgid "Connected to receiver"
+msgstr "Povezano s prijamnikom"
+
+msgid "Connected. Choose something to watch."
+msgstr "Povezano. Odaberite što želite gledati."
+
+msgid "Connecting to receiver…"
+msgstr "Povezivanje s prijamnikom…"
+
+msgid "Connection cancelled"
+msgstr "Povezivanje je otkazano"
+
+msgid "Could not confirm receiver stopped. Local playback remains paused. Retry Stop casting."
+msgstr "Nije potvrđeno zaustavljanje prijamnika. Lokalna reprodukcija ostaje pauzirana. Ponovite Zaustavi emitiranje."
+
+msgid "Enter a valid receiver IP address."
+msgstr "Unesite valjanu IP adresu prijamnika."
+
+msgid "Leave the watch party or paired Nova session before casting."
+msgstr "Prije emitiranja napustite zajedničko gledanje ili uparenu Nova sesiju."
+
+msgid "Media could not be prepared safely. Choose another source or play locally."
+msgstr "Medij nije moguće sigurno pripremiti. Odaberite drugi izvor ili reproducirajte lokalno."
+
+msgid "Media preparation exceeded its storage limit. Free space or choose another source."
+msgstr "Priprema medija premašila je ograničenje prostora. Oslobodite prostor ili odaberite drugi izvor."
+
+msgid "Media source is unavailable. Refresh sources and try again."
+msgstr "Izvor medija nije dostupan. Osvježite izvore i pokušajte ponovno."
+
+msgid "Paused on receiver"
+msgstr "Pauzirano na prijamniku"
+
+msgid "Playback changed on another device. Reconnect to continue."
+msgstr "Reprodukcija je promijenjena s drugog uređaja. Ponovno se povežite za nastavak."
+
+msgid "Playback finished on receiver"
+msgstr "Reprodukcija je završena na prijamniku"
+
+msgid "Playing on receiver"
+msgstr "Reprodukcija na prijamniku"
+
+msgid "Preparing media for receiver…"
+msgstr "Priprema medija za prijamnik…"
+
+msgid "Receiver changed. Choose the source again."
+msgstr "Prijamnik je promijenjen. Ponovno odaberite izvor."
+
+msgid "Receiver could not pause safely. Local playback was retained."
+msgstr "Prijamnik nije moguće sigurno pauzirati. Lokalna reprodukcija je zadržana."
+
+msgid "Receiver did not confirm playback. Try another source."
+msgstr "Prijamnik nije potvrdio reprodukciju. Pokušajte drugi izvor."
+
+msgid "Receiver did not respond. Check its power and Wi-Fi, then try again."
+msgstr "Prijamnik ne odgovara. Provjerite napajanje i Wi-Fi pa pokušajte ponovno."
+
+msgid "Receiver format support is unknown. Try this stream, choose another source or play here."
+msgstr "Podrška formata na prijamniku nije poznata. Isprobajte izvor, odaberite drugi ili reproducirajte ovdje."
+
+msgid "Receiver is already in use."
+msgstr "Prijamnik je već u upotrebi."
+
+msgid "Receiver playback stopped. Choose a source to continue."
+msgstr "Reprodukcija na prijamniku je zaustavljena. Odaberite izvor za nastavak."
+
+msgid "Receiver returned an invalid response. Try reconnecting."
+msgstr "Prijamnik je vratio nevaljan odgovor. Pokušajte ponovno povezivanje."
+
+msgid "Searching for receivers…"
+msgstr "Traženje prijamnika…"
+
+msgid "Stop casting or choose Play here before changing receiver."
+msgstr "Prije promjene prijamnika zaustavite emitiranje ili odaberite Reproduciraj ovdje."
+
+msgid "This HLS source is unsupported. Choose another source or play locally."
+msgstr "Ovaj HLS izvor nije podržan. Odaberite drugi izvor ili reproducirajte lokalno."
+
+msgid "This action is unavailable while casting."
+msgstr "Ova radnja nije dostupna tijekom emitiranja."
+
+msgid "This receiver does not support this operation."
+msgstr "Ovaj prijamnik ne podržava ovu radnju."
+
+msgid "This source cannot be sent to this receiver without transcoding. Choose another source."
+msgstr "Ovaj izvor zahtijeva transkodiranje za ovaj prijamnik. Odaberite drugi izvor."
+
+msgid "This source cannot be shared safely. Choose another source."
+msgstr "Ovaj izvor nije moguće sigurno dijeliti. Odaberite drugi izvor."
+
+msgid "Browser links cannot be cast. Choose a direct media source."
+msgstr "Veze za preglednik nije moguće emitirati. Odaberite izravan medijski izvor."
+
+msgid "Casting"
+msgstr "Emitiranje"
+
+msgid "The receiver may still be playing. Resume local playback anyway?"
+msgstr "Prijamnik možda još reproducira. Ipak nastaviti lokalnu reprodukciju?"
+
+msgid "Resume locally anyway"
+msgstr "Ipak nastavi lokalno"
+
+msgid "Retry Stop casting"
+msgstr "Pokušaj ponovno zaustaviti emitiranje"
+
+msgid "Volume down"
+msgstr "Smanji glasnoću"
+
+msgid "Volume up"
+msgstr "Povećaj glasnoću"
+
+msgid "This source cannot resume on the receiver. Play locally or choose another source."
+msgstr "Ovaj izvor nije moguće nastaviti na prijamniku. Reproducirajte lokalno ili odaberite drugi izvor."
+
+msgid "Receiver did not confirm the resume position. Local playback was retained."
+msgstr "Prijamnik nije potvrdio položaj nastavka. Lokalna reprodukcija je zadržana."
+
+msgid "Selected embedded subtitles cannot be cast. Use external text subtitles or play locally."
+msgstr "Odabrane ugrađene titlove nije moguće emitirati. Koristite vanjske tekstualne titlove ili reproducirajte lokalno."
+
+msgid "This receiver cannot display the selected subtitles. Play locally to preserve them."
+msgstr "Ovaj prijamnik ne može prikazati odabrane titlove. Za njihovo zadržavanje reproducirajte lokalno."
+
+msgid "Some external subtitles are unavailable on this receiver. Video can continue or you can play locally."
+msgstr "Neki vanjski titlovi nisu dostupni na ovom prijamniku. Video se može nastaviti ili ga možete reproducirati lokalno."
+
+msgid "Selected subtitles could not be enabled on this receiver. Play locally to preserve subtitles."
+msgstr "Odabrane titlove nije moguće uključiti na ovom prijamniku. Za njihovo zadržavanje reproducirajte lokalno."
+
+msgid "Torrent source is no longer available. Choose the source again."
+msgstr "Torrent izvor više nije dostupan. Ponovno odaberite izvor."
+
+msgid "Stop casting before joining a watch party or paired Nova session."
+msgstr "Prije pridruživanja zajedničkom gledanju ili uparenoj Nova sesiji zaustavite emitiranje."
+
+msgid "Subtitle"
+msgstr "Titl"
+
+msgid "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here."
+msgstr "Emitiranje je dosegnulo ograničenje međuspremnika. Povećajte Međuspremnik za remuksiranje pri emitiranju u postavkama reproduktora, odaberite drugi izvor ili reproducirajte ovdje."
+
+msgid "This receiver cannot accept this streaming format. Choose another source or play here."
+msgstr "Ovaj prijamnik ne podržava ovaj format emitiranja. Odaberite drugi izvor ili reproducirajte ovdje."
+
+msgid "This receiver does not support the source codecs. Choose another source or play here."
+msgstr "Ovaj prijamnik ne podržava kodeke izvora. Odaberite drugi izvor ili reproducirajte ovdje."
+
+msgid "Changing receiver…"
+msgstr "Promjena prijamnika…"
+
+msgid "Could not confirm receiver ownership. Retry the connection before changing device."
+msgstr "Nije potvrđeno vlasništvo nad reprodukcijom na prijamniku. Prije promjene uređaja pokušajte ponovno povezivanje."
+
+msgid "Sleep timer finished. Receiver stop could not be confirmed."
+msgstr "Mjerač vremena za spavanje je istekao. Nije potvrđeno zaustavljanje prijamnika."
+
+msgid "Playback position changed while preparing. Try casting again."
+msgstr "Položaj reprodukcije promijenio se tijekom pripreme. Ponovno pokušajte emitiranje."
+
+msgid "Casting remux buffer"
+msgstr "Međuspremnik za remuksiranje pri emitiranju"
+
+msgid "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."
+msgstr "Najviše memorije za zadržane medijske segmente kada je za emitiranje potrebno remuksiranje. Obrada koristi dodatnu memoriju. Primjenjuje se na sljedeću sesiju emitiranja."

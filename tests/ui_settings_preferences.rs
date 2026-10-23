@@ -44,3 +44,9 @@ mod stremio_motion;
 
 #[path = "settings_preferences/catalog_grouping.rs"]
 mod catalog_grouping;
+
+#[path = "settings_preferences/paused_controls.rs"]
+mod paused_controls;
+
+#[path = "settings_preferences/casting_remux_buffer.rs"]
+mod casting_remux_buffer;
