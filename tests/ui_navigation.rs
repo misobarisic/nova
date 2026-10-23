@@ -3,6 +3,9 @@
 #[path = "support/isolation.rs"]
 mod isolation;
 
+#[path = "navigation/feature_previews.rs"]
+mod feature_previews;
+
 #[path = "navigation/more_transition.rs"]
 mod more_transition;
 
@@ -15,6 +18,8 @@ mod navbar_motion;
 #[path = "navigation/onboarding_ui.rs"]
 mod onboarding_ui;
 
+#[path = "navigation/backup.rs"]
+mod backup;
 #[path = "navigation/profiles.rs"]
 mod profiles;
 

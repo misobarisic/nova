@@ -232,6 +232,9 @@ impl Bridge {
         self.list_services().wake.store(true, Ordering::Release);
     }
     pub(super) fn list_services_connect(&self, value: i32, client: String, token: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(i) = index(value) else {
             return;
         };
@@ -260,6 +263,9 @@ impl Bridge {
         );
     }
     pub(super) fn list_services_disconnect(&self, value: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(i) = index(value) {
             let h = self.list_services();
             let epoch = h.bump(i);
@@ -274,12 +280,18 @@ impl Bridge {
         }
     }
     pub(super) fn list_services_sync(&self, value: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(i) = index(value) {
             let h = self.list_services();
             h.send(Command::Sync(i, h.generation[i].load(Ordering::Acquire)));
         }
     }
     pub(super) fn list_services_automatic_changed(&self, value: i32, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(i) = index(value) {
             let h = self.list_services();
             h.control(
@@ -289,6 +301,9 @@ impl Bridge {
         }
     }
     pub(super) fn list_services_scope_changed(&self, value: i32, full: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(i) = index(value) {
             let h = self.list_services();
             let generation = h.generation[i].load(Ordering::Acquire);
@@ -296,6 +311,9 @@ impl Bridge {
         }
     }
     pub(super) fn list_services_open_account(&self, value: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(i) = index(value) {
             let _ = crate::player::open_browser(if i == 0 {
                 "https://simkl.com/settings/developer/"
@@ -324,6 +342,9 @@ impl Bridge {
         }
     }
     pub(super) fn list_services_title_select(&self, value: i32, enabled: bool, history: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(review) = self.list_services_review(value) {
             let h = self.list_services();
             let generation = h.generation[review.service].load(Ordering::Acquire);
@@ -365,6 +386,9 @@ impl Bridge {
         }
     }
     pub(super) fn list_services_title_sync(&self, value: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(review) = self.list_services_review(value) {
             let h = self.list_services();
             let generation = h.generation[review.service].load(Ordering::Acquire);

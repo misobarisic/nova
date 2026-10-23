@@ -7,6 +7,21 @@ struct Fixture {
 }
 
 fn isolated(name: &str, body: impl FnOnce(Fixture)) {
+    isolated_prepared(name, |_| {}, body);
+}
+
+fn isolated_with_downloads(name: &str, body: impl FnOnce(Fixture)) {
+    isolated_prepared(name, seed_receiver_downloads, |fixture| {
+        assert!(fixture.bridge.shared.lock().unwrap().installed.is_empty());
+        body(fixture);
+    });
+}
+
+fn isolated_prepared(
+    name: &str,
+    prepare: impl FnOnce(&std::path::Path),
+    body: impl FnOnce(Fixture),
+) {
     const ROOT: &str = "NOVA_REMOTE_COORDINATOR_TEST_ROOT";
     let Some(root) = std::env::var_os(ROOT) else {
         let root = std::env::temp_dir().join(format!(
@@ -37,6 +52,7 @@ fn isolated(name: &str, body: impl FnOnce(Fixture)) {
     let root = PathBuf::from(root);
     i_slint_backend_testing::init_integration_test_with_mock_time();
     storage::init_at(&root);
+    prepare(&root);
     playback_foreground(true);
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
@@ -134,6 +150,18 @@ fn startup_profile_selection_blocks_remote_playback_and_state() {
             }
             assert!(!app.get_player_open());
             assert!(bridge.shared.lock().unwrap().playback_intent.is_none());
+            profile_policy::set_entry_blocked(true);
+            let response = receive(&bridge, peer("controller", 3, true), Request::Snapshot);
+            assert_eq!(
+                response,
+                Response::Error(PlaybackError::Failed("profile_locked".into()))
+            );
+            assert_eq!(
+                error_text(&PlaybackError::Failed("profile_locked".into())),
+                "Unlock on TV."
+            );
+            assert!(!app.get_player_open());
+            profile_policy::set_entry_blocked(false);
             app.set_profiles_require_selection(false);
             assert!(bridge.playback_snapshot().ready);
         },
@@ -852,9 +880,9 @@ fn receiver_episode_resolution_prefers_native_ids_and_rejects_ambiguous_or_stale
     assert!(remote_episode(&videos, "unknown").is_none());
 }
 
-fn install_receiver_downloads(bridge: &mut Bridge) {
-    let root = PathBuf::from(std::env::var_os("NOVA_REMOTE_COORDINATOR_TEST_ROOT").unwrap())
-        .join("downloads");
+fn seed_receiver_downloads(root: &std::path::Path) {
+    let root = root.join("downloads");
+    std::fs::create_dir_all(&root).unwrap();
     let jobs = (1..=2)
         .map(|episode| {
             let path = root.join(format!("episode-{episode}.mkv"));
@@ -878,10 +906,8 @@ fn install_receiver_downloads(bridge: &mut Bridge) {
             .to_json()
             .unwrap(),
     );
-    Arc::get_mut(&mut bridge.runtime)
-        .expect("fixture runtime is not shared yet")
-        .downloads = DownloadCoordinator::new(root);
-    assert!(bridge.shared.lock().unwrap().installed.is_empty());
+    // Seed durable state before constructing the one device-owned coordinator.
+    // Reopening the same root intentionally returns its existing live owner.
 }
 
 fn alias_media(episode: &str) -> MediaIdentity {
@@ -909,16 +935,12 @@ fn assert_download_offer(bridge: &Bridge, response: Response, episode: u32) {
 
 #[test]
 fn cached_remote_aliases_find_receiver_downloads_without_metadata_addons() {
-    isolated(
+    isolated_with_downloads(
         concat!(
             module_path!(),
             "::cached_remote_aliases_find_receiver_downloads_without_metadata_addons"
         ),
-        |Fixture {
-             app: _app,
-             mut bridge,
-         }| {
-            install_receiver_downloads(&mut bridge);
+        |Fixture { app: _app, bridge }| {
             let mut videos = vec![alias_video("tt100:1:1", 1, &["kitsu:100:1"])];
             write_episodes_cache_for("series", "tt100", &videos);
             assert_download_offer(
@@ -973,16 +995,12 @@ fn cached_remote_aliases_find_receiver_downloads_without_metadata_addons() {
 
 #[test]
 fn live_remote_metadata_resolves_after_reconciliation_without_first_alias_wins() {
-    isolated(
+    isolated_with_downloads(
         concat!(
             module_path!(),
             "::live_remote_metadata_resolves_after_reconciliation_without_first_alias_wins"
         ),
-        |Fixture {
-             app: _app,
-             mut bridge,
-         }| {
-            install_receiver_downloads(&mut bridge);
+        |Fixture { app: _app, bridge }| {
             for (requested, aliases, expected) in [
                 ("tt100:1:2", vec!["tt100:1:2"], Some(2)),
                 ("kitsu:100:1", vec!["kitsu:100:1"], None),
@@ -1018,13 +1036,12 @@ fn live_remote_metadata_resolves_after_reconciliation_without_first_alias_wins()
 
 #[test]
 fn receiver_sizes_survive_offers_and_controller_stream_rows() {
-    isolated(
+    isolated_with_downloads(
         concat!(
             module_path!(),
             "::receiver_sizes_survive_offers_and_controller_stream_rows"
         ),
-        |Fixture { app, mut bridge }| {
-            install_receiver_downloads(&mut bridge);
+        |Fixture { app, bridge }| {
             let streams = Addon::parse_streams(
                 &serde_json::to_vec(&serde_json::json!({"streams": [
                     {"name":"Addon", "title":"Hinted release\n💾 2.0 GB", "url":"https://example.invalid/hinted.mkv", "behaviorHints":{"videoSize":1100000000u64}},
@@ -1880,6 +1897,228 @@ fn current_offers_are_source_bound_and_capture_recovery_at_start_acceptance() {
             assert_eq!(actual.title.subtitle_style, latest.title.subtitle_style);
             assert_eq!(actual.audio_language, latest.audio_language);
             assert_eq!(actual.subtitle_language, latest.subtitle_language);
+        },
+    );
+}
+
+#[test]
+fn sleep_timer_is_receiver_owned_survives_disconnect_and_rejects_old_session_cancel() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::sleep_timer_is_receiver_owned_survives_disconnect_and_rejects_old_session_cancel"
+        ),
+        |Fixture { app, bridge }| {
+            let media = MediaIdentity {
+                media_type: "series".into(),
+                title_id: "timer-show".into(),
+                episode_id: "e1".into(),
+                ..Default::default()
+            };
+            bridge.shared.lock().unwrap().remote_playback.start_context = Some(media.clone());
+            let request = bridge.begin_playback_request();
+            app.set_player_open(true);
+            let session = bridge.playback_snapshot().session.unwrap();
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    Request::Command {
+                        session,
+                        action: PlaybackAction::SetSleepTimer(
+                            nova_playback_api::SleepTimerMode::Minutes(30)
+                        )
+                    }
+                ),
+                Response::Accepted
+            );
+            assert!(bridge.playback_snapshot().sleep_timer.is_some());
+            // Disconnect cleanup releases ephemeral holds, never the receiver timer.
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    Request::ReleasePreview
+                ),
+                Response::Accepted
+            );
+            assert!(bridge.playback_snapshot().sleep_timer.is_some());
+            bridge.shared.lock().unwrap().remote_playback.start_context = Some(media);
+            let replacement = bridge.begin_playback_request();
+            assert!(!request.is_current());
+            app.set_player_open(true);
+            let current = bridge.playback_snapshot().session.unwrap();
+            assert_ne!(session, current);
+            assert_eq!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    Request::Command {
+                        session,
+                        action: PlaybackAction::CancelSleepTimer
+                    }
+                ),
+                Response::Error(PlaybackError::StaleSession)
+            );
+            assert!(bridge.playback_snapshot().sleep_timer.is_some());
+            // A native deadline elapsed while Slint was paused invalidates the
+            // pending source and closes before its late callback can start it.
+            bridge.player.set_sleep_deadline(Some(0));
+            assert!(bridge.refresh_sleep_timer());
+            assert!(!app.get_player_open());
+            assert!(!replacement.is_current());
+            assert!(!bridge.playback_request_is_current(&replacement));
+            assert!(bridge.playback_snapshot().sleep_timer.is_none());
+        },
+    );
+}
+
+#[test]
+fn cancelling_a_candidate_keeps_live_playback_timer_but_closing_loading_player_cancels_it() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::cancelling_a_candidate_keeps_live_playback_timer_but_closing_loading_player_cancels_it"
+        ),
+        |Fixture { app, bridge }| {
+            let media = MediaIdentity {
+                media_type: "series".into(),
+                title_id: "timer-show".into(),
+                episode_id: "e1".into(),
+                ..Default::default()
+            };
+            bridge.shared.lock().unwrap().remote_playback.start_context = Some(media.clone());
+            let candidate = bridge.begin_playback_request();
+            app.set_player_open(true); // An older loaded item remains on screen.
+            bridge
+                .set_sleep_timer(nova_playback_api::SleepTimerMode::Minutes(30))
+                .unwrap();
+            bridge.cancel_pending_playback();
+            assert!(!candidate.is_current());
+            assert!(app.get_player_open());
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .sleep_timer
+                    .snapshot(crate::player::elapsed_realtime_ms())
+                    .is_some()
+            );
+            assert!(!bridge.player.sleep_deadline_expired());
+
+            bridge.shared.lock().unwrap().remote_playback.start_context = Some(media);
+            let loading = bridge.begin_playback_request();
+            app.set_player_open(true);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_mut()
+                .unwrap()
+                .in_app = true;
+            bridge.cancel_pending_playback();
+            assert!(!loading.is_current());
+            assert!(!app.get_player_open());
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .sleep_timer
+                    .snapshot(crate::player::elapsed_realtime_ms())
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn restricted_remote_offers_require_approved_title_and_local_provenance() {
+    isolated_prepared(
+        concat!(
+            module_path!(),
+            "::restricted_remote_offers_require_approved_title_and_local_provenance"
+        ),
+        |root| {
+            // Real startup establishes the selected profile before Bridge
+            // attaches its activation session. Initializing afterward would
+            // replace that context with a durable owner that cannot use UI
+            // state, and would test a lifecycle production never performs.
+            profiles::initialize().unwrap();
+            seed_receiver_downloads(root);
+        },
+        |Fixture { app: _app, bridge }| {
+            let owner = profiles::ProfileStore::capture();
+            assert!(owner.is_scoped());
+            assert!(bridge.shared.lock().unwrap().installed.is_empty());
+            let mut policy = profile_policy::ProfilePolicy {
+                pin: "0012".into(),
+                restricted: true,
+                allowed_titles: vec![profile_policy::AllowedTitle {
+                    media_type: "series".into(),
+                    title_id: "tt100".into(),
+                }],
+                ..Default::default()
+            };
+            owner
+                .write(
+                    "library",
+                    r#"[{"id":"tt100","type_":"series","name":"Receiver show"}]"#,
+                )
+                .unwrap();
+            owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            write_episodes_cache_for(
+                "series",
+                "tt100",
+                &[alias_video("tt100:1:1", 1, &["kitsu:100:1"])],
+            );
+            let response = receive(
+                &bridge,
+                peer("controller", 1, true),
+                Request::Lookup(alias_media("tt100:1:1")),
+            );
+            assert!(
+                matches!(response,Response::Offers(ref rows) if rows.is_empty()),
+                "unapproved local source must not be offered: {response:?}"
+            );
+            policy.allowed_addons.push("local".into());
+            owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            assert_download_offer(
+                &bridge,
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    Request::Lookup(alias_media("tt100:1:1")),
+                ),
+                1,
+            );
+            policy.allowed_titles.clear();
+            owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            assert!(matches!(
+                receive(
+                    &bridge,
+                    peer("controller", 1, true),
+                    Request::Lookup(alias_media("tt100:1:1"))
+                ),
+                Response::Error(PlaybackError::Unavailable)
+            ));
         },
     );
 }

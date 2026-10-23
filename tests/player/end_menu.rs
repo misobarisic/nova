@@ -62,6 +62,47 @@ fn setup() -> (nova::AppWindow, Rc<RefCell<Vec<&'static str>>>) {
 }
 
 #[test]
+fn manual_queue_end_choice_uses_queued_successor_on_phone_and_tv() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::manual_queue_end_choice_uses_queued_successor_on_phone_and_tv"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let (app, actions) = setup();
+    app.set_playback_end_menu_queue(true);
+    app.set_playback_end_menu_has_next(true);
+    app.set_playback_end_menu_next_title("The queued movie".into());
+    for tv in [false, true] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window().set_size(slint::PhysicalSize::new(
+            if tv { 1280 } else { 390 },
+            if tv { 720 } else { 844 },
+        ));
+        app.set_playback_end_menu_visible(true);
+        advance(&app, 40);
+        let queued = ElementQuery::from_root(&app)
+            .match_predicate(|item| {
+                item.accessible_role() == Some(AccessibleRole::Button)
+                    && item
+                        .accessible_label()
+                        .is_some_and(|label| label == "Next queued item")
+            })
+            .find_all();
+        assert_eq!(
+            queued.len(),
+            1,
+            "queue EOF must not offer an unrelated sequential episode"
+        );
+        key(&app, slint::platform::Key::Return);
+        app.set_playback_end_menu_visible(false);
+        advance(&app, 20);
+    }
+    assert_eq!(actions.borrow().as_slice(), ["next", "next"]);
+}
+
+#[test]
 fn android_pip_hides_entire_scene_and_restores_player_state() {
     if !crate::isolation::run(concat!(
         module_path!(),

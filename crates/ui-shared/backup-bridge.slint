@@ -1,0 +1,29 @@
+export struct BackupOption { id: string, label: string, checked: bool }
+export struct BackupMapping { id: string, label: string, target: string }
+export global BackupBridge {
+    in-out property <bool> open;
+    in-out property <bool> busy;
+    in-out property <bool> importing;
+    in-out property <bool> preview_ready;
+    in-out property <bool> replace;
+    in-out property <string> status;
+    in-out property <[BackupOption]> profiles;
+    in-out property <[BackupOption]> components;
+    in-out property <[BackupMapping]> mappings;
+    in-out property <[BackupOption]> conflicts;
+    in-out property <[string]> preview_rows;
+    callback opened();
+    callback closed();
+    callback preset(int);
+    callback toggle_profile(string);
+    callback toggle_component(string);
+    callback toggle_conflict(string);
+    callback cycle_target(string);
+    callback mode_changed(bool);
+    callback export_file();
+    callback import_file();
+    callback build_preview();
+    callback apply_import();
+    callback undo();
+    callback delete_recovery();
+}

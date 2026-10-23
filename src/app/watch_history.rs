@@ -223,6 +223,13 @@ impl Bridge {
         drop(state);
         let hidden: HashMap<String, u64> = read_json(HIDDEN_KEY).unwrap_or_default();
         rows.retain(|row| {
+            profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &row.type_,
+                &row.series_id,
+            )
+        });
+        rows.retain(|row| {
             hidden
                 .get(&title_key(&row.type_, &row.series_id))
                 .is_none_or(|hidden_at| row.played_at_secs > *hidden_at)
@@ -525,6 +532,13 @@ pub(super) fn prepare_progress_history(
                 resume_only,
             )
         };
+        rows.retain(|row| {
+            profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &row.type_,
+                &row.series_id,
+            )
+        });
         rows.retain(|row| {
             hidden
                 .get(&title_key(&row.type_, &row.series_id))

@@ -1,4 +1,5 @@
-import { RemoteBridge, Theme, SettingsStyle, InterfaceStyle, SubtitleStyle } from "@NovaUiShared";
+import { SleepTimerMenu } from "sleep-timer.slint";
+import { PlayerOsdBridge, RemoteBridge, Theme, SettingsStyle, InterfaceStyle, SubtitleStyle } from "@NovaUiShared";
 import { PillButton, MiniSlider } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
@@ -125,7 +126,7 @@ component RemoteToolsSurface inherits Rectangle {
         else if top + h > menu_scroll.visible-height { menu_scroll.content-y -= top + h - menu_scroll.visible-height; }
     }
     pure function count() -> int {
-        return root.page == "tools" ? 7 : root.page == "chapters" ? RemoteBridge.chapters.length
+        return root.page == "sleep" ? 15 : root.page == "tools" ? 8 : root.page == "chapters" ? RemoteBridge.chapters.length
             : root.page == "secondary" ? RemoteBridge.secondary_sub_tracks.length + 4
             : root.page == "intro" ? 6 : root.page == "bookmarks" ? 1 + RemoteBridge.bookmarks.length * 3
             : root.page == "recovery" ? 6 : root.page == "device" ? 4 : root.page == "appearance" ? 9 : 3;
@@ -137,7 +138,7 @@ component RemoteToolsSurface inherits Rectangle {
             : root.page != "tools" || (i == 0 ? RemoteBridge.can_chapters : i == 1 ? RemoteBridge.can_subtitle_style
             : i == 2 ? RemoteBridge.can_secondary_subtitles : i == 3 ? RemoteBridge.can_intro_skip
             : i == 4 ? RemoteBridge.can_bookmarks : i == 5 ? RemoteBridge.can_source_recovery || RemoteBridge.can_source_offers || RemoteBridge.can_subtitle_discovery
-            : RemoteBridge.can_decoder || RemoteBridge.can_brightness);
+            : i == 7 ? RemoteBridge.sleep_timer_available : RemoteBridge.can_decoder || RemoteBridge.can_brightness);
     }
     private property <int> next_index;
     function move(direction: int) {
@@ -158,6 +159,9 @@ component RemoteToolsSurface inherits Rectangle {
         width: 100%; height: 100%; enabled: root.active;
         key-pressed(e) => {
             if e.text == Key.Back || e.text == Key.Escape || (e.text == Key.Backspace && root.page != "bookmark-editor") { if !e.repeat { root.go_back(); } accept }
+            else if InterfaceStyle.tv && root.page == "sleep" && (e.text == Key.Return || e.text == " ") {
+                if !e.repeat && root.ready { PlayerOsdBridge.sleep_timer_pick(root.selected, true); } accept
+            }
             else if InterfaceStyle.tv && root.page == "appearance" && ((root.selected >= 0 && root.selected < 5) || root.selected == 7) && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                 root.send("subtitle_style", RemoteBridge.subtitle_style[root.selected] + (e.text == Key.LeftArrow ? -1 : 1) * SubtitleStyle.step(root.selected), root.selected == 0 ? "0" : root.selected == 1 ? "1" : root.selected == 2 ? "2" : root.selected == 3 ? "3" : root.selected == 4 ? "4" : "7", ""); accept
             } else if InterfaceStyle.tv && root.page == "appearance" && (root.selected == 5 || root.selected == 6) && (e.text == Key.Return || e.text == " ") {
@@ -177,24 +181,28 @@ component RemoteToolsSurface inherits Rectangle {
                         : root.page == "appearance" ? @tr("Subtitle appearance") : root.page == "secondary" ? @tr("Secondary subtitles")
                         : root.page == "intro" ? @tr("Intros and credits") : root.page == "bookmarks" ? @tr("Scene bookmarks")
                         : root.page == "bookmark-editor" ? (root.editing_id == "" ? @tr("Add bookmark") : @tr("Edit note"))
-                        : root.page == "recovery" ? @tr("Sources and online subtitles") : @tr("Device playback");
+                        : root.page == "sleep" ? @tr("Sleep timer") : root.page == "recovery" ? @tr("Sources and online subtitles") : @tr("Device playback");
                     subtitle: RemoteBridge.target_name; show-back: true; narrow: root.width < 700px;
                     back => { root.go_back(); }
                 }
                 if root.page == "tools": SessionPanel {
                     VerticalLayout { padding: 4px; spacing: 0px; alignment: start;
-                        for label[i] in [@tr("Chapters"), @tr("Subtitle appearance"), @tr("Secondary subtitles"), @tr("Intros and credits"), @tr("Scene bookmarks"), @tr("Sources and online subtitles"), @tr("Device playback")]: VerticalLayout {
+                        for label[i] in [@tr("Chapters"), @tr("Subtitle appearance"), @tr("Secondary subtitles"), @tr("Intros and credits"), @tr("Scene bookmarks"), @tr("Sources and online subtitles"), @tr("Device playback"), @tr("Sleep timer")]: VerticalLayout {
                             spacing: 0px; vertical-stretch: 0;
                             if root.available(i): RemoteToolRow {
                             slot: i; current: root.selected; label: label; enabled: root.ready && root.available(i); submenu: true;
                             icon: i == 0 ? @image-url("../../assets/icons/player/list-video.svg") : i == 1 ? @image-url("../../assets/icons/player/sliders-horizontal.svg")
                                 : i == 2 ? @image-url("../../assets/icons/player/captions.svg") : i == 3 ? @image-url("../../assets/icons/player/skip-forward.svg")
                                 : i == 4 ? @image-url("../../assets/icons/player/bookmark.svg") : i == 5 ? @image-url("../../assets/icons/player/refresh-cw.svg") : @image-url("../../assets/icons/player/cpu.svg");
-                            activate => { RemoteBridge.menu_page = i == 0 ? "chapters" : i == 1 ? "appearance" : i == 2 ? "secondary" : i == 3 ? "intro" : i == 4 ? "bookmarks" : i == 5 ? "recovery" : "device"; }
+                            activate => { RemoteBridge.menu_page = i == 0 ? "chapters" : i == 1 ? "appearance" : i == 2 ? "secondary" : i == 3 ? "intro" : i == 4 ? "bookmarks" : i == 5 ? "recovery" : i == 7 ? "sleep" : "device"; }
                             reveal(y, h) => { root.reveal(y, h); }
                             }
                         }
                     }
+                }
+                if root.page == "sleep": SleepTimerMenu {
+                    remote: true; enabled: root.ready && RemoteBridge.sleep_timer_available; focused_idx: root.selected;
+                    reveal(y,h) => { root.reveal(y,h); }
                 }
                 if root.page == "chapters": SessionPanel {
                     VerticalLayout { padding: 8px; spacing: 4px; alignment: start;
@@ -322,7 +330,7 @@ export component RemoteControlsPage inherits Rectangle {
     property <bool> more_expanded: false;
     private property <bool> has_tools: RemoteBridge.can_chapters || RemoteBridge.can_subtitle_style
         || RemoteBridge.can_secondary_subtitles || RemoteBridge.can_intro_skip || RemoteBridge.can_bookmarks
-        || RemoteBridge.can_source_recovery || RemoteBridge.can_source_offers || RemoteBridge.can_subtitle_discovery
+        || RemoteBridge.sleep_timer_available || RemoteBridge.can_source_recovery || RemoteBridge.can_source_offers || RemoteBridge.can_subtitle_discovery
         || RemoteBridge.can_decoder || RemoteBridge.can_brightness;
     changed has_tools => {
         if root.active && !root.has_tools {
@@ -386,9 +394,18 @@ export component RemoteControlsPage inherits Rectangle {
             if root.tv-index < 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
             if root.tv-index < 17 && RemoteBridge.offers.length > 0 { root.tv-index = 17; focus.focus(); return; }
             if root.ready && root.has_tools && root.tv-index < 17 + RemoteBridge.offers.length { root.tv-index = 17 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && RemoteBridge.connected && root.tv-index < 18 + RemoteBridge.offers.length { root.tv-index = 18 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_active && root.tv-index < 19 + RemoteBridge.offers.length { root.tv-index = 19 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && RemoteBridge.connected && RemoteBridge.queue_active && root.tv-index < 20 + RemoteBridge.offers.length { root.tv-index = 20 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_countdown > 0 && root.tv-index < 21 + RemoteBridge.offers.length { root.tv-index = 21 + RemoteBridge.offers.length; return; }
         }
         if direction < 0 {
-            if root.tv-index > 17 { root.tv-index -= 1; focus.focus(); return; }
+            if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_countdown > 0 && root.tv-index > 21 + RemoteBridge.offers.length { root.tv-index = 21 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && RemoteBridge.connected && RemoteBridge.queue_active && root.tv-index > 20 + RemoteBridge.offers.length { root.tv-index = 20 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_active && root.tv-index > 19 + RemoteBridge.offers.length { root.tv-index = 19 + RemoteBridge.offers.length; return; }
+            if RemoteBridge.can_queue && RemoteBridge.connected && root.tv-index > 18 + RemoteBridge.offers.length { root.tv-index = 18 + RemoteBridge.offers.length; return; }
+            if root.ready && root.has_tools && root.tv-index > 17 + RemoteBridge.offers.length { root.tv-index = 17 + RemoteBridge.offers.length; return; }
+            if root.tv-index > 17 && root.tv-index <= 17 + RemoteBridge.offers.length { root.tv-index -= 1; focus.focus(); return; }
             if root.tv-index > 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
             if root.tv-index > 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
             if root.tv-index > 14 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 14; return; }
@@ -580,6 +597,32 @@ export component RemoteControlsPage inherits Rectangle {
                         clicked => { if InterfaceStyle.tv { root.tv-index = 0; } root.action("stop", 0); }
                     }
                 }
+                if RemoteBridge.can_queue: SessionPanel {
+                    VerticalLayout { padding: 12px; spacing: 8px;
+                        if RemoteBridge.queue_active: Text { text: RemoteBridge.queue_phase; wrap: word-wrap; color: Theme.current.text_secondary; }
+                        PillButton {
+                            property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 18 + RemoteBridge.offers.length;
+                            changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                            label: @tr("Continue queue"); enabled: root.active && RemoteBridge.connected && !RemoteBridge.loading;
+                            clicked => { RemoteBridge.action("queue_continue", 0, RemoteBridge.session); }
+                        }
+                        if RemoteBridge.queue_active: PillButton {
+                            property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 19 + RemoteBridge.offers.length;
+                            changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                            label: @tr("Skip queued item"); enabled: root.ready; clicked => { root.action("queue_skip", 0); }
+                        }
+                        if RemoteBridge.queue_active: PillButton {
+                            property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 20 + RemoteBridge.offers.length;
+                            changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                            label: @tr("Stop queue"); enabled: root.active && RemoteBridge.connected && !RemoteBridge.loading; clicked => { RemoteBridge.action("queue_stop", 0, RemoteBridge.session); }
+                        }
+                        if RemoteBridge.queue_countdown > 0: PillButton {
+                            property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 21 + RemoteBridge.offers.length;
+                            changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                            label: @tr("Play now"); enabled: root.ready; clicked => { root.action("queue_now", 0); }
+                        }
+                    }
+                }
                 if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
                     Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
                     prompt_accept := PillButton {
@@ -657,6 +700,11 @@ export component RemoteControlsPage inherits Rectangle {
         }
     }
 
+    if RemoteBridge.sleep_timer_active && RemoteBridge.menu_page == "": Text {
+        text: RemoteBridge.sleep_timer_label; x: root.safe-left + 18px; y: root.safe-top + 64px;
+        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+        color: Theme.current.text_secondary; horizontal-alignment: right;
+    }
     if RemoteBridge.menu_page != "": Rectangle { width: 100%; height: 100%; background: Theme.current.artwork_canvas; }
     tools := RemoteToolsSurface {
         visible: RemoteBridge.menu_page != "";

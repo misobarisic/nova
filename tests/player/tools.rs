@@ -918,3 +918,69 @@ fn direct_subtitle_tools_animate_forward_and_back_and_respect_reduced_motion() {
         key(&app, slint::platform::Key::Escape);
     }
 }
+
+#[test]
+fn sleep_timer_phone_and_tv_controls_scroll_activate_and_back_without_stopping() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::sleep_timer_phone_and_tv_controls_scroll_activate_and_back_without_stopping"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for tv in [false, true] {
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::Anim>().set_enabled(false);
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window().set_size(slint::PhysicalSize::new(
+            if tv { 1280 } else { 390 },
+            if tv { 720 } else { 844 },
+        ));
+        app.set_is_android(!tv);
+        app.set_desktop_decoder_available(true);
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_osd_visible(true);
+        app.set_sleep_timer_available(true);
+        app.set_sleep_timer_end_available(true);
+        app.set_sleep_timer_episodes_available(true);
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let recorded = commands.clone();
+        app.global::<nova::PlayerOsdBridge>()
+            .on_sleep_timer_changed(move |mode, value| recorded.borrow_mut().push((mode, value)));
+        app.on_close_player(|| panic!("Back from a timer menu must not close playback"));
+        app.show().unwrap();
+        open_page(&app, 7);
+        assert!(button(&app, "15 minutes").size().height > 0.0);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(commands.borrow().as_slice(), &[(1, 15)]);
+        for _ in 0..7 {
+            key(&app, slint::platform::Key::DownArrow);
+        }
+        let custom = button(&app, "Start custom timer");
+        let point = custom.absolute_position();
+        assert!(
+            point.y >= 0.0 && point.y + custom.size().height <= if tv { 720.0 } else { 844.0 },
+            "focused custom timer action must remain visible"
+        );
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(commands.borrow().last(), Some(&(1, 30)));
+        key(&app, slint::platform::Key::Escape);
+        let timer = button(&app, "Sleep timer");
+        let top = timer.absolute_position().y;
+        assert!(
+            top >= 0.0 && top + timer.size().height <= if tv { 720.0 } else { 844.0 },
+            "Back must reveal the invoking Sleep timer row"
+        );
+        key(&app, slint::platform::Key::Return);
+        assert!(
+            button(&app, "15 minutes").size().height > 0.0,
+            "Back must restore keyboard focus to Sleep timer"
+        );
+        key(&app, slint::platform::Key::Escape);
+        key(&app, slint::platform::Key::Escape);
+        assert!(app.get_player_open());
+        app.hide().unwrap();
+    }
+}

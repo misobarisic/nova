@@ -133,6 +133,7 @@ impl Member {
     fn new(id: String, name: String, is_host: bool, now: u64) -> Self {
         Self {
             participant: Participant {
+                source_fingerprint: None,
                 id,
                 name,
                 is_host,
@@ -506,6 +507,18 @@ impl HostRoom {
                 member.admitted = false;
             }
             member.participant.connected = age <= DISCONNECTED_MS;
+            member.participant.source_fingerprint = if !self.snapshot.ended
+                && member.participant.connected
+                && member.report.generation == self.snapshot.generation
+                && !member.report.ended
+                && member.report.error.is_none()
+                && self.snapshot.media.as_ref().is_some_and(|media| {
+                    media_matches(&media.identity, member.report.media.as_ref())
+                }) {
+                member.report.source_fingerprint
+            } else {
+                None
+            };
             let mut issue = self.snapshot.media.as_ref().map_or_else(
                 || Some("waiting for host to choose media".into()),
                 |media| reason(media, self.snapshot.generation, &member.report),
@@ -1046,5 +1059,67 @@ pub(crate) mod tests {
         assert_eq!(drift_correction(&snapshot, &local, 2_000).rate, 1.0);
         snapshot.connected = false;
         assert!(drift_correction(&snapshot, &local, 2_000).paused);
+    }
+}
+
+#[cfg(test)]
+mod source_hint_tests {
+    use super::tests::{media, report, room};
+    use super::*;
+
+    #[test]
+    fn source_hints_are_scoped_to_current_media_generation_and_connection() {
+        let mut room = room();
+        let mut host = report();
+        host.source_fingerprint = Some([1; 32]);
+        room.local_report(host, 100).unwrap();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        let mut guest = report();
+        guest.source_fingerprint = Some([2; 32]);
+        room.report("guest", guest.clone(), 2, 200).unwrap();
+        let hints = |room: &HostRoom| {
+            room.snapshot
+                .participants
+                .iter()
+                .map(|p| (p.id.clone(), p.source_fingerprint))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(hints(&room)["host"], Some([1; 32]));
+        assert_eq!(hints(&room)["guest"], Some([2; 32]));
+
+        guest.media.as_mut().unwrap().episode_id = "wrong-episode".into();
+        room.report("guest", guest.clone(), 3, 300).unwrap();
+        assert_eq!(hints(&room)["guest"], None);
+        guest.media = Some(media().identity);
+        room.report("guest", guest.clone(), 4, 400).unwrap();
+        assert_eq!(hints(&room)["guest"], Some([2; 32]));
+        room.tick(400 + DISCONNECTED_MS + 1);
+        assert_eq!(hints(&room)["guest"], None);
+        room.clear_media(400 + DISCONNECTED_MS + 2).unwrap();
+        assert!(
+            room.snapshot
+                .participants
+                .iter()
+                .all(|p| p.source_fingerprint.is_none())
+        );
+        room.select_media(media(), report(), 3000).unwrap();
+        assert_ne!(room.snapshot.generation, guest.generation);
+        room.report("guest", guest, 5, 3100).unwrap();
+        assert_eq!(hints(&room)["guest"], None);
+        room.remove("guest", 3200).unwrap();
+        assert!(!hints(&room).contains_key("guest"));
+    }
+
+    #[test]
+    fn source_hint_wire_shape_is_fixed_and_versioned() {
+        assert_eq!(ALPN, b"nova/party/3");
+        let report = LocalReport {
+            source_fingerprint: Some([9; 32]),
+            ..Default::default()
+        };
+        let bytes = postcard::to_allocvec(&report).unwrap();
+        let decoded: LocalReport = crate::wire::decode(&bytes).unwrap();
+        assert_eq!(decoded.source_fingerprint, Some([9; 32]));
+        assert!(bytes.len() < 128);
     }
 }

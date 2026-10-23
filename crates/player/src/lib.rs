@@ -38,6 +38,9 @@ mod media_badges;
 mod media_probe;
 pub use media_probe::probe_local_duration;
 
+mod sleep_timer;
+pub use sleep_timer::elapsed_realtime_ms;
+
 mod screenshot;
 pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
@@ -356,6 +359,10 @@ fn resume_android_playback(auto_continue: bool) {
         .as_ref()
         .and_then(|s| s.upgrade())
     {
+        // Never briefly auto-continue audio after a deadline elapsed in suspend.
+        if state.enforce_sleep_deadline() {
+            return;
+        }
         let mut recovery = state.recovery.lock().unwrap();
         let play = resume_android_recovery(
             &mut recovery,
@@ -1124,6 +1131,7 @@ struct PreferenceSession {
 }
 
 struct State {
+    sleep_deadline: Mutex<sleep_timer::Deadline>,
     #[cfg(not(target_os = "android"))]
     playback_fullscreen: AtomicBool,
     #[cfg(not(target_os = "android"))]
@@ -1434,6 +1442,7 @@ impl Player {
             .map(native_subtitle_defaults)
             .unwrap_or_default();
         let state = Arc::new(State {
+            sleep_deadline: Mutex::new(Default::default()),
             native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
             preference_source: Mutex::new(String::new()),
@@ -1528,6 +1537,7 @@ impl Player {
         {
             *ANDROID_PLAYER.lock().unwrap() = Some(Arc::downgrade(&state));
         }
+        sleep_timer::start_watchdog(&state);
         let notifier_state = Arc::clone(&state);
         if let Err(e) =
             app.window()
@@ -1681,6 +1691,7 @@ impl Player {
                         }
                     }
                     RenderingState::BeforeRendering => {
+                        if notifier_state.enforce_sleep_deadline() { return; }
                         let Some(app) = notifier_state.app.upgrade() else {
                             return;
                         };
@@ -3460,6 +3471,9 @@ impl Player {
     /// `std::sync::Mutex` is not reentrant, and re-locking it on the UI thread
     /// would hang the app.
     pub fn tick(&self) {
+        if self.state.enforce_sleep_deadline() {
+            return;
+        }
         let Some(app) = self.state.app.upgrade() else {
             return;
         };

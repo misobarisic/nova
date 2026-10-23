@@ -475,17 +475,17 @@ fn queue_header_actions_are_reachable_in_both_tab_directions() {
     queue.on_clear_watched(move || *observed.borrow_mut() += 1);
     let played = Rc::new(RefCell::new(Vec::new()));
     let observed = played.clone();
-    queue.on_play(move |id| observed.borrow_mut().push(id.to_string()));
+    queue.on_continue_queue(move || observed.borrow_mut().push("continue".to_string()));
     queue.set_open(true);
     app.window().set_size(slint::PhysicalSize::new(1280, 900));
     app.show().unwrap();
     settle(&app);
-    // From the first row, Up reaches Play first and Right reaches Clear watched.
+    // From the first row, Up reaches Continue queue and Right reaches Clear watched.
     key(&app, slint::platform::Key::UpArrow);
     key(&app, slint::platform::Key::RightArrow);
     key(&app, slint::platform::Key::Return);
     assert_eq!(*cleared.borrow(), 1);
-    // Shift+Tab goes back to Play first, rather than cycling row actions forward.
+    // Shift+Tab goes back to Continue queue, rather than cycling row actions forward.
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::Shift.into(),
@@ -496,8 +496,90 @@ fn queue_header_actions_are_reachable_in_both_tab_directions() {
             text: slint::platform::Key::Shift.into(),
         });
     key(&app, slint::platform::Key::Return);
-    assert_eq!(played.borrow().as_slice(), &["episode-a"]);
+    assert_eq!(played.borrow().as_slice(), &["continue"]);
     key(&app, slint::platform::Key::Tab);
     key(&app, slint::platform::Key::Return);
     assert_eq!(*cleared.borrow(), 2);
+}
+
+#[test]
+fn explicit_queue_controls_are_keyboard_and_tv_reachable_without_opening_playback() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::explicit_queue_controls_are_keyboard_and_tv_reachable_without_opening_playback"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_more_open(true);
+    let queue = app.global::<nova::QueueBridge>();
+    queue.set_rows(Rc::new(VecModel::from(fixture())).into());
+    queue.set_run_active(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let observed = actions.clone();
+    queue.on_continue_queue(move || observed.borrow_mut().push("continue".to_owned()));
+    let observed = actions.clone();
+    queue.on_set_autoplay(move |enabled| observed.borrow_mut().push(format!("autoplay:{enabled}")));
+    let observed = actions.clone();
+    queue.on_skip(move || observed.borrow_mut().push("skip".to_owned()));
+    let observed = actions.clone();
+    queue.on_stop_queue(move || observed.borrow_mut().push("stop".to_owned()));
+    let observed = actions.clone();
+    queue.on_start_from(move |id| observed.borrow_mut().push(format!("from:{id}")));
+    queue.set_open(true);
+    app.show().unwrap();
+    settle(&app);
+    assert!(
+        actions.borrow().is_empty(),
+        "opening a queue never starts playback"
+    );
+    for tv in [false, true] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window().set_size(slint::PhysicalSize::new(
+            if tv { 1280 } else { 390 },
+            if tv { 720 } else { 844 },
+        ));
+        queue.set_open(false);
+        queue.set_open(true);
+        queue.set_focused_index(0);
+        settle(&app);
+        key(&app, slint::platform::Key::UpArrow);
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::RightArrow);
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::UpArrow);
+        for _ in 0..4 {
+            key(&app, slint::platform::Key::LeftArrow);
+        }
+    }
+    assert_eq!(
+        actions.borrow().as_slice(),
+        [
+            "continue",
+            "autoplay:true",
+            "skip",
+            "stop",
+            "from:episode-a",
+            "continue",
+            "autoplay:true",
+            "skip",
+            "stop",
+            "from:episode-a"
+        ]
+    );
+    assert!(!app.get_player_open());
+    key(&app, slint::platform::Key::Escape);
+    assert!(!queue.get_open());
+    assert!(app.get_more_open());
 }

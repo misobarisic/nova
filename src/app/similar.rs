@@ -223,6 +223,10 @@ impl Bridge {
         id: &str,
         then: impl FnOnce(Vec<MetaPreview>) + Send + 'static,
     ) {
+        if profile_policy::restricted() {
+            then(Vec::new());
+            return;
+        }
         let type_ = type_.to_owned();
         let id = id.to_owned();
         let context = profiles::capture();

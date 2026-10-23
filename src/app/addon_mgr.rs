@@ -59,6 +59,9 @@ impl Bridge {
     /// Validate + normalise the URL on the main thread, then fetch the
     /// manifest on a worker thread. New UI addons are installed enabled.
     pub(super) fn add_addon(&self, raw: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(app) = self.app().filter(|app| app.get_onboarding_visible()) {
             let Ok(addon) = Addon::new(raw) else {
                 app.set_onboarding_error(text::tr("Enter a valid add-on URL.").into());
@@ -95,6 +98,9 @@ impl Bridge {
     }
 
     pub(super) fn install_new(&self, raw: &str, enabled: bool, label: Option<String>) {
+        if !self.require_profile_management() {
+            return;
+        }
         let addon = match Addon::new(raw) {
             Ok(a) => a,
             Err(_) => {
@@ -390,6 +396,9 @@ impl Bridge {
         config: nova_providers::ProviderCapabilities,
         persist: bool,
     ) {
+        if persist && !self.require_profile_management() {
+            return;
+        }
         if !nova_providers::supports_capability_config(url)
             || (persist
                 && !self
@@ -503,6 +512,9 @@ impl Bridge {
     /// refresh. Disabling the addon currently browsed in Discover drops back
     /// to the merged "All addons" view.
     pub(super) fn toggle_addon(&self, idx: usize) {
+        if !self.require_profile_management() {
+            return;
+        }
         let reset_chosen = {
             let mut state = self.shared.lock().unwrap();
             let chosen = state.chosen_addon;
@@ -529,6 +541,9 @@ impl Bridge {
     /// derived from it (label, manifest + manifest cache, merged catalogs,
     /// configure-page verdict). Keeps the old data on failure.
     pub(super) fn refresh_addon(&self, idx: usize) {
+        if !self.require_profile_management() {
+            return;
+        }
         let (base, generation) = {
             let mut state = self.shared.lock().unwrap();
             let Some(entry) = state.installed.get(idx) else {
@@ -623,6 +638,9 @@ impl Bridge {
 
     /// Settings → Addons: remove (uninstall) the addon at `idx`.
     pub(super) fn remove_addon_at(&self, idx: usize) {
+        if !self.require_profile_management() {
+            return;
+        }
         let removed_url = {
             let mut state = self.shared.lock().unwrap();
             if state.installed.is_empty() {
@@ -661,6 +679,9 @@ impl Bridge {
     /// across devices via the `order` record. The browsed addon is tracked
     /// by URL so `chosen_addon` survives the shift.
     pub(super) fn move_addon(&self, idx: usize, delta: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             let chosen_url = (state.chosen_addon != usize::MAX)

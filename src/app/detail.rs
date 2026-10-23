@@ -207,6 +207,13 @@ impl Bridge {
         watch_now: bool,
         record_source: bool,
     ) {
+        if !profile_policy::allows_browse_title(
+            &profiles::ProfileStore::capture(),
+            &preview.type_,
+            &preview.id,
+        ) {
+            return;
+        }
         let catalog_opening = self.begin_catalog_detail_open();
         self.cancel_season_download();
         let _ = (generation, searching);
@@ -292,6 +299,7 @@ impl Bridge {
 
         app.set_selected_title(SharedString::from(preview.title()));
         app.set_detail_is_movie(is_movie);
+        self.refresh_smart_offline();
         app.set_stream_selector_open(false);
         app.set_detail_episode_reveal_request(0);
         app.set_selected_year(SharedString::from(&paint_year));
@@ -470,6 +478,9 @@ impl Bridge {
     /// Explicit refresh preserves the selected addon while replacing every
     /// source response. Navigation continues to start from All.
     pub(super) fn start_stream_search_inner(&self, request_id: String, preserve_filter: bool) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
         self.publish_stream_refresh_gate();
         if self.remote_output_selected() {
             if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
@@ -2965,6 +2976,7 @@ impl Bridge {
     pub(super) fn refresh_watch_action(&self) {
         self.publish_catalog_detail_scope();
         self.refresh_watch_queue();
+        self.refresh_release_reminders();
         self.refresh_watch_action_label();
     }
 
@@ -3290,6 +3302,17 @@ impl Bridge {
             let mut filtered: Vec<StreamUi> = state
                 .stream_all
                 .iter()
+                .filter(|s| {
+                    s.download.as_ref().map_or_else(
+                        || {
+                            profile_policy::allows_addon(
+                                &profiles::ProfileStore::capture(),
+                                &s.owner_url,
+                            )
+                        },
+                        |j| smart_offline::allows_download(&profiles::ProfileStore::capture(), j),
+                    )
+                })
                 .filter(|s| filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon))
                 .cloned()
                 .collect();
@@ -3448,6 +3471,23 @@ impl Bridge {
                 stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id)
             })
         });
+        let (party_room, party_media) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.party.snapshot_for_sources(),
+                state.modal_item.as_ref().map(|m| {
+                    party_source::canonical_media(
+                        nova_playback_api::MediaIdentity {
+                            media_type: m.type_.clone(),
+                            title_id: m.id.clone(),
+                            episode_id: m.request_id.clone(),
+                            ..Default::default()
+                        },
+                        &m.videos,
+                    )
+                }),
+            )
+        };
         let stream_rows: Vec<StreamRow> = displayed
             .iter()
             .enumerate()
@@ -3475,6 +3515,9 @@ impl Bridge {
                     is_download: row.download.is_some(),
                     external_link: matches!(row.source, StreamSource::ExternalUrl(_)),
                     last_used: last_used_index == Some(index),
+                    party_recommended: party_media.as_ref().is_some_and(|media| {
+                        party_source::recommended(party_room.as_ref(), media, &row.source)
+                    }),
                     recommended: recommended_id
                         .as_deref()
                         .is_some_and(|id| row.choice_id.as_deref() == Some(id)),
@@ -3679,6 +3722,22 @@ impl Bridge {
     }
 
     pub(super) fn stream_picked(&self, index: usize) {
+        {
+            let state = self.shared.lock().unwrap();
+            let owner = profiles::ProfileStore::capture();
+            if state.streams.get(index).is_none_or(|s| {
+                !s.download.as_ref().map_or_else(
+                    || profile_policy::allows_addon(&owner, &s.owner_url),
+                    |j| smart_offline::allows_download(&owner, j),
+                )
+            }) || state
+                .modal_item
+                .as_ref()
+                .is_some_and(|m| !profile_policy::allows_title(&owner, &m.type_, &m.id))
+            {
+                return;
+            }
+        }
         if self.season_download_pick(index) {
             return;
         }
@@ -3960,10 +4019,15 @@ pub(super) fn stream_search_urls_for_context(
     modal: &ModalItem,
     request_id: &str,
 ) -> Vec<(String, String, String, u64)> {
+    let owner = profiles::ProfileStore::capture();
+    if !profile_policy::allows_title(&owner, &modal.type_, &modal.id) {
+        return vec![];
+    }
     let lookup = source_stream_lookup(modal, request_id);
     let stream_ids = episode_stream_ids(modal, request_id);
     installed
         .iter()
+        .filter(|a| profile_policy::allows_addon(&owner, &a.url))
         .filter_map(|a| {
             let video = modal.videos.iter().find(|v| v.id == request_id);
             let owner = video
@@ -5120,20 +5184,33 @@ fn retain_episode_artwork(videos: &mut [Video], cached: &[Video]) {
 /// Save and return the same reconciled list consumed by Detail, prefetch and
 /// Home. The stable cache key supplies the baseline across provider refreshes;
 /// the complete parent response is required to prove cross-ID episode matches.
+static EPISODE_RECONCILE: Mutex<()> = Mutex::new(());
+
 pub(crate) fn write_episode_meta_cache_for(type_: &str, id: &str, item: &MetaItem) -> Vec<Video> {
+    write_episode_meta_cache_guarded(type_, id, item, || true).unwrap_or_default()
+}
+
+pub(super) fn write_episode_meta_cache_guarded(
+    type_: &str,
+    id: &str,
+    item: &MetaItem,
+    current: impl FnOnce() -> bool,
+) -> Option<Vec<Video>> {
     if !meta_matches_request(item, type_, id) {
-        return vec![];
+        return None;
     }
     // Detail, Home and prefetch may finish on different workers. Their
     // read/reconcile/write must be one transaction so a sparse late reply
     // cannot overwrite coverage discovered by a concurrent full response.
-    static RECONCILE: Mutex<()> = Mutex::new(());
-    let _guard = RECONCILE.lock().unwrap();
+    let _guard = EPISODE_RECONCILE.lock().unwrap();
+    if !current() {
+        return None;
+    }
     let mut item = item.clone();
     item.videos.retain(|v| v.season.is_some());
     let known = read_episodes_cache_for(type_, id).unwrap_or_default();
     let videos = nova_providers::reconcile_episode_metadata(&item, &known);
-    write_episodes_cache_for(type_, id, &videos)
+    Some(write_episodes_cache_for(type_, id, &videos))
 }
 
 pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) -> Vec<Video> {
@@ -5142,6 +5219,7 @@ pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) 
         retain_episode_artwork(&mut videos, &cached);
     }
     write_json(&episodes_key(type_, id), &videos);
+    smart_offline::trigger();
     videos
 }
 pub(crate) fn meta_header_key(type_: &str, id: &str) -> String {

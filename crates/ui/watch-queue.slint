@@ -46,21 +46,28 @@ export component WatchQueuePage inherits Rectangle {
     clip: true;
     private property <int> selected: 0;
     private property <int> action: 0;
+    private property <int> published-focus: QueueBridge.focused_index;
+    changed published-focus => { root.selected = root.published-focus; }
+    changed selected => { QueueBridge.focused_index = root.selected; QueueBridge.focused_key = root.selected >= 0 && root.selected < QueueBridge.rows.length ? QueueBridge.rows[root.selected].id : ""; }
     private property <int> row-count: QueueBridge.rows.length;
-    changed row-count => { root.selected = Math.max(-1, Math.min(root.selected, root.row-count - 1)); if root.selected < 0 { root.action = Math.min(1, root.action); } }
-    changed active => { if root.active { page_focus.focus(); } }
+    changed row-count => { root.selected = Math.max(-1, Math.min(root.selected, root.row-count - 1)); if root.selected < 0 { root.action = Math.min(4, root.action); } }
+    changed active => { if root.active { QueueBridge.focused_key = root.selected >= 0 && root.selected < QueueBridge.rows.length ? QueueBridge.rows[root.selected].id : ""; page_focus.focus(); } }
     function activate() {
         if !root.active || QueueBridge.rows.length == 0 || root.selected >= QueueBridge.rows.length { return; }
         if root.selected < 0 {
-            if root.action == 0 { QueueBridge.play(QueueBridge.rows[0].id); }
-            else { QueueBridge.clear_watched(); }
+            if root.action == 0 { QueueBridge.continue_queue(); }
+            else if root.action == 1 { QueueBridge.clear_watched(); }
+            else if root.action == 2 { QueueBridge.set_autoplay(!QueueBridge.autoplay); }
+            else if root.action == 3 { QueueBridge.skip(); }
+            else if root.action == 4 { QueueBridge.stop_queue(); }
             return;
         }
         let id = QueueBridge.rows[root.selected].id;
         if root.action == 0 { QueueBridge.play(id); }
-        else if root.action == 1 { QueueBridge.move(id, -1); root.selected = Math.max(0, root.selected - 1); }
-        else if root.action == 2 { QueueBridge.move(id, 1); root.selected = Math.min(QueueBridge.rows.length - 1, root.selected + 1); }
+        else if root.action == 1 { QueueBridge.move(id, -1); if QueueBridge.rows[root.selected].id != id { root.selected = Math.max(0, root.selected - 1); } }
+        else if root.action == 2 { QueueBridge.move(id, 1); if QueueBridge.rows[root.selected].id != id { root.selected = Math.min(QueueBridge.rows.length - 1, root.selected + 1); } }
         else if root.action == 3 { QueueBridge.remove(id); }
+        else if root.action == 4 { QueueBridge.start_from(id); }
     }
     function reveal(top: length, h: length) {
         if top < -queue_scroll.content-y { queue_scroll.content-y = -top; }
@@ -75,20 +82,20 @@ export component WatchQueuePage inherits Rectangle {
             else if e.text == Key.UpArrow || e.text == Key.DownArrow {
                 SettingsStyle.keyboard-mode = true;
                 root.selected = Math.max(-1, Math.min(QueueBridge.rows.length - 1, root.selected + (e.text == Key.UpArrow ? -1 : 1)));
-                if root.selected < 0 { root.action = Math.min(1, root.action); queue_scroll.content-y = 0px; }
+                if root.selected < 0 { root.action = Math.min(4, root.action); queue_scroll.content-y = 0px; }
                 accept
             } else if e.text == Key.Tab {
                 SettingsStyle.keyboard-mode = true;
-                let count = 2 + QueueBridge.rows.length * 4;
-                let current = root.selected < 0 ? root.action : 2 + root.selected * 4 + root.action;
+                let count = 5 + QueueBridge.rows.length * 5;
+                let current = root.selected < 0 ? root.action : 5 + root.selected * 5 + root.action;
                 let next = Math.mod(current + (e.modifiers.shift ? count - 1 : 1), count);
-                root.selected = next < 2 ? -1 : Math.floor((next - 2) / 4);
-                root.action = next < 2 ? next : Math.mod(next - 2, 4);
+                root.selected = next < 5 ? -1 : Math.floor((next - 5) / 5);
+                root.action = next < 5 ? next : Math.mod(next - 5, 5);
                 if root.selected < 0 { queue_scroll.content-y = 0px; }
                 accept
             } else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
                 SettingsStyle.keyboard-mode = true;
-                let count = root.selected < 0 ? 2 : 4;
+                let count = 5;
                 root.action = Math.mod(root.action + (e.text == Key.LeftArrow ? count - 1 : 1), count); accept
             } else if e.text == Key.Return || e.text == " " { SettingsStyle.keyboard-mode = true; if !e.repeat { root.activate(); } accept }
             else if e.text == Key.Delete { if !e.repeat && root.selected >= 0 && root.selected < QueueBridge.rows.length { QueueBridge.remove(QueueBridge.rows[root.selected].id); } accept }
@@ -116,12 +123,20 @@ export component WatchQueuePage inherits Rectangle {
                             Text { text: @tr("Mix movies and episodes from different shows. Choose a stream whenever you're ready."); font-size: 14px; color: Theme.current.text_secondary; wrap: word-wrap; }
                             if QueueBridge.rows.length > 0: HorizontalLayout {
                                 spacing: 10px;
-                                TrackingButton { text: @tr("Play first"); primary: true; border-width: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? Theme.current.accent_vivid : Theme.current.border_overlay; clicked => { QueueBridge.play(QueueBridge.rows[0].id); } }
+                                TrackingButton { text: @tr("Continue queue"); primary: true; border-width: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: root.selected < 0 && root.action == 0 && SettingsStyle.keyboard-mode ? Theme.current.accent_vivid : Theme.current.border_overlay; clicked => { QueueBridge.continue_queue(); } }
                                 TrackingButton { text: @tr("Clear watched"); quiet: true; border-width: root.selected < 0 && root.action == 1 && SettingsStyle.keyboard-mode ? 2px : 0px; border-color: Theme.current.accent_vivid; clicked => { QueueBridge.clear_watched(); } }
                                 if !root.narrow: Rectangle { horizontal-stretch: 1; }
                             }
+                            if QueueBridge.rows.length > 0: Text { text: QueueBridge.phase; font-size: 13px; color: Theme.current.text_secondary; }
+                            if QueueBridge.rows.length > 0: TrackingButton { text: QueueBridge.autoplay ? @tr("Autoplay next queued item: On") : @tr("Autoplay next queued item: Off"); border-width: root.selected < 0 && root.action == 2 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: Theme.current.accent_vivid; clicked => { QueueBridge.set_autoplay(!QueueBridge.autoplay); } }
+                            if QueueBridge.rows.length > 0: HorizontalLayout {
+                                spacing: 10px;
+                                TrackingButton { text: @tr("Skip"); enabled: QueueBridge.run_active; border-width: root.selected < 0 && root.action == 3 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: Theme.current.accent_vivid; clicked => { QueueBridge.skip(); } }
+                                TrackingButton { text: @tr("Stop queue"); enabled: QueueBridge.run_active; border-width: root.selected < 0 && root.action == 4 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: Theme.current.accent_vivid; clicked => { QueueBridge.stop_queue(); } }
+                            }
                         }
                     }
+                    if QueueBridge.sync_status != "": Text { text: QueueBridge.sync_status; color: Theme.current.text_secondary; wrap: word-wrap; font-size: 12px; }
                     if QueueBridge.notice != "": Text { text: QueueBridge.notice; color: Theme.current.text_secondary; wrap: word-wrap; font-size: 14px; }
                     if QueueBridge.rows.length == 0: Rectangle {
                         height: empty.preferred-height + 64px; border-radius: Theme.card_corner_radius;
@@ -153,19 +168,20 @@ export component WatchQueuePage inherits Rectangle {
                                 }
                                 VerticalLayout {
                                     spacing: 5px; alignment: center; min-width: 0px;
-                                    Text { text: index == 0 ? @tr("UP NEXT") : @tr("#{}", index + 1); font-size: 11px; font-weight: 700; letter-spacing: 1px; color: index == 0 ? Theme.current.accent_vivid : Theme.current.text_secondary; }
+                                    Text { text: row.id == QueueBridge.current_key ? @tr("CURRENT") : index == 0 ? @tr("UP NEXT") : @tr("#{}", index + 1); font-size: 11px; font-weight: 700; letter-spacing: 1px; color: index == 0 ? Theme.current.accent_vivid : Theme.current.text_secondary; }
                                     Text { text: row.title; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; max-lines: 2; overflow: elide; min-width: 0px; }
                                     Text { text: row.context; font-size: 13px; color: Theme.current.text_secondary; wrap: word-wrap; max-lines: 2; overflow: elide; min-width: 0px; }
                                     if row.watched: Text { text: @tr("Watched"); font-size: 12px; color: Theme.current.accent_vivid; }
                                 }
                             }
+                            TrackingButton { text: @tr("Start from this item"); border-width: root.selected == index && root.action == 4 && SettingsStyle.keyboard-mode ? 2px : 1px; border-color: Theme.current.accent_vivid; clicked => { root.selected = index; root.action = 4; QueueBridge.start_from(row.id); } }
                             HorizontalLayout {
                                 spacing: 8px;
                                 QueueAction { icon: 0; label: @tr("Play") + " · " + row.title + " · " + row.context; primary: true; focused: root.selected == index && root.action == 0 && SettingsStyle.keyboard-mode; picked => { root.selected = index; root.action = 0; root.activate(); } }
                                 Text { text: @tr("Choose stream"); color: Theme.current.text_secondary; font-size: 12px; vertical-alignment: center; min-width: 0px; overflow: elide; }
                                 Rectangle { horizontal-stretch: 1; min-width: 0px; }
-                                QueueAction { icon: 1; label: @tr("Move up") + " · " + row.title; enabled: index > 0; focused: root.selected == index && root.action == 1 && SettingsStyle.keyboard-mode; picked => { root.selected = index; QueueBridge.move(row.id, -1); root.selected = Math.max(0, index - 1); page_focus.focus(); } }
-                                QueueAction { icon: 2; label: @tr("Move down") + " · " + row.title; enabled: index + 1 < QueueBridge.rows.length; focused: root.selected == index && root.action == 2 && SettingsStyle.keyboard-mode; picked => { root.selected = index; QueueBridge.move(row.id, 1); root.selected = Math.min(QueueBridge.rows.length - 1, index + 1); page_focus.focus(); } }
+                                QueueAction { icon: 1; label: @tr("Move up") + " · " + row.title; enabled: index > 0; focused: root.selected == index && root.action == 1 && SettingsStyle.keyboard-mode; picked => { root.selected = index; QueueBridge.move(row.id, -1); if QueueBridge.rows[root.selected].id != row.id { root.selected = Math.max(0, index - 1); } page_focus.focus(); } }
+                                QueueAction { icon: 2; label: @tr("Move down") + " · " + row.title; enabled: index + 1 < QueueBridge.rows.length; focused: root.selected == index && root.action == 2 && SettingsStyle.keyboard-mode; picked => { root.selected = index; QueueBridge.move(row.id, 1); if QueueBridge.rows[root.selected].id != row.id { root.selected = Math.min(QueueBridge.rows.length - 1, index + 1); } page_focus.focus(); } }
                                 QueueAction { icon: 3; label: @tr("Remove from queue") + " · " + row.title; focused: root.selected == index && root.action == 3 && SettingsStyle.keyboard-mode; picked => { QueueBridge.remove(row.id); page_focus.focus(); } }
                             }
                         }

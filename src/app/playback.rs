@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Default)]
 struct PlaybackContext {
+    policy_revision: String,
     intro_download: Option<crate::download::DownloadJob>,
     retry_preferences: Option<nova_config::playback_preferences::SessionPreferences>,
     bookmark_resume: bool,
@@ -167,6 +168,7 @@ impl PlaybackIntent {
 pub(crate) fn note_android_pause_checkpoint() {
     let bridge = super::bridge::with_global_bridge(Clone::clone);
     if let Some(bridge) = bridge {
+        bridge.refresh_sleep_timer();
         bridge.party_suspend();
         bridge.remote_suspend();
         bridge.refresh_playback_end_menu();
@@ -179,6 +181,21 @@ pub(crate) fn note_android_pause_checkpoint() {
 
 impl Bridge {
     /// Snapshot the actual playback intent, not whichever detail page is open.
+    pub(super) fn playback_policy_source_allowed(&self) -> bool {
+        let state = self.shared.lock().unwrap();
+        let owner = profiles::ProfileStore::capture();
+        state.playback_intent.as_ref().is_none_or(|i| {
+            i.context.intro_download.as_ref().map_or_else(
+                || {
+                    i.context.selected_stream.as_ref().map_or_else(
+                        || !profile_policy::restricted(),
+                        |s| profile_policy::allows_addon(&owner, &s.owner),
+                    )
+                },
+                |j| smart_offline::allows_download(&owner, j),
+            )
+        })
+    }
     pub(super) fn current_playback_identity(&self) -> Option<nova_playback_api::MediaIdentity> {
         let state = self.shared.lock().unwrap();
         let context = &state.playback_intent.as_ref()?.context;
@@ -307,6 +324,11 @@ impl Bridge {
     }
 
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
+        if profile_policy::entry_blocked() {
+            let rejected = crate::torrent::PlaybackRequest::default();
+            rejected.cancel();
+            return rejected;
+        }
         if !self
             .shared
             .lock()
@@ -563,9 +585,17 @@ impl Bridge {
             context.bookmark_resume = true;
         }
         context.selected_stream = selected_stream;
+        context.policy_revision = profile_policy::revision(&profiles::ProfileStore::capture());
 
         state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
+        self.queue_note_playback_start();
+        self.sleep_timer_start(&nova_playback_api::MediaIdentity {
+            media_type: context.media_type.clone(),
+            title_id: context.media_id.clone(),
+            episode_id: context.request_id.clone(),
+            ..Default::default()
+        });
         self.publish_player_context(&context);
         token
     }
@@ -614,6 +644,8 @@ impl Bridge {
     }
 
     pub(super) fn note_selected_playback_stream(&self, stream: &StreamUi) {
+        self.queue_note_selected_stream(stream);
+        self.party_remember_source(stream);
         self.shared
             .lock()
             .unwrap()
@@ -724,7 +756,31 @@ impl Bridge {
         &self,
         token: &crate::torrent::PlaybackRequest,
     ) -> bool {
+        if profile_policy::entry_blocked() {
+            return false;
+        }
+        if self.player.sleep_deadline_expired() {
+            return false;
+        }
         let state = self.shared.lock().unwrap();
+        let owner = profiles::ProfileStore::capture();
+        if state.playback_intent.as_ref().is_some_and(|i| {
+            i.context.policy_revision != profile_policy::revision(&owner)
+                || !profile_policy::allows_title(&owner, &i.context.media_type, &i.context.media_id)
+                || i.context
+                    .intro_download
+                    .as_ref()
+                    .is_some_and(|j| !smart_offline::allows_download(&owner, j))
+                || (i.context.intro_download.is_none()
+                    && i.context
+                        .selected_stream
+                        .as_ref()
+                        .map_or_else(profile_policy::restricted, |s| {
+                            !profile_policy::allows_addon(&owner, &s.owner)
+                        }))
+        }) {
+            return false;
+        }
         state
             .playback_intent
             .as_ref()
@@ -777,6 +833,9 @@ impl Bridge {
         if pending {
             self.finish_playback_request();
             if visible {
+                // Retiring a candidate request may leave older playback live.
+                // Cancel its timer only when this path actually closes it.
+                self.cancel_sleep_timer();
                 self.player.close();
             }
         }
@@ -784,6 +843,9 @@ impl Bridge {
 
     fn mark_playback_opened(&self, in_app: bool) {
         if !in_app {
+            self.preserve_queue_on_close(false);
+            self.cancel_queue_run();
+            self.cancel_sleep_timer();
             self.playback_closed();
         }
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
@@ -1030,6 +1092,9 @@ impl Bridge {
         settings_generation: u64,
         addon_generation: u64,
     ) {
+        if !profile_policy::allows_addon(&profiles::ProfileStore::capture(), &provider_url) {
+            return;
+        }
         let request = self.begin_playback_request();
         if !request.is_current() {
             return;
@@ -1196,6 +1261,7 @@ impl Bridge {
             .downloads
             .job(id)
             .filter(|job| job.phase == crate::download::DownloadPhase::Completed)
+            .filter(|job| smart_offline::allows_download(&profiles::ProfileStore::capture(), job))
         else {
             return;
         };
@@ -1241,6 +1307,7 @@ impl Bridge {
             .unwrap_or_default();
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
+                policy_revision: profile_policy::revision(&profiles::ProfileStore::capture()),
                 intro_download: Some(job.clone()),
                 history_resume: explicit_context
                     .history_resume
@@ -1366,7 +1433,7 @@ impl Bridge {
 
     // Android suspension also checkpoints the active player. PiP keeps that
     // session playing, so persistence alone must never emit a terminal scrobble.
-    fn persist_playback_checkpoint(&self, stopped: bool) {
+    pub(super) fn persist_playback_checkpoint(&self, stopped: bool) {
         persistence::flush_report();
         self.flush_playback_preferences(true);
         let outgoing = self.shared.lock().unwrap().playback.clone();
@@ -1763,6 +1830,7 @@ impl Bridge {
     }
 
     pub(super) fn cancel_resume_prompt(&self) {
+        self.cancel_sleep_timer();
         self.cancel_pending_playback();
         self.shared.lock().unwrap().pending_resume_stream = None;
         if let Some(app) = self.app() {

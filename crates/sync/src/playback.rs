@@ -15,13 +15,22 @@ use nova_playback_api::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{Semaphore, watch};
 
-// /4 extends the subtitle-style snapshot with the native backdrop opacity.
-pub const ALPN: &[u8] = b"nova/playback/4";
+// /5 adds receiver-owned queue execution and sleep-timer commands/status.
+pub const ALPN: &[u8] = b"nova/playback/5";
 const MAX_FRAME: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MEMBERSHIP_POLL: Duration = Duration::from_millis(100);
 pub(crate) fn request_timeout(request: &Request) -> Duration {
-    if matches!(request, Request::Lookup(_) | Request::CurrentOffers { .. }) {
+    if matches!(
+        request,
+        Request::Lookup(_)
+            | Request::CurrentOffers { .. }
+            | Request::QueueStart { .. }
+            | Request::Command {
+                action: nova_playback_api::PlaybackAction::QueueSkip,
+                ..
+            }
+    ) {
         Duration::from_secs(90)
     } else {
         TIMEOUT
@@ -810,7 +819,7 @@ mod tests {
             .valid_payload()
         );
         assert!(!PlaybackAction::SetSpeed(3.0).valid_payload());
-        assert_eq!(ALPN, b"nova/playback/4");
+        assert_eq!(ALPN, b"nova/playback/5");
         assert_eq!(
             request_timeout(&Request::CurrentOffers { session }),
             Duration::from_secs(90)
@@ -915,6 +924,75 @@ mod tests {
             Response::Error(PlaybackError::InvalidRequest)
         );
         assert_eq!(executions.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn queue_start_replay_executes_once_and_reused_id_cannot_retarget() {
+        let service = service();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let executions = starts.clone();
+        service.set_handler(Some(Arc::new(move |context, request, done| {
+            assert!(context.is_authorized());
+            assert!(matches!(request, Request::QueueStart { .. }));
+            executions.fetch_add(1, Ordering::Relaxed);
+            done(Response::Accepted);
+        })));
+        let request = Request::QueueStart {
+            profile_id: "default".into(),
+            item_key: Some(r#"["series","show","one"]"#.into()),
+            expected_session: None,
+        };
+        assert_eq!(request_timeout(&request), Duration::from_secs(90));
+        assert_eq!(
+            service.dispatch("paired", wire(1, request.clone())).await,
+            Response::Accepted
+        );
+        assert_eq!(
+            service.dispatch("paired", wire(1, request)).await,
+            Response::Accepted
+        );
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        let changed = Request::QueueStart {
+            profile_id: "other".into(),
+            item_key: None,
+            expected_session: None,
+        };
+        assert_eq!(
+            service.dispatch("paired", wire(1, changed)).await,
+            Response::Error(PlaybackError::InvalidRequest)
+        );
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn pending_queue_stop_roundtrips_without_native_session_and_is_bounded() {
+        let request = Request::QueueStop {
+            profile_id: "default".into(),
+            run_id: 4,
+            expected_session: None,
+        };
+        assert!(request.valid_payload());
+        assert_eq!(request_timeout(&request), TIMEOUT);
+        let wire = wire(7, request.clone());
+        let decoded: WireRequest =
+            postcard::from_bytes(&postcard::to_allocvec(&wire).unwrap()).unwrap();
+        assert_eq!(decoded.request, request);
+        assert!(
+            !Request::QueueStop {
+                profile_id: "default".into(),
+                run_id: 0,
+                expected_session: None
+            }
+            .valid_payload()
+        );
+        assert!(
+            !Request::QueueStop {
+                profile_id: "\n".into(),
+                run_id: 4,
+                expected_session: None
+            }
+            .valid_payload()
+        );
     }
     #[tokio::test]
     async fn a_live_quic_connection_is_revoked_and_releases_preview() {

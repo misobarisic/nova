@@ -1,4 +1,5 @@
-import { InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, SceneBookmarkRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { SleepTimerMenu } from "sleep-timer.slint";
+import { PlayerOsdBridge, InterfaceStyle, SubtitleStyle, PartyBridge, SettingsBridge, Theme, ChapterRow, SceneBookmarkRow, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -419,6 +420,7 @@ component SettingsMenu inherits Rectangle {
         if root.page == 7 { return @tr("Chapters"); }
         if root.page == 8 { return @tr("Second subtitles"); }
         if root.page == 9 { return @tr("Scene bookmarks"); }
+        if root.page == 10 { return @tr("Sleep timer"); }
         return @tr("Playback");
     }
 
@@ -635,8 +637,20 @@ component SettingsMenu inherits Rectangle {
                             focused: root.focused_idx == (root.decoder_available ? 6 : 5) + (root.player_chapters.length > 0 ? 1 : 0);
                             activate => { root.try_another_stream(); root.closed(); }
                         }
+                        MenuRow {
+                            label: @tr("Sleep timer"); value: PlayerOsdBridge.sleep_timer_label; submenu: true;
+                            enabled: PlayerOsdBridge.sleep_timer_available;
+                            focused: root.focused_idx == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                            activate => { root.page = 10; }
+                        }
                     }
 
+                    if root.page == 10: SleepTimerMenu {
+                        enabled: PlayerOsdBridge.sleep_timer_available;
+                        focused_idx: root.focused_idx;
+                        reveal(y,h) => { root.reveal_row(y,h); }
+                    }
                     if root.page == 8: VerticalLayout {
                         spacing: 4px;
                         if root.subtitle_addon_status > 0: SubtitleAddonStatus { status: root.subtitle_addon_status; }
@@ -1382,7 +1396,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
+                return (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1398,6 +1412,7 @@ export component PlayerOverlay {
             if root.settings_page == 7 { return root.player_chapters.length; }
             if root.settings_page == 8 { return root.secondary_sub_tracks.length + 4; }
             if root.settings_page == 9 { return root.scene_bookmarks.length * 4 + 2; }
+            if root.settings_page == 10 { return 15; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1422,9 +1437,11 @@ export component PlayerOverlay {
             }
             root.kb_menu = focused;
         } else if (root.settings_page != 0) {
+            let return_to_timer = root.settings_page == 10;
             root.subtitle_tools_origin = 0;
             root.settings_page = 0;
-            root.kb_menu = 0;
+            // Return to the invoking row, including its scroll position.
+            root.kb_menu = return_to_timer ? (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) : 0;
         } else {
             root.open_popup = 0;
         }
@@ -1610,10 +1627,14 @@ export component PlayerOverlay {
                 } else if root.kb_menu == (root.decoder_available ? 4 : 3) {
                     root.settings_page = 6;
                     root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.settings_page = 10; root.kb_menu = 0;
                 } else if !(PartyBridge.active || PartyBridge.busy) {
                     root.settings_page = 4;
                     root.kb_menu = 0;
                 }
+            } else if root.settings_page == 10 {
+                PlayerOsdBridge.sleep_timer_pick(root.kb_menu, false);
             } else if (root.settings_page == 1) {
                 if (root.kb_menu >= root.kb_menu_first() && root.kb_menu < 3) {
                     root.pick_decoder(root.kb_menu);
@@ -3343,6 +3364,14 @@ export component PlayerOverlay {
                 clicked => { root.dismiss_skip_segment(); }
                 IcClose { width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_player_muted; }
             }
+        }
+
+        if PlayerOsdBridge.sleep_timer_active: Text {
+            text: PlayerOsdBridge.sleep_timer_label;
+            x: root.safe-left + 18px; y: Math.max(root.safe-top + 12px, parent.height - root.safe-bottom - 152px);
+            width: Math.max(0px, parent.width - root.safe-left - root.safe-right - 36px);
+            color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : 13px;
+            horizontal-alignment: right;
         }
 
         // Playback menu (gear button): subtitle + audio track pickers

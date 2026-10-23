@@ -138,9 +138,12 @@ nova-list-services = { path = "crates/list-services" }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+sha2 = "0.11"
 url = "2"
 # The license catalog uses the same zstd implementation as local storage.
 zstd = { version = "0.13", default-features = false }
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 # QR encoding for the sync invite ticket (Settings → Sync). Disable default
 # features so we don't pull the `image` crate: we read the module matrix via
@@ -178,7 +181,6 @@ zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 skrifa = "=0.44.0"
-zip = { version = "2", default-features = false, features = ["deflate"] }
 # Headless UI tests (drag-scroll regression): drives the real AppWindow
 # through synthetic pointer events, no display needed.
 i-slint-backend-testing = { workspace = true }
@@ -263,6 +265,10 @@ orientation = "portrait"
 name = ".AddonImportActivity"
 exported = false
 
+[[package.metadata.android.application.activity]]
+name = ".DocumentActivity"
+exported = false
+
 # Download foreground service: keeps the process (and its transfer threads)
 # alive while a stream download is running, including with the screen off.
 [[package.metadata.android.application.service]]
@@ -280,6 +286,18 @@ foreground_service_type = "dataSync"
 [[package.metadata.android.application.service]]
 name = ".NovaSyncJobService"
 permission = "android.permission.BIND_JOB_SERVICE"
+
+[[package.metadata.android.application.service]]
+name = ".NovaOfflineJobService"
+permission = "android.permission.BIND_JOB_SERVICE"
+
+[[package.metadata.android.application.service]]
+name = ".NovaReleaseJobService"
+permission = "android.permission.BIND_JOB_SERVICE"
+
+[[package.metadata.android.application.receiver]]
+name = ".NovaReleaseDismissReceiver"
+exported = false
 
 # The dev, release, dev-release, and cd-release profiles use the same public debug key
 # so APKs stay update-compatible across build profiles. Do not publish with it:

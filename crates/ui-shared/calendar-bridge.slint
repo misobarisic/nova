@@ -2,6 +2,28 @@ import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, H
 
 // The host keeps backend-owned state; the page shares this exact object.
 export global CalendarBridge {
+    in-out property <bool> detail_subscribed;
+    in-out property <bool> delivery_enabled;
+    in-out property <bool> android_notifications;
+    in-out property <string> reminder_search;
+    in-out property <bool> reminder_truncated;
+    callback reminder_search_changed(string);
+    in-out property <string> reminder_status;
+    in-out property <string> digest_text;
+    in-out property <[string]> reminder_keys;
+    in-out property <[string]> reminder_labels;
+    in-out property <[bool]> reminder_subscribed;
+    in-out property <[bool]> export_selected;
+    in-out property <string> export_start;
+    in-out property <string> export_end;
+    in-out property <int> export_scope: 0;
+    in-out property <bool> export_ready;
+    in-out property <int> tools_focus;
+    in-out property <string> export_preview;
+    callback toggle_detail();
+    callback toggle_subscription(string);
+    callback select_export_title(string);
+    callback reminder_action(int);
     callback focus_shell();
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;

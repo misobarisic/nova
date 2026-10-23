@@ -287,6 +287,9 @@ impl Bridge {
     }
 
     pub(super) fn refresh_bookmarks(&self) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
         let Some(app) = self.app() else { return };
         let global = app.global::<BookmarksBridge>();
         let mut groups = match self.bookmark_groups() {
@@ -300,6 +303,15 @@ impl Bridge {
                 return;
             }
         };
+        groups.retain(|g| {
+            g.scenes.first().is_some_and(|(_, i, _)| {
+                profile_policy::allows_title(
+                    &profiles::ProfileStore::capture(),
+                    &i.media_type,
+                    &i.title_id,
+                )
+            })
+        });
         sort_groups(&mut groups, global.get_sort());
         let selected = global.get_title_id();
         let selected_group = groups
@@ -376,9 +388,18 @@ impl Bridge {
     }
 
     fn edit_saved_bookmark(&self, scene: &str, note: Option<&str>) -> bool {
+        if profile_policy::entry_blocked() {
+            return false;
+        }
         let Ok((key, id)) = serde_json::from_str::<(String, String)>(scene) else {
             return false;
         };
+        let Ok((kind, title_id, _)) = serde_json::from_str::<(String, String, String)>(&key) else {
+            return false;
+        };
+        if !profile_policy::allows_title(&profiles::ProfileStore::capture(), &kind, &title_id) {
+            return false;
+        }
         let Ok(mut values) = load_bookmarks() else {
             self.bookmark_notice("Bookmarks could not be loaded. Saved data has been preserved.");
             return false;
@@ -408,6 +429,9 @@ impl Bridge {
     }
 
     fn play_saved_scene(&self, id: &str) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
         let Some((_, identity, bookmark)) = self
             .bookmark_groups()
             .ok()

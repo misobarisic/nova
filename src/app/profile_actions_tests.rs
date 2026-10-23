@@ -955,3 +955,259 @@ fn stale_network_work_completes_synchronously_without_transport_and_releases_per
         },
     );
 }
+
+#[test]
+fn pin_selection_cancellation_revisions_and_restricted_exit_are_atomic() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::pin_selection_cancellation_revisions_and_restricted_exit_are_atomic"
+        ),
+        |fixture| {
+            let initial = profiles::active_context();
+            let child = profiles::create("Child").unwrap();
+            let child_owner = profiles::ProfileStore::for_profile(&child);
+            let mut policy = profile_policy::ProfilePolicy {
+                pin: "0012".into(),
+                restricted: true,
+                require_pin_on_entry: true,
+                ..Default::default()
+            };
+            child_owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            fixture.bridge.switch_profile(&child);
+            assert_eq!(profiles::active_context(), initial);
+            assert!(fixture.app.global::<crate::MoreBridge>().get_pin_open());
+            fixture.bridge.submit_profile_pin("12");
+            assert_eq!(profiles::active_context(), initial);
+            fixture.bridge.cancel_profile_pin();
+            assert_eq!(profiles::active_context(), initial);
+            fixture.bridge.switch_profile(&child);
+            fixture.bridge.submit_profile_pin("0012");
+            assert_eq!(profiles::active_context().id, child);
+            fixture.bridge.switch_profile(&initial.id);
+            assert_eq!(
+                profiles::active_context().id,
+                child,
+                "unlocked normal target cannot bypass restricted exit"
+            );
+            fixture.bridge.cancel_profile_pin();
+            fixture.bridge.switch_profile(&initial.id);
+            fixture.bridge.submit_profile_pin("0012");
+            assert_eq!(profiles::active_context().id, initial.id);
+            fixture.bridge.switch_profile(&child);
+            policy.pin = "0034".into();
+            child_owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            fixture.bridge.submit_profile_pin("0012");
+            assert_eq!(
+                profiles::active_context().id,
+                initial.id,
+                "policy changes revoke a pending entry decision"
+            );
+            assert!(!fixture.app.global::<crate::MoreBridge>().get_pin_open());
+            fixture.bridge.switch_profile(&child);
+            profiles::delete(&child).unwrap();
+            fixture.bridge.submit_profile_pin("0034");
+            assert_eq!(
+                profiles::active_context().id,
+                initial.id,
+                "retirement invalidates an open keypad"
+            );
+        },
+    );
+}
+
+#[test]
+fn locked_startup_defers_preparation_projection_and_models_until_pin() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::locked_startup_defers_preparation_projection_and_models_until_pin"
+        ),
+        |fixture| {
+            let owner = profiles::ProfileStore::capture();
+            let original = profiles::active_context();
+            let policy = profile_policy::ProfilePolicy {
+                pin: "0012".into(),
+                require_pin_on_entry: true,
+                ..Default::default()
+            };
+            owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                )
+                .unwrap();
+            let entry: LibraryEntry = serde_json::from_value(
+                serde_json::json!({"id":"private-title","type_":"movie","name":"Private title"}),
+            )
+            .unwrap();
+            owner
+                .persist_snapshot(
+                    "library",
+                    &serde_json::to_string(&vec![entry]).unwrap(),
+                    false,
+                )
+                .unwrap();
+            // Real preparation would reject these. A startup recovery picker must
+            // not even attempt it before a valid entry decision.
+            owner
+                .write("settings", "unreadable until selected")
+                .unwrap();
+            owner.write("addons", "unreadable until selected").unwrap();
+            fixture
+                .bridge
+                .profile_loaded_epoch
+                .store(0, Ordering::Release);
+            assert!(profile_policy::initialize_entry_gate(&owner));
+            fixture.bridge.activate_profile(owner.id(), true).unwrap();
+            fixture.bridge.refresh_watch_queue();
+            fixture.bridge.refresh_bookmarks();
+            fixture.bridge.refresh_viewing_journal();
+            fixture.bridge.refresh_smart_collections();
+            fixture.bridge.refresh_smart_offline();
+            fixture.bridge.refresh_release_reminders();
+            fixture
+                .bridge
+                .sync_apply(vec![owner.domain(sync::DOMAIN_LIBRARY)]);
+            assert_eq!(
+                profiles::active_context(),
+                original,
+                "no replacement session before PIN"
+            );
+            assert!(fixture.bridge.shared.lock().unwrap().entries.is_empty());
+            assert!(fixture.bridge.shared.lock().unwrap().installed.is_empty());
+            assert_eq!(fixture.app.get_library().row_count(), 0);
+            assert!(
+                !fixture
+                    .bridge
+                    .sessions
+                    .active()
+                    .services_requested
+                    .load(Ordering::Acquire)
+            );
+            assert_eq!(
+                fixture.bridge.profile_loaded_epoch.load(Ordering::Acquire),
+                0
+            );
+            fixture.bridge.switch_profile(owner.id());
+            fixture.bridge.submit_profile_pin("12");
+            assert_eq!(profiles::active_context(), original);
+            assert!(fixture.bridge.shared.lock().unwrap().entries.is_empty());
+            fixture.bridge.cancel_profile_pin();
+            assert!(profile_policy::entry_blocked());
+            owner.write("settings", "{}").unwrap();
+            owner.write("addons", "[]").unwrap();
+            fixture.bridge.switch_profile(owner.id());
+            fixture.bridge.submit_profile_pin("0012");
+            assert!(!profile_policy::entry_blocked());
+            assert_ne!(profiles::active_context().epoch, original.epoch);
+            assert_eq!(
+                fixture.bridge.shared.lock().unwrap().entries[0].id,
+                "private-title"
+            );
+            assert_eq!(fixture.app.get_library().row_count(), 1);
+        },
+    );
+}
+
+#[test]
+fn policy_editor_toggles_exact_entities_after_durable_order_changes() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::policy_editor_toggles_exact_entities_after_durable_order_changes"
+        ),
+        |fixture| {
+            let owner = profiles::ProfileStore::capture();
+            let first: LibraryEntry = serde_json::from_value(
+                serde_json::json!({"id":"same","type_":"movie","name":"First"}),
+            )
+            .unwrap();
+            let second: LibraryEntry = serde_json::from_value(
+                serde_json::json!({"id":"same","type_":"series","name":"Second"}),
+            )
+            .unwrap();
+            owner
+                .persist_snapshot(
+                    "library",
+                    &serde_json::to_string(&vec![first.clone(), second.clone()]).unwrap(),
+                    false,
+                )
+                .unwrap();
+            fixture.bridge.edit_profile_policy(owner.id());
+            let shown = fixture
+                .app
+                .global::<crate::MoreBridge>()
+                .get_policy_title_keys()
+                .row_data(0)
+                .unwrap();
+            owner
+                .persist_snapshot(
+                    "library",
+                    &serde_json::to_string(&vec![second, first]).unwrap(),
+                    false,
+                )
+                .unwrap();
+            fixture.bridge.toggle_profile_policy_title(shown.as_str());
+            fixture.bridge.save_profile_policy_editor();
+            assert_eq!(
+                profile_policy::load(&owner).unwrap().allowed_titles,
+                vec![profile_policy::AllowedTitle {
+                    media_type: "movie".into(),
+                    title_id: "same".into()
+                }]
+            );
+            let first = AddonStore {
+                url: "https://source/config-a".into(),
+                enabled: true,
+                configure_ok: None,
+                label: "First source".into(),
+                capabilities: None,
+            };
+            let second = AddonStore {
+                url: "https://source/config-b".into(),
+                enabled: true,
+                configure_ok: None,
+                label: "Second source".into(),
+                capabilities: None,
+            };
+            owner
+                .persist_snapshot(
+                    "addons",
+                    &serde_json::to_string(&vec![first.clone(), second.clone()]).unwrap(),
+                    false,
+                )
+                .unwrap();
+            fixture.bridge.edit_profile_policy(owner.id());
+            let shown = fixture
+                .app
+                .global::<crate::MoreBridge>()
+                .get_policy_addon_keys()
+                .row_data(0)
+                .unwrap();
+            owner
+                .persist_snapshot(
+                    "addons",
+                    &serde_json::to_string(&vec![second, first]).unwrap(),
+                    false,
+                )
+                .unwrap();
+            fixture.bridge.toggle_profile_policy_addon(shown.as_str());
+            fixture.bridge.save_profile_policy_editor();
+            assert_eq!(
+                profile_policy::load(&owner).unwrap().allowed_addons,
+                vec!["https://source/config-a"]
+            );
+        },
+    );
+}

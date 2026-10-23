@@ -39,6 +39,10 @@ impl ProfileStore {
         }
     }
 
+    pub(crate) fn is_scoped(&self) -> bool {
+        self.scoped
+    }
+
     pub(crate) fn id(&self) -> &str {
         &self.id
     }

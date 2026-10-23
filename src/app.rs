@@ -354,6 +354,7 @@ struct Shared {
     downloads_page_collapsed: HashSet<String>,
     downloads_page_refresh: downloads_page::RefreshState,
     page_artwork: page_artwork::PageArtworkState,
+    release_reminders: release_reminders::State,
     /// Modal target, if open.
     modal_item: Option<ModalItem>,
     /// Streams currently displayed (already narrowed by `stream_filter`).
@@ -434,6 +435,7 @@ struct Shared {
     upcoming_cal: UpcomingCal,
     /// Current episode or movie; `None` while idle.
     playback: Option<PlaybackTarget>,
+    sleep_timer: sleep_timer::State,
     playback_end: playback_end::State,
     /// Resolved stream held while the user chooses whether to resume.
     pending_resume_stream: Option<PendingStream>,
@@ -804,6 +806,7 @@ mod detail;
 mod detail_extras;
 mod downloads;
 mod downloads_page;
+mod headless_profile;
 mod home;
 mod home_catalog_fetch;
 mod intro_skip;
@@ -814,6 +817,7 @@ mod next_episode;
 mod onboarding;
 mod page_artwork;
 mod party;
+mod party_source;
 mod persistence;
 mod playback;
 mod playback_actions;
@@ -826,20 +830,30 @@ mod posters;
 mod profile_actions;
 #[cfg(test)]
 mod profile_actions_tests;
+#[cfg(test)]
+mod profile_management_tests;
 mod profile_net;
+mod profile_policy;
 mod profile_session;
 mod profiles;
 #[cfg(all(test, feature = "desktop"))]
 mod progress_identity_tests;
 mod progress_projection;
 mod recommendations;
+mod release_reminders;
+#[cfg(target_os = "android")]
+mod release_reminders_android;
 pub(crate) mod remote_playback;
 mod run;
 mod season_downloads;
 mod settings;
 mod settings_sync;
 mod similar;
+mod sleep_timer;
 mod smart_collections;
+mod smart_offline;
+#[cfg(target_os = "android")]
+mod smart_offline_android;
 mod stream_filters;
 mod stream_preferences;
 mod stream_prefetch;
@@ -855,7 +869,9 @@ pub use run::run;
 
 mod qr;
 
+mod backup;
 mod clipboard;
+pub(crate) mod documents;
 mod episodes;
 mod i18n;
 mod io;

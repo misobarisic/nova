@@ -47,6 +47,7 @@ static AUTH_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// Cached global ref to the sync-job class.
 static JOB_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 static JOB_CANCEL: AtomicBool = AtomicBool::new(false);
+static HEADLESS_CONTEXT: OnceLock<(JavaVM, GlobalRef)> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeCancelSync(
@@ -75,6 +76,10 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativePrepareSync(
 pub(crate) fn with_app_context<R>(
     f: impl FnOnce(&mut jni::JNIEnv, jobject) -> jni::errors::Result<R>,
 ) -> Option<R> {
+    if let Some((vm, context)) = HEADLESS_CONTEXT.get() {
+        let mut guard = vm.attach_current_thread().ok()?;
+        return f(&mut guard, context.as_obj().as_raw()).ok();
+    }
     let ctx = ndk_context::android_context();
     // SAFETY: ndk-context holds these for the process lifetime; the wrappers do
     // not take ownership and Drop does not release them.
@@ -264,21 +269,7 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
     // the store yet — and `read_settings` reads redb. The open is lazy and
     // caches a permanent `None` if no path is set, so reading first would make
     // sync look permanently disabled for the life of the process.
-    let files = env
-        .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
-        .map_err(|e| e.to_string())?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let path = env
-        .call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| e.to_string())?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let jpath = unsafe { JString::from_raw(path.into_raw()) };
-    let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
-    nova_config::set_android_files_dir(PathBuf::from(path));
-    crate::storage::init_at(&nova_config::app_data_dir());
-    super::addon_packages::configure_blob_store();
+    initialize_headless_context(env, context)?;
 
     let settings = nova_sync::read_settings();
     if !settings.enabled || !settings.background_enabled || JOB_CANCEL.load(Ordering::Acquire) {
@@ -299,4 +290,44 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
         Ok(None) => Ok("skipped: another background job owns engine".to_string()),
         Err(error) => Err(format!("setup: {error:#}")),
     }
+}
+
+/// Bootstrap shared by no-Activity sync/reminder/offline jobs. The app context
+/// is retained for JNI adapters; no Activity/Slint/Bridge is constructed.
+pub(crate) fn initialize_headless_context(
+    env: &mut jni::JNIEnv,
+    context: &JObject,
+) -> Result<(), String> {
+    let files = env
+        .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
+        .map_err(|e| e.to_string())?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let path = env
+        .call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .map_err(|e| e.to_string())?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let jpath = unsafe { JString::from_raw(path.into_raw()) };
+    let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
+    nova_config::set_android_files_dir(PathBuf::from(path));
+    crate::storage::init_at(&nova_config::app_data_dir());
+    super::addon_packages::configure_blob_store();
+
+    if HEADLESS_CONTEXT.get().is_none() {
+        let app = env
+            .call_method(
+                context,
+                "getApplicationContext",
+                "()Landroid/content/Context;",
+                &[],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        let global = env.new_global_ref(app).map_err(|e| e.to_string())?;
+        let vm = env.get_java_vm().map_err(|e| e.to_string())?;
+        let _ = HEADLESS_CONTEXT.set((vm, global));
+    }
+    Ok(())
 }

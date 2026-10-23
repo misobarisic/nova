@@ -2255,8 +2255,8 @@ mod tests {
             &store,
             Version::new(30_000, 0, 2, true)
         ));
-        assert_eq!(ALPN, b"nova/sync/5");
-        assert_eq!(PAIR_ALPN, b"nova/pair/4");
+        assert_eq!(ALPN, b"nova/sync/6");
+        assert_eq!(PAIR_ALPN, b"nova/pair/5");
     }
 
     #[test]

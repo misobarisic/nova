@@ -32,8 +32,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use librqbit::api::TorrentIdOrHash;
+mod storage_guard;
+use librqbit::storage::StorageFactoryExt;
 use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse, Session, SessionOptions};
 use serde::{Deserialize, Serialize};
+pub use storage_guard::{WriteGuard, physical_bytes, register as register_write_guard};
 
 /// librqbit's torrent id type (`librqbit::session::TorrentId`, re-exported
 /// here for readability).
@@ -288,6 +291,7 @@ impl TorrentEngine {
             // ports, leaving metadata unresolvable. The listener also lets the
             // session announce a reachable port to DHT/trackers.
             let make_opts = |ipv4_only: bool| SessionOptions {
+                default_storage_factory: Some(storage_guard::GuardedFactory.boxed()),
                 client_name_and_version: Some("nova/0.1".to_string()),
                 persistence: None,
                 dht: Some(librqbit::DhtSessionConfig {

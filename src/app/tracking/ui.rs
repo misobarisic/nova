@@ -22,18 +22,27 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_automatic(&self, index: i32, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(service) = service(index) {
             self.tracking()
                 .send(Command::Automatic { service, enabled });
         }
     }
     pub(in crate::app) fn tracking_reset(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         for epoch in &self.tracking().login_generation {
             epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.tracking().send(Command::Reset);
     }
     pub(in crate::app) fn tracking_connect(&self, index: i32, client: String, redirect: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(service) = service(index) else {
             return;
         };
@@ -50,6 +59,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_complete(&self, index: i32, value: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(service) = service(index) else {
             return;
         };
@@ -73,6 +85,9 @@ impl Bridge {
         self.tracking().send(Command::Cancel { service, epoch });
     }
     pub(in crate::app) fn tracking_disconnect(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(service) = service(index) else {
             return;
         };
@@ -138,6 +153,9 @@ impl Bridge {
         })
     }
     pub(in crate::app) fn tracking_show(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         if self.app().is_some_and(|app| app.get_tracking_open()) {
             return;
         }
@@ -200,6 +218,9 @@ impl Bridge {
         self.tracking().send(Command::Close);
     }
     pub(in crate::app) fn tracking_search(&self, index: i32, query: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(service) = service(index) else {
             return;
         };
@@ -230,6 +251,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_pick(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Ok(index) = usize::try_from(index) else {
             return;
         };
@@ -239,6 +263,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_preview(&self, first: String, last: String, start: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.tracking().send(Command::Preview {
             first,
             last,
@@ -247,6 +274,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_assign(&self, row: i32, value: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Ok(row) = usize::try_from(row) {
             if let Some(app) = self.app() {
                 app.set_tracking_can_confirm(false);
@@ -259,6 +289,9 @@ impl Bridge {
         }
     }
     pub(in crate::app) fn tracking_confirm(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.tracking().send(Command::Confirm {
             generation: self.tracking().context_generation.load(Ordering::Acquire),
         });
@@ -269,6 +302,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_accept_setup(&self, revision: String, include_history: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_tracking_busy(true);
         }
@@ -279,6 +315,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_adjust_setup(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Ok(index) = usize::try_from(index) {
             self.tracking().send(Command::AdjustSetup {
                 index,
@@ -298,6 +337,9 @@ impl Bridge {
         set_completed: bool,
         completed: String,
     ) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.tracking().send(Command::Edit {
             id,
             progress,
@@ -308,6 +350,9 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_action(&self, id: String, action: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.tracking().send(Command::Action { id, action });
     }
 }

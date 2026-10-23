@@ -35,7 +35,7 @@ use crate::{RemoteCallback, SyncStatus};
 
 /// Typed library identities and authorization-based peer membership. The
 /// postcard layout is unchanged; older merge semantics are incompatible.
-pub const ALPN: &[u8] = b"nova/sync/5";
+pub const ALPN: &[u8] = b"nova/sync/6";
 /// ALPN for the one-shot "you have been removed" notice. Separate from the sync
 /// ALPN so the sync wire schema (postcard, non-self-describing) is unchanged.
 pub const REMOVE_ALPN: &[u8] = b"nova/remove/1";

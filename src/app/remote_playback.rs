@@ -65,7 +65,7 @@ fn remote_display_text(value: &str, max_bytes: usize) -> String {
 /// Native IDs take precedence over aliases claimed by other episodes. A
 /// confirmed alias is usable only when exactly one receiver episode claims it;
 /// metadata order must never decide which episode the controller plays.
-fn remote_episode<'a>(videos: &'a [Video], requested: &str) -> Option<&'a Video> {
+pub(super) fn remote_episode<'a>(videos: &'a [Video], requested: &str) -> Option<&'a Video> {
     if let Some(video) = videos.iter().find(|video| video.id == requested) {
         return Some(video);
     }
@@ -113,6 +113,11 @@ fn validate_remote_action(
     }
     let caps = &snapshot.capabilities;
     let supported = match &action {
+        SetSleepTimer(nova_playback_api::SleepTimerMode::Episodes(_)) => {
+            caps.sleep_timer && caps.sleep_timer_episodes
+        }
+        SetSleepTimer(_) | ExtendSleepTimer | CancelSleepTimer => caps.sleep_timer,
+        QueueSkip | QueueStop | QueuePlayNow => caps.queue,
         Stop => caps.stop,
         Resume(_) | CancelResume => caps.resume,
         NextEpisode { token } | DismissNextEpisode { token } => {
@@ -188,7 +193,16 @@ fn validate_remote_action(
 }
 
 fn is_lookup_request(request: &Request) -> bool {
-    matches!(request, Request::Lookup(_) | Request::CurrentOffers { .. })
+    matches!(
+        request,
+        Request::Lookup(_)
+            | Request::CurrentOffers { .. }
+            | Request::QueueStart { .. }
+            | Request::Command {
+                action: PlaybackAction::QueueSkip,
+                ..
+            }
+    )
 }
 
 fn semantic_request(request: &Request) -> Option<(&'static str, String, SessionId)> {
@@ -435,6 +449,7 @@ pub(super) struct State {
     queued: VecDeque<Request>,
     in_flight: bool,
     lookup_in_flight: bool,
+    queue_revision: u64,
     discovery_running: bool,
     discovery_at: Option<Instant>,
     discovery_view: DiscoveryView,
@@ -452,6 +467,20 @@ pub(super) struct State {
 }
 
 impl State {
+    fn queue_stop_request(&mut self) -> Option<Request> {
+        let snapshot = self.snapshot.as_ref()?;
+        let queue = snapshot.queue.as_ref()?;
+        let request = Request::QueueStop {
+            profile_id: queue.profile_id.clone(),
+            run_id: queue.run_id,
+            expected_session: snapshot.session,
+        };
+        self.queue_revision = self.queue_revision.wrapping_add(1);
+        self.lookup_in_flight = false;
+        self.queued.clear();
+        self.queued.push_front(request.clone());
+        Some(request)
+    }
     fn scene_resume_command(&mut self, snapshot: &PlaybackSnapshot) -> Option<Request> {
         let mut pending = self.scene_resume.take()?;
         if pending.start.profile != profiles::active_context()
@@ -617,6 +646,9 @@ impl State {
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn playback_foreground(active: bool) {
     FOREGROUND.store(active, Ordering::Release);
+    if !active {
+        profile_policy::suspend();
+    }
 }
 
 fn session_text(session: Option<SessionId>) -> String {
@@ -628,6 +660,7 @@ fn session_text(session: Option<SessionId>) -> String {
 fn error_text(error: &PlaybackError) -> String {
     // Do not display provider errors which could include source URLs or secrets.
     text::tr(match error {
+        PlaybackError::Failed(code) if code == "profile_locked" => "Unlock on TV.",
         PlaybackError::Unavailable => "Open Nova on the playing device to connect.",
         PlaybackError::Unauthorized => "This device is no longer paired.",
         PlaybackError::StaleSession => "Playback changed. Refresh the controls and try again.",
@@ -668,6 +701,167 @@ fn remote_prompt_text(snapshot: &PlaybackSnapshot) -> &'static str {
 }
 
 impl Bridge {
+    fn remote_stop_queue(&self) {
+        let mut state = self.shared.lock().unwrap();
+        let remote = &mut state.remote_playback;
+        if remote.queue_stop_request().is_none() {
+            return;
+        }
+        drop(state);
+        self.remote_tick();
+    }
+
+    pub(super) fn remote_start_queue(&self, item_key: Option<&str>) {
+        let mut state = self.shared.lock().unwrap();
+        let remote = &mut state.remote_playback;
+        if remote.target.is_empty() || remote.queued.len() >= 32 {
+            return;
+        }
+        let expected_session = remote.snapshot.as_ref().and_then(|s| s.session);
+        remote.queued.push_back(Request::QueueStart {
+            profile_id: profiles::current_id(),
+            item_key: item_key.map(str::to_owned),
+            expected_session,
+        });
+        drop(state);
+        if let Some(app) = self.app() {
+            app.global::<crate::QueueBridge>().set_open(false);
+            app.set_remote_controls_open(true);
+        }
+        self.remote_tick();
+    }
+
+    pub(super) fn remote_queue_action(&self, action: PlaybackAction) {
+        if matches!(action, PlaybackAction::QueueStop) {
+            self.remote_stop_queue();
+            return;
+        }
+        let session = self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.session);
+        if let Some(session) = session {
+            self.queue_remote_action(session, action);
+        }
+    }
+
+    fn receive_queue_start(
+        &self,
+        peer: PeerContext,
+        key: Option<&str>,
+        expected: Option<SessionId>,
+        continuation: bool,
+        done: Completion,
+    ) {
+        if (if continuation {
+            key.map_or_else(
+                || Err("Missing queue item".to_owned()),
+                |key| self.continue_queue_from(key),
+            )
+        } else {
+            self.start_queue(key)
+        })
+        .is_err()
+        {
+            done(Response::Error(PlaybackError::NotFound));
+            return;
+        }
+        let Some((run_id, entry)) = self.queue_run_entry() else {
+            done(Response::Error(PlaybackError::NotFound));
+            return;
+        };
+        let video = read_episodes_cache_for(&entry.type_, &entry.series_id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|v| v.id == entry.episode_id)
+            .unwrap_or_else(|| entry.video());
+        if entry.type_ != "movie"
+            && (if episode_has_air_date(&video) {
+                !episode_is_out(&video, today_days())
+            } else {
+                entry.source_preference.is_none()
+            })
+        {
+            self.pause_queue();
+            done(Response::Error(PlaybackError::NotFound));
+            return;
+        }
+        let profile = profiles::capture();
+        let bridge = self.clone();
+        let owner = peer.clone();
+        self.lookup_remote_streams(
+            peer,
+            entry.identity(),
+            Box::new(move |response| {
+                if !profiles::is_current(&profile)
+                    || !owner.is_authorized()
+                    || bridge
+                        .queue_run_entry()
+                        .is_none_or(|(id, current)| id != run_id || current.key() != entry.key())
+                    || bridge.playback_snapshot().session != expected
+                {
+                    done(Response::Error(PlaybackError::StaleSession));
+                    return;
+                }
+                let Response::Offers(offers) = response else {
+                    bridge.pause_queue();
+                    done(response);
+                    return;
+                };
+                let rows: Vec<_> = {
+                    let state = bridge.shared.lock().unwrap();
+                    offers
+                        .iter()
+                        .filter_map(|offer| {
+                            state
+                                .remote_playback
+                                .offers
+                                .get(&offer.id)
+                                .map(|stored| (offer.id.clone(), stored.stream.clone()))
+                        })
+                        .collect()
+                };
+                let preference = entry.source_preference.clone().or_else(|| {
+                    stream_series_scope(&entry.type_, &entry.series_id)
+                        .and_then(|id| bridge.last_stream.series_preference(&id, now_secs()))
+                });
+                let candidate = playback_end::automatic_choice_with_rules(
+                    &rows.iter().map(|(_, row)| row.clone()).collect::<Vec<_>>(),
+                    preference.as_ref(),
+                    active_torrent_settings().enabled,
+                    &bridge.effective_stream_filter_rules(),
+                );
+                let id = candidate.and_then(|candidate| {
+                    rows.iter()
+                        .find(|(_, row)| row.id == candidate.id)
+                        .map(|(id, _)| id.clone())
+                });
+                let Some(id) = id else {
+                    bridge.pause_queue();
+                    done(Response::Error(PlaybackError::NotFound));
+                    return;
+                };
+                if !profile_policy::allows_title(
+                    &profiles::ProfileStore::capture(),
+                    &entry.type_,
+                    &entry.series_id,
+                ) || bridge.sleep_timer_blocks_successor(&entry.identity())
+                {
+                    done(Response::Error(PlaybackError::Unavailable));
+                    return;
+                }
+                bridge.sleep_timer_note_successor(entry.identity(), run_id);
+                bridge.preserve_queue_on_close(true);
+                let result = bridge.start_remote_offer(&owner, &id, expected);
+                bridge.preserve_queue_on_close(false);
+                done(result);
+            }),
+        );
+    }
     fn reconcile_remote_polling_engine(&self, engine: &Arc<nova_sync::SyncEngine>) {
         let changed = self
             .shared
@@ -840,6 +1034,7 @@ impl Bridge {
 
     #[cfg(target_os = "android")]
     pub(super) fn remote_suspend(&self) {
+        self.suspend_profile_management();
         let _ = self.execute_playback_action(PlaybackAction::EndSpeedPreview);
         {
             let mut state = self.shared.lock().unwrap();
@@ -951,6 +1146,9 @@ impl Bridge {
         #[cfg(not(target_os = "android"))]
         let volume = app.get_volume() as f64;
         PlaybackSnapshot {
+            sleep_timer: state
+                .sleep_timer
+                .snapshot(crate::player::elapsed_realtime_ms()),
             ready,
             role: if remote.role == Role::Remote {
                 PlaybackRole::Remote
@@ -1040,6 +1238,14 @@ impl Bridge {
             screenshot_saved: remote.screenshot_saved,
             screenshot_failed: remote.screenshot_failed,
             capabilities: PlaybackCapabilities {
+                queue: state.watch_queue.active(),
+                sleep_timer: active && app.get_player_open(),
+                sleep_timer_episodes: active
+                    && state
+                        .playback
+                        .as_ref()
+                        .and_then(|p| p.history.as_ref())
+                        .is_some_and(|history| history.type_ == "series"),
                 pause: started,
                 seek: started,
                 volume: started,
@@ -1067,6 +1273,14 @@ impl Bridge {
                     )),
                 brightness: started && cfg!(target_os = "android"),
             },
+            queue: state.watch_queue.status(
+                &profiles::current_id(),
+                if app.get_auto_next_preview() {
+                    app.get_auto_next_seconds().max(0) as u32
+                } else {
+                    0
+                },
+            ),
             revision: remote.sequence,
         }
     }
@@ -1100,12 +1314,22 @@ impl Bridge {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
-        if !FOREGROUND.load(Ordering::Acquire)
-            || self
-                .app()
-                .is_none_or(|app| app.get_profiles_require_selection())
-        {
+        if !FOREGROUND.load(Ordering::Acquire) || self.app().is_none() {
             done(Response::Error(PlaybackError::Unavailable));
+            return;
+        }
+        if self.app().is_some_and(|app| {
+            app.get_profiles_require_selection() || app.global::<crate::MoreBridge>().get_pin_open()
+        }) {
+            let locked = profile_policy::entry_blocked()
+                || self
+                    .app()
+                    .is_some_and(|app| app.global::<crate::MoreBridge>().get_pin_open());
+            done(Response::Error(if locked {
+                PlaybackError::Failed("profile_locked".into())
+            } else {
+                PlaybackError::Unavailable
+            }));
             return;
         }
         if !matches!(request, Request::Snapshot) && self.party_active() {
@@ -1127,6 +1351,43 @@ impl Bridge {
                 }
                 drop(state);
                 done(Response::Snapshot(self.playback_snapshot()));
+            }
+            Request::QueueStop {
+                profile_id,
+                run_id,
+                expected_session,
+            } => {
+                let snapshot = self.playback_snapshot();
+                if profile_id != profiles::current_id() {
+                    done(Response::Error(PlaybackError::Unavailable));
+                    return;
+                }
+                if snapshot.session != expected_session
+                    || snapshot
+                        .queue
+                        .as_ref()
+                        .is_none_or(|queue| queue.run_id != run_id)
+                {
+                    done(Response::Error(PlaybackError::StaleSession));
+                    return;
+                }
+                self.stop_queue();
+                done(Response::Snapshot(self.playback_snapshot()));
+            }
+            Request::QueueStart {
+                profile_id,
+                item_key,
+                expected_session,
+            } => {
+                if profile_id != profiles::current_id() {
+                    done(Response::Error(PlaybackError::Unavailable));
+                    return;
+                }
+                if self.playback_snapshot().session != expected_session {
+                    done(Response::Error(PlaybackError::StaleSession));
+                    return;
+                }
+                self.receive_queue_start(peer, item_key.as_deref(), expected_session, false, done);
             }
             Request::Lookup(media) => self.lookup_remote_streams(peer, media, done),
             Request::Start {
@@ -1153,6 +1414,22 @@ impl Bridge {
                         return;
                     }
                 };
+                if matches!(action, PlaybackAction::QueueSkip) {
+                    if let Some(next) = self.queue_successor() {
+                        self.queue_skip_cursor(&next.key());
+                        self.receive_queue_start(
+                            peer,
+                            Some(&next.key()),
+                            Some(session),
+                            true,
+                            done,
+                        );
+                    } else {
+                        self.stop_queue();
+                        done(Response::Snapshot(self.playback_snapshot()));
+                    }
+                    return;
+                }
                 done(
                     match self.dispatch_playback_action_from(action, Some(&peer)) {
                         Ok(()) => Response::Accepted,
@@ -1264,6 +1541,14 @@ impl Bridge {
     }
 
     fn lookup_remote_streams(&self, peer: PeerContext, mut media: MediaIdentity, done: Completion) {
+        if !profile_policy::allows_title(
+            &profiles::ProfileStore::capture(),
+            &media.media_type,
+            &media.title_id,
+        ) {
+            done(Response::Error(PlaybackError::Unavailable));
+            return;
+        }
         if media.title_id.is_empty()
             || media.title_id.len() > 1024
             || media.episode_id.len() > 1024
@@ -1523,6 +1808,11 @@ impl Bridge {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
+        let policy_owner = profiles::ProfileStore::capture();
+        if !profile_policy::allows_title(&policy_owner, &media.media_type, &media.title_id) {
+            done(Response::Error(PlaybackError::Unavailable));
+            return;
+        }
         // Earlier addon replies may already be buffered when settings change.
         // Never relabel their old account-dependent sources with the new epoch.
         if settings_generation != nova_providers::plugin_settings::settings_generation() {
@@ -1534,6 +1824,12 @@ impl Bridge {
         let rules = self.effective_stream_filter_rules();
         let mut rows = rows
             .into_iter()
+            .filter(|(row, _)| {
+                row.download.as_ref().map_or_else(
+                    || profile_policy::allows_addon(&policy_owner, &row.owner_url),
+                    |job| smart_offline::allows_download(&policy_owner, job),
+                )
+            })
             .filter(|(row, _)| {
                 matches!(row.source, StreamSource::Downloaded { .. })
                     || rules.accepts(&row.card.filter_facts)
@@ -1556,25 +1852,27 @@ impl Bridge {
             .jobs()
             .into_iter()
             .filter(|job| {
-                job.media_id == media.title_id
+                job.media_type == media.media_type
+                    && job.media_id == media.title_id
                     && job.request_id == media.episode_id
                     && job.phase == crate::download::DownloadPhase::Completed
+                    && smart_offline::allows_download(&policy_owner, job)
             })
             .take(REMOTE_OFFER_LIMIT)
         {
             if let Some(path) = job.artifact_path.clone().filter(|path| path.is_file()) {
                 let stream = StreamUi {
-                    id: String::new(),
+                    id: format!("download:{}", job.id),
                     choice_id: None,
                     owner_url: String::new(),
                     display: job.title.clone(),
                     card: downloaded_stream_card(&job),
                     source: StreamSource::Downloaded {
-                        job_id: job.id,
+                        job_id: job.id.clone(),
                         path,
                     },
                     addon: text::tr("Downloaded").into(),
-                    download: None,
+                    download: Some(job),
                 };
                 offers.push(self.retain_remote_offer(
                     &peer.peer_id,
@@ -1659,6 +1957,7 @@ impl Bridge {
     }
 
     fn launch_remote_offer(&self, stream: StreamUi) -> Response {
+        self.note_selected_playback_stream(&stream);
         self.play_remote_source(stream.source, &stream.display);
         let snapshot = self.playback_snapshot();
         if snapshot.session.is_none() {
@@ -1693,7 +1992,19 @@ impl Bridge {
             }) {
                 return Err(PlaybackError::StaleSession);
             }
-            if offer.peer != peer.peer_id
+            if !profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &offer.media.media_type,
+                &offer.media.title_id,
+            ) || !offer.stream.download.as_ref().map_or_else(
+                || {
+                    profile_policy::allows_addon(
+                        &profiles::ProfileStore::capture(),
+                        &offer.stream.owner_url,
+                    )
+                },
+                |j| smart_offline::allows_download(&profiles::ProfileStore::capture(), j),
+            ) || offer.peer != peer.peer_id
                 || offer.created.elapsed() > Duration::from_secs(300)
                 || offer.settings_generation
                     != nova_providers::plugin_settings::settings_generation()
@@ -1731,6 +2042,12 @@ impl Bridge {
                 let _ = self.dispatch_playback_action(PlaybackAction::Stop);
             }
         }
+        self.queue_note_stream_for(
+            &offer.media.media_type,
+            &offer.media.title_id,
+            &offer.media.episode_id,
+            &offer.stream,
+        );
         if let Some(identity) = offer.stream.choice_id.clone() {
             self.last_stream.remember(identity, now_secs());
         }
@@ -2359,6 +2676,14 @@ impl Bridge {
     }
 
     fn remote_ui_action(&self, name: &str, value: f32, token: &str) {
+        if name == "queue_continue" {
+            self.remote_start_queue(None);
+            return;
+        }
+        if name == "queue_stop" {
+            self.remote_stop_queue();
+            return;
+        }
         if !FOREGROUND.load(Ordering::Acquire) {
             return;
         }
@@ -2379,6 +2704,9 @@ impl Bridge {
             return;
         }
         let action = match name {
+            "queue_skip" => PlaybackAction::QueueSkip,
+            "queue_stop" => PlaybackAction::QueueStop,
+            "queue_now" => PlaybackAction::QueuePlayNow,
             "pause" => PlaybackAction::TogglePause,
             "seek" => PlaybackAction::SeekAbsolute(value as f64),
             "seek_relative" => PlaybackAction::SeekRelative(value as f64),
@@ -2472,6 +2800,21 @@ impl Bridge {
         }
         let integer = value.fract() == 0.0;
         let action = match name {
+            "sleep_minutes" if integer && (1.0..=240.0).contains(&value) => {
+                PlaybackAction::SetSleepTimer(nova_playback_api::SleepTimerMode::Minutes(
+                    value as u16,
+                ))
+            }
+            "sleep_episodes" if integer && (1.0..=10.0).contains(&value) => {
+                PlaybackAction::SetSleepTimer(nova_playback_api::SleepTimerMode::Episodes(
+                    value as u8,
+                ))
+            }
+            "sleep_end" => {
+                PlaybackAction::SetSleepTimer(nova_playback_api::SleepTimerMode::EndOfItem)
+            }
+            "sleep_cancel" => PlaybackAction::CancelSleepTimer,
+            "sleep_extend" => PlaybackAction::ExtendSleepTimer,
             "chapter" => PlaybackAction::SeekChapter { id: id.into() },
             "subtitle_style" => {
                 let Ok(control) = id.parse::<i32>() else {
@@ -2689,6 +3032,26 @@ impl Bridge {
                 old.is_none_or(|old| old.bookmarks != snapshot.bookmarks),
             )
         };
+        app.global::<crate::RemoteBridge>()
+            .set_queue_active(snapshot.queue.is_some());
+        app.global::<crate::RemoteBridge>()
+            .set_queue_countdown(snapshot.queue.as_ref().map_or(0, |q| q.countdown as i32));
+        app.global::<crate::RemoteBridge>().set_queue_phase(
+            snapshot
+                .queue
+                .as_ref()
+                .map(|q| {
+                    text::tr(match q.phase.as_str() {
+                        "finished" => "Finished",
+                        "paused" => "Queue paused",
+                        "countdown" => "Next queued item",
+                        "ready" => "Choose a stream",
+                        _ => "Queue playing",
+                    })
+                })
+                .unwrap_or("")
+                .into(),
+        );
         app.set_remote_loading(false);
         app.set_remote_connected(snapshot.ready);
         app.set_remote_error(SharedString::default());
@@ -2702,6 +3065,30 @@ impl Bridge {
         app.set_remote_paused(snapshot.paused);
         app.set_remote_muted(snapshot.muted);
         app.set_remote_fullscreen(snapshot.fullscreen);
+        app.set_remote_sleep_timer_available(snapshot.capabilities.sleep_timer);
+        app.set_remote_sleep_timer_episodes_available(snapshot.capabilities.sleep_timer_episodes);
+        app.set_remote_sleep_timer_duration(snapshot.sleep_timer.as_ref().is_some_and(|timer| {
+            matches!(timer.mode, nova_playback_api::SleepTimerMode::Minutes(_))
+        }));
+        app.set_remote_sleep_timer_active(snapshot.sleep_timer.is_some());
+        app.set_remote_sleep_timer_label(
+            snapshot
+                .sleep_timer
+                .as_ref()
+                .map(|timer| {
+                    text::sleep_timer_status(
+                        match timer.mode {
+                            nova_playback_api::SleepTimerMode::Minutes(_) => 1,
+                            nova_playback_api::SleepTimerMode::EndOfItem => 2,
+                            _ => 3,
+                        },
+                        timer.remaining_seconds,
+                        timer.remaining_episodes,
+                    )
+                })
+                .unwrap_or_else(|| text::tr("Off").into())
+                .into(),
+        );
         app.set_remote_can_pause(snapshot.capabilities.pause);
         app.set_remote_can_mute(snapshot.capabilities.mute);
         app.set_remote_can_stop(snapshot.capabilities.stop);
@@ -2802,6 +3189,7 @@ impl Bridge {
         app.set_remote_decoder(snapshot.decoder);
         app.set_remote_brightness(snapshot.brightness as f32);
         app.set_remote_automatic_recovery(snapshot.automatic_recovery);
+        app.set_remote_can_queue(snapshot.capabilities.queue);
         app.set_remote_can_chapters(snapshot.capabilities.chapters);
         app.set_remote_can_subtitle_style(snapshot.capabilities.subtitle_style);
         app.set_remote_can_secondary_subtitles(snapshot.capabilities.secondary_subtitles);
@@ -2930,7 +3318,7 @@ impl Bridge {
                 app.set_remote_connected(false);
                 return;
             };
-            let (target, generation, request, is_lookup, lookup_session) = {
+            let (target, generation, request, is_lookup, lookup_session, queue_revision) = {
                 let mut state = self.shared.lock().unwrap();
                 let r = &mut state.remote_playback;
                 if r.in_flight || r.target.is_empty() {
@@ -2968,8 +3356,18 @@ impl Bridge {
                     request,
                     is_lookup,
                     r.snapshot.as_ref().and_then(|s| s.session),
+                    r.queue_revision,
                 )
             };
+            let queue_request = matches!(&request, Request::QueueStart { .. });
+            let queue_lookup = queue_request
+                || matches!(
+                    &request,
+                    Request::Command {
+                        action: PlaybackAction::QueueSkip,
+                        ..
+                    }
+                );
             let current_offers = matches!(&request, Request::CurrentOffers { .. });
             let semantic = semantic_request(&request);
             let started_offer = match &request {
@@ -3038,6 +3436,9 @@ impl Bridge {
                             state.remote_playback.lookup_in_flight = false;
                             state.remote_playback.queued.clear();
                             state.remote_playback.scene_resume = None;
+                            return;
+                        }
+                        if queue_lookup && state.remote_playback.queue_revision != queue_revision {
                             return;
                         }
                         if is_lookup {
@@ -3124,7 +3525,7 @@ impl Bridge {
                         Ok(Response::Accepted) => {}
                         Ok(Response::Error(error)) => {
                             if let Some(app) = b.app() {
-                                app.set_remote_error(error_text(&error).into());
+                                app.set_remote_error(if queue_request && error == PlaybackError::NotFound { text::tr("Queue item is unavailable on this device. Sync, then retry or choose a source on the TV.").to_owned() } else if queue_request && error == PlaybackError::Unavailable { text::tr("Select and unlock the same profile on the playing device.").to_owned() } else { error_text(&error) }.into());
                             }
                             if !is_lookup
                                 && matches!(
@@ -3327,6 +3728,179 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_queue_stop_uses_control_lane_without_a_native_session() {
+        let mut remote = State {
+            lookup_in_flight: true,
+            snapshot: Some(PlaybackSnapshot {
+                ready: true,
+                queue: Some(nova_playback_api::QueueStatus {
+                    profile_id: "default".into(),
+                    run_id: 7,
+                    item_key: "item".into(),
+                    phase: "ready".into(),
+                    countdown: 0,
+                    autoplay: true,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        remote.queued.push_back(Request::QueueStart {
+            profile_id: "default".into(),
+            item_key: None,
+            expected_session: None,
+        });
+        let old_revision = remote.queue_revision;
+        let request = remote.queue_stop_request().unwrap();
+        assert!(
+            !is_lookup_request(&request),
+            "stop must pass an in-flight source lookup"
+        );
+        assert!(is_lookup_request(&Request::QueueStart {
+            profile_id: "default".into(),
+            item_key: None,
+            expected_session: None
+        }));
+        assert_eq!(
+            request,
+            Request::QueueStop {
+                profile_id: "default".into(),
+                run_id: 7,
+                expected_session: None
+            }
+        );
+        assert!(!remote.lookup_in_flight);
+        assert_eq!(
+            remote.queued.len(),
+            1,
+            "queued starts cannot run after cancellation"
+        );
+        assert_ne!(
+            remote.queue_revision, old_revision,
+            "late lookup snapshots are rejected"
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn pending_queue_stop_cancels_intent_and_rejects_previous_run() {
+        const ROOT: &str = "NOVA_PENDING_QUEUE_STOP_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-pending-queue-stop-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output=std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT,&root).args(["--exact","app::remote_playback::tests::pending_queue_stop_cancels_intent_and_rejects_previous_run","--nocapture"]).output().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let key = r#"["movie","movie-id","movie-id"]"#;
+        storage::try_set_str(watch_queue::KEY,&serde_json::json!({"version":2,"entries":[{"type_":"movie","series_id":"movie-id","episode_id":"movie-id","title":"Queued movie","poster_url":"","episode_title":"","season":null,"episode":null}],"order":[key]}).to_string()).unwrap();
+        bridge.start_queue(Some(key)).unwrap();
+        let (run_id, _) = bridge.queue_run_entry().unwrap();
+        let snapshot = bridge.playback_snapshot();
+        assert!(
+            snapshot.session.is_none(),
+            "source lookup has no native session"
+        );
+        let peer = PeerContext::new("paired".into(), 1, 1, Arc::new(|| true));
+        let request = Request::QueueStop {
+            profile_id: profiles::current_id(),
+            run_id,
+            expected_session: None,
+        };
+        let response = Arc::new(Mutex::new(None));
+        let observed = response.clone();
+        bridge.receive_playback_request(
+            peer.clone(),
+            request.clone(),
+            Box::new(move |value| *observed.lock().unwrap() = Some(value)),
+        );
+        assert!(matches!(
+            response.lock().unwrap().as_ref(),
+            Some(Response::Snapshot(_))
+        ));
+        assert!(bridge.queue_run_entry().is_none());
+        assert!(!app.get_player_open());
+        bridge.start_queue(Some(key)).unwrap();
+        let (resolving, _) = bridge.queue_run_entry().unwrap();
+        let pending = bridge.begin_playback_request();
+        assert!(pending.is_current());
+        let response = Arc::new(Mutex::new(None));
+        let observed = response.clone();
+        bridge.receive_playback_request(
+            peer.clone(),
+            Request::QueueStop {
+                profile_id: profiles::current_id(),
+                run_id: resolving,
+                expected_session: bridge.playback_snapshot().session,
+            },
+            Box::new(move |value| *observed.lock().unwrap() = Some(value)),
+        );
+        assert!(matches!(
+            response.lock().unwrap().as_ref(),
+            Some(Response::Snapshot(_))
+        ));
+        assert!(!pending.is_current());
+        assert!(!bridge.playback_request_is_current(&pending));
+        assert!(bridge.queue_run_entry().is_none());
+        bridge.start_queue(Some(key)).unwrap();
+        let (replacement, _) = bridge.queue_run_entry().unwrap();
+        assert_ne!(replacement, run_id);
+        let response = Arc::new(Mutex::new(None));
+        let observed = response.clone();
+        bridge.receive_playback_request(
+            peer,
+            request,
+            Box::new(move |value| *observed.lock().unwrap() = Some(value)),
+        );
+        assert_eq!(
+            response.lock().unwrap().as_ref(),
+            Some(&Response::Error(PlaybackError::StaleSession))
+        );
+        assert_eq!(bridge.queue_run_entry().unwrap().0, replacement);
+        bridge.open_preview(
+            MetaPreview {
+                id: "unrelated".into(),
+                type_: "movie".into(),
+                name: "Another movie".into(),
+                ..Default::default()
+            },
+            0,
+            false,
+            None,
+            false,
+        );
+        let unrelated = bridge.begin_playback_request();
+        assert!(unrelated.is_current());
+        assert!(
+            bridge.queue_run_entry().is_none(),
+            "an unrelated accepted start cancels a pending queue rather than inheriting its EOF ownership"
+        );
+    }
     #[test]
     fn offer_display_omits_source_locations_and_credentials() {
         assert_eq!(

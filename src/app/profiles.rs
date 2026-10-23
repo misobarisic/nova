@@ -180,10 +180,17 @@ pub(super) fn scoped_key(key: &str) -> bool {
             | "watch_history_hidden:v1"
             | "new_episodes_hidden:v1"
             | "playback_preferences:v1"
+            | "stream_family_preferences:v1"
             | "scene_bookmarks:v1"
             | "secondary_subtitles:v1"
             | "secondary_subtitle_positions:v1"
             | "watch_queue:v1"
+            | "offline_policies:v1"
+            | "watch_queue:v2"
+            | super::profile_policy::KEY
+            | "release_subscriptions:v1"
+            | "release_delivery:v1"
+            | "calendar_export:v1"
             | "addons"
             | "addon_packages:v1"
             | "discover:search_history:v2"
@@ -236,10 +243,13 @@ pub(super) fn list() -> Result<Vec<Profile>, String> {
     profiles.sort_by(|a, b| a.id.cmp(&b.id));
     drop(store);
     cleanup_deleted_data(deleted)?;
+    #[cfg(target_os = "android")]
+    super::release_reminders::update_android_schedule(&profiles);
     Ok(profiles)
 }
 fn cleanup_deleted_data(ids: HashSet<String>) -> Result<(), String> {
     for id in ids {
+        super::release_reminders::cancel_profile_notifications(&id);
         nova_providers::plugin_settings::revoke_owner(
             &ProfileStore::for_profile(&id).domain("plugin_settings"),
         );
@@ -628,6 +638,8 @@ mod tests {
         assert!(scoped_key("list_services:simkl_cache:v1:account"));
         assert!(scoped_key("plugin_settings"));
         assert!(scoped_key("watch_queue:v1"));
+        assert!(scoped_key("watch_queue:v2"));
+        assert!(scoped_key(crate::app::profile_policy::KEY));
         assert!(scoped_key("scene_bookmarks:v1"));
         assert!(scoped_key("secondary_subtitles:v1"));
         assert!(scoped_key("secondary_subtitle_positions:v1"));

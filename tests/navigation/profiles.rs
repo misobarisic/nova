@@ -454,6 +454,11 @@ fn compact_rows_keep_letters_readable_and_management_nested() {
         renamed.borrow().last(),
         Some(&("miso".to_string(), "Mišo 2".to_string()))
     );
+    // Each profile has Rename, Delete and PIN actions. The footer can sit
+    // below a phone viewport; keyboard traversal must reveal it again.
+    for _ in 0..10 {
+        key(&app, slint::platform::Key::DownArrow.into());
+    }
     assert!(
         ElementHandle::find_by_accessible_label(&app, "Done")
             .next()
@@ -516,7 +521,14 @@ fn keyboard_and_tv_navigation_reveal_picker_actions_and_skip_last_delete() {
         button(&app, &format!("Delete profile: {PROFILE_NAME}")).accessible_enabled(),
         Some(false)
     );
-    // Rename -> Add skips the disabled last-profile Delete action.
+    // Rename -> PIN -> Add skips the disabled last-profile Delete action.
+    let policy_edits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = policy_edits.clone();
+    app.global::<nova_ui::MoreBridge>()
+        .on_policy_edit(move |id| recorded.borrow_mut().push(id.to_string()));
+    key(&app, slint::platform::Key::DownArrow.into());
+    key(&app, slint::platform::Key::Return.into());
+    assert_eq!(policy_edits.borrow().as_slice(), &["stable-profile"]);
     key(&app, slint::platform::Key::DownArrow.into());
     key(&app, slint::platform::Key::Return.into());
     key(&app, "New profile".into());
@@ -661,4 +673,144 @@ fn selecting_profiles_reveals_home_and_cancels_interrupted_motion() {
             assert!(app.get_show_home() && !app.get_profiles_require_selection());
         }
     }
+}
+
+#[test]
+fn pin_keypad_tv_digits_back_and_phone_safe_bounds() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::pin_keypad_tv_digits_back_and_phone_safe_bounds"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = picker(true);
+    let ui = app.global::<nova_ui::MoreBridge>();
+    let digits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = digits.clone();
+    ui.on_pin_input_edit(move |digit| recorded.borrow_mut().push(digit));
+    let cancelled = Rc::new(RefCell::new(0));
+    let count = cancelled.clone();
+    let weak = app.as_weak();
+    ui.on_pin_cancel(move || {
+        *count.borrow_mut() += 1;
+        if let Some(app) = weak.upgrade() {
+            app.global::<nova_ui::MoreBridge>().set_pin_open(false);
+        }
+    });
+    for (width, height, tv) in [(320, 568, false), (1280, 720, true)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.global::<nova_ui::InterfaceStyle>().set_tv(tv);
+        // LogicalEdges::new takes top/bottom/left/right. Named fields keep
+        // this asymmetric cutout fixture and its geometric expectations clear.
+        let safe_area = i_slint_core::lengths::LogicalEdges {
+            top: 28.0,
+            bottom: 12.0,
+            left: 8.0,
+            right: 16.0,
+        };
+        i_slint_core::window::WindowInner::from_pub(app.window())
+            .set_window_item_safe_area(safe_area);
+        ui.set_pin_open(true);
+        settle(&app);
+        let first = button(&app, "1");
+        let first_x = first.absolute_position().x;
+        let cell_width = first.size().width;
+        assert!(cell_width >= 44.0 && first.size().height >= 44.0);
+        for (column, label) in ["1", "2", "3"].into_iter().enumerate() {
+            let cell = button(&app, label);
+            assert!((cell.size().width - cell_width).abs() < 0.5);
+            assert!(
+                (cell.absolute_position().x - first_x - column as f32 * (cell_width + 12.0)).abs()
+                    < 0.5
+            );
+        }
+        let grid_center = first_x + (cell_width * 3.0 + 24.0) / 2.0;
+        let safe_center = safe_area.left + (width as f32 - safe_area.left - safe_area.right) / 2.0;
+        assert!(
+            (grid_center - safe_center).abs() < 0.5,
+            "keypad center {grid_center} must match safe center {safe_center}; first_x={first_x}, cell_width={cell_width}, safe_area={safe_area:?}"
+        );
+        // A late page mount must return navigation to the topmost PIN layer.
+        app.invoke_preserve_back_focus();
+        key(&app, slint::platform::Key::Return.into());
+        assert_eq!(
+            digits.borrow().last(),
+            Some(&1),
+            "D-pad starts on first digit"
+        );
+        key(&app, slint::platform::Key::RightArrow.into());
+        key(&app, slint::platform::Key::Return.into());
+        assert_eq!(digits.borrow().last(), Some(&2));
+        for _ in 0..4 {
+            key(&app, slint::platform::Key::DownArrow.into());
+        }
+        // An empty PIN disables Unlock; traverse past it in both directions.
+        key(&app, slint::platform::Key::LeftArrow.into());
+        key(&app, slint::platform::Key::Return.into());
+        assert_eq!(digits.borrow().last(), Some(&-2));
+        key(&app, slint::platform::Key::RightArrow.into());
+        for (column, label) in ["Clear", "0", "Delete"].into_iter().enumerate() {
+            let cell = button(&app, label);
+            assert!((cell.size().width - cell_width).abs() < 0.5);
+            assert!(
+                (cell.absolute_position().x - first_x - column as f32 * (cell_width + 12.0)).abs()
+                    < 0.5
+            );
+        }
+        let cancel = button(&app, "Cancel");
+        let p = cancel.absolute_position();
+        let size = cancel.size();
+        assert!(p.x >= safe_area.left && p.x + size.width <= width as f32 - safe_area.right + 0.5);
+        assert!(
+            p.y >= safe_area.top && p.y + size.height <= height as f32 - safe_area.bottom + 0.5
+        );
+        key(&app, slint::platform::Key::Escape.into());
+        assert!(!ui.get_pin_open());
+        assert!(app.get_profiles_require_selection());
+    }
+    assert_eq!(*cancelled.borrow(), 2);
+}
+
+#[test]
+fn policy_editor_wraps_focus_back_to_pin_and_reveals_add_title() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::policy_editor_wraps_focus_back_to_pin_and_reveals_add_title"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = picker(false);
+    app.window().set_size(slint::PhysicalSize::new(320, 568));
+    app.global::<nova_ui::InterfaceStyle>().set_tv(true);
+    let ui = app.global::<nova_ui::MoreBridge>();
+    ui.set_policy_titles(
+        Rc::new(slint::VecModel::from(
+            (0..12)
+                .map(|i| format!("Long library title {i}").into())
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    ui.set_policy_open(true);
+    settle(&app);
+    // Up wraps from the PIN field to Cancel at the bottom of the long form.
+    key(&app, slint::platform::Key::UpArrow.into());
+    let cancel = button(&app, "Cancel");
+    assert!(cancel.absolute_position().y >= 0.0);
+    assert!(cancel.absolute_position().y + cancel.size().height <= 568.5);
+    key(&app, slint::platform::Key::DownArrow.into());
+    let input = ElementHandle::find_by_accessible_label(&app, "Profile PIN")
+        .find(|e| e.accessible_role() == Some(AccessibleRole::TextInput))
+        .unwrap();
+    assert!(input.absolute_position().y >= 0.0);
+    assert!(input.absolute_position().y + input.size().height <= 568.5);
+    for _ in 0..3 {
+        key(&app, slint::platform::Key::DownArrow.into());
+    }
+    let add = button(&app, "Add title");
+    assert!(add.absolute_position().y >= 0.0);
+    assert!(add.absolute_position().y + add.size().height <= 568.5);
 }

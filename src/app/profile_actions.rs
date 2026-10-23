@@ -190,6 +190,9 @@ impl Bridge {
     }
 
     pub(super) fn create_profile(&self, name: &str) {
+        if !self.gate_profile_create(name) {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_profiles_error("".into());
         }
@@ -200,6 +203,9 @@ impl Bridge {
     }
 
     pub(super) fn rename_profile(&self, id: &str, name: &str) {
+        if !profiles::valid_id(id) || !self.gate_profile_rename(id, name) {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_profiles_error("".into());
         }
@@ -210,6 +216,9 @@ impl Bridge {
     }
 
     pub(super) fn delete_profile(&self, id: &str) {
+        if !profiles::valid_id(id) || !self.gate_profile_delete(id) {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_profiles_error("".into());
         }
@@ -220,10 +229,21 @@ impl Bridge {
     }
 
     pub(super) fn switch_profile(&self, id: &str) {
+        if !profiles::valid_id(id) || !self.gate_profile_selection(id) {
+            return;
+        }
+        self.activate_profile_authorized(id);
+    }
+
+    pub(super) fn activate_profile_authorized(&self, id: &str) {
+        self.finish_profile_management_for_selection();
         if let Some(app) = self.app() {
             app.set_profiles_error("".into());
         }
+        let was_blocked = profile_policy::entry_blocked();
+        profile_policy::set_entry_blocked(false);
         if let Err(error) = self.activate_profile(id, false) {
+            profile_policy::set_entry_blocked(was_blocked);
             self.profile_error(error);
         }
     }
@@ -238,11 +258,38 @@ impl Bridge {
         }
     }
 
-    fn activate_profile(&self, id: &str, require_selection: bool) -> Result<(), String> {
+    pub(super) fn activate_profile(&self, id: &str, require_selection: bool) -> Result<(), String> {
         if !profiles::list()?.iter().any(|profile| profile.id == id) {
             return Err("This profile is unavailable.".into());
         }
         let active = profiles::active_context();
+        // Recovery/import may request a picker for a protected target. Keep
+        // its durable snapshots detached until an actual PIN-authorized choice.
+        if require_selection
+            && profile_policy::load(&profiles::ProfileStore::for_profile(id))
+                .map_or(true, |p| p.require_pin_on_entry)
+        {
+            profile_policy::set_entry_blocked(true);
+            self.cancel_pending_playback();
+            self.cancel_sleep_timer();
+            self.player.close();
+            self.finish_playback_request();
+            self.shutdown_tracking();
+            self.shutdown_stremio();
+            self.shutdown_list_services();
+            self.sessions
+                .active()
+                .services_requested
+                .store(false, Ordering::Release);
+            self.profile_loaded_epoch.store(0, Ordering::Release);
+            if let Some(app) = self.app() {
+                app.set_profiles_require_selection(true);
+                app.set_profiles_open(true);
+                app.set_more_open(true);
+                app.set_show_home(false);
+            }
+            return Ok(());
+        }
         let loaded = self.profile_loaded_epoch.load(Ordering::Acquire) == active.epoch;
         let changed = active.id != id || !loaded;
         if changed {
@@ -264,6 +311,7 @@ impl Bridge {
             self.clear_addon_subtitles();
             #[cfg(target_os = "android")]
             android_player::player_brightness_reset();
+            self.cancel_sleep_timer();
             self.finish_playback_request();
             self.player.close();
             self.shutdown_tracking();
@@ -374,6 +422,7 @@ impl Bridge {
             app.set_remote_devices_open(false);
         }
         self.shared.lock().unwrap().loading_addons = true;
+        plugin_cache::start_gc_worker();
         addon_packages::initialize(self);
         for addon in addons {
             nova_providers::configure_provider_capabilities(
@@ -410,6 +459,10 @@ impl Bridge {
     }
 
     fn finish_profile_selection(&self, require_selection: bool) {
+        if !require_selection {
+            profile_policy::set_entry_blocked(false);
+            profile_policy::remember_entry(&profiles::ProfileStore::capture());
+        }
         if !require_selection {
             self.sessions
                 .active()

@@ -36,6 +36,27 @@ pub(super) struct ResolverDownload {
     is_current: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
+impl ResolverDownload {
+    pub(super) fn for_offline(
+        token: String,
+        resolve: impl Fn(
+            &str,
+            Duration,
+            ResolverCancellation,
+        ) -> Result<addons::Stream, nova_providers::ProviderResolveError>
+        + Send
+        + Sync
+        + 'static,
+        is_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        Self {
+            token,
+            resolve: Arc::new(resolve),
+            is_current,
+        }
+    }
+}
+
 fn is_resolver_download(job: &DownloadJob) -> bool {
     job.source
         .url()
@@ -71,14 +92,16 @@ pub(crate) struct DownloadCoordinator {
 }
 
 pub(super) struct NewDownload {
-    media_type: String,
-    media_id: String,
-    request_id: String,
-    title: String,
-    year: String,
-    display: String,
-    addon: String,
-    source: JobSource,
+    pub(super) media_type: String,
+    pub(super) media_id: String,
+    pub(super) request_id: String,
+    pub(super) title: String,
+    pub(super) year: String,
+    pub(super) display: String,
+    pub(super) addon: String,
+    pub(super) source: JobSource,
+    pub(super) source_owner: String,
+    pub(super) source_revision: String,
 }
 
 struct PendingRemoval {
@@ -91,6 +114,7 @@ struct DownloadInner {
     state: Mutex<DownloadState>,
     next_id: AtomicU64,
     revision: AtomicU64,
+    foreground: AtomicBool,
 }
 
 impl DownloadInner {
@@ -150,14 +174,77 @@ fn completed_snapshot_matches(job: &DownloadJob, snapshot: &DownloadJob) -> bool
         && same_download_identity(job, snapshot)
 }
 
+fn detach_policy_jobs(
+    state: &mut DownloadState,
+    owner: &crate::download::offline::Owner,
+    keep: bool,
+    playing: Option<&str>,
+) -> HashSet<String> {
+    let mut remove = HashSet::new();
+    for job in &mut state.manifest.jobs {
+        if job.offline.owners.remove(owner)
+            && job.offline.owners.is_empty()
+            && !job.offline.manual_keep
+        {
+            if keep && job.phase == DownloadPhase::Completed {
+                job.offline.manual_keep = true;
+            } else if playing != Some(job.id.as_str()) {
+                remove.insert(job.id.clone());
+            }
+        }
+    }
+    remove
+}
+
+/// Refresh actual physical bytes before admission/restart. Torrent bundles are
+/// charged by directory once, including boundary pieces and sibling files.
+fn refresh_physical_accounting(jobs: &mut [DownloadJob]) {
+    for job in jobs {
+        if job.offline.manual_keep {
+            continue;
+        }
+        if let Some(directory) = &job.torrent_directory {
+            job.bytes_downloaded = crate::torrent::physical_bytes(directory);
+        } else if let Some(path) = &job.artifact_path {
+            job.bytes_downloaded = path
+                .parent()
+                .map(crate::torrent::physical_bytes)
+                .unwrap_or(0);
+        }
+    }
+}
+
 impl DownloadCoordinator {
     pub(super) fn available_bytes(&self) -> Option<u64> {
         crate::download::available_bytes(&self.inner.root)
     }
     pub(crate) fn new(root: PathBuf) -> Self {
+        Self::new_mode(root, true)
+    }
+    #[cfg(target_os = "android")]
+    pub(super) fn new_headless(root: PathBuf) -> Self {
+        Self::new_mode(root, false)
+    }
+    #[cfg(target_os = "android")]
+    pub(super) fn foreground_attached(&self) -> bool {
+        self.inner.foreground.load(Ordering::Acquire)
+    }
+    fn new_mode(root: PathBuf, foreground: bool) -> Self {
         if let Err(error) = std::fs::create_dir_all(&root) {
             eprintln!("nova downloads: cannot create {}: {error}", root.display());
         }
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        static COORDINATORS: std::sync::OnceLock<
+            Mutex<HashMap<PathBuf, std::sync::Weak<DownloadInner>>>,
+        > = std::sync::OnceLock::new();
+        let mut registry = COORDINATORS.get_or_init(Mutex::default).lock().unwrap();
+        if let Some(inner) = registry.get(&root).and_then(std::sync::Weak::upgrade) {
+            if foreground {
+                inner.foreground.store(true, Ordering::Release);
+            }
+            return Self { inner };
+        }
+
         let manifest = load_manifest(&root);
         log_corrupt_manifest_backups();
         // A removed row can still own asynchronous file/torrent cleanup after
@@ -185,8 +272,13 @@ impl DownloadCoordinator {
                 }),
                 next_id: AtomicU64::new(next_id),
                 revision: AtomicU64::new(0),
+                foreground: AtomicBool::new(foreground),
             }),
         };
+        registry.insert(
+            coordinator.inner.root.clone(),
+            Arc::downgrade(&coordinator.inner),
+        );
         coordinator.persist();
         coordinator
     }
@@ -398,6 +490,19 @@ impl DownloadCoordinator {
         request: NewDownload,
         resolver: Option<ResolverDownload>,
     ) -> String {
+        self.enqueue_owned(
+            request,
+            resolver,
+            crate::download::offline::JobOwnership::default(),
+        )
+    }
+
+    fn enqueue_owned(
+        &self,
+        request: NewDownload,
+        resolver: Option<ResolverDownload>,
+        mut ownership: crate::download::offline::JobOwnership,
+    ) -> String {
         let NewDownload {
             media_type,
             media_id,
@@ -407,6 +512,8 @@ impl DownloadCoordinator {
             display,
             addon,
             source,
+            source_owner,
+            source_revision,
         } = request;
         let intro_request = intro_skip::download_request(&media_type, &media_id, &request_id);
         let id = {
@@ -421,6 +528,15 @@ impl DownloadCoordinator {
                     let id = state.manifest.jobs[index].id.clone();
                     state.resolvers.insert(id, resolver);
                 }
+                if ownership.manual_keep {
+                    state.manifest.jobs[index].offline.manual_keep = true;
+                    state.manifest.jobs[index].offline.manual_origin = true;
+                }
+                state.manifest.jobs[index]
+                    .offline
+                    .owners
+                    .append(&mut ownership.owners);
+                persist_manifest(&state.manifest);
                 // Already have a job for this exact stream. Re-tapping
                 // "Download" on a failed job re-arms the same row (no
                 // duplicate pinned entry, and an HTTP `.part` resumes) so a
@@ -462,6 +578,9 @@ impl DownloadCoordinator {
                 }
             };
             let mut job = DownloadJob::new(id.clone(), source);
+            ownership.source_owner = source_owner;
+            ownership.source_revision = source_revision;
+            job.offline = ownership;
             job.intro_request = intro_request;
             job.media_type = media_type;
             job.media_id = media_id;
@@ -491,6 +610,374 @@ impl DownloadCoordinator {
         id
     }
 
+    #[cfg(target_os = "android")]
+    pub(super) fn pause_background_smart(&self) {
+        let mut state = self.inner.state();
+        for job in &mut state.manifest.jobs {
+            if job.offline.automatic()
+                && matches!(
+                    job.phase,
+                    DownloadPhase::Queued | DownloadPhase::Resolving | DownloadPhase::Downloading
+                )
+            {
+                job.phase = DownloadPhase::Paused;
+                job.offline.pause_reason = Some(crate::download::offline::PauseReason::Background);
+            }
+        }
+        if let Some(active) = &state.active
+            && state
+                .manifest
+                .jobs
+                .iter()
+                .any(|job| job.id == active.id && job.offline.automatic())
+        {
+            active.cancel.cancel();
+            active.torrent_cancel.store(true, Ordering::Release);
+        }
+        persist_manifest(&state.manifest);
+        self.bump_revision();
+    }
+
+    pub(super) fn attach_smart_owner(&self, id: &str, owner: crate::download::offline::Owner) {
+        let mut state = self.inner.state();
+        if let Some(job) = state.manifest.jobs.iter_mut().find(|j| j.id == id)
+            && job.offline.owners.insert(owner)
+        {
+            persist_manifest(&state.manifest);
+            self.bump_revision();
+        }
+    }
+    pub(super) fn keep_removed_policy(
+        &self,
+        owner: &crate::download::offline::Owner,
+        keep: bool,
+        playing: Option<&str>,
+    ) {
+        let mut state = self.inner.state();
+        let remove = detach_policy_jobs(&mut state, owner, keep, playing);
+        let pending = self.claim_removals(&mut state, &remove);
+        persist_manifest(&state.manifest);
+        self.bump_revision();
+        drop(state);
+        if let Some(pending) = pending {
+            self.finish_removals(pending);
+        }
+    }
+
+    pub(super) fn smart_admit(
+        &self,
+        request: NewDownload,
+        resolver: Option<ResolverDownload>,
+        owner: crate::download::offline::Owner,
+        estimate: Option<u64>,
+    ) -> Result<String, crate::download::offline::PauseReason> {
+        use crate::download::offline::{JobOwnership, Ledger, PauseReason};
+        let _device = smart_offline::device_guard();
+        // Revalidate after slow source lookup, then serialize physical admission.
+        if !smart_offline::owner_wants(
+            &owner,
+            &request.media_type,
+            &request.media_id,
+            &request.request_id,
+            &request.source_owner,
+        ) || !smart_offline::source_revision_matches(&owner, &request.source_revision)
+        {
+            return Err(PauseReason::Disabled);
+        }
+        let device = smart_offline::read_device().map_err(|_| PauseReason::Disabled)?;
+        if let Some(reason) = device.environmental_pause(smart_offline::environment()) {
+            return Err(reason);
+        }
+        let mut state = self.inner.state();
+        refresh_physical_accounting(&mut state.manifest.jobs);
+        let ledger = Ledger::from_jobs(&state.manifest.jobs);
+        let estimate_cap = estimate
+            .and_then(|n| n.checked_add(n / 20))
+            .and_then(|n| n.checked_add(16 * 1024 * 1024));
+        if let Some(job) = state.manifest.jobs.iter_mut().find(|job| {
+            job.media_type == request.media_type
+                && job.media_id == request.media_id
+                && job.request_id == request.request_id
+        }) {
+            let id = job.id.clone();
+            if job.phase == DownloadPhase::Failed
+                && job.offline.retry_at.is_some_and(|at| at <= now_secs())
+            {
+                let cap = estimate_cap.ok_or(PauseReason::NeedsSource)?;
+                if ledger.automatic_bytes.saturating_add(ledger.outstanding)
+                    > device.allowance_bytes
+                {
+                    return Err(PauseReason::Budget);
+                }
+                if cap > job.offline.reserved_bytes {
+                    let (free, capacity) = crate::download::filesystem_capacity(&self.inner.root)
+                        .ok_or(PauseReason::FreeSpace)?;
+                    let extra = ledger.admit(
+                        Some(cap - job.offline.reserved_bytes),
+                        &device,
+                        free,
+                        capacity,
+                    )?;
+                    job.offline.reserved_bytes = job.offline.reserved_bytes.saturating_add(extra);
+                }
+                job.offline.owners.insert(owner);
+                job.source = request.source;
+                job.offline.source_revision = request.source_revision;
+                job.offline.source_owner = request.source_owner;
+                job.offline.pause_reason = None;
+                job.phase = DownloadPhase::Queued;
+                if let Some(resolver) = resolver {
+                    state.resolvers.insert(id.clone(), resolver);
+                }
+            } else {
+                job.offline.owners.insert(owner);
+            }
+            persist_manifest(&state.manifest);
+            self.bump_revision();
+            drop(state);
+            self.schedule_next();
+            return Ok(id);
+        }
+        if state.manifest.jobs.iter().any(|job| {
+            job.source == request.source
+                && (job.media_type != request.media_type
+                    || job.media_id != request.media_id
+                    || job.request_id != request.request_id)
+        }) {
+            return Err(PauseReason::NeedsSource);
+        }
+        let device = smart_offline::read_device().map_err(|_| PauseReason::Disabled)?;
+        if let Some(reason) = device.environmental_pause(smart_offline::environment()) {
+            return Err(reason);
+        }
+        let (free, capacity) =
+            crate::download::filesystem_capacity(&self.inner.root).ok_or(PauseReason::FreeSpace)?;
+        refresh_physical_accounting(&mut state.manifest.jobs);
+        let mut reserved = Ledger::from_jobs(&state.manifest.jobs).admit(
+            estimate.map(|n| n.saturating_add(16 * 1024 * 1024)),
+            &device,
+            free,
+            capacity,
+        )?;
+        let torrent_directory = match &request.source {
+            JobSource::Torrent { info_hash, .. } => Some(crate::torrent::download_directory(
+                info_hash,
+                &self.inner.root.join("torrents"),
+                None,
+            )),
+            _ => None,
+        };
+        if let Some(directory) = &torrent_directory {
+            let previous = state
+                .manifest
+                .jobs
+                .iter()
+                .filter(|j| j.torrent_directory.as_ref() == Some(directory))
+                .map(|j| j.offline.reserved_bytes)
+                .max()
+                .unwrap_or(0);
+            reserved = reserved.saturating_add(previous);
+            for sibling in &mut state.manifest.jobs {
+                if sibling.torrent_directory.as_ref() == Some(directory)
+                    && !sibling.offline.manual_keep
+                {
+                    sibling.offline.reserved_bytes = reserved;
+                }
+            }
+        }
+        let id = format!(
+            "download-{:016x}",
+            self.inner.next_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut job = DownloadJob::new(id.clone(), request.source);
+        job.media_type = request.media_type;
+        job.media_id = request.media_id;
+        job.request_id = request.request_id;
+        job.title = request.title;
+        job.year = (!request.year.is_empty()).then_some(request.year);
+        job.display = request.display;
+        job.addon = request.addon;
+        job.offline = JobOwnership {
+            manual_keep: false,
+            manual_origin: false,
+            owners: std::collections::BTreeSet::from([owner]),
+            reserved_bytes: reserved,
+            source_owner: request.source_owner,
+            source_revision: request.source_revision,
+            ..Default::default()
+        };
+        job.torrent_directory = torrent_directory;
+        job.intro_request =
+            intro_skip::download_request(&job.media_type, &job.media_id, &job.request_id);
+        job.file_name = Some(job_file_name(&job));
+        if job.source.is_http() {
+            job.artifact_path = Some(self.inner.root.join("http").join(&job.id).join(
+                artifact_filename(&job.id, job.file_name.as_deref().unwrap_or_default()),
+            ));
+        }
+        if let Some(resolver) = resolver {
+            state.resolvers.insert(id.clone(), resolver);
+        }
+        state.manifest.jobs.push(job);
+        persist_manifest(&state.manifest);
+        self.bump_revision();
+        drop(state);
+        self.schedule_next();
+        Ok(id)
+    }
+
+    fn smart_byte_admission(&self, id: &str, next: u64) -> bool {
+        use crate::download::offline::{GIB, Ledger, PauseReason};
+        let mut state = self.inner.state();
+        let Some(index) = state.manifest.jobs.iter().position(|j| j.id == id) else {
+            return false;
+        };
+        refresh_physical_accounting(&mut state.manifest.jobs);
+        let job = &state.manifest.jobs[index];
+        if job.offline.manual_keep {
+            return true;
+        }
+        let next = next.max(job.bytes_downloaded).saturating_add(8192);
+        let mut reason = smart_offline::job_pause(job);
+        if next > job.offline.reserved_bytes {
+            reason = Some(PauseReason::Budget);
+        }
+        if let (Ok(device), Some((free, capacity))) = (
+            smart_offline::read_device(),
+            crate::download::filesystem_capacity(&self.inner.root),
+        ) {
+            let ledger = Ledger::from_jobs(&state.manifest.jobs);
+            if ledger
+                .automatic_bytes
+                .saturating_sub(job.bytes_downloaded)
+                .saturating_add(next)
+                > device.allowance_bytes
+            {
+                reason = Some(PauseReason::Budget);
+            }
+            if free.saturating_sub(next.saturating_sub(job.bytes_downloaded))
+                < GIB.max(capacity / 20)
+            {
+                reason = Some(PauseReason::FreeSpace);
+            }
+        } else {
+            reason = Some(PauseReason::FreeSpace);
+        }
+        if let Some(reason) = reason {
+            let job = &mut state.manifest.jobs[index];
+            job.phase = DownloadPhase::Paused;
+            job.offline.pause_reason = Some(reason);
+            persist_manifest(&state.manifest);
+            self.bump_revision();
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn reconcile_smart_owners(
+        &self,
+        wanted: &HashSet<(crate::download::offline::Owner, String)>,
+        playing: Option<&str>,
+        cleanup: bool,
+    ) {
+        use crate::download::offline::PauseReason;
+        let mut state = self.inner.state();
+        let before = state.manifest.clone();
+        let mut remove = HashSet::new();
+        for job in &mut state.manifest.jobs {
+            if job.phase == DownloadPhase::Completed
+                && job
+                    .artifact_path
+                    .as_ref()
+                    .is_none_or(|path| !path.is_file())
+            {
+                job.phase = DownloadPhase::Failed;
+                job.error = Some("Downloaded file is missing.".into());
+                if job.offline.automatic() {
+                    job.offline.retry_at = Some(now_secs());
+                }
+            }
+            let keep_removed = job
+                .offline
+                .owners
+                .iter()
+                .any(smart_offline::removed_rule_keeps_file);
+            job.offline
+                .owners
+                .retain(|owner| wanted.contains(&(owner.clone(), job.request_id.clone())));
+            if job.offline.owners.is_empty() && !job.offline.manual_keep {
+                if keep_removed && job.phase == DownloadPhase::Completed {
+                    job.offline.manual_keep = true;
+                    job.offline.pinned = true;
+                    continue;
+                }
+                if job.phase != DownloadPhase::Completed
+                    || cleanup && playing != Some(job.id.as_str())
+                {
+                    remove.insert(job.id.clone());
+                }
+            } else if job.offline.automatic() {
+                let reason = smart_offline::job_pause(job);
+                if let Some(reason) = reason {
+                    if !matches!(job.phase, DownloadPhase::Completed | DownloadPhase::Failed)
+                        && job.offline.pause_reason != Some(PauseReason::User)
+                    {
+                        job.phase = DownloadPhase::Paused;
+                        job.offline.pause_reason = Some(reason);
+                    }
+                } else if job.phase == DownloadPhase::Paused
+                    && job.offline.pause_reason.as_ref().is_some_and(|reason| {
+                        !matches!(
+                            reason,
+                            PauseReason::User
+                                | PauseReason::Budget
+                                | PauseReason::FreeSpace
+                                | PauseReason::NeedsSource
+                        )
+                    })
+                {
+                    job.phase = DownloadPhase::Queued;
+                    job.offline.pause_reason = None;
+                }
+            }
+        }
+        if let Some(active) = &state.active
+            && state
+                .manifest
+                .jobs
+                .iter()
+                .any(|j| j.id == active.id && j.phase == DownloadPhase::Paused)
+        {
+            active.cancel.cancel();
+            active.torrent_cancel.store(true, Ordering::Release);
+        }
+        let pending = self.claim_removals(&mut state, &remove);
+        if state.manifest != before {
+            persist_manifest(&state.manifest);
+            self.bump_revision();
+        }
+        drop(state);
+        if let Some(pending) = pending {
+            self.finish_removals(pending);
+        }
+        self.schedule_next();
+    }
+
+    fn pin_completed(&self, id: &str, pinned: bool) {
+        let mut state = self.inner.state();
+        if let Some(job) = state
+            .manifest
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == id && job.phase == DownloadPhase::Completed)
+        {
+            job.offline.pinned = pinned;
+            job.offline.manual_keep = job.offline.manual_origin || pinned;
+            persist_manifest(&state.manifest);
+            self.bump_revision();
+        }
+    }
+
     pub(crate) fn pause(&self, id: &str) {
         let mut state = self.inner.state();
         let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) else {
@@ -500,6 +987,7 @@ impl DownloadCoordinator {
             return;
         }
         job.phase = DownloadPhase::Paused;
+        job.offline.pause_reason = Some(crate::download::offline::PauseReason::User);
         job.error = None;
         job.updated_at = crate::download::unix_timestamp();
         if state.active.as_ref().is_some_and(|active| active.id == id) {
@@ -520,7 +1008,22 @@ impl DownloadCoordinator {
             if job.phase != DownloadPhase::Paused && job.phase != DownloadPhase::Failed {
                 return;
             }
+            if job.offline.automatic()
+                && (job.phase == DownloadPhase::Failed || is_resolver_download(job))
+            {
+                job.phase = DownloadPhase::Failed;
+                job.offline.retry_at = Some(now_secs());
+                job.offline.retry_attempt = 0;
+                job.offline.pause_reason = None;
+                job.error = None;
+                persist_manifest(&state.manifest);
+                self.bump_revision();
+                return;
+            }
             job.phase = DownloadPhase::Queued;
+            job.offline.pause_reason = None;
+            job.offline.retry_attempt = 0;
+            job.offline.retry_at = None;
             job.error = None;
             job.updated_at = crate::download::unix_timestamp();
             if matches!(job.source, JobSource::Torrent { .. }) {
@@ -535,6 +1038,9 @@ impl DownloadCoordinator {
     }
 
     pub(crate) fn remove(&self, id: &str) {
+        if let Some(job) = self.job(id) {
+            smart_offline::suppress_removed_job(&job);
+        }
         self.remove_many(&HashSet::from([id.to_owned()]));
     }
 
@@ -718,7 +1224,12 @@ impl DownloadCoordinator {
                 .manifest
                 .jobs
                 .iter()
-                .find(|job| job.phase == DownloadPhase::Queued)
+                .filter(|job| job.phase == DownloadPhase::Queued)
+                .filter(|job| {
+                    self.inner.foreground.load(Ordering::Acquire) || job.offline.automatic()
+                })
+                .filter(|job| !job.offline.automatic() || smart_offline::job_pause(job).is_none())
+                .min_by_key(|job| (!job.offline.manual_keep, job.created_at))
                 .cloned()
             else {
                 return;
@@ -753,6 +1264,13 @@ impl DownloadCoordinator {
             (job, active)
         };
 
+        if job.offline.automatic() {
+            let coordinator = self.clone();
+            let id = job.id.clone();
+            active.cancel.set_byte_admission(Arc::new(move |bytes| {
+                coordinator.smart_byte_admission(&id, bytes)
+            }));
+        }
         let coordinator = self.clone();
         let job_id = job.id.clone();
         let worker_job_id = job_id.clone();
@@ -927,6 +1445,30 @@ impl DownloadCoordinator {
             self.finish(job.id, Err("torrent engine unavailable".into()));
             return;
         };
+        let _write_guard = job.offline.automatic().then(|| {
+            let coordinator = self.clone();
+            let id = job.id.clone();
+            let cancel = active.cancel.clone();
+            let torrent_cancel = active.torrent_cancel.clone();
+            let root = crate::torrent::download_directory(
+                &info_hash,
+                &self.inner.root.join("torrents"),
+                job.torrent_directory.as_deref(),
+            );
+            crate::torrent::register_write_guard(
+                &info_hash,
+                root,
+                Arc::new(move |next| {
+                    let allowed =
+                        !cancel.is_cancelled() && coordinator.smart_byte_admission(&id, next);
+                    if !allowed {
+                        cancel.cancel();
+                        torrent_cancel.store(true, Ordering::Release);
+                    }
+                    allowed
+                }),
+            )
+        });
         let (sender, receiver) = mpsc::channel();
         let id = job.id.clone();
         let coordinator = self.clone();
@@ -1131,6 +1673,9 @@ impl DownloadCoordinator {
                                 job.error = None;
                             } else {
                                 job.phase = DownloadPhase::Failed;
+                                if job.offline.automatic() {
+                                    job.offline.retry(crate::download::unix_timestamp());
+                                }
                                 job.error = Some(error);
                             }
                         }
@@ -1274,6 +1819,7 @@ impl DownloadCoordinator {
     }
 
     fn bump_revision(&self) {
+        smart_offline::trigger();
         self.inner.revision.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -1539,6 +2085,9 @@ fn normalize_manifest(manifest: &mut DownloadManifest, root: &Path) {
         if is_resolver_download(job) && job.phase != DownloadPhase::Completed {
             job.phase = DownloadPhase::Failed;
             job.error = Some(RESOLVER_RESELECT.into());
+            if job.offline.automatic() {
+                job.offline.retry_at = Some(now_secs());
+            }
         }
         if matches!(
             job.phase,
@@ -1724,6 +2273,11 @@ pub(crate) fn write_download_settings(settings: &DownloadSettings) {
 
 impl DownloadCoordinator {
     pub(crate) fn status_text(job: &DownloadJob) -> String {
+        if job.phase == DownloadPhase::Paused
+            && let Some(reason) = job.offline.pause_reason.clone()
+        {
+            return text::tr(smart_offline::pause_text(reason)).into();
+        }
         match job.phase {
             DownloadPhase::Queued => text::tr("Queued").into(),
             DownloadPhase::Resolving => text::tr("Preparing…").into(),
@@ -1899,6 +2453,17 @@ impl Bridge {
                     label: SharedString::from(text::tr("Remove download")),
                     enabled: true,
                 });
+                if job.phase == DownloadPhase::Completed {
+                    items.push(SheetItem {
+                        label: text::tr(if job.offline.pinned {
+                            "Unpin downloaded file"
+                        } else {
+                            "Keep downloaded file"
+                        })
+                        .into(),
+                        enabled: true,
+                    });
+                }
                 (
                     SharedString::from(format!("{} · {}", first_line(&job.display), job.addon)),
                     items,
@@ -1930,6 +2495,22 @@ impl Bridge {
                         label: SharedString::from(text::tr("Download")),
                         enabled: true,
                     });
+                    let owner = profiles::ProfileStore::capture();
+                    if self
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|m| smart_offline::enabled_title(&owner, &m.type_, &m.id))
+                    {
+                        items.push(SheetItem {
+                            label: SharedString::from(text::tr(
+                                "Use this source for smart downloads",
+                            )),
+                            enabled: true,
+                        });
+                    }
                 }
                 (SharedString::from(first_line(&stream.display)), items)
             }
@@ -1965,6 +2546,11 @@ impl Bridge {
                 1 if job.phase == DownloadPhase::Failed => {
                     self.reselect_failed_download(job.clone())
                 }
+                2 if job.phase == DownloadPhase::Completed => {
+                    if self.require_profile_management() {
+                        self.downloads.pin_completed(&job.id, !job.offline.pinned);
+                    }
+                }
                 1 | 2 => self.downloads.remove(&job.id),
                 _ => {}
             }
@@ -1984,10 +2570,24 @@ impl Bridge {
             }
         } else if action == 1 {
             self.download_stream(&stream);
+        } else if action == 2 {
+            self.smart_source_selected(&stream);
         }
     }
 
     pub(super) fn download_stream(&self, stream: &StreamUi) {
+        let owner = profiles::ProfileStore::capture();
+        if !profile_policy::allows_addon(&owner, &stream.owner_url)
+            || self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .is_none_or(|m| !profile_policy::allows_title(&owner, &m.type_, &m.id))
+        {
+            return;
+        }
         if self.season_download_pick_row(stream.clone()) {
             return;
         }
@@ -2040,6 +2640,8 @@ impl Bridge {
             year,
             display: stream.display.clone(),
             addon: stream.addon.clone(),
+            source_owner: stream.owner_url.clone(),
+            source_revision: String::new(),
             source,
         };
         if let Some(resolver) = resolver {
@@ -2133,6 +2735,8 @@ impl Bridge {
                 year: year.into(),
                 display: stream.display.clone(),
                 addon: stream.addon.clone(),
+                source_owner: stream.owner_url.clone(),
+                source_revision: String::new(),
                 source: prepared.0,
             },
             prepared.1,
@@ -2161,12 +2765,18 @@ impl Bridge {
 
     /// Remove one downloaded episode (file + manifest entry) from the list.
     pub(super) fn remove_download(&self, id: &str) {
+        if !profile_policy::management_allowed(&profiles::ProfileStore::capture()) {
+            return;
+        }
         self.downloads.remove(id);
         self.apply_stream_filter();
         self.downloads_list_to_ui();
     }
 
     pub(super) fn set_download_auto_delete_watched(&self, enabled: bool) {
+        if !profile_policy::management_allowed(&profiles::ProfileStore::capture()) {
+            return;
+        }
         let settings = DownloadSettings {
             auto_delete_watched: enabled,
         };
@@ -2338,6 +2948,7 @@ fn watched_download_removal_ids(
         .jobs
         .iter()
         .filter(|job| job.media_id == series_id && episode_ids.contains(&job.request_id))
+        .filter(|job| job.offline.owners.is_empty() && !job.offline.pinned)
         // HLS opens later segments throughout playback, so its playing bundle
         // must survive until player-close cleanup authorizes another claim.
         .filter(|job| {
@@ -2408,6 +3019,100 @@ fn fallback_episode_label(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_rule_keeps_only_completed_files_and_never_promotes_live_auto_work() {
+        use crate::download::offline::Owner;
+        let owner = Owner {
+            profile: "alice".into(),
+            policy: "show".into(),
+        };
+        let sibling = Owner {
+            profile: "bob".into(),
+            policy: "show".into(),
+        };
+        for phase in [
+            DownloadPhase::Queued,
+            DownloadPhase::Resolving,
+            DownloadPhase::Downloading,
+        ] {
+            let coordinator = DownloadCoordinator {
+                inner: Arc::new(DownloadInner {
+                    root: PathBuf::new(),
+                    state: Mutex::new(DownloadState {
+                        manifest: DownloadManifest::default(),
+                        active: None,
+                        last_persist: Instant::now(),
+                        resolvers: HashMap::new(),
+                    }),
+                    next_id: AtomicU64::new(1),
+                    revision: AtomicU64::new(0),
+                    foreground: AtomicBool::new(true),
+                }),
+            };
+            install_active(&coordinator, "auto", phase, false);
+            {
+                let mut state = coordinator.inner.state();
+                let job = &mut state.manifest.jobs[0];
+                job.offline.manual_keep = false;
+                job.offline.owners.insert(owner.clone());
+            }
+            let token = coordinator
+                .inner
+                .state()
+                .active
+                .as_ref()
+                .unwrap()
+                .cancel
+                .clone();
+            let mut state = coordinator.inner.state();
+            let mut completed = DownloadJob::default();
+            completed.id = "ready".into();
+            completed.phase = DownloadPhase::Completed;
+            completed.offline.manual_keep = false;
+            completed.offline.owners.insert(owner.clone());
+            state.manifest.jobs.push(completed);
+            let mut shared = DownloadJob::default();
+            shared.id = "shared".into();
+            shared.offline.manual_keep = false;
+            shared
+                .offline
+                .owners
+                .extend([owner.clone(), sibling.clone()]);
+            state.manifest.jobs.push(shared);
+            let ids = detach_policy_jobs(&mut state, &owner, true, None);
+            assert_eq!(ids, HashSet::from(["auto".into()]));
+            assert!(!state.manifest.jobs[0].offline.manual_keep);
+            assert!(
+                state
+                    .manifest
+                    .jobs
+                    .iter()
+                    .find(|job| job.id == "ready")
+                    .unwrap()
+                    .offline
+                    .manual_keep
+            );
+            assert_eq!(
+                state
+                    .manifest
+                    .jobs
+                    .iter()
+                    .find(|job| job.id == "shared")
+                    .unwrap()
+                    .offline
+                    .owners,
+                std::collections::BTreeSet::from([sibling.clone()])
+            );
+            let _pending = coordinator.claim_removals(&mut state, &ids).unwrap();
+            drop(state);
+            assert!(token.is_cancelled());
+            assert!(
+                !coordinator.smart_byte_admission("auto", 1),
+                "a removed automatic worker cannot bypass policy as manual"
+            );
+        }
+    }
 
     #[test]
     fn downloaded_episode_labels_read_each_typed_title_once_per_publication() {
@@ -2503,6 +3208,8 @@ mod tests {
         // Occupy the worker slot so this real enqueue stays entirely local.
         install_active(&coordinator, "blocking", DownloadPhase::Downloading, false);
         let replacement_id = coordinator.enqueue(NewDownload {
+            source_owner: String::new(),
+            source_revision: String::new(),
             media_type: "series".into(),
             media_id: "replacement".into(),
             request_id: "replacement-episode".into(),

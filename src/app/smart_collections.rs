@@ -60,6 +60,9 @@ impl Bridge {
     }
 
     pub(super) fn refresh_smart_collections(&self) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
         let Some(app) = self.app() else { return };
         let collections = app.global::<SmartCollectionsBridge>();
         let profile = profiles::current_id();

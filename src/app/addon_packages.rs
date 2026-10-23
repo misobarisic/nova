@@ -156,6 +156,37 @@ pub(super) fn records(raw: &str) -> Result<Vec<(String, String, u64)>, String> {
         })
         .collect()
 }
+/// Immutable package inventory for a no-Activity worker, never selected globally.
+pub(super) fn owned_packages(
+    owner: &profiles::ProfileStore,
+) -> Result<Vec<Arc<AddonPackage>>, String> {
+    let descriptors = owner
+        .read(KEY)
+        .map_err(|e| e.to_string())?
+        .map(|raw| parse(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    let addons: Vec<AddonStore> = owner
+        .read("addons")
+        .map_err(|e| e.to_string())?
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    // Pending or disabled packages must not prevent an unrelated HTTP addon
+    // from serving an owned background request. Missing selected packages stay
+    // unavailable in this immutable inventory and cannot fall back globally.
+    Ok(descriptors
+        .iter()
+        .filter(|(id, _)| {
+            addons.iter().any(|addon| {
+                addon.enabled && addon.url.trim_end_matches('/') == format!("nova-provider://{id}")
+            })
+        })
+        .filter_map(|(_, descriptor)| load_descriptor(descriptor).ok())
+        .collect())
+}
+
 fn archive_path(hash: &str) -> Result<PathBuf, String> {
     if !valid_hash(hash) {
         return Err("invalid addon package hash".into());
@@ -176,6 +207,14 @@ fn read_archive(hash: &str) -> Result<Vec<u8>, String> {
         return Err("addon package archive exceeds size limit".into());
     }
     Ok(bytes)
+}
+/// Backups use the same immutable package validation and staging as pairing.
+pub(super) fn backup_archive(hash: &str) -> Result<Vec<u8>, String> {
+    read_archive(hash)
+}
+pub(super) fn stage_backup_archive(bytes: &[u8]) -> Result<(), String> {
+    let package = AddonPackage::parse(bytes).map_err(|e| e.to_string())?;
+    store_archive(&package, bytes)
 }
 fn load_descriptor(descriptor: &PackageDescriptor) -> Result<Arc<AddonPackage>, String> {
     let package =

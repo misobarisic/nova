@@ -339,3 +339,79 @@ fn browser_destinations_hide_size_information_and_preserve_selection_identity() 
         "browser and media clicks retain their distinct backend row identities"
     );
 }
+
+#[test]
+fn watch_party_recommendation_reuses_measured_caption_and_fits_phone_desktop_and_tv_cards() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::watch_party_recommendation_reuses_measured_caption_and_fits_phone_desktop_and_tv_cards"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    use slint::Model;
+    for (width, height, tv) in [(390, 844, false), (1280, 900, false), (1920, 1080, true)] {
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::Anim>().set_enabled(false);
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_is_android(width == 390);
+        app.set_modal_visible(true);
+        app.set_detail_is_movie(true);
+        app.set_stream_selector_open(true);
+        app.set_detail_tab(0);
+        app.set_modal_episodes(false);
+        app.set_selected_title("Movie".into());
+        let model = Rc::new(VecModel::from(vec![nova::StreamRow {
+            text: "Party choice".into(),
+            title: "Party choice".into(),
+            last_used: false,
+            recommended: true,
+            party_recommended: true,
+            ..stream_row("party-choice", false)
+        }]));
+        app.set_streams(model.clone().into());
+        app.show().unwrap();
+        for _ in 0..6 {
+            for item in i_slint_backend_testing::ElementQuery::from_root(&app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = (item.size(), item.absolute_position());
+            }
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(30));
+            slint::platform::update_timers_and_animations();
+        }
+        let caption = ElementHandle::find_by_element_id(&app, "StreamList::last_used_label")
+            .next()
+            .expect("existing recommendation caption");
+        let card = ElementHandle::find_by_element_id(&app, "StreamList::row_reveal")
+            .next()
+            .unwrap();
+        let cp = caption.absolute_position();
+        let rp = card.absolute_position();
+        assert!(
+            caption.size().height > 0.0
+                && cp.x >= rp.x
+                && cp.x + caption.size().width <= rp.x + card.size().width + 0.5
+        );
+        assert!(cp.y >= rp.y && cp.y + caption.size().height <= rp.y + card.size().height + 0.5);
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Party choice — Watch party recommended")
+                .next()
+                .is_some()
+        );
+        let mut row = model.row_data(0).unwrap();
+        row.party_recommended = false;
+        model.set_row_data(0, row);
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Party choice — Recommended")
+                .next()
+                .is_some()
+        );
+        assert_eq!(model.row_data(0).unwrap().id, "party-choice");
+        app.hide().unwrap();
+    }
+}

@@ -639,7 +639,13 @@ impl Bridge {
             self.schedule_home_grouping_candidates(key, raw, &previews, HOME_SHOWCASE_PER_CATALOG);
             catalog.previews = previews;
         }
-        projected.previews(sources)
+        projected
+            .previews(sources)
+            .into_iter()
+            .filter(|m| {
+                profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+            })
+            .collect()
     }
 
     fn project_home_row_cache(
@@ -697,6 +703,10 @@ impl Bridge {
     /// contributes at most five distinct titles; Discover's current picker,
     /// pagination and search state are intentionally untouched.
     pub(super) fn refresh_home_showcase(&self) {
+        if profile_policy::restricted() {
+            self.install_home_showcase(Vec::new());
+            return;
+        }
         let generation = self.home_showcase_gen.fetch_add(1, Ordering::Relaxed) + 1;
         let (selected, sources, targets, restore) = {
             let mut state = self.shared.lock().unwrap();
@@ -775,6 +785,10 @@ impl Bridge {
     /// addon catalog in the background. This cache is independent of the
     /// rotating banner because the rows can contain larger first pages.
     pub(super) fn refresh_home_catalog_rows(&self) {
+        if profile_policy::restricted() {
+            self.install_prepared_home_catalog_rows(Vec::new());
+            return;
+        }
         let generation = self.home_catalog_rows_gen.fetch_add(1, Ordering::Relaxed) + 1;
         let (selected, sources, targets, restore, installed) = {
             let mut state = self.shared.lock().unwrap();
@@ -876,6 +890,11 @@ impl Bridge {
     /// Progress workers already joined history against metadata. Keep this
     /// publication path free of the cache reads in rebuild_watch_history_list.
     pub(super) fn install_prepared_home_catalog_rows(&self, mut groups: Vec<HomeCatalogGroup>) {
+        for group in &mut groups {
+            group.previews.retain(|m| {
+                profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+            });
+        }
         let Some(app) = self.app() else { return };
         let view = app.get_home_view();
         let history_was_open = view >= 3
@@ -1136,7 +1155,10 @@ impl Bridge {
         }
     }
 
-    fn install_home_showcase(&self, previews: Vec<MetaPreview>) {
+    fn install_home_showcase(&self, mut previews: Vec<MetaPreview>) {
+        previews.retain(|m| {
+            profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+        });
         let anchor = self.shared.lock().unwrap().home_showcase_displayed.clone();
         let index = anchor
             .as_ref()
@@ -1952,7 +1974,11 @@ impl Bridge {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    e.watch_status == WatchStatus::Auto
+                    profile_policy::allows_title(
+                        &profiles::ProfileStore::capture(),
+                        &e.type_,
+                        &e.id,
+                    ) && e.watch_status == WatchStatus::Auto
                         && latest_refs.contains_key(e.id.as_str())
                         && groups.is_representative(&e.type_, &e.id)
                 })
@@ -1979,6 +2005,13 @@ impl Bridge {
         let mut list: Vec<ContinueEntry> = Vec::new();
         let mut episode_identities = HashMap::new();
         for identity in identities {
+            if !profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &identity.type_,
+                &identity.id,
+            ) {
+                continue;
+            }
             // Process each cache independently so a large metadata response
             // never overlaps the next series' Video allocation.
             let episodes = (identity.type_ != "movie")
@@ -2433,6 +2466,13 @@ impl Bridge {
         let today = today_days();
         let mut upcoming: Vec<UpcomingEntry> = Vec::new();
         for identity in identities {
+            if !profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &identity.type_,
+                &identity.id,
+            ) {
+                continue;
+            }
             let episodes =
                 read_episodes_cache_for(&identity.type_, &identity.id).unwrap_or_default();
             let state = self.shared.lock().unwrap();
@@ -5245,7 +5285,9 @@ pub(super) fn prepare_progress_home(
     let mut upcoming = Vec::new();
     let mut aliases = HashMap::new();
     for e in state.entries.iter().filter(|e| {
-        e.watch_status == WatchStatus::Auto && groups.is_representative(&e.type_, &e.id)
+        profile_policy::allows_title(&profiles::ProfileStore::capture(), &e.type_, &e.id)
+            && e.watch_status == WatchStatus::Auto
+            && groups.is_representative(&e.type_, &e.id)
     }) {
         let cached = metadata.episode_data(&e.type_, &e.id);
         let videos = cached.as_deref().map(Vec::as_slice).unwrap_or_default();

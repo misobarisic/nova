@@ -4543,3 +4543,715 @@ msgstr "Neprozirnost pozadine (%)"
 
 msgid "Adds a translucent black backdrop to styled text subtitles on both tracks. Embedded styles and image subtitles may keep their original appearance."
 msgstr "Dodaje poluprozirnu crnu pozadinu stiliziranim tekstnim titlovima na oba zapisa. Ugrađeni stilovi i slikovni titlovi mogu zadržati izvorni izgled."
+
+msgid "Sleep timer"
+msgstr "Mjerač spavanja"
+
+msgid "15 minutes"
+msgstr "15 minuta"
+
+msgid "30 minutes"
+msgstr "30 minuta"
+
+msgid "45 minutes"
+msgstr "45 minuta"
+
+msgid "60 minutes"
+msgstr "60 minuta"
+
+msgid "90 minutes"
+msgstr "90 minuta"
+
+msgid "Fewer minutes"
+msgstr "Manje minuta"
+
+msgid "More minutes"
+msgstr "Više minuta"
+
+msgid "Start custom timer"
+msgstr "Pokreni prilagođeni mjerač"
+
+msgid "End of this episode/movie"
+msgstr "Kraj ove epizode/filma"
+
+msgid "Fewer episodes"
+msgstr "Manje epizoda"
+
+msgid "More episodes"
+msgstr "Više epizoda"
+
+msgid "Start episode timer"
+msgstr "Pokreni mjerač epizoda"
+
+msgid "Add 15 minutes"
+msgstr "Dodaj 15 minuta"
+
+msgid "Cancel timer"
+msgstr "Otkaži mjerač"
+
+msgid "Minutes: {}"
+msgstr "Minute: {}"
+
+msgid "Episodes: {}"
+msgstr "Epizode: {}"
+
+msgid "Remind me"
+msgstr "Podsjeti me"
+
+msgid "Stop release reminders"
+msgstr "Zaustavite podsjetnike na izdanja"
+
+msgid "Manage reminders / Export calendar"
+msgstr "Podsjetnici / Izvoz kalendara"
+
+msgid "New releases / Export calendar"
+msgstr "Nova izdanja / Izvoz kalendara"
+
+msgid "Reminders and calendar export"
+msgstr "Podsjetnici i izvoz kalendara"
+
+msgid "Enable device notifications"
+msgstr "Uključite obavijesti na uređaju"
+
+msgid "Disable device notifications"
+msgstr "Isključite obavijesti na uređaju"
+
+msgid "One daily digest at 09:00 local time. Desktop delivery runs while Nova is open."
+msgstr "Jedan dnevni sažetak u 09:00 po lokalnom vremenu. Na računalu se dostavlja dok je Nova otvorena."
+
+msgid "Released today"
+msgstr "Objavljeno danas"
+
+msgid "Open release"
+msgstr "Otvorite izdanje"
+
+msgid "Dismiss digest"
+msgstr "Odbacite sažetak"
+
+msgid "Export scope"
+msgstr "Opseg izvoza"
+
+msgid "Subscribed shows"
+msgstr "Pretplaćene serije"
+
+msgid "Library shows"
+msgstr "Serije iz zbirke"
+
+msgid "Current Calendar filter"
+msgstr "Trenutačni filtar kalendara"
+
+msgid "Selected shows"
+msgstr "Odabrane serije"
+
+msgid "Date range (YYYY-MM-DD)"
+msgstr "Raspon datuma (GGGG-MM-DD)"
+
+msgid "End date"
+msgstr "Završni datum"
+
+msgid "Start one day earlier"
+msgstr "Početak dan ranije"
+
+msgid "Start one day later"
+msgstr "Početak dan kasnije"
+
+msgid "End one day earlier"
+msgstr "Završetak dan ranije"
+
+msgid "End one day later"
+msgstr "Završetak dan kasnije"
+
+msgid "Preview and save .ics snapshot"
+msgstr "Pregledajte i spremite .ics snimku"
+
+msgid "Export update"
+msgstr "Izvezite ažuriranje"
+
+msgid "Save / Share .ics"
+msgstr "Spremite / Podijelite .ics"
+
+msgid "Snapshots do not update automatically. Use a dedicated calendar and replace its snapshot if your importer duplicates updates or ignores cancellations."
+msgstr "Snimke se ne ažuriraju automatski. Koristite zaseban kalendar i zamijenite snimku ako uvoznik udvostručuje ažuriranja ili zanemaruje otkazivanja."
+
+msgid "Shows: reminders and export selection"
+msgstr "Serije: podsjetnici i odabir za izvoz"
+
+msgid "Selected for export"
+msgstr "Odabrano za izvoz"
+
+msgid "Select for export"
+msgstr "Odaberite za izvoz"
+
+# Profile PIN and restrictions
+
+msgid "Enter PIN"
+msgstr "Unesite PIN"
+
+msgid "Unlock on this device"
+msgstr "Otključajte na ovom uređaju"
+
+msgid "Unlock"
+msgstr "Otključajte"
+
+msgid "PIN"
+msgstr "PIN"
+
+msgid "Profile PIN and restrictions"
+msgstr "PIN profila i ograničenja"
+
+msgid "PINs are stored as plaintext. Use 4–8 digits; leave empty to remove the PIN."
+msgstr "PIN-ovi se spremaju kao običan tekst. Koristite 4–8 znamenki; ostavite prazno za uklanjanje PIN-a."
+
+msgid "Profile PIN"
+msgstr "PIN profila"
+
+msgid "Require PIN to open"
+msgstr "Zahtijevajte PIN za otvaranje"
+
+msgid "Restricted mode"
+msgstr "Ograničeni način rada"
+
+msgid "Allowed library titles"
+msgstr "Dopušteni naslovi iz biblioteke"
+
+msgid "Empty lists allow no content. Removed library titles stay unavailable until added again."
+msgstr "Prazni popisi ne dopuštaju sadržaj. Uklonjeni naslovi ostaju nedostupni dok ih ponovno ne dodate."
+
+msgid "Allowed source addons"
+msgstr "Dopušteni dodaci izvora"
+
+msgid "Local files with unknown source"
+msgstr "Lokalne datoteke s nepoznatim izvorom"
+
+msgid "Incorrect PIN. Try again."
+msgstr "Pogrešan PIN. Pokušajte ponovno."
+
+msgid "Unsupported profile policy."
+msgstr "Nepodržana pravila profila."
+
+msgid "Enter 4–8 digits."
+msgstr "Unesite 4–8 znamenki."
+
+msgid "Set a PIN first."
+msgstr "Najprije postavite PIN."
+
+msgid "Enter PIN to continue."
+msgstr "Unesite PIN za nastavak."
+
+# Synced watch queue and receiver-owned continuous playback.
+
+msgid "Continue queue"
+msgstr "Nastavi red gledanja"
+
+msgid "Autoplay next queued item: On"
+msgstr "Automatski sljedeći sadržaj: uključeno"
+
+msgid "Autoplay next queued item: Off"
+msgstr "Automatski sljedeći sadržaj: isključeno"
+
+msgid "Skip"
+msgstr "Preskoči"
+
+msgid "Stop queue"
+msgstr "Zaustavi red gledanja"
+
+msgid "CURRENT"
+msgstr "TRENUTAČNO"
+
+msgid "Start from this item"
+msgstr "Počni od ovog sadržaja"
+
+msgid "Skip queued item"
+msgstr "Preskoči sadržaj u redu"
+
+msgid "Ready"
+msgstr "Spremno"
+
+msgid "In progress"
+msgstr "U tijeku"
+
+msgid "Finished"
+msgstr "Dovršeno"
+
+msgid "Queue paused. Choose a source, retry, skip or stop the queue."
+msgstr "Red gledanja je pauziran. Odaberite izvor, pokušajte ponovno, preskočite ili zaustavite red."
+
+msgid "Queue playback is unavailable"
+msgstr "Reprodukcija reda gledanja nije dostupna"
+
+msgid "Queue is unavailable"
+msgstr "Red gledanja nije dostupan"
+
+msgid "No pending queue item"
+msgstr "Nema sadržaja na čekanju u redu"
+
+msgid "Title is unavailable"
+msgstr "Naslov nije dostupan"
+
+msgid "Queue paused"
+msgstr "Red gledanja je pauziran"
+
+msgid "Next queued item"
+msgstr "Sljedeći sadržaj u redu"
+
+msgid "Queue playing"
+msgstr "Reprodukcija reda gledanja"
+
+msgid "Use 4–8 digits; leave empty to remove the PIN."
+msgstr "Koristite 4–8 znamenki; ostavite prazno za uklanjanje PIN-a."
+
+msgid "Add title"
+msgstr "Dodajte naslov"
+
+msgid "Allow this title"
+msgstr "Dopustite ovaj naslov"
+
+msgid "Done choosing titles"
+msgstr "Gotovo s odabirom naslova"
+
+msgid "Queue item is unavailable on this device. Sync, then retry or choose a source on the TV."
+msgstr "Sadržaj reda nije dostupan na ovom uređaju. Sinkronizirajte pa pokušajte ponovno ili odaberite izvor na TV-u."
+
+msgid "Select and unlock the same profile on the playing device."
+msgstr "Odaberite i otključajte isti profil na uređaju za reprodukciju."
+
+msgid "Watch party recommended"
+msgstr "Preporuka grupe za gledanje"
+
+msgid "Smart downloads"
+msgstr "Pametna preuzimanja"
+
+msgid "Keep offline"
+msgstr "Čuvaj izvanmrežno"
+
+msgid "Offline rule enabled"
+msgstr "Izvanmrežno pravilo uključeno"
+
+msgid "Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet."
+msgstr "Pravila se sinkroniziraju između profila. Preuzimanja se izvode samo za profile uključene na ovom uređaju, putem Wi-Fi ili Ethernet veze bez ograničenja prometa."
+
+msgid "Pause this profile on this device"
+msgstr "Pauziraj ovaj profil na ovom uređaju"
+
+msgid "Enable this profile on this device"
+msgstr "Uključi ovaj profil na ovom uređaju"
+
+msgid "Automatic allowance: {} GiB"
+msgstr "Ograničenje automatskih preuzimanja: {} GiB"
+
+msgid "Charging required"
+msgstr "Potrebno je punjenje"
+
+msgid "Charging optional"
+msgstr "Punjenje nije obvezno"
+
+msgid "Open a show and choose Keep offline to add a rule."
+msgstr "Otvorite seriju i odaberite Čuvaj izvanmrežno da dodate pravilo."
+
+msgid "Pause rule"
+msgstr "Pauziraj pravilo"
+
+msgid "Resume rule"
+msgstr "Nastavi pravilo"
+
+msgid "Keep next {}"
+msgstr "Čuvaj sljedećih {}"
+
+msgid "Choose another source"
+msgstr "Odaberi drugi izvor"
+
+msgid "Choose source"
+msgstr "Odaberi izvor"
+
+msgid "Retry / Restore offline"
+msgstr "Ponovi / vrati izvanmrežno"
+
+msgid "Specials included"
+msgstr "Specijali uključeni"
+
+msgid "Specials excluded"
+msgstr "Specijali isključeni"
+
+msgid "Remove unneeded automatic files"
+msgstr "Ukloni nepotrebne automatske datoteke"
+
+msgid "Keep watched automatic files"
+msgstr "Zadrži odgledane automatske datoteke"
+
+msgid "Remove rule, keep files"
+msgstr "Ukloni pravilo, zadrži datoteke"
+
+msgid "Remove rule and unneeded files"
+msgstr "Ukloni pravilo i nepotrebne datoteke"
+
+msgid "Waiting for unmetered Wi-Fi or Ethernet"
+msgstr "Čeka se Wi-Fi ili Ethernet bez ograničenja prometa"
+
+msgid "Waiting for charging"
+msgstr "Čeka se punjenje"
+
+msgid "Automatic storage allowance reached"
+msgstr "Dosegnuto je ograničenje automatske pohrane"
+
+msgid "Preserving free storage reserve"
+msgstr "Čuva se rezerva slobodnog prostora"
+
+msgid "Execution disabled on this device"
+msgstr "Izvršavanje je isključeno na ovom uređaju"
+
+msgid "Size unknown — choose Download manually"
+msgstr "Veličina nije poznata — odaberite ručno preuzimanje"
+
+msgid "Paused by you"
+msgstr "Ručno ste pauzirali"
+
+msgid "Pending background opportunity"
+msgstr "Čeka se prilika za rad u pozadini"
+
+msgid "Choose a source for smart downloads"
+msgstr "Odaberite izvor za pametna preuzimanja"
+
+msgid "Removed manually — use Restore offline"
+msgstr "Ručno uklonjeno — odaberite Vrati izvanmrežno"
+
+msgid "Download failed — Retry or choose a source"
+msgstr "Preuzimanje nije uspjelo — ponovite ili odaberite izvor"
+
+msgid "Smart downloads ready"
+msgstr "Pametna preuzimanja su spremna"
+
+msgid "Source removed — choose another source"
+msgstr "Izvor je uklonjen — odaberite drugi izvor"
+
+msgid "Source is not allowed"
+msgstr "Izvor nije dopušten"
+
+msgid "No matching release — choose another source"
+msgstr "Nema odgovarajućeg izdanja — odaberite drugi izvor"
+
+msgid "Choose an exact torrent file for smart downloads"
+msgstr "Odaberite točnu torrent datoteku za pametna preuzimanja"
+
+msgid "Choose a downloadable source"
+msgstr "Odaberite izvor za preuzimanje"
+
+msgid "Source changed — choose another source"
+msgstr "Izvor je promijenjen — odaberite drugi izvor"
+
+msgid "Open an episode and use this source for smart downloads"
+msgstr "Otvorite epizodu i odaberite ovaj izvor za pametna preuzimanja"
+
+msgid "Use this source for smart downloads"
+msgstr "Koristi ovaj izvor za pametna preuzimanja"
+
+msgid "Automatic storage"
+msgstr "Automatska pohrana"
+
+msgid "Reserved"
+msgstr "Rezervirano"
+
+msgid "Manually kept"
+msgstr "Ručno zadržano"
+
+msgid "ready"
+msgstr "spremno"
+
+msgid "downloading"
+msgstr "preuzima se"
+
+msgid "Source lookup failed — retry later"
+msgstr "Pretraživanje izvora nije uspjelo — pokušajte kasnije"
+
+msgid "Offline settings unavailable"
+msgstr "Izvanmrežne postavke nisu dostupne"
+
+msgid "Over allowance"
+msgstr "Prekoračenje ograničenja"
+
+msgid "Profiles enabled on this device"
+msgstr "Profili uključeni na ovom uređaju"
+
+msgid "Enabled on this device"
+msgstr "Uključeno na ovom uređaju"
+
+msgid "Disabled on this device"
+msgstr "Isključeno na ovom uređaju"
+
+msgid "Backup and import"
+msgstr "Sigurnosna kopija i uvoz"
+
+msgid "Data"
+msgstr "Podaci"
+
+msgid "Export selected data and restore a backup"
+msgstr "Izvoz odabranih podataka i vraćanje sigurnosne kopije"
+
+msgid "Map profiles, select components and review changes before importing."
+msgstr "Povežite profile, odaberite dijelove i pregledajte promjene prije uvoza."
+
+msgid "Choose the profiles and personal data to export."
+msgstr "Odaberite profile i osobne podatke za izvoz."
+
+msgid "Presets"
+msgstr "Predlošci"
+
+msgid "Everything personal"
+msgstr "Svi osobni podaci"
+
+msgid "All personal components, including credentials and profile PINs."
+msgstr "Svi osobni dijelovi, uključujući pristupne podatke i PIN-ove profila."
+
+msgid "Library and viewing"
+msgstr "Biblioteka i gledanje"
+
+msgid "Library, progress, history, collections, bookmarks and queue."
+msgstr "Biblioteka, napredak, povijest, zbirke, oznake i red gledanja."
+
+msgid "Configuration"
+msgstr "Konfiguracija"
+
+msgid "Personal settings, addons, integrations and profile policy."
+msgstr "Osobne postavke, dodaci, integracije i pravila profila."
+
+msgid "Target profiles"
+msgstr "Odredišni profili"
+
+msgid "Replace selected components"
+msgstr "Zamijeni odabrane dijelove"
+
+msgid "Absent records in selected components will be deleted."
+msgstr "Zapisi koji nedostaju u odabranim dijelovima bit će izbrisani."
+
+msgid "Merge inserts missing records and preserves local conflicts."
+msgstr "Spajanje dodaje zapise koji nedostaju i zadržava lokalne vrijednosti pri sukobu."
+
+msgid "Components"
+msgstr "Dijelovi"
+
+msgid "Use backup for conflicts"
+msgstr "Pri sukobu koristi sigurnosnu kopiju"
+
+msgid "Import preview"
+msgstr "Pregled uvoza"
+
+msgid "Selected configuration includes addon credentials and profile PINs. Imported edits sync to paired devices. Notification delivery and smart downloads stay off on this device."
+msgstr "Odabrana konfiguracija uključuje pristupne podatke dodataka i PIN-ove profila. Uvezene promjene sinkroniziraju se s uparenim uređajima. Obavijesti i pametna preuzimanja ostaju isključeni na ovom uređaju."
+
+msgid "Export selected data"
+msgstr "Izvezi odabrane podatke"
+
+msgid "Import reviewed changes"
+msgstr "Uvezi pregledane promjene"
+
+msgid "Build import preview"
+msgstr "Pripremi pregled uvoza"
+
+msgid "Rebuild import preview"
+msgstr "Ponovno pripremi pregled uvoza"
+
+msgid "Choose another backup file"
+msgstr "Odaberi drugu sigurnosnu kopiju"
+
+msgid "Choose backup file to import"
+msgstr "Odaberi sigurnosnu kopiju za uvoz"
+
+msgid "Undo last import"
+msgstr "Poništi posljednji uvoz"
+
+msgid "Delete recovery copies"
+msgstr "Izbriši kopije za oporavak"
+
+msgid "Playback progress"
+msgstr "Napredak reprodukcije"
+
+msgid "Viewing journal"
+msgstr "Dnevnik gledanja"
+
+msgid "Viewing activity"
+msgstr "Aktivnost gledanja"
+
+msgid "Hidden Continue rows"
+msgstr "Skriveni redovi nastavka gledanja"
+
+msgid "Hidden history rows"
+msgstr "Skriveni redovi povijesti"
+
+msgid "Hidden new episodes"
+msgstr "Skrivene nove epizode"
+
+msgid "Personal settings and Home"
+msgstr "Osobne postavke i početna stranica"
+
+msgid "Title playback preferences"
+msgstr "Postavke reprodukcije naslova"
+
+msgid "Addons and configuration"
+msgstr "Dodaci i konfiguracija"
+
+msgid "Optional addon package files"
+msgstr "Neobavezne datoteke paketa dodataka"
+
+msgid "Integration accounts and mappings"
+msgstr "Računi i povezivanja integracija"
+
+msgid "Smart offline policies"
+msgstr "Pravila pametnih izvanmrežnih preuzimanja"
+
+msgid "This device's compatible preferences"
+msgstr "Kompatibilne postavke ovog uređaja"
+
+msgid "Create new profile"
+msgstr "Stvori novi profil"
+
+msgid "Choose at least one profile and component"
+msgstr "Odaberite barem jedan profil i dio"
+
+msgid "Preparing backup…"
+msgstr "Priprema sigurnosne kopije…"
+
+msgid "Backup exported"
+msgstr "Sigurnosna kopija je izvezena"
+
+msgid "Export cancelled"
+msgstr "Izvoz je otkazan"
+
+msgid "Choose a backup file…"
+msgstr "Odaberite sigurnosnu kopiju…"
+
+msgid "Choose target profiles and components, then rebuild the preview"
+msgstr "Odaberite odredišne profile i dijelove pa pripremite pregled"
+
+msgid "Unsupported optional components"
+msgstr "Nepodržani neobavezni dijelovi"
+
+msgid "Import cancelled"
+msgstr "Uvoz je otkazan"
+
+msgid "Preparing import preview…"
+msgstr "Priprema pregleda uvoza…"
+
+msgid "Importing selected data…"
+msgstr "Uvoz odabranih podataka…"
+
+msgid "Import complete. Recovery copy saved; Undo is available."
+msgstr "Uvoz je dovršen. Kopija za oporavak je spremljena; poništavanje je dostupno."
+
+msgid "Recovery copies deleted"
+msgstr "Kopije za oporavak su izbrisane"
+
+msgid "Archive"
+msgstr "Sigurnosna kopija"
+
+msgid "Identical"
+msgstr "Jednako"
+
+msgid "Conflicts"
+msgstr "Sukobi"
+
+msgid "Preserved local"
+msgstr "Zadržano lokalno"
+
+msgid "Deletions"
+msgstr "Brisanja"
+
+msgid "Conflict identities"
+msgstr "Identiteti sukobljenih zapisa"
+
+msgid "Review the exact changes, then import"
+msgstr "Pregledajte točne promjene pa uvezite podatke"
+
+msgid "Category assignments omitted because their categories are unavailable"
+msgstr "Dodjele kategorija su izostavljene jer njihove kategorije nisu dostupne"
+
+msgid "Included"
+msgstr "Uključeno"
+
+msgid "Already installed"
+msgstr "Već instalirano"
+
+msgid "Reinstall needed"
+msgstr "Potrebna je ponovna instalacija"
+
+msgid "Target changed while preview was open. Rebuild the preview before importing."
+msgstr "Odredište se promijenilo tijekom pregleda. Ponovno pripremite pregled prije uvoza."
+
+msgid "Device preferences changed while preview was open. Rebuild the preview before importing."
+msgstr "Postavke uređaja promijenile su se tijekom pregleda. Ponovno pripremite pregled prije uvoza."
+
+msgid "Choose one distinct target for each backup profile"
+msgstr "Odaberite zasebno odredište za svaki profil iz sigurnosne kopije"
+
+msgid "Unlock the target profile before importing"
+msgstr "Otključajte odredišni profil prije uvoza"
+
+msgid "There is no local import to undo"
+msgstr "Nema lokalnog uvoza za poništavanje"
+
+msgid "Unsupported backup format version"
+msgstr "Nepodržana verzija sigurnosne kopije"
+
+msgid "Backup manifest is missing"
+msgstr "Nedostaje manifest sigurnosne kopije"
+
+msgid "Duplicate or invalid backup path"
+msgstr "Dvostruka ili neispravna putanja sigurnosne kopije"
+
+msgid "Duplicate or invalid backup component"
+msgstr "Dvostruki ili neispravan dio sigurnosne kopije"
+
+msgid "Expanded backup exceeds the size limit"
+msgstr "Raspakirana sigurnosna kopija premašuje ograničenje veličine"
+
+msgid "Backup exceeds the size limit"
+msgstr "Sigurnosna kopija premašuje ograničenje veličine"
+
+msgid "Document exceeds the size limit"
+msgstr "Dokument premašuje ograničenje veličine"
+
+msgid "A document picker is already open"
+msgstr "Odabir dokumenta već je otvoren"
+
+msgid "Document picker could not be opened"
+msgstr "Odabir dokumenta nije moguće otvoriti"
+
+msgid "Selected addon package file is missing"
+msgstr "Nedostaje odabrana datoteka paketa dodatka"
+
+msgid "Missing addon package file"
+msgstr "Nedostaje datoteka paketa dodatka"
+
+msgid "Addon package checksum failed"
+msgstr "Kontrolni zbroj paketa dodatka nije valjan"
+
+msgid "Addon package identity mismatch"
+msgstr "Identitet paketa dodatka se ne podudara"
+
+msgid "Enable release digest"
+msgstr "Uključite sažetak izdanja"
+
+msgid "Disable release digest"
+msgstr "Isključite sažetak izdanja"
+
+msgid "Daily at 09:00 local time. Android can notify; desktop reminders appear here while Nova is open."
+msgstr "Svakodnevno u 09:00 po lokalnom vremenu. Android može slati obavijesti; na računalu se podsjetnici prikazuju ovdje dok je Nova otvorena."
+
+msgid "Search shows"
+msgstr "Pretražite serije"
+
+msgid "Showing the first 50 matches. Search to find more shows."
+msgstr "Prikazano je prvih 50 rezultata. Pretražite da biste pronašli ostale serije."
+
+msgid "Keep downloaded file"
+msgstr "Zadrži preuzetu datoteku"
+
+msgid "Unpin downloaded file"
+msgstr "Ukloni oznaku zadržavanja datoteke"
+
+msgid "Skipped expired or unsupported values"
+msgstr "Preskočene istekle ili nepodržane vrijednosti"
+
+msgid "Unlock on TV."
+msgstr "Otključajte na TV-u."
+
+msgid "Select"
+msgstr "Odaberi"

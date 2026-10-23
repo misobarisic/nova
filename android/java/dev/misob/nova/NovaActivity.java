@@ -90,6 +90,7 @@ public final class NovaActivity extends NativeActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        NovaReleaseJobService.captureTap(this,getIntent());
         IntentFilter filter = new IntentFilter(TRANSPORT);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
@@ -102,6 +103,12 @@ public final class NovaActivity extends NativeActivity {
         getWindow().getDecorView().addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (eligible && !isInPictureInPictureMode()) applyPipParams();
         });
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        NovaReleaseJobService.captureTap(this,intent);
     }
 
     private boolean locked() {

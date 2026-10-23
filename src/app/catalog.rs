@@ -224,7 +224,13 @@ fn reserve_saved_episode_refresh(
             {
                 return None;
             }
-            let last_watched = *history.get(entry.id.as_str())?;
+            let owner = profiles::ProfileStore::capture();
+            let scheduled = release_reminders::subscribed(&owner, &entry.type_, &entry.id)
+                || smart_offline::enabled_title(&owner, &entry.type_, &entry.id);
+            let last_watched = history
+                .get(entry.id.as_str())
+                .copied()
+                .or_else(|| scheduled.then_some(wall_now))?;
             let previous = state
                 .metadata_prefetch
                 .get(&(entry.type_.clone(), entry.id.clone()));
@@ -506,6 +512,21 @@ impl Bridge {
     /// Core fetch: builds URLs (with `skip` extra when appending), fetches
     /// from all matching addons in parallel, and applies the merged result.
     pub(super) fn fetch_catalog_page(&self, append: bool) {
+        if profile_policy::restricted() && !profile_policy::management_browsing() {
+            let previews = profile_policy::local_previews("");
+            if let Some(app) = self.app() {
+                app.set_catalog(
+                    Rc::new(VecModel::from(
+                        previews.iter().map(search_media_card).collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                );
+                app.set_loading_more(false);
+                app.set_can_load_more(false);
+            }
+            self.shared.lock().unwrap().previews = previews;
+            return;
+        }
         let (urls, type_, catalog_id, genre, skip, generation) = {
             let state = self.shared.lock().unwrap();
             if state.chosen_type >= state.type_defs.len() {
@@ -1318,7 +1339,7 @@ impl Bridge {
         if !remote_playback::is_foreground()
             || !app.window().is_visible()
             || app.window().is_minimized()
-            || (!app.get_show_home() && !app.get_show_library())
+            || (!app.get_show_home() && !app.get_show_library() && !app.get_show_calendar())
             || app.get_player_open()
             || app.get_modal_visible()
         {
@@ -1340,6 +1361,17 @@ impl Bridge {
     }
 
     fn finish_saved_episode_refresh(&self, job: &SavedEpisodeRefresh, success: bool) {
+        let owner = profiles::ProfileStore::capture();
+        if release_reminders::subscribed(&owner, &job.type_, &job.id) {
+            release_reminders::note_metadata_refresh(
+                &owner,
+                if success {
+                    Ok(())
+                } else {
+                    Err(text::tr("Metadata refresh pending; cached schedule retained").into())
+                },
+            );
+        }
         if let Some(prefetch) = self
             .shared
             .lock()
@@ -1373,7 +1405,9 @@ impl Bridge {
                 && self.app().is_some_and(|app| {
                     app.window().is_visible()
                         && !app.window().is_minimized()
-                        && (app.get_show_home() || app.get_show_library())
+                        && (app.get_show_home()
+                            || app.get_show_library()
+                            || app.get_show_calendar())
                         && !app.get_player_open()
                         && !app.get_modal_visible()
                 })
@@ -1770,7 +1804,22 @@ impl Bridge {
             let generation = state.search_generation;
             state.search = trimmed.clone();
             state.search_previews.clear();
-            state.search_targets = filtered_search_targets(&state.installed, &state.search_filters);
+            state.search_targets =
+                if profile_policy::restricted() && !profile_policy::management_browsing() {
+                    vec![SearchTarget {
+                        addon_url: String::new(),
+                        type_: String::new(),
+                        catalog_id: String::new(),
+                        genre_options: Vec::new(),
+                        genre: String::new(),
+                        supports_skip: false,
+                        next_skip: 0,
+                        exhausted: true,
+                        results: profile_policy::local_previews(&trimmed),
+                    }]
+                } else {
+                    filtered_search_targets(&state.installed, &state.search_filters)
+                };
             state.search_pending_requests = 0;
             state.search_loading_more = false;
             state.search_poster_inflight.clear();
@@ -1798,6 +1847,10 @@ impl Bridge {
             app.set_search_empty_hint(SharedString::from(text::tr("No results for this search.")));
         }
 
+        if profile_policy::restricted() && !profile_policy::management_browsing() {
+            self.apply_search_results(generation, Vec::new(), false);
+            return;
+        }
         let targets = (0..target_count).collect();
         self.fetch_search_pages(generation, trimmed, targets, false);
     }
@@ -1892,7 +1945,14 @@ impl Bridge {
             }
 
             let query = state.search.clone();
-            let merged = ranked_search_results(&query, &state.search_targets);
+            let mut merged = ranked_search_results(&query, &state.search_targets);
+            merged.retain(|m| {
+                profile_policy::allows_browse_title(
+                    &profiles::ProfileStore::capture(),
+                    &m.type_,
+                    &m.id,
+                )
+            });
             let old_keys: HashSet<(String, String)> = old_previews
                 .iter()
                 .map(|meta| (meta.type_.clone(), meta.id.clone()))

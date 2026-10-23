@@ -85,6 +85,253 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Unlock on TV." => "Otključajte na TV-u.",
+        "Skipped expired or unsupported values" => "Preskočene istekle ili nepodržane vrijednosti",
+        "Keep downloaded file" => "Zadrži preuzetu datoteku",
+        "Unpin downloaded file" => "Ukloni oznaku zadržavanja datoteke",
+        "Backup and import" => "Sigurnosna kopija i uvoz",
+        "Data" => "Podaci",
+        "Export selected data and restore a backup" => {
+            "Izvoz odabranih podataka i vraćanje sigurnosne kopije"
+        }
+        "Map profiles, select components and review changes before importing." => {
+            "Povežite profile, odaberite dijelove i pregledajte promjene prije uvoza."
+        }
+        "Choose the profiles and personal data to export." => {
+            "Odaberite profile i osobne podatke za izvoz."
+        }
+        "Presets" => "Predlošci",
+        "Everything personal" => "Svi osobni podaci",
+        "All personal components, including credentials and profile PINs." => {
+            "Svi osobni dijelovi, uključujući pristupne podatke i PIN-ove profila."
+        }
+        "Library and viewing" => "Biblioteka i gledanje",
+        "Library, progress, history, collections, bookmarks and queue." => {
+            "Biblioteka, napredak, povijest, zbirke, oznake i red gledanja."
+        }
+        "Configuration" => "Konfiguracija",
+        "Personal settings, addons, integrations and profile policy." => {
+            "Osobne postavke, dodaci, integracije i pravila profila."
+        }
+        "Target profiles" => "Odredišni profili",
+        "Replace selected components" => "Zamijeni odabrane dijelove",
+        "Absent records in selected components will be deleted." => {
+            "Zapisi koji nedostaju u odabranim dijelovima bit će izbrisani."
+        }
+        "Merge inserts missing records and preserves local conflicts." => {
+            "Spajanje dodaje zapise koji nedostaju i zadržava lokalne vrijednosti pri sukobu."
+        }
+        "Components" => "Dijelovi",
+        "Use backup for conflicts" => "Pri sukobu koristi sigurnosnu kopiju",
+        "Import preview" => "Pregled uvoza",
+        "Selected configuration includes addon credentials and profile PINs. Imported edits sync to paired devices. Notification delivery and smart downloads stay off on this device." => {
+            "Odabrana konfiguracija uključuje pristupne podatke dodataka i PIN-ove profila. Uvezene promjene sinkroniziraju se s uparenim uređajima. Obavijesti i pametna preuzimanja ostaju isključeni na ovom uređaju."
+        }
+        "Export selected data" => "Izvezi odabrane podatke",
+        "Import reviewed changes" => "Uvezi pregledane promjene",
+        "Build import preview" => "Pripremi pregled uvoza",
+        "Rebuild import preview" => "Ponovno pripremi pregled uvoza",
+        "Choose another backup file" => "Odaberi drugu sigurnosnu kopiju",
+        "Choose backup file to import" => "Odaberi sigurnosnu kopiju za uvoz",
+        "Undo last import" => "Poništi posljednji uvoz",
+        "Delete recovery copies" => "Izbriši kopije za oporavak",
+        "Playback progress" => "Napredak reprodukcije",
+        "Viewing journal" => "Dnevnik gledanja",
+        "Viewing activity" => "Aktivnost gledanja",
+        "Hidden Continue rows" => "Skriveni redovi nastavka gledanja",
+        "Hidden history rows" => "Skriveni redovi povijesti",
+        "Hidden new episodes" => "Skrivene nove epizode",
+        "Personal settings and Home" => "Osobne postavke i početna stranica",
+        "Title playback preferences" => "Postavke reprodukcije naslova",
+        "Addons and configuration" => "Dodaci i konfiguracija",
+        "Optional addon package files" => "Neobavezne datoteke paketa dodataka",
+        "Integration accounts and mappings" => "Računi i povezivanja integracija",
+        "Smart offline policies" => "Pravila pametnih izvanmrežnih preuzimanja",
+        "This device's compatible preferences" => "Kompatibilne postavke ovog uređaja",
+        "Create new profile" => "Stvori novi profil",
+        "Choose at least one profile and component" => "Odaberite barem jedan profil i dio",
+        "Preparing backup…" => "Priprema sigurnosne kopije…",
+        "Backup exported" => "Sigurnosna kopija je izvezena",
+        "Export cancelled" => "Izvoz je otkazan",
+        "Choose a backup file…" => "Odaberite sigurnosnu kopiju…",
+        "Choose target profiles and components, then rebuild the preview" => {
+            "Odaberite odredišne profile i dijelove pa pripremite pregled"
+        }
+        "Unsupported optional components" => "Nepodržani neobavezni dijelovi",
+        "Import cancelled" => "Uvoz je otkazan",
+        "Preparing import preview…" => "Priprema pregleda uvoza…",
+        "Importing selected data…" => "Uvoz odabranih podataka…",
+        "Import complete. Recovery copy saved; Undo is available." => {
+            "Uvoz je dovršen. Kopija za oporavak je spremljena; poništavanje je dostupno."
+        }
+        "Recovery copies deleted" => "Kopije za oporavak su izbrisane",
+        "Archive" => "Sigurnosna kopija",
+        "Identical" => "Jednako",
+        "Conflicts" => "Sukobi",
+        "Updates" => "Ažuriranja",
+        "Preserved local" => "Zadržano lokalno",
+        "Deletions" => "Brisanja",
+        "Conflict identities" => "Identiteti sukobljenih zapisa",
+        "Review the exact changes, then import" => "Pregledajte točne promjene pa uvezite podatke",
+        "Category assignments omitted because their categories are unavailable" => {
+            "Dodjele kategorija su izostavljene jer njihove kategorije nisu dostupne"
+        }
+        "Included" => "Uključeno",
+        "Already installed" => "Već instalirano",
+        "Reinstall needed" => "Potrebna je ponovna instalacija",
+        "Target changed while preview was open. Rebuild the preview before importing." => {
+            "Odredište se promijenilo tijekom pregleda. Ponovno pripremite pregled prije uvoza."
+        }
+        "Device preferences changed while preview was open. Rebuild the preview before importing." => {
+            "Postavke uređaja promijenile su se tijekom pregleda. Ponovno pripremite pregled prije uvoza."
+        }
+        "Choose one distinct target for each backup profile" => {
+            "Odaberite zasebno odredište za svaki profil iz sigurnosne kopije"
+        }
+        "Unlock the target profile before importing" => "Otključajte odredišni profil prije uvoza",
+        "There is no local import to undo" => "Nema lokalnog uvoza za poništavanje",
+        "Unsupported backup format version" => "Nepodržana verzija sigurnosne kopije",
+        "Backup manifest is missing" => "Nedostaje manifest sigurnosne kopije",
+        "Duplicate or invalid backup path" => "Dvostruka ili neispravna putanja sigurnosne kopije",
+        "Duplicate or invalid backup component" => "Dvostruki ili neispravan dio sigurnosne kopije",
+        "Expanded backup exceeds the size limit" => {
+            "Raspakirana sigurnosna kopija premašuje ograničenje veličine"
+        }
+        "Backup exceeds the size limit" => "Sigurnosna kopija premašuje ograničenje veličine",
+        "Document exceeds the size limit" => "Dokument premašuje ograničenje veličine",
+        "A document picker is already open" => "Odabir dokumenta već je otvoren",
+        "Document picker could not be opened" => "Odabir dokumenta nije moguće otvoriti",
+        "Selected addon package file is missing" => "Nedostaje odabrana datoteka paketa dodatka",
+        "Missing addon package file" => "Nedostaje datoteka paketa dodatka",
+        "Addon package checksum failed" => "Kontrolni zbroj paketa dodatka nije valjan",
+        "Addon package identity mismatch" => "Identitet paketa dodatka se ne podudara",
+        "Smart downloads" => "Pametna preuzimanja",
+        "Keep offline" => "Čuvaj izvanmrežno",
+        "Offline rule enabled" => "Izvanmrežno pravilo uključeno",
+        "Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet." => {
+            "Pravila se sinkroniziraju između profila. Preuzimanja se izvode samo za profile uključene na ovom uređaju, putem Wi-Fi ili Ethernet veze bez ograničenja prometa."
+        }
+        "Pause this profile on this device" => "Pauziraj ovaj profil na ovom uređaju",
+        "Enable this profile on this device" => "Uključi ovaj profil na ovom uređaju",
+        "Automatic allowance: {} GiB" => "Ograničenje automatskih preuzimanja: {} GiB",
+        "Charging required" => "Potrebno je punjenje",
+        "Charging optional" => "Punjenje nije obvezno",
+        "Open a show and choose Keep offline to add a rule." => {
+            "Otvorite seriju i odaberite Čuvaj izvanmrežno da dodate pravilo."
+        }
+        "Pause rule" => "Pauziraj pravilo",
+        "Resume rule" => "Nastavi pravilo",
+        "Keep next {}" => "Čuvaj sljedećih {}",
+        "Choose another source" => "Odaberi drugi izvor",
+        "Choose source" => "Odaberi izvor",
+        "Retry / Restore offline" => "Ponovi / vrati izvanmrežno",
+        "Specials included" => "Specijali uključeni",
+        "Specials excluded" => "Specijali isključeni",
+        "Remove unneeded automatic files" => "Ukloni nepotrebne automatske datoteke",
+        "Keep watched automatic files" => "Zadrži odgledane automatske datoteke",
+        "Remove rule, keep files" => "Ukloni pravilo, zadrži datoteke",
+        "Remove rule and unneeded files" => "Ukloni pravilo i nepotrebne datoteke",
+        "Waiting for unmetered Wi-Fi or Ethernet" => {
+            "Čeka se Wi-Fi ili Ethernet bez ograničenja prometa"
+        }
+        "Waiting for charging" => "Čeka se punjenje",
+        "Automatic storage allowance reached" => "Dosegnuto je ograničenje automatske pohrane",
+        "Preserving free storage reserve" => "Čuva se rezerva slobodnog prostora",
+        "Execution disabled on this device" => "Izvršavanje je isključeno na ovom uređaju",
+        "Size unknown — choose Download manually" => {
+            "Veličina nije poznata — odaberite ručno preuzimanje"
+        }
+        "Paused by you" => "Ručno ste pauzirali",
+        "Pending background opportunity" => "Čeka se prilika za rad u pozadini",
+        "Choose a source for smart downloads" => "Odaberite izvor za pametna preuzimanja",
+        "Removed manually — use Restore offline" => {
+            "Ručno uklonjeno — odaberite Vrati izvanmrežno"
+        }
+        "Download failed — Retry or choose a source" => {
+            "Preuzimanje nije uspjelo — ponovite ili odaberite izvor"
+        }
+        "Smart downloads ready" => "Pametna preuzimanja su spremna",
+        "Source removed — choose another source" => "Izvor je uklonjen — odaberite drugi izvor",
+        "Source is not allowed" => "Izvor nije dopušten",
+        "No matching release — choose another source" => {
+            "Nema odgovarajućeg izdanja — odaberite drugi izvor"
+        }
+        "Choose an exact torrent file for smart downloads" => {
+            "Odaberite točnu torrent datoteku za pametna preuzimanja"
+        }
+        "Choose a downloadable source" => "Odaberite izvor za preuzimanje",
+        "Source changed — choose another source" => {
+            "Izvor je promijenjen — odaberite drugi izvor"
+        }
+        "Open an episode and use this source for smart downloads" => {
+            "Otvorite epizodu i odaberite ovaj izvor za pametna preuzimanja"
+        }
+        "Use this source for smart downloads" => "Koristi ovaj izvor za pametna preuzimanja",
+        "Automatic storage" => "Automatska pohrana",
+        "Reserved" => "Rezervirano",
+        "Manually kept" => "Ručno zadržano",
+        "ready" => "spremno",
+        "downloading" => "preuzima se",
+        "Source lookup failed — retry later" => {
+            "Pretraživanje izvora nije uspjelo — pokušajte kasnije"
+        }
+        "Offline settings unavailable" => "Izvanmrežne postavke nisu dostupne",
+        "Over allowance" => "Prekoračenje ograničenja",
+        "Profiles enabled on this device" => "Profili uključeni na ovom uređaju",
+        "Enabled on this device" => "Uključeno na ovom uređaju",
+        "Disabled on this device" => "Isključeno na ovom uređaju",
+
+        "Queue item is unavailable on this device. Sync, then retry or choose a source on the TV." => {
+            "Sadržaj reda nije dostupan na ovom uređaju. Sinkronizirajte pa pokušajte ponovno ili odaberite izvor na TV-u."
+        }
+        "Select and unlock the same profile on the playing device." => {
+            "Odaberite i otključajte isti profil na uređaju za reprodukciju."
+        }
+
+        "Continue queue" => "Nastavi red gledanja",
+        "Autoplay next queued item: On" => "Automatski sljedeći sadržaj: uključeno",
+        "Autoplay next queued item: Off" => "Automatski sljedeći sadržaj: isključeno",
+        "Skip" => "Preskoči",
+        "Stop queue" => "Zaustavi red gledanja",
+        "CURRENT" => "TRENUTAČNO",
+        "Start from this item" => "Počni od ovog sadržaja",
+        "Skip queued item" => "Preskoči sadržaj u redu",
+        "In progress" => "U tijeku",
+        "Queue paused. Choose a source, retry, skip or stop the queue." => {
+            "Red gledanja je pauziran. Odaberite izvor, pokušajte ponovno, preskočite ili zaustavite red."
+        }
+        "Queue playback is unavailable" => "Reprodukcija reda gledanja nije dostupna",
+        "Queue is unavailable" => "Red gledanja nije dostupan",
+        "No pending queue item" => "Nema sadržaja na čekanju u redu",
+        "Title is unavailable" => "Naslov nije dostupan",
+        "Queue paused" => "Red gledanja je pauziran",
+        "Next queued item" => "Sljedeći sadržaj u redu",
+        "Queue playing" => "Reprodukcija reda gledanja",
+        "Play now" => "Reproduciraj sada",
+
+        "Local files with unknown source" => "Lokalne datoteke s nepoznatim izvorom",
+        "Incorrect PIN. Try again." => "Pogrešan PIN. Pokušajte ponovno.",
+        "Unsupported profile policy." => "Nepodržana pravila profila.",
+        "Enter 4–8 digits." => "Unesite 4–8 znamenki.",
+        "Set a PIN first." => "Najprije postavite PIN.",
+        "Enter PIN to continue." => "Unesite PIN za nastavak.",
+        "Released today" => "Objavljeno danas",
+        " — paused (On Hold / Dropped)" => " — pauzirano (Na čekanju / Odbačeno)",
+        " — paused (not in Library)" => " — pauzirano (nije u zbirci)",
+        "Allow notifications in Android settings, then enable delivery again" => {
+            "Dopustite obavijesti u postavkama Androida, a zatim ponovno uključite dostavu"
+        }
+        "Unlock profile management first" => "Najprije otključajte upravljanje profilom",
+        "Profile changed; preview this export again" => {
+            "Profil je promijenjen; ponovno pregledajte izvoz"
+        }
+        "Enter valid start and end dates" => "Unesite valjane početne i završne datume",
+        "Choose an ordered date range of at most two years" => {
+            "Odaberite raspon datuma pravilnim redoslijedom, najviše dvije godine"
+        }
+        "Metadata refresh pending; cached schedule retained" => {
+            "Osvježavanje metapodataka je na čekanju; zadržan je spremljeni raspored"
+        }
         "Could not read your scene bookmarks. Your saved data has been kept." => {
             "Oznake scena nije moguće pročitati. Spremljeni podaci su sačuvani."
         }
@@ -621,6 +868,11 @@ pub fn tr(english: &str) -> &str {
         }
         "TorBox returned an invalid playback URL." => "TorBox je vratio nevaljan URL reprodukcije.",
         "On" => "Uključeno",
+        "Sleep timer unavailable" => "Mjerač spavanja nije dostupan",
+        "Episode timer requires series playback" => "Mjerač epizoda zahtijeva reprodukciju serije",
+        "Choose a duration timer first" => "Prvo odaberite trajanje mjerača",
+        "Sleep timer finished" => "Mjerač spavanja je istekao",
+        "Episode timer finished the episode portion" => "Mjerač epizoda završio je dio s epizodama",
         "Off" => "Isključeno",
         "Show skip prompt" => "Prikaži gumb za preskakanje",
         "Auto skip" => "Automatski preskoči",
@@ -3356,4 +3608,85 @@ pub fn journal_date(at: u64, with_time: bool) -> String {
     } else {
         format!("{year:04}-{month:02}-{day:02}")
     }
+}
+
+/// Receiver-sampled countdown; controllers never invent a deadline.
+pub fn sleep_timer_status(mode: u8, seconds: u32, episodes: u8) -> String {
+    match mode {
+        1 if croatian() => format!("Spavanje za {}:{:02}", seconds / 60, seconds % 60),
+        1 => format!("Sleep in {}:{:02}", seconds / 60, seconds % 60),
+        2 if croatian() => "Spavanje na kraju sadržaja".into(),
+        2 => "Sleep at end of item".into(),
+        _ if croatian() => format!("Preostale epizode: {episodes}"),
+        _ => format!("Episodes remaining: {episodes}"),
+    }
+}
+
+/// Device accounting uses GiB consistently; reservations remain visibly separate.
+pub fn smart_offline_storage(used: u64, reserved: u64, manual: u64, budget: u64) -> String {
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let mut label = format!(
+        "{}: {:.2} / {:.0} GiB · {}: {:.2} GiB · {}: {:.2} GiB",
+        tr("Automatic storage"),
+        used as f64 / gib,
+        budget as f64 / gib,
+        tr("Reserved"),
+        reserved as f64 / gib,
+        tr("Manually kept"),
+        manual as f64 / gib
+    );
+    if used > budget {
+        label.push_str(&format!(
+            " · {}: {:.2} GiB",
+            tr("Over allowance"),
+            (used - budget) as f64 / gib
+        ));
+    }
+    label
+}
+pub fn smart_offline_status(ready: usize, active: usize, message: &str) -> String {
+    format!(
+        "{ready} {} · {active} {} · {}",
+        tr("ready"),
+        tr("downloading"),
+        tr(message)
+    )
+}
+
+pub fn release_export_preview(
+    series: usize,
+    releases: usize,
+    undated: usize,
+    cancelled: usize,
+) -> String {
+    if croatian() {
+        format!(
+            "Serije: {series} · Izdanja: {releases} · Nedatirane epizode izostavljene: {undated} · Otkazani zapisi zbog uklanjanja iz odabira ili rasporeda: {cancelled}"
+        )
+    } else {
+        format!(
+            "Series: {series} · Releases: {releases} · Undated episodes omitted: {undated} · Cancellation records for scope or schedule removals: {cancelled}"
+        )
+    }
+}
+pub fn release_reminder_status(
+    subscriptions: usize,
+    refreshed: Option<&str>,
+    error: Option<&str>,
+) -> String {
+    let base = if croatian() {
+        format!("Pretplaćene serije: {subscriptions}")
+    } else {
+        format!("Subscribed series: {subscriptions}")
+    };
+    let refresh = match refreshed {
+        Some(at) if croatian() => format!(" · Posljednje osvježavanje: {at}"),
+        Some(at) => format!(" · Last refreshed: {at}"),
+        None if croatian() => " · Osvježavanje na čekanju".into(),
+        None => " · Refresh pending".into(),
+    };
+    format!(
+        "{base}{refresh}{}",
+        error.map(|e| format!(" · {e}")).unwrap_or_default()
+    )
 }

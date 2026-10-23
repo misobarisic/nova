@@ -71,6 +71,8 @@ impl State {
 // All publications are scoped to native load, playback, addon/settings revision
 // and a unique attempt, so late replies can never revive a cancelled preview.
 struct Automatic {
+    activation: profiles::Context,
+    queue_target: Option<watch_queue::Entry>,
     ticket: Arc<()>,
     next: Video,
     settings: u64,
@@ -87,7 +89,7 @@ fn automatic_successor(videos: &[Video], current: &str) -> Option<Video> {
     (episode_has_air_date(next) && episode_is_out(next, today_days())).then(|| next.clone())
 }
 
-fn automatic_choice_with_rules(
+pub(super) fn automatic_choice_with_rules(
     rows: &[StreamUi],
     preference: Option<&StreamPreference>,
     torrents: bool,
@@ -97,6 +99,15 @@ fn automatic_choice_with_rules(
         .iter()
         .filter(|row| {
             stream_recommendation_usable(row)
+                && match &row.download {
+                    Some(job) => {
+                        smart_offline::allows_download(&profiles::ProfileStore::capture(), job)
+                    }
+                    None => profile_policy::allows_addon(
+                        &profiles::ProfileStore::capture(),
+                        &row.owner_url,
+                    ),
+                }
                 && (torrents || !matches!(row.source, StreamSource::Torrent { .. }))
         })
         .cloned()
@@ -237,6 +248,9 @@ impl Bridge {
     }
 
     pub(super) fn refresh_playback_end_menu(&self) {
+        if self.refresh_sleep_timer() {
+            return;
+        }
         let Some(app) = self.app() else { return };
         let context = app
             .get_player_open()
@@ -245,6 +259,7 @@ impl Bridge {
         // Native readiness validates the loaded path and excludes a queued
         // replacement/loading source. A near-end position is not EOF.
         let ended = self.player.playback_readiness().ended;
+        self.refresh_queue_playback(ended);
         let eligible = self.playback_end_eligible(&app);
         let visible = {
             let mut state = self.shared.lock().unwrap();
@@ -268,21 +283,36 @@ impl Bridge {
             self.shared.lock().unwrap().playback_end.automatic = None;
             app.set_auto_next_preview(false);
         }
-        let automatic = context
-            .as_ref()
-            .is_some_and(|context| automatic_allowed && self.refresh_automatic_next(context, &app));
+        let queue_owned = self.queue_run_active();
+        let automatic = context.as_ref().is_some_and(|context| {
+            automatic_allowed
+                && (!queue_owned || self.queue_autoplay())
+                && self.refresh_automatic_next(context, &app)
+        });
         let visible = visible && !automatic;
-        let next = visible
+        let queued_next = (visible && queue_owned)
+            .then(|| self.queue_successor())
+            .flatten();
+        let next = (visible && !queue_owned)
             .then(|| {
                 context
                     .as_ref()
                     .and_then(|context| self.playback_end_next_video(context))
             })
             .flatten();
-        app.set_playback_end_menu_has_next(next.is_some());
+        app.set_playback_end_menu_queue(queue_owned);
+        app.set_playback_end_menu_has_next(queued_next.is_some() || next.is_some());
         app.set_playback_end_menu_next_title(
-            next.as_ref()
-                .map(episode_row_label)
+            queued_next
+                .as_ref()
+                .map(|entry| {
+                    if entry.type_ == "movie" {
+                        entry.title.clone()
+                    } else {
+                        format!("{} · {}", entry.title, episode_row_label(&entry.video()))
+                    }
+                })
+                .or_else(|| next.as_ref().map(episode_row_label))
                 .unwrap_or_default()
                 .into(),
         );
@@ -298,6 +328,9 @@ impl Bridge {
     }
 
     fn automatic_valid(&self, context: &Context, automatic: &Automatic) -> bool {
+        if !profiles::is_current(&automatic.activation) {
+            return false;
+        }
         if self.app().is_none_or(|app| {
             app.get_completion_prompt_visible()
                 || app.get_onboarding_visible()
@@ -305,7 +338,22 @@ impl Bridge {
         }) {
             return false;
         }
-        if self.remote_receiver_playback() || self.remote_output_selected() {
+        if self.remote_output_selected()
+            || (self.remote_receiver_playback() && automatic.queue_target.is_none())
+        {
+            return false;
+        }
+        if let Some(entry) = &automatic.queue_target
+            && (!self.queue_autoplay()
+                || self
+                    .queue_successor()
+                    .is_none_or(|next| next.key() != entry.key())
+                || !profile_policy::allows_title(
+                    &profiles::ProfileStore::capture(),
+                    &entry.type_,
+                    &entry.series_id,
+                ))
+        {
             return false;
         }
         let rules = self.effective_stream_filter_rules();
@@ -324,7 +372,8 @@ impl Bridge {
             return false;
         }
         let state = self.shared.lock().unwrap();
-        state.cache_settings.auto_next_episode
+        (automatic.queue_target.is_some()
+            || (state.cache_settings.auto_next_episode && !state.watch_queue.active()))
             && !state.cache_settings.uses_external_player()
             && nova_providers::plugin_settings::settings_generation() == automatic.settings
             && state
@@ -336,9 +385,10 @@ impl Bridge {
                 == automatic.owners
             && state.playback_end.session.as_ref() == Some(&context.session)
             && !state.playback_end.suppressed
-            && self
-                .playback_end_next_video_unlocked(context, &state)
-                .is_some_and(|next| next.id == automatic.next.id)
+            && (automatic.queue_target.is_some()
+                || self
+                    .playback_end_next_video_unlocked(context, &state)
+                    .is_some_and(|next| next.id == automatic.next.id))
     }
 
     fn playback_end_next_video_unlocked(&self, context: &Context, state: &Shared) -> Option<Video> {
@@ -359,7 +409,7 @@ impl Bridge {
             let begin = !state.playback_end.automatic_attempted && !state.playback_end.suppressed;
             state.playback_end.automatic_attempted = true;
             begin
-                && state.cache_settings.auto_next_episode
+                && (state.watch_queue.active() || state.cache_settings.auto_next_episode)
                 && !state.cache_settings.uses_external_player()
         };
         if begin {
@@ -372,10 +422,30 @@ impl Bridge {
         };
         if !self.automatic_valid(context, &automatic_value) {
             app.set_auto_next_preview(false);
+            let successor_changed = automatic_value.queue_target.as_ref().is_some_and(|entry| {
+                self.queue_successor()
+                    .is_none_or(|next| next.key() != entry.key())
+            });
+            let still_owned =
+                profiles::is_current(&automatic_value.activation) && self.queue_autoplay() && {
+                    let state = self.shared.lock().unwrap();
+                    state.playback_end.session.as_ref() == Some(&context.session)
+                        && !state.playback_end.suppressed
+                };
+            if successor_changed && still_owned {
+                // Reorder/removal revokes the old candidate and attempt ticket.
+                // Re-enter the same bounded discovery path for the latest next
+                // item; an expired discovery deadline opens its paused picker.
+                self.shared.lock().unwrap().playback_end.automatic_attempted = false;
+                return self.refresh_automatic_next(context, app);
+            }
             return false;
         }
         let now = Instant::now();
         if automatic_value.candidate.is_none() && self.shared.lock().unwrap().playback_end.visible {
+            if automatic_value.queue_target.is_some() {
+                self.pause_queue();
+            }
             app.set_auto_next_preview(false);
             return false;
         }
@@ -383,8 +453,14 @@ impl Bridge {
             let mut rows: Vec<_> = self
                 .downloads
                 .jobs_for_media(
-                    &context.session.type_,
-                    &context.session.title,
+                    automatic_value
+                        .queue_target
+                        .as_ref()
+                        .map_or(context.session.type_.as_str(), |e| e.type_.as_str()),
+                    automatic_value
+                        .queue_target
+                        .as_ref()
+                        .map_or(context.session.title.as_str(), |e| e.series_id.as_str()),
                     &automatic_value.next.id,
                 )
                 .into_iter()
@@ -407,10 +483,25 @@ impl Bridge {
                 })
                 .collect();
             rows.extend(automatic_value.rows.iter().flatten().cloned());
-            let preference = stream_series_scope(&context.session.type_, &context.session.title)
-                .and_then(|id| {
-                    self.last_stream
-                        .series_preference(&id, nova_config::now_secs())
+            let preference = automatic_value
+                .queue_target
+                .as_ref()
+                .and_then(|entry| entry.source_preference.clone())
+                .or_else(|| {
+                    stream_series_scope(
+                        automatic_value
+                            .queue_target
+                            .as_ref()
+                            .map_or(context.session.type_.as_str(), |e| e.type_.as_str()),
+                        automatic_value
+                            .queue_target
+                            .as_ref()
+                            .map_or(context.session.title.as_str(), |e| e.series_id.as_str()),
+                    )
+                    .and_then(|id| {
+                        self.last_stream
+                            .series_preference(&id, nova_config::now_secs())
+                    })
                 });
             automatic_value.candidate = automatic_choice_with_rules(
                 &rows,
@@ -424,12 +515,32 @@ impl Bridge {
         }
         let waiting = automatic_value.candidate.is_none();
         if waiting && self.shared.lock().unwrap().playback_end.visible {
+            if automatic_value.queue_target.is_some() {
+                self.pause_queue();
+            }
             // The ordinary five-second EOF deadline also bounds discovery.
             app.set_auto_next_preview(false);
             return false;
         }
         if let Some(row) = &automatic_value.candidate {
-            app.set_auto_next_preview_title(episode_row_label(&automatic_value.next).into());
+            app.set_auto_next_preview_title(
+                automatic_value
+                    .queue_target
+                    .as_ref()
+                    .map(|entry| {
+                        if entry.type_ == "movie" {
+                            entry.title.clone()
+                        } else {
+                            format!(
+                                "{} · {}",
+                                entry.title,
+                                episode_row_label(&automatic_value.next)
+                            )
+                        }
+                    })
+                    .unwrap_or_else(|| episode_row_label(&automatic_value.next))
+                    .into(),
+            );
             app.set_auto_next_preview_source(row.card.title.clone().into());
             app.set_auto_next_preview_metadata(row.card.metadata.clone().into());
             let elapsed = now.saturating_duration_since(automatic_value.since.unwrap());
@@ -447,25 +558,71 @@ impl Bridge {
     }
 
     fn begin_automatic_next(&self, context: &Context) {
-        if context.session.type_ == "movie"
-            || self.remote_receiver_playback()
-            || self.remote_output_selected()
+        let queue_target = self
+            .queue_run_active()
+            .then(|| self.queue_successor())
+            .flatten();
+        if self.remote_output_selected()
+            || (queue_target.is_none()
+                && (context.session.type_ == "movie" || self.remote_receiver_playback()))
         {
             return;
         }
-        let videos = self.playback_end_videos(context);
+        if self.queue_run_active() && queue_target.is_none() {
+            self.finish_queue();
+            return;
+        }
+        let queue_context = queue_target.as_ref().map(|entry| Context {
+            session: Session {
+                type_: entry.type_.clone(),
+                title: entry.series_id.clone(),
+                episode: entry.episode_id.clone(),
+                ..context.session.clone()
+            },
+            history: PlaybackHistory {
+                title: entry.title.clone(),
+                poster_url: entry.poster_url.clone(),
+                type_: entry.type_.clone(),
+                ..context.history.clone()
+            },
+        });
+        let lookup_context = queue_context.as_ref().unwrap_or(context);
+        let videos = self.playback_end_videos(lookup_context);
         let (next, urls, owners) = {
             let state = self.shared.lock().unwrap();
-            let Some(next) = self.playback_end_next_video_unlocked(context, &state) else {
-                return;
+            let next = if let Some(entry) = &queue_target {
+                let video = videos
+                    .iter()
+                    .find(|v| v.id == entry.episode_id)
+                    .cloned()
+                    .unwrap_or_else(|| entry.video());
+                if entry.type_ != "movie"
+                    && (if episode_has_air_date(&video) {
+                        !episode_is_out(&video, today_days())
+                    } else {
+                        entry.source_preference.is_none()
+                    })
+                {
+                    drop(state);
+                    self.pause_queue();
+                    return;
+                }
+                video
+            } else {
+                let Some(next) = self.playback_end_next_video_unlocked(context, &state) else {
+                    return;
+                };
+                next
             };
             // Use the playing title's confirmed episode mapping. Browsing a
             // different title cannot retarget the lookup or its aliases.
-            let lookup = context.lookup(videos);
+            let lookup = lookup_context.lookup(videos);
             let modal = state
                 .modal_item
                 .as_ref()
-                .filter(|m| m.id == context.session.title && m.type_ == context.session.type_)
+                .filter(|m| {
+                    m.id == lookup_context.session.title && m.type_ == lookup_context.session.type_
+                })
                 .unwrap_or(&lookup);
             let urls = detail::stream_search_urls_for_context(&state.installed, modal, &next.id);
             let owners = state
@@ -480,6 +637,8 @@ impl Bridge {
         let settings = nova_providers::plugin_settings::settings_generation();
         let rules = self.effective_stream_filter_rules();
         self.shared.lock().unwrap().playback_end.automatic = Some(Automatic {
+            activation: profiles::capture(),
+            queue_target: queue_target.clone(),
             ticket: ticket.clone(),
             next: next.clone(),
             settings,
@@ -494,7 +653,7 @@ impl Bridge {
             let bridge = self.clone();
             let ticket = ticket.clone();
             let request = next.id.clone();
-            let media_type = context.session.type_.clone();
+            let media_type = lookup_context.session.type_.clone();
             self.request_streams_with_prefetch_cache(
                 url,
                 owner.clone(),
@@ -544,6 +703,9 @@ impl Bridge {
     }
 
     fn cancel_automatic_next(&self) {
+        if self.queue_run_active() {
+            self.pause_queue();
+        }
         let mut state = self.shared.lock().unwrap();
         state.playback_end.automatic = None;
         state.playback_end.visible = true;
@@ -588,6 +750,27 @@ impl Bridge {
             self.cancel_automatic_next();
             return;
         }
+        if let Some(entry) = automatic.queue_target.as_ref() {
+            if !self.queue_accept_successor(entry) {
+                return;
+            }
+            self.note_player_progress_from_ui();
+            self.player
+                .with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+            self.release_catalog_detail_for_native_successor();
+            self.open_queue_successor(entry, row);
+            return;
+        }
+        let identity = nova_playback_api::MediaIdentity {
+            media_type: context.session.type_.clone(),
+            title_id: context.session.title.clone(),
+            episode_id: automatic.next.id.clone(),
+            ..Default::default()
+        };
+        if self.sleep_timer_blocks_successor(&identity) {
+            return;
+        }
+        self.sleep_timer_note_successor(identity, 0);
         let videos = self.playback_end_videos(&context);
         let matches = self
             .shared
@@ -648,6 +831,7 @@ impl Bridge {
             app.set_playback_end_menu_visible(false);
             app.set_auto_next_preview(false);
             app.set_playback_end_menu_has_next(false);
+            app.set_playback_end_menu_queue(false);
             app.set_playback_end_menu_next_title(SharedString::default());
         }
     }
@@ -705,6 +889,10 @@ impl Bridge {
         let Some(context) = self.current_playback_end_action() else {
             return;
         };
+        if self.queue_run_active() {
+            self.skip_queue();
+            return;
+        }
         let videos = self.playback_end_videos(&context);
         let Some(next) =
             next_episode::successor(&videos, &context.session.episode, today_days()).cloned()
@@ -758,6 +946,127 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn queue_reorder_replaces_lookup_and_countdown_attempts_without_reviving_stop() {
+        const ROOT: &str = "NOVA_QUEUE_REORDER_EOF_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-queue-reorder-eof-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output=std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT,&root).args(["--exact","app::playback_end::tests::queue_reorder_replaces_lookup_and_countdown_attempts_without_reviving_stop","--nocapture"]).output().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.set_onboarding_visible(false);
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let key = |id: &str| serde_json::to_string(&("movie", id, id)).unwrap();
+        let entries:Vec<_>=["a","b","c"].into_iter().map(|id|serde_json::json!({"type_":"movie","series_id":id,"episode_id":id,"title":id,"poster_url":"","episode_title":"","season":null,"episode":null})).collect();
+        let original=serde_json::json!({"version":2,"entries":entries,"order":[key("a"),key("b"),key("c")],"autoplay":true}).to_string();
+        for lookup_pending in [true, false] {
+            sync::persist_sync_snapshot(watch_queue::KEY, &original, false).unwrap();
+            bridge.shared.lock().unwrap().watch_queue.entries = None;
+            bridge.start_queue(Some(&key("a"))).unwrap();
+            let context = Context {
+                session: Session {
+                    native: 7,
+                    playback: 9,
+                    type_: "movie".into(),
+                    title: "a".into(),
+                    episode: "a".into(),
+                },
+                history: PlaybackHistory {
+                    type_: "movie".into(),
+                    title: "a".into(),
+                    ..Default::default()
+                },
+            };
+            bridge.begin_automatic_next(&context);
+            let old_ticket = {
+                let mut state = bridge.shared.lock().unwrap();
+                state.playback_end.session = Some(context.session.clone());
+                state.playback_end.automatic_attempted = true;
+                let automatic = state.playback_end.automatic.as_mut().unwrap();
+                assert_eq!(automatic.queue_target.as_ref().unwrap().series_id, "b");
+                automatic.pending = usize::from(lookup_pending);
+                if !lookup_pending {
+                    automatic.candidate = Some(row(
+                        "old-source",
+                        "B source",
+                        StreamSource::Url("https://fixture.invalid/b".into()),
+                    ));
+                    automatic.since = Some(Instant::now() - Duration::from_secs(2));
+                }
+                automatic.ticket.clone()
+            };
+            let owner = nova_sync::local_store().unwrap();
+            let raw = {
+                let mut store = owner.lock().unwrap();
+                store.set(
+                    &sync::profile_domain(watch_queue::ORDER),
+                    "order",
+                    Some(
+                        serde_json::json!({"keys":[key("a"),key("c"),key("b")],"autoplay":true})
+                            .to_string(),
+                    ),
+                    0,
+                    2,
+                );
+                watch_queue::snapshot(&store, &profiles::ProfileStore::capture()).unwrap()
+            };
+            {
+                let _guard = sync::ApplyingGuard::new();
+                sync::persist_sync_snapshot(watch_queue::KEY, &raw, false).unwrap();
+            }
+            bridge.shared.lock().unwrap().watch_queue.entries = None;
+            bridge.refresh_watch_queue();
+            assert!(bridge.refresh_automatic_next(&context, &app));
+            {
+                let state = bridge.shared.lock().unwrap();
+                let automatic = state.playback_end.automatic.as_ref().unwrap();
+                assert_eq!(automatic.queue_target.as_ref().unwrap().series_id, "c");
+                assert!(!Arc::ptr_eq(&old_ticket, &automatic.ticket));
+                assert!(
+                    automatic.candidate.is_none(),
+                    "B's candidate cannot start C"
+                );
+            }
+            bridge.cancel_queue_run();
+            assert!(!bridge.refresh_automatic_next(&context, &app));
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .playback_end
+                    .automatic
+                    .is_none()
+            );
+            assert!(!app.get_player_open());
+        }
+    }
 
     fn session(native: u64) -> Session {
         Session {
@@ -897,6 +1206,8 @@ mod tests {
             state.observe(Some(session(1)), true, true, now);
             state.automatic_attempted = true;
             state.automatic = Some(Automatic {
+                activation: profiles::capture(),
+                queue_target: None,
                 ticket: Arc::new(()),
                 next: Video::default(),
                 settings: 0,

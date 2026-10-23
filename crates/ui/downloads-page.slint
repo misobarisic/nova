@@ -1,4 +1,4 @@
-import { Theme, Anim, InterfaceStyle, NavState, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+import { Theme, Anim, OfflineBridge, InterfaceStyle, NavState, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
@@ -6,6 +6,7 @@ import { SideNav } from "sidenav.slint";
 import { LibraryFilterChip } from "filter-chip.slint";
 import { IcChevronDown } from "icons.slint";
 import { PageHeader } from "page-header.slint";
+import { SmartDownloads } from "smart-downloads.slint";
 
 
 
@@ -203,7 +204,7 @@ export component DownloadsPage inherits Rectangle {
             else if root.tv-nav == 4 { NavState.calendar_picked(); }
         } else if root.tv-zone == 0 { download_search.focus(); }
         else if root.tv-zone == 1 { root.filter_changed(root.tv-filter); }
-        else if root.tv-zone == 2 { root.sort_changed(!root.sort_recent); }
+        else if root.tv-zone == 2 { if root.smart-button-selected {OfflineBridge.open_requested();}else{root.sort_changed(!root.sort_recent);} }
         else if root.tv-zone == 3 {
             if root.tv-episode < 0 { root.group_toggled(root.groups[root.tv-group].id); }
             else { root.action(root.groups[root.tv-group].episodes[root.tv-episode].id, root.tv-action); }
@@ -235,6 +236,7 @@ export component DownloadsPage inherits Rectangle {
     changed scrolling_landscape => { groups-scroll.content-y = 0px; }
     private property <bool> two-columns: !InterfaceStyle.tv && root.available-width > 850px;
     private property <int> columns: root.two-columns ? 2 : 1;
+    private property <bool> smart-button-selected;
     private property <int> last-back;
     private property <[string]> filter-labels: [@tr("All"), @tr("Unwatched"), @tr("In progress"), @tr("Watched")];
     private property <length> selected_filter_left;
@@ -255,9 +257,16 @@ export component DownloadsPage inherits Rectangle {
     callback query_changed(string); callback filter_changed(int); callback sort_changed(bool);
     callback group_toggled(string); callback action(string,int); callback back();
     callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
-    changed system_back_request => { if (root.active && root.last-back != root.system_back_request) { root.last-back = root.system_back_request; if InterfaceStyle.tv && download_search.has-focus { page_scope.focus(); root.tv-zone = 0; } else { root.back(); } } }
+    changed system_back_request => { if (root.active && root.last-back != root.system_back_request) {
+        root.last-back = root.system_back_request;
+        if OfflineBridge.opened {OfflineBridge.closed();page_scope.focus();}
+        else if InterfaceStyle.tv && download_search.has-focus {page_scope.focus();root.tv-zone=0;}
+        else {root.back();}
+    } }
     page_scope := FocusScope { enabled: root.active; width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
         capture-key-pressed(e) => {
+            if OfflineBridge.opened {reject}
+            else
             if InterfaceStyle.tv && download_search.has-focus {
                 if e.text == Key.Back || e.text == Key.Escape || e.text == Key.DownArrow || e.text == Key.UpArrow {
                     page_scope.focus(); root.tv-zone = e.text == Key.DownArrow ? 1 : 0; accept
@@ -269,6 +278,7 @@ export component DownloadsPage inherits Rectangle {
                 root.kb_active = true; page_scope.focus();
                 let d = e.text == Key.RightArrow ? 1 : -1;
                 if root.tv-zone < 0 { if d > 0 { root.tv-zone = 0; } }
+                else if root.tv-zone == 2 {root.smart-button-selected=!root.smart-button-selected;}
                 else if root.tv-zone == 1 { root.tv-filter = Math.max(0, Math.min(3, root.tv-filter + d)); }
                 else if root.tv-zone >= 3 && root.tv-episode >= 0 { root.tv-action = Math.max(0, Math.min(((root.tv-zone == 4 && root.transfers[root.tv-episode].action_kind == 3) || (root.tv-zone == 3 && root.groups[root.tv-group].episodes[root.tv-episode].action_kind == 3)) ? 2 : 1, root.tv-action + d)); }
                 else if d < 0 { root.tv-zone = -1; }
@@ -301,7 +311,8 @@ export component DownloadsPage inherits Rectangle {
             }
             Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 19px : 12px; }
             controls_slot := Rectangle { height: download_controls.preferred-height; vertical-stretch: 0; }
-            DownloadButton { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2; reveal(y,h) => { root.tv-reveal(y,h); } label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+            DownloadButton {label:@tr("Smart downloads");tv-focused:InterfaceStyle.tv && root.kb_active && root.tv-zone==2 && root.smart-button-selected;picked=>{OfflineBridge.open_requested();}}
+            DownloadButton { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2 && !root.smart-button-selected; reveal(y,h) => { root.tv-reveal(y,h); } label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
             if root.groups.length == 0: Text { vertical-stretch: 0;
                 text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
                 color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
@@ -386,4 +397,5 @@ export component DownloadsPage inherits Rectangle {
         clicked => { }
         scroll-event(event) => { accept }
     }
+    SmartDownloads {x:root.content_x;y:0px;width:root.width - root.content_x;height:root.height;safe_left:root.safe-left;safe_right:root.safe-right;safe_top:root.safe-top;safe_bottom:root.safe-bottom;}
 }

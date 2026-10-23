@@ -22,7 +22,7 @@ use crate::store::Store;
 use crate::ticket::match_code;
 
 /// Pair only devices supporting typed library keys and membership grants.
-pub const ALPN: &[u8] = b"nova/pair/4";
+pub const ALPN: &[u8] = b"nova/pair/5";
 const PROTO: u8 = 4;
 /// How long an invite stays valid.
 pub const INVITE_TTL_SECS: u64 = 15 * 60;

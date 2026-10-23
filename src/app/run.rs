@@ -176,7 +176,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let profile_device = profiles::initialize().map_err(std::io::Error::other)?;
     persistence::register_collections();
     app.set_profiles_remember_last(profile_device.open_last_profile_on_startup);
-    if !profile_device.open_last_profile_on_startup {
+    let entry_locked_startup = profile_policy::initialize_entry_gate(
+        &profiles::ProfileStore::for_profile(&profile_device.active_profile),
+    );
+    if !profile_device.open_last_profile_on_startup || entry_locked_startup {
         app.set_profiles_require_selection(true);
         app.set_profiles_open(true);
         app.set_show_home(false);
@@ -186,13 +189,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     nova_providers::catalog_grouping::set_catalog_grouping_cache(Arc::new(
         io::CatalogGroupingCache,
     ));
-    if let Err(error) = nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
-        plugin_settings::Backend::new(),
-    )) {
-        io::block_unreadable(plugin_settings::KEY);
-        storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
-    } else {
-        plugin_cache::start_gc_worker();
+    if !entry_locked_startup {
+        if let Err(error) = nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
+            plugin_settings::Backend::new(),
+        )) {
+            io::block_unreadable(plugin_settings::KEY);
+            storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+        } else {
+            plugin_cache::start_gc_worker();
+        }
     }
     crate::web_log("nova: window created");
 
@@ -414,8 +419,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.wire_remote_playback();
     bridge.wire_party();
     bridge.wire_completion_prompts();
+    backup::install(&app);
     bridge.setup_viewing_journal();
     bridge.setup_watch_queue();
+    bridge.setup_smart_offline();
+    bridge.setup_release_reminders();
     bridge.setup_bookmarks();
     bridge.setup_sync_inspector();
     bridge.setup_smart_collections();
@@ -431,6 +439,59 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     crate::app::bridge::install_global_bridge(&bridge);
 
     // Handler wiring.
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_management_backgrounded(move || b.suspend_profile_management());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_search_titles(move || b.policy_search_titles());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_finish_title_search(move || b.policy_finish_title_search());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_allow_selected_title(move || b.policy_allow_selected_title());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_pin_input_edit(move |digit| {
+            if let Some(app) = b.app() {
+                let ui = app.global::<crate::MoreBridge>();
+                let mut value = ui.get_pin_input().to_string();
+                if digit == -1 {
+                    value.clear();
+                } else if digit == -2 {
+                    value.pop();
+                } else if (0..=9).contains(&digit) && value.len() < 8 {
+                    value.push(char::from(b'0' + digit as u8));
+                }
+                ui.set_pin_length(value.len() as i32);
+                ui.set_pin_input(value.into());
+            }
+        });
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_pin_submit(move |pin| b.submit_profile_pin(pin.as_str()));
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_pin_cancel(move || b.cancel_profile_pin());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>().on_policy_edit(move |id| {
+        if profiles::valid_id(id.as_str()) {
+            b.edit_profile_policy(id.as_str());
+        }
+    });
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_title_toggle(move |key| b.toggle_profile_policy_title(key.as_str()));
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_addon_toggle(move |owner| b.toggle_profile_policy_addon(owner.as_str()));
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_policy_save(move || b.save_profile_policy_editor());
+    let b = bridge.clone();
+    app.global::<crate::MoreBridge>()
+        .on_management_closed(move || b.close_profile_management());
     let b = bridge.clone();
     app.on_profile_create(move |name| b.create_profile(name.as_str()));
     let b = bridge.clone();
@@ -1064,10 +1125,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only
     // populated by a live fetch the first time an addon is installed.
-    addon_packages::initialize(&bridge);
-    let persisted = read_persisted_addons();
-    let mut extra = configured_addon_urls();
-    if !owns_addon_setup && persisted.is_empty() && extra.is_empty() {
+    if !entry_locked_startup {
+        addon_packages::initialize(&bridge);
+    }
+    let persisted = if entry_locked_startup {
+        Vec::new()
+    } else {
+        read_persisted_addons()
+    };
+    let mut extra = if entry_locked_startup {
+        Vec::new()
+    } else {
+        configured_addon_urls()
+    };
+    if !entry_locked_startup && !owns_addon_setup && persisted.is_empty() && extra.is_empty() {
         // First run with no configuration at all: seed with the default.
         extra.push(DEFAULT_ADDON.to_string());
     }
@@ -1088,66 +1159,68 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         app.set_sync_qr_scan_available(true);
     }
 
-    bridge.shared.lock().unwrap().loading_addons = true;
-    for addon in &persisted {
-        nova_providers::configure_provider_capabilities(
-            &addon.url,
-            addon.capabilities.unwrap_or_default(),
-        );
-        bridge.install_persisted(
-            &addon.url,
-            addon.enabled,
-            addon.configure_ok,
-            Some(addon.label.clone()),
-        );
-    }
-    for url in &extra {
-        bridge.install_persisted(url, true, None, None);
-    }
-    bridge.shared.lock().unwrap().loading_addons = false;
-    bridge.persist_installed();
-    addon_packages::reconcile(&bridge);
-
-    // Restore preferences before deriving Home models: applying Home with
-    // temporary defaults would prune the saved poster-rail catalog cache.
-    // These settings also control the first artwork decode/encode requests.
-    {
-        let mut state = bridge.shared.lock().unwrap();
-        state.cache_settings = read_settings();
-        state.download_settings = read_download_settings();
-        set_active_cache_settings(state.cache_settings.clone());
-    }
-    bridge.settings_to_ui();
-
-    // Library: restore saved items and render them in the Library page.
-    {
-        let mut state = bridge.shared.lock().unwrap();
-        state.entries = read_persisted_library();
-        // Episode playback history (watched + resume positions).
-        state.progress = read_progress_map();
-        // Continue Watching removals (local mirror of the synced domain).
-        state.continue_hidden = read_continue_hidden();
-        // Backfill the sync-era library order for pre-sync saves (their saved
-        // order becomes the `added_at_secs` order).
-        if backfill_added_at(&mut state.entries) {
-            let entries = state.entries.clone();
-            drop(state);
-            write_persisted_library(&entries);
+    if !entry_locked_startup {
+        bridge.shared.lock().unwrap().loading_addons = true;
+        for addon in &persisted {
+            nova_providers::configure_provider_capabilities(
+                &addon.url,
+                addon.capabilities.unwrap_or_default(),
+            );
+            bridge.install_persisted(
+                &addon.url,
+                addon.enabled,
+                addon.configure_ok,
+                Some(addon.label.clone()),
+            );
         }
+        for url in &extra {
+            bridge.install_persisted(url, true, None, None);
+        }
+        bridge.shared.lock().unwrap().loading_addons = false;
+        bridge.persist_installed();
+        addon_packages::reconcile(&bridge);
+
+        // Restore preferences before deriving Home models: applying Home with
+        // temporary defaults would prune the saved poster-rail catalog cache.
+        // These settings also control the first artwork decode/encode requests.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings = read_settings();
+            state.download_settings = read_download_settings();
+            set_active_cache_settings(state.cache_settings.clone());
+        }
+        bridge.settings_to_ui();
+
+        // Library: restore saved items and render them in the Library page.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = read_persisted_library();
+            // Episode playback history (watched + resume positions).
+            state.progress = read_progress_map();
+            // Continue Watching removals (local mirror of the synced domain).
+            state.continue_hidden = read_continue_hidden();
+            // Backfill the sync-era library order for pre-sync saves (their saved
+            // order becomes the `added_at_secs` order).
+            if backfill_added_at(&mut state.entries) {
+                let entries = state.entries.clone();
+                drop(state);
+                write_persisted_library(&entries);
+            }
+        }
+        bridge.migrate_viewing_activity();
+        // Only unapplied records need replay; snapshots already materialized
+        // by previous launches/local writes are authoritative and cheap to load.
+        bridge.restore_playback_preferences_schema();
+        bridge.restore_last_stream_choice();
+        if let Err(error) = plugin_settings::restore_retained_settings() {
+            storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+        }
+        bridge.seed_playback_default_settings();
+        bridge.sync_seed();
+        bridge.restore_sync_projection();
+        bridge.sync_reconcile_progress_aliases();
+        bridge.settings_to_ui();
     }
-    bridge.migrate_viewing_activity();
-    // Only unapplied records need replay; snapshots already materialized
-    // by previous launches/local writes are authoritative and cheap to load.
-    bridge.restore_playback_preferences_schema();
-    bridge.restore_last_stream_choice();
-    if let Err(error) = plugin_settings::restore_retained_settings() {
-        storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
-    }
-    bridge.seed_playback_default_settings();
-    bridge.sync_seed();
-    bridge.restore_sync_projection();
-    bridge.sync_reconcile_progress_aliases();
-    bridge.settings_to_ui();
     let image_gc_worker = cache_gc::start(&bridge);
     let persistence_worker = persistence::start();
     if !app.get_profiles_require_selection() {
@@ -1159,25 +1232,36 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         bridge.retry_profile_services();
     }
     bridge.shared.lock().unwrap().restoring_models = false;
-    bridge
-        .profile_loaded_epoch
-        .store(profiles::active_context().epoch, Ordering::Release);
+    if !entry_locked_startup {
+        bridge
+            .profile_loaded_epoch
+            .store(profiles::active_context().epoch, Ordering::Release);
+    }
     bridge.refresh_profiles();
-    bridge.apply_library_to_ui();
-    // Home landing page: derive Continue Watching, New episodes and Upcoming
-    // from viewing activity, playback history and cached episode air dates.
-    bridge.rebuild_continue_list();
-    bridge.rebuild_upcoming_list();
-    bridge.apply_home_to_ui();
-    bridge.dispatch_continue_posters();
-    bridge.dispatch_upcoming_posters();
-    bridge.dispatch_home_catalog_posters();
-    // Restore selected featured catalogs from local storage before the first
-    // frame, then refresh in the background. Pending manifests do not block
-    // cached titles; their completion retries the corresponding live fetch.
-    bridge.refresh_home_showcase();
-    bridge.refresh_home_catalog_rows();
-
+    if profile_device.open_last_profile_on_startup
+        && profile_policy::load(&profiles::ProfileStore::for_profile(
+            &profile_device.active_profile,
+        ))
+        .is_ok_and(|p| p.require_pin_on_entry)
+    {
+        bridge.switch_profile(&profile_device.active_profile);
+    }
+    if !entry_locked_startup {
+        bridge.apply_library_to_ui();
+        // Home landing page: derive Continue Watching, New episodes and Upcoming
+        // from viewing activity, playback history and cached episode air dates.
+        bridge.rebuild_continue_list();
+        bridge.rebuild_upcoming_list();
+        bridge.apply_home_to_ui();
+        bridge.dispatch_continue_posters();
+        bridge.dispatch_upcoming_posters();
+        bridge.dispatch_home_catalog_posters();
+        // Restore selected featured catalogs from local storage before the first
+        // frame, then refresh in the background. Pending manifests do not block
+        // cached titles; their completion retries the corresponding live fetch.
+        bridge.refresh_home_showcase();
+        bridge.refresh_home_catalog_rows();
+    }
     // Torrent settings: restore + mirror into the runtime cache read by the
     // engine and the player-close cleanup path.
     {
@@ -1269,6 +1353,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let b = bridge.clone();
     app.on_playback_end_stay(move || b.playback_end_stay());
+    let b = bridge.clone();
+    app.global::<crate::PlayerOsdBridge>()
+        .on_sleep_timer_changed(move |mode, value| b.sleep_timer_ui(mode, value));
     let b = bridge.clone();
     app.on_playback_end_next(move || b.playback_end_next());
     let b = bridge.clone();
@@ -1525,6 +1612,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_millis(250),
         move || {
             tick_bridge.retry_profile_services();
+            #[cfg(target_os = "android")]
+            release_reminders_android::poll_tap(&tick_bridge);
             if let Some(app) = tick_bridge.app() {
                 #[cfg(feature = "desktop")]
                 tick_window.tick(&app, &tick_player);
@@ -1541,8 +1630,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if episode_inventory_check.elapsed() >= Duration::from_secs(60) {
                 episode_inventory_check = std::time::Instant::now();
                 tick_bridge.refresh_saved_episode_metadata();
+                tick_bridge.reconcile_release_reminders();
             }
             let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());
+            tick_bridge.refresh_sleep_timer();
             tick_player.tick();
             tick_bridge.poll_addon_subtitles();
             if was_open
@@ -1566,6 +1657,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.refresh_intro_skip();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();
+            tick_bridge.smart_offline_tick();
             if tick_bridge
                 .app()
                 .is_some_and(|app| app.get_show_downloads())

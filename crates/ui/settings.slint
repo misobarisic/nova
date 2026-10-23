@@ -1,4 +1,5 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
+import { BackupBridge } from "@NovaUiShared";
 import { InterfaceStyle, SmartCollectionsBridge, CatalogGroupingBridge, StreamFiltersBridge, SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
 import { SmartCollectionsEditor } from "smart-collections.slint";
 import { SettingSyncModal } from "settings-sync-modal.slint";
@@ -588,7 +589,7 @@ export component SettingsPage {
         if (id == 4) { return root.show_torrents; }
         if (id == 5) { return true; }
         if (id == 7) { return true; }
-        if (id == 8 || id == 9 || id == 12 || id == 13 || id == 14) { return true; }
+        if (id == 8 || id == 9 || id == 12 || id == 13 || id == 14 || id == 15) { return true; }
         return (id >= 0 && id <= 3) || id == 6;
     }
 
@@ -606,6 +607,7 @@ export component SettingsPage {
         if (id == 8) { return 10; }
         if (id == 9) { return 11; }
         if (id == 4) { return 12; }
+        if (id == 15) { return 13; }
         return 0;
     }
     function land_title(id: int) -> string { return SettingsDestinations.entries[root.destination_index(id)].title; }
@@ -617,7 +619,7 @@ export component SettingsPage {
     function group_available(group: int) -> bool {
         if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(14) || root.land_avail(6) || root.land_avail(5); }
         if (group == 1) { return root.land_avail(0) || root.land_avail(1) || root.land_avail(7) || root.land_avail(12); }
-        if (group == 2) { return root.land_avail(2) || root.land_avail(8) || root.land_avail(9) || root.land_avail(4); }
+        if (group == 2) { return root.land_avail(2) || root.land_avail(8) || root.land_avail(9) || root.land_avail(4) || root.land_avail(15); }
         return false;
     }
     function land_first() -> int {
@@ -634,6 +636,7 @@ export component SettingsPage {
         if (root.land_avail(8)) { return 8; }
         if (root.land_avail(9)) { return 9; }
         if (root.land_avail(4)) { return 4; }
+        if (root.land_avail(15)) { return 15; }
         return 13;
     }
     function land_next(id: int) -> int {
@@ -650,6 +653,7 @@ export component SettingsPage {
         if (root.destination_index(id) < root.destination_index(8) && root.land_avail(8)) { return 8; }
         if (root.destination_index(id) < root.destination_index(9) && root.land_avail(9)) { return 9; }
         if (root.destination_index(id) < root.destination_index(4) && root.land_avail(4)) { return 4; }
+        if (root.destination_index(id) < root.destination_index(15) && root.land_avail(15)) { return 15; }
         return id;
     }
     function land_prev(id: int) -> int {
@@ -688,6 +692,7 @@ export component SettingsPage {
     }
 
     public function open_page(id: int) {
+        if id == 15 { BackupBridge.opened(); return; }
         if (root.sel >= 0) { root.page_scrolls[root.sel] = root.scroll_y; }
         // The nested downloaded-episodes list gets an entrance transition:
         // arm the from-state before `sel` builds the block, then reveal on the

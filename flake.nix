@@ -73,6 +73,7 @@
           ./android/cargo-apk2-uncompressed-libs.patch
           ./android/cargo-apk2-version-code.patch
           ./android/cargo-apk2-pip.patch
+          ./android/cargo-apk2-receivers.patch
         ];
         cargoLock.lockFile = ./android/cargo-apk2-Cargo.lock;
         postPatch = ''

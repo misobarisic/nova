@@ -1,7 +1,37 @@
+import { RemoteBridge } from "remote-bridge.slint";
 import { TrackRow, ChapterRow, SceneBookmarkRow } from "../ui/types.slint";
 
 // Shared canonical data handles; this global owns no visual tree.
 export global PlayerOsdBridge {
+    in-out property <string> sleep_timer_label;
+    in-out property <string> sleep_timer_notice;
+    in-out property <bool> sleep_timer_available;
+    in-out property <bool> sleep_timer_episodes_available;
+    in-out property <bool> sleep_timer_end_available;
+    in-out property <bool> sleep_timer_active;
+    in-out property <bool> sleep_timer_duration;
+    in-out property <int> sleep_custom_minutes: 30;
+    in-out property <int> sleep_custom_episodes: 1;
+    callback sleep_timer_changed(int, int);
+    public function sleep_timer_pick(i: int, remote: bool) {
+        if i < 0 || i > 14 { return; }
+        if remote && !RemoteBridge.sleep_timer_available { return; }
+        if !remote && !self.sleep_timer_available { return; }
+        if i == 9 && !remote && !self.sleep_timer_end_available { return; }
+        if i >= 10 && i <= 12 && !(remote ? RemoteBridge.sleep_timer_episodes_available : self.sleep_timer_episodes_available) { return; }
+        if i == 13 && !(remote ? RemoteBridge.sleep_timer_duration : self.sleep_timer_duration) { return; }
+        if i == 6 { self.sleep_custom_minutes = Math.max(1, self.sleep_custom_minutes - 1); }
+        else if i == 7 { self.sleep_custom_minutes = Math.min(240, self.sleep_custom_minutes + 1); }
+        else if i == 10 { self.sleep_custom_episodes = Math.max(1, self.sleep_custom_episodes - 1); }
+        else if i == 11 { self.sleep_custom_episodes = Math.min(10, self.sleep_custom_episodes + 1); }
+        else {
+            let mode = i == 0 || i == 14 ? 0 : i == 9 ? 2 : i == 12 ? 3 : i == 13 ? 4 : 1;
+            let value = i == 1 ? 15 : i == 2 ? 30 : i == 3 ? 45 : i == 4 ? 60 : i == 5 ? 90 : i == 12 ? self.sleep_custom_episodes : self.sleep_custom_minutes;
+            if remote { RemoteBridge.semantic_action(mode == 0 ? "sleep_cancel" : mode == 1 ? "sleep_minutes" : mode == 2 ? "sleep_end" : mode == 3 ? "sleep_episodes" : "sleep_extend", value, "", "", RemoteBridge.session); }
+            else { self.sleep_timer_changed(mode, value); }
+        }
+    }
+
     in-out property <[TrackRow]> secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label;
     in-out property <int> secondary_subtitle_position_index;

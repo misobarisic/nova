@@ -15,6 +15,18 @@ export global QueueBridge {
     in-out property <string> summary;
     in-out property <string> notice;
     in-out property <bool> detail_queued;
+    in-out property <bool> autoplay;
+    in-out property <bool> run_active;
+    in-out property <string> current_key;
+    in-out property <string> phase;
+    in-out property <string> sync_status;
+    in-out property <string> focused_key;
+    in-out property <int> focused_index;
+    callback continue_queue();
+    callback start_from(string);
+    callback skip();
+    callback stop_queue();
+    callback set_autoplay(bool);
     callback opened();
     callback add_detail();
     callback add_episode(int);

@@ -35,9 +35,21 @@ pub(super) struct State {
     last_seek: Option<(Instant, f64)>,
     resume_guard: bool,
     setup_restore: Option<(u64, bool)>,
+    source_choice: Option<SourceChoice>,
+}
+
+#[derive(Clone)]
+struct SourceChoice {
+    activation: u64,
+    generation: u64,
+    media: nova_playback_api::MediaIdentity,
+    fingerprint: nova_party::SourceFingerprint,
 }
 
 impl State {
+    pub(super) fn snapshot_for_sources(&self) -> Option<RoomSnapshot> {
+        self.snapshot.clone()
+    }
     pub(super) fn active(&self) -> bool {
         self.service.is_some() || self.busy
     }
@@ -125,6 +137,119 @@ impl Bridge {
         })
     }
 
+    pub(super) fn party_remember_source(&self, stream: &StreamUi) {
+        let fingerprint = party_source::fingerprint(&stream.source);
+        let mut state = self.shared.lock().unwrap();
+        let media = state
+            .modal_item
+            .as_ref()
+            .map(|m| nova_playback_api::MediaIdentity {
+                media_type: m.type_.clone(),
+                title_id: m.id.clone(),
+                episode_id: m.request_id.clone(),
+                ..Default::default()
+            });
+        let party = &mut state.party;
+        party.source_choice = if party.active() {
+            media
+                .zip(fingerprint)
+                .map(|(media, fingerprint)| SourceChoice {
+                    activation: party.generation,
+                    generation: party.snapshot.as_ref().map_or(0, |r| r.generation),
+                    media,
+                    fingerprint,
+                })
+        } else {
+            None
+        };
+    }
+
+    fn party_chosen_source(
+        &self,
+        room: Option<&RoomSnapshot>,
+        local: Option<&PartyMedia>,
+    ) -> Option<nova_party::SourceFingerprint> {
+        let current = self.current_playback_identity();
+        let mut state = self.shared.lock().unwrap();
+        let party = &mut state.party;
+        let choice = party.source_choice.as_ref()?;
+        if choice.activation != party.generation
+            || !current
+                .as_ref()
+                .is_some_and(|media| party_source::same_media(media, &choice.media))
+        {
+            party.source_choice = None;
+            return None;
+        }
+        if let Some(room) = room {
+            if !room.connected
+                || room.ended
+                || choice.generation != room.generation
+                || !room
+                    .media
+                    .as_ref()
+                    .zip(local)
+                    .is_some_and(|(expected, local)| {
+                        party_source::same_media(&expected.identity, &local.identity)
+                    })
+            {
+                party.source_choice = None;
+                return None;
+            }
+        } else if !party.choosing_media {
+            return None;
+        }
+        Some(choice.fingerprint)
+    }
+
+    pub(super) fn refresh_party_stream_recommendations(&self) {
+        let Some(app) = self.app() else { return };
+        let owner = profiles::ProfileStore::capture();
+        let (room, media, rows, title_allowed) = {
+            let state = self.shared.lock().unwrap();
+            let media = state.modal_item.as_ref().map(|m| {
+                party_source::canonical_media(
+                    nova_playback_api::MediaIdentity {
+                        media_type: m.type_.clone(),
+                        title_id: m.id.clone(),
+                        episode_id: m.request_id.clone(),
+                        ..Default::default()
+                    },
+                    &m.videos,
+                )
+            });
+            let title_allowed = state
+                .modal_item
+                .as_ref()
+                .is_some_and(|m| profile_policy::allows_title(&owner, &m.type_, &m.id));
+            (
+                state.party.snapshot.clone(),
+                media,
+                state.streams.clone(),
+                title_allowed,
+            )
+        };
+        let model = app.get_streams();
+        for (index, source) in rows.iter().enumerate() {
+            let Some(mut row) = model.row_data(index).filter(|row| row.id == source.id) else {
+                continue;
+            };
+            let source_allowed = source.download.as_ref().map_or_else(
+                || profile_policy::allows_addon(&owner, &source.owner_url),
+                |job| smart_offline::allows_download(&owner, job),
+            );
+            let value = title_allowed
+                && source_allowed
+                && media.as_ref().is_some_and(|media| {
+                    party_source::recommended(room.as_ref(), media, &source.source)
+                });
+            if row.party_recommended != value {
+                row.party_recommended = value;
+                model.set_row_data(index, row);
+            }
+        }
+    }
+
     pub(super) fn wire_party(&self) {
         let Some(app) = self.app() else { return };
         let b = self.clone();
@@ -182,22 +307,7 @@ impl Bridge {
         let (season, episode) = video
             .map(|v| (v.season, v.episode.or(v.number)))
             .unwrap_or_default();
-        if let Some(video) = video {
-            // These aliases have already passed the metadata broker's proof.
-            if let Some(id) = confirmed_episode_stream_ids(video)
-                .into_iter()
-                .find(|id| id.starts_with("tt"))
-            {
-                let pieces = id.rsplitn(3, ':').collect::<Vec<_>>();
-                if pieces.len() == 3
-                    && pieces[0].parse::<u32>().ok() == episode
-                    && pieces[1].parse::<u32>().ok() == season
-                {
-                    identity.title_id = pieces[2].into();
-                    identity.episode_id = id;
-                }
-            }
-        }
+        identity = party_source::canonical_media(identity, &videos);
         Some(PartyMedia {
             identity,
             season,
@@ -237,6 +347,7 @@ impl Bridge {
             })
             .flatten();
         LocalReport {
+            source_fingerprint: self.party_chosen_source(room, local.as_ref()),
             generation: room.map_or(0, |room| room.generation),
             media,
             loaded,
@@ -392,6 +503,7 @@ impl Bridge {
         };
         self.player.set_party_playback_rate(None);
         self.party_restore_setup(restore);
+        self.refresh_party_stream_recommendations();
         if let Some(app) = self.app() {
             app.set_party_active(false);
             app.set_party_has_media(false);
@@ -463,6 +575,7 @@ impl Bridge {
                 return;
             }
             party.choosing_media = true;
+            party.source_choice = None;
             party.selection_epoch = self.player.screenshot_session();
             party.choosing_source = false;
             // Retire controls and reports for the old title before returning
@@ -800,6 +913,7 @@ impl Bridge {
             };
             let snapshot = service.snapshot();
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
+                let current_media = b.current_playback_identity();
                 let reopen_room;
                 {
                     let mut state = b.shared.lock().unwrap();
@@ -817,12 +931,32 @@ impl Bridge {
                     if selecting_media || (media_change && result.is_err()) {
                         p.choosing_media = false;
                     }
-                    if snapshot.is_some() {
-                        let changed = p.snapshot.as_ref().map(|r| r.generation)
-                            != snapshot.as_ref().map(|r| r.generation);
+                    if let Some(room) = snapshot.as_ref() {
+                        let changed =
+                            p.snapshot.as_ref().map(|r| r.generation) != Some(room.generation);
                         if changed {
                             p.last_seek = None;
                             p.choosing_source = false;
+                            // The host's explicit SelectMedia operation binds
+                            // its chosen local asset to the new generation.
+                            // Every other generation change retires the pick.
+                            if selecting_media
+                                && result.is_ok()
+                                && p.source_choice.as_ref().is_some_and(|choice| {
+                                    current_media.as_ref().is_some_and(|media| {
+                                        party_source::same_media(&choice.media, media)
+                                    })
+                                })
+                            {
+                                if let Some(choice) = p.source_choice.as_mut() {
+                                    choice.generation = room.generation;
+                                }
+                            } else {
+                                p.source_choice = None;
+                            }
+                        }
+                        if !room.connected || room.ended {
+                            p.source_choice = None;
                         }
                         p.snapshot = snapshot;
                     }
@@ -863,6 +997,7 @@ impl Bridge {
     }
 
     fn party_publish(&self) {
+        self.refresh_party_stream_recommendations();
         let Some(app) = self.app() else { return };
         let room = self.shared.lock().unwrap().party.snapshot.clone();
         let Some(room) = room else { return };

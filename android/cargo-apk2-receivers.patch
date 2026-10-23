@@ -1,0 +1,14 @@
+diff --git a/ndk-build2/src/manifest.rs b/ndk-build2/src/manifest.rs
+--- a/ndk-build2/src/manifest.rs
++++ b/ndk-build2/src/manifest.rs
+@@ -177,4 +177,10 @@ pub struct Application {
+     #[serde(rename = "service")]
+     #[serde(default)]
+     pub services: Vec<Service>,
++    // Receivers share the service component's common name/exported/permission
++    // and intent-filter fields; service-only optional fields stay absent.
++    // This permits notification delete intents to acknowledge durable state
++    // even when no Activity or JobService is alive.
++    #[serde(rename = "receiver", default)]
++    pub receivers: Vec<Service>,
+ }

@@ -5,6 +5,16 @@ export struct RemoteBookmarkRow { id: string, note: string, time: string }
 
 // Receiver snapshots only; this bridge never holds a video surface or source URL.
 export global RemoteBridge {
+    in-out property <bool> can_queue;
+    in-out property <bool> queue_active;
+    in-out property <int> queue_countdown;
+    in-out property <string> queue_phase;
+    in-out property <string> sleep_timer_label;
+    in-out property <bool> sleep_timer_available;
+    in-out property <bool> sleep_timer_episodes_available;
+    in-out property <bool> sleep_timer_active;
+    in-out property <bool> sleep_timer_duration;
+
     // UI-owned picker captures the session so a stale row cannot change a replacement.
     in-out property <int> track_picker;
     in-out property <string> track_picker_session;

@@ -17,6 +17,7 @@ export component SearchField inherits Rectangle {
     in property <string> placeholder-text: "";
     in property <bool> enabled: true;
     in property <InputType> input-type: InputType.text;
+    in property <length> text-size: root.prominent ? 16px : 13px;
     in property <bool> show-pointer-focus: true;
     in property <bool> keyboard-mode: false;
     // Touch-sized box (44px) on narrow layouts, compact (32px) otherwise.
@@ -112,7 +113,7 @@ export component SearchField inherits Rectangle {
             text <=> root.text;
             input-type: root.input-type;
             enabled: root.enabled;
-            font-size: root.prominent ? 16px : 13px;
+            font-size: root.text-size;
             color: Theme.current.text_primary;
             // Dimmed selection wash instead of the bright stock accent.
             selection-background-color: Theme.current.input_selection;
@@ -152,7 +153,7 @@ export component SearchField inherits Rectangle {
         height: parent.height;
         text: root.placeholder-text;
         color: Theme.current.text_hint;
-        font-size: root.prominent ? 16px : 13px;
+        font-size: root.text-size;
         vertical-alignment: center;
         overflow: elide;
     }

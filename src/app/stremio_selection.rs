@@ -272,6 +272,9 @@ impl Bridge {
         })
     }
     pub(in crate::app) fn stremio_mode(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mode = match index {
             0 => SyncMode::FullLibrary,
             1 => SyncMode::SelectedTitles,
@@ -281,6 +284,9 @@ impl Bridge {
         self.stremio().send(Command::Mode(mode, generation));
     }
     pub(in crate::app) fn stremio_title_search(&self, query: String) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(context) = self.stremio_title_context() else {
             return;
         };
@@ -298,19 +304,31 @@ impl Bridge {
         ));
     }
     pub(in crate::app) fn stremio_title_pick(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Ok(index) = usize::try_from(index) {
             self.stremio_title_request(|g| Request::Pick(index, g));
         }
     }
     pub(in crate::app) fn stremio_title_assign(&self, row: i32, target: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let (Ok(row), Ok(target)) = (usize::try_from(row), usize::try_from(target)) {
             self.stremio_title_request(|g| Request::Assign(row, target, g));
         }
     }
     pub(in crate::app) fn stremio_title_confirm(&self, history: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.stremio_title_request(|g| Request::Confirm(history, g));
     }
     pub(in crate::app) fn stremio_title_unlink(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(context) = self.stremio_title_context() {
             self.stremio_title_request(|g| Request::Unlink(context, g));
         }

@@ -24,9 +24,9 @@ pub use nova_ui_shared::{
     JournalMonthRow, JournalSessionRow, JournalTitleRow, LicenseSource, MediaCard, PartyMemberRow,
     PluginSettingRow, ProfileRow, RemoteBookmarkRow, RemoteChapterRow, RemoteDeviceRow,
     RemoteOfferRow, SceneBookmarkRow, SeasonCard, SettingSyncInfo, SheetItem, SmartCollectionRow,
-    StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow,
-    TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow,
-    WatchQueueRow,
+    SmartOfflineRow, StreamRow, SyncInspectorRow, SyncInvite, SyncPeer, ThemePalette, TrackRow,
+    TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow,
+    TrackingSetupRow, UpcomingRow, WatchQueueRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

@@ -582,6 +582,21 @@ pub fn prepare_plugin_settings(
 
 /// Publish only after the app has prepared its incoming profile successfully.
 pub fn activate_plugin_settings(prepared: PreparedPluginSettings) {
+    *active_service().lock().unwrap() = retain_prepared_settings(prepared, true);
+}
+
+/// Retain durable background authority without changing the selected profile.
+pub fn owned_settings_capability(prepared: PreparedPluginSettings) -> SettingsCapability {
+    let owner = retain_prepared_settings(prepared, false);
+    let revision = owner.lock().unwrap().revision;
+    SettingsCapability {
+        owner,
+        revision,
+        provider: None,
+    }
+}
+
+fn retain_prepared_settings(prepared: PreparedPluginSettings, activate: bool) -> ServiceOwner {
     let PreparedPluginSettings {
         owner_id,
         observed_owner,
@@ -609,7 +624,9 @@ pub fn activate_plugin_settings(prepared: PreparedPluginSettings) {
         } else {
             current.backend = state.backend;
         }
-        current.generation = next_generation();
+        if activate {
+            current.generation = next_generation();
+        }
         drop(current);
         existing
     } else {
@@ -620,7 +637,7 @@ pub fn activate_plugin_settings(prepared: PreparedPluginSettings) {
         registry.insert(id, Arc::downgrade(&owner));
     }
     drop(registry);
-    *active_service().lock().unwrap() = owner;
+    owner
 }
 pub fn configure_plugin_settings(
     backend: Arc<dyn PluginSettingsBackend>,
@@ -1200,6 +1217,23 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn background_preparation_preserves_retained_owner_activation_generation() {
+        let backend = Arc::new(Memory {
+            owner: Some("background-generation-fixture".into()),
+            ..Default::default()
+        });
+        let first = owned_settings_capability(prepare_plugin_settings(backend.clone()).unwrap());
+        let generation = first.owner.lock().unwrap().generation;
+        let revision = first.revision;
+        let second = owned_settings_capability(prepare_plugin_settings(backend).unwrap());
+        assert!(Arc::ptr_eq(&first.owner, &second.owner));
+        assert_eq!(second.owner.lock().unwrap().generation, generation);
+        assert_eq!(second.revision, revision);
+        assert!(first.is_current());
+        assert!(second.is_current());
+    }
+
     #[test]
     fn settings_cache_roundtrip_bounds_defaults_and_failed_writes() {
         let backend = Arc::new(Memory::default());

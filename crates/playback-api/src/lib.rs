@@ -21,6 +21,12 @@ pub struct MediaIdentity {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PlaybackAction {
+    SetSleepTimer(SleepTimerMode),
+    ExtendSleepTimer,
+    CancelSleepTimer,
+    QueueSkip,
+    QueueStop,
+    QueuePlayNow,
     TogglePause,
     SetPaused(bool),
     SeekRelative(f64),
@@ -106,6 +112,8 @@ impl PlaybackAction {
         };
         let range = |value: f64, low, high| value.is_finite() && (low..=high).contains(&value);
         match self {
+            Self::SetSleepTimer(SleepTimerMode::Minutes(n)) => (1..=240).contains(n),
+            Self::SetSleepTimer(SleepTimerMode::Episodes(n)) => (1..=10).contains(n),
             Self::SeekRelative(value) => range(*value, -86400.0, 86400.0),
             Self::SeekAbsolute(value) => range(*value, 0.0, 365.0 * 86400.0),
             Self::SetVolume(value) => range(*value, 0.0, 100.0),
@@ -151,6 +159,16 @@ impl PlaybackAction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Request {
     Snapshot,
+    QueueStart {
+        profile_id: String,
+        item_key: Option<String>,
+        expected_session: Option<SessionId>,
+    },
+    QueueStop {
+        profile_id: String,
+        run_id: u64,
+        expected_session: Option<SessionId>,
+    },
     Lookup(MediaIdentity),
     CurrentOffers {
         session: SessionId,
@@ -171,6 +189,26 @@ impl Request {
     /// Semantic bounds are checked before a request can enter the replay cache.
     pub fn valid_payload(&self) -> bool {
         match self {
+            Self::QueueStop {
+                profile_id, run_id, ..
+            } => {
+                *run_id > 0
+                    && !profile_id.is_empty()
+                    && profile_id.len() <= 1024
+                    && !profile_id.chars().any(char::is_control)
+            }
+            Self::QueueStart {
+                profile_id,
+                item_key,
+                ..
+            } => {
+                !profile_id.is_empty()
+                    && profile_id.len() <= 1024
+                    && !profile_id.chars().any(char::is_control)
+                    && item_key.as_ref().is_none_or(|key| {
+                        !key.is_empty() && key.len() <= 4096 && !key.chars().any(char::is_control)
+                    })
+            }
             Self::Command { action, .. } => action.valid_payload(),
             Self::Start { offer_id, .. } => {
                 !offer_id.is_empty() && offer_id.len() <= MAX_REMOTE_ID_BYTES
@@ -231,6 +269,9 @@ pub enum PlaybackPhase {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackCapabilities {
+    pub sleep_timer: bool,
+    pub sleep_timer_episodes: bool,
+    pub queue: bool,
     pub pause: bool,
     pub seek: bool,
     pub volume: bool,
@@ -281,9 +322,34 @@ pub const MAX_REMOTE_LABEL_BYTES: usize = 192;
 pub const MAX_REMOTE_NOTE_BYTES: usize = 1120;
 pub const MAX_REMOTE_ID_BYTES: usize = 64;
 
+/// Receiver owns the deadline; controllers display only these samples.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SleepTimerMode {
+    Minutes(u16),
+    EndOfItem,
+    Episodes(u8),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SleepTimerStatus {
+    pub mode: SleepTimerMode,
+    pub remaining_seconds: u32,
+    pub remaining_episodes: u8,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueStatus {
+    pub profile_id: String,
+    pub run_id: u64,
+    pub item_key: String,
+    pub phase: String,
+    pub countdown: u32,
+    pub autoplay: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSnapshot {
     /// Headless sync jobs and apps without a registered UI adapter are unavailable.
+    pub sleep_timer: Option<SleepTimerStatus>,
+    pub queue: Option<QueueStatus>,
     pub ready: bool,
     pub role: PlaybackRole,
     pub session: Option<SessionId>,
@@ -341,7 +407,16 @@ impl PlaybackSnapshot {
                     .all(|r| id(&r.token) && label(&r.label, MAX_REMOTE_LABEL_BYTES))
         };
         let time = |value: f64| value.is_finite() && (0.0..=365.0 * 86400.0).contains(&value);
-        label(&self.title, 512)
+        self.sleep_timer.as_ref().is_none_or(|timer| {
+            timer.remaining_seconds <= 240 * 60
+                && timer.remaining_episodes <= 10
+                && PlaybackAction::SetSleepTimer(timer.mode.clone()).valid_payload()
+        }) && self.queue.as_ref().is_none_or(|queue| {
+            label(&queue.profile_id, 1024)
+                && label(&queue.item_key, 4096)
+                && label(&queue.phase, 64)
+                && queue.countdown <= 60
+        }) && label(&self.title, 512)
             && label(&self.episode, 512)
             && time(self.time)
             && time(self.duration)

@@ -158,6 +158,9 @@ impl Bridge {
     }
 
     pub(super) fn set_setting_override(&self, field: &str, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         if !sync::setting_can_override(field) || !writable_key("settings") {
             return;
         }

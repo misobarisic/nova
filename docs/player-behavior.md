@@ -550,6 +550,71 @@ the AppWindow `next_episode_*` properties/callbacks.
 Regression coverage lives beside the policy in `src/app/next_episode.rs` and
 in `tests/shared_layout/next_episode_banner.rs` for headless layout, navigation and input.
 
+## Synced watch queue and continuous playback
+
+The Watch queue is personal profile data. Movies and exact typed episode
+identities are separate membership records; order and the continuation cursor
+are independent last-writer-wins registers. A losing reorder cannot delete
+another device's addition, and removed rows cannot return through an old order.
+The v1 queue migrates once to `watch_queue:v2` together with its sync records and
+baselines; its original bytes remain available. Concurrent additions can exceed
+the ordinary 200-item admission limit without being discarded.
+
+**Play** still opens one item's ordinary source picker. **Continue queue** and
+**Start from this item** create explicit receiver-local runs. Continue skips
+watched rows, except an unfinished intentional rewatch, and never wraps a
+finished cursor to the beginning. Completed rows stay until Remove or Clear
+watched. A source picker alone does not consume an item. Accepted native starts,
+explicit Skip and true EOF update the shared cursor; playback position remains
+in ordinary progress. Receiving a cursor or autoplay preference never starts or
+retargets a player.
+
+Autoplay is off by default. A run captures the choice made at its explicit start.
+At EOF its next surviving row takes precedence over sequential-series autoplay.
+The existing bounded discovery, release-family preference, playable ranking and
+eight-second source preview are shared. Matching completed downloads participate
+only while the file exists and its full typed identity and profile policy agree.
+Different titles use their own saved preference. Future or dateless episodes,
+missing sources, timeouts and failed sources pause on the pending item and open
+the normal source picker; Retry, Skip and Stop remain available. With autoplay
+off, the EOF menu offers **Next queued item** and opens that planned item's source
+picker rather than substituting a sequential episode. Cancelling the
+preview pauses the run. Manual Skip does not mark the item watched. Reordering
+affects the next transition; removing the playing row preserves its successor
+context rather than abruptly changing the active media.
+
+For paired Nova playback, Continue queue on the remote controls sends a
+session-bound request containing the selected profile and optional item key.
+The receiver requires the same selected, unlocked profile and its own synced
+item, then resolves and plays its own source. It owns every advance and exposes
+run/countdown state plus Skip, Stop queue and Play now. Controller disconnection
+does not stop the run. Stale sessions and missing items fail without silently
+switching profiles. External players and watch parties cannot run the queue.
+
+## Sleep timer and transition precedence
+
+Player and paired controls offer duration presets, a custom 1–240-minute
+duration, End of this item and After 1–10 episodes during series playback.
+Duration uses elapsed monotonic time, including pause, buffering and suspension;
+the native player watchdog also enforces its deadline. The receiver owns a
+paired timer and publishes sampled remaining time. It continues if the phone
+disconnects. Timer state is local to the playback session and never restored or
+synced as personal data.
+
+End of item binds to the exact typed item. Episode counts include the current
+episode and count each natural native EOF once; seeks and manual skips do not
+decrement. Authorized queue or series continuation preserves the count, while
+unrelated playback cancels it. An episode timer stops before a movie in a mixed
+queue. Explicit Stop, player close or profile cancellation clears the timer.
+Parties offer duration only and expiry leaves the party and stops this device;
+external-player handoffs expose the timer as unavailable.
+
+The single EOF path checks explicit cancellation and sleep expiry before party
+ownership, then an active queue run, sequential-series autoplay and the normal
+end menu. Final asynchronous starts recheck the timer, profile activation,
+native load, source rules and run/item identity. A late lookup or countdown
+cannot reopen playback after Stop or expiry.
+
 ## Torrent request and file ownership
 
 Each stream selection carries a playback request identity through resolution

@@ -388,6 +388,9 @@ impl Bridge {
         });
     }
     pub(super) fn stremio_connect(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         let generation = self.stremio().generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.stremio().send(Command::Connect(generation));
     }
@@ -396,26 +399,41 @@ impl Bridge {
         self.stremio().send(Command::Cancel(generation));
     }
     pub(super) fn stremio_start(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.stremio().send(Command::Start(
             self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_sync(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.stremio().send(Command::Sync(
             self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_automatic(&self, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.stremio().send(Command::Automatic(
             enabled,
             self.stremio().generation.load(Ordering::Acquire),
         ));
     }
     pub(super) fn stremio_disconnect(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         let generation = self.stremio().generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.stremio().send(Command::Disconnect(generation));
     }
     pub(super) fn stremio_open_link(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         self.stremio().send(Command::OpenLink);
     }
     pub(super) fn stremio_wake(&self) {

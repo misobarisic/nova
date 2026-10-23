@@ -9,14 +9,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 mod capacity;
-pub use capacity::available_bytes;
+pub mod offline;
+pub use capacity::{available_bytes, filesystem_capacity};
 mod hls;
 mod http;
 
 pub use http::{
     download_http, download_http_for_job, download_http_for_job_blocking, download_http_resume,
     download_http_with_options, download_http_with_request, download_http_with_request_blocking,
-    is_manifest_content_type, is_manifest_url, new_http_client,
+    is_manifest_content_type, is_manifest_url, new_http_client, probe_http_size,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +238,9 @@ pub struct DownloadJob {
     pub intro_request: Option<DownloadIntroRequest>,
     #[serde(default)]
     pub intro_timings: Option<DownloadIntroTimings>,
+    /// Device-local ownership and reservation; legacy jobs remain manually kept.
+    #[serde(default)]
+    pub offline: offline::JobOwnership,
 }
 
 impl Default for DownloadJob {
@@ -267,6 +271,7 @@ impl Default for DownloadJob {
             last_modified: None,
             intro_request: None,
             intro_timings: None,
+            offline: offline::JobOwnership::default(),
         }
     }
 }
@@ -553,10 +558,13 @@ pub struct DownloadOutcome {
     pub last_modified: Option<String>,
 }
 
+pub type ByteAdmission = Arc<dyn Fn(u64) -> bool + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct CancellationToken {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    admission: Arc<std::sync::Mutex<Option<ByteAdmission>>>,
 }
 
 impl fmt::Debug for CancellationToken {
@@ -571,6 +579,20 @@ impl fmt::Debug for CancellationToken {
 impl CancellationToken {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Called before each HTTP/HLS body write, independently of UI progress.
+    pub fn set_byte_admission(&self, check: Arc<dyn Fn(u64) -> bool + Send + Sync>) {
+        *self.admission.lock().unwrap() = Some(check);
+    }
+
+    pub fn admit_bytes(&self, next_total: u64) -> bool {
+        let check = self.admission.lock().unwrap().clone();
+        let allowed = !self.is_cancelled() && check.is_none_or(|check| check(next_total));
+        if !allowed {
+            self.cancel();
+        }
+        allowed
     }
 
     pub fn cancel(&self) {

@@ -14,8 +14,10 @@ pub use service::PartyService;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-pub const ALPN: &[u8] = b"nova/party/2";
+pub const ALPN: &[u8] = b"nova/party/3";
 pub const MAX_MEMBERS: usize = 8;
+/// Opaque SHA-256 asset hint; contains no source URL, path, headers or provider token.
+pub type SourceFingerprint = [u8; 32];
 pub const BUFFER_READY_SECONDS: f64 = 2.0;
 pub const START_LEAD_MS: u64 = 1_000;
 pub const HOST_TIMEOUT_MS: u64 = 30_000;
@@ -37,6 +39,7 @@ pub struct PartyMedia {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LocalReport {
+    pub source_fingerprint: Option<SourceFingerprint>,
     pub generation: u64,
     /// Identity bound by the local adapter after resolving its own source.
     pub media: Option<MediaIdentity>,
@@ -78,6 +81,8 @@ impl Timeline {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Participant {
+    /// Bound by the host to the snapshot's current media generation.
+    pub source_fingerprint: Option<SourceFingerprint>,
     pub id: String,
     pub name: String,
     pub is_host: bool,

@@ -51,6 +51,9 @@ impl Bridge {
             return Err("No active playback".into());
         }
         match action {
+            PlaybackAction::SetSleepTimer(mode) => self.set_sleep_timer(mode)?,
+            PlaybackAction::ExtendSleepTimer => self.extend_sleep_timer()?,
+            PlaybackAction::CancelSleepTimer => self.cancel_sleep_timer(),
             PlaybackAction::TogglePause => {
                 self.clear_playback_end_menu();
                 self.change_playback_pause(!self.player.is_paused());
@@ -62,6 +65,7 @@ impl Bridge {
             PlaybackAction::SeekRelative(delta) => {
                 finite(delta)?;
                 self.clear_playback_end_menu();
+                self.sleep_timer_note_seek(app.get_position() as f64 + delta);
                 self.note_intro_seek(app.get_position() as f64, app.get_position() as f64 + delta);
                 self.player.seek_relative(delta);
                 self.refresh_next_episode_prompt();
@@ -75,6 +79,7 @@ impl Bridge {
                 } else {
                     position.max(0.0)
                 };
+                self.sleep_timer_note_seek(position);
                 self.note_intro_seek(app.get_position() as f64, position);
                 self.player.seek(position.min(f32::MAX as f64) as f32);
                 self.refresh_next_episode_prompt();
@@ -142,7 +147,12 @@ impl Bridge {
                 }
                 self.take_player_screenshot();
             }
+            PlaybackAction::QueueSkip => self.skip_queue(),
+            PlaybackAction::QueueStop => self.stop_queue(),
+            PlaybackAction::QueuePlayNow => self.play_automatic_next(),
             PlaybackAction::Stop => {
+                self.cancel_queue_run();
+                self.sleep_timer_playback_closed();
                 self.player.release_window_transition();
                 let pending = self.shared.lock().unwrap().playback_intent.is_some();
                 if app.get_player_open() || app.get_resume_prompt_visible() || pending {
@@ -278,6 +288,7 @@ impl Bridge {
 
     /// Native close and explicit Stop converge here once per opening.
     pub(super) fn complete_playback_close(&self) {
+        self.sleep_timer_playback_closed();
         self.clear_addon_subtitles();
         #[cfg(target_os = "android")]
         android_player::player_brightness_reset();

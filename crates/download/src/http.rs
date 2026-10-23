@@ -55,6 +55,38 @@ pub fn new_http_client() -> Result<Client, DownloadError> {
         .map_err(|error| DownloadError::InvalidResponse(error.to_string()))
 }
 
+/// Probe a bounded single-resource total without starting a media transfer.
+/// A playlist's own Content-Length never describes its offline bundle.
+pub fn probe_http_size(url: &str, headers: &[(String, String)]) -> Option<u64> {
+    if super::is_manifest_url(url) || super::validate_download_url(url).is_err() {
+        return None;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    runtime.block_on(async {
+        let client = new_http_client().ok()?;
+        let mut request = client
+            .head(url)
+            .timeout(Duration::from_secs(15))
+            .header("accept-encoding", "identity");
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let response = request.send().await.ok()?.error_for_status().ok()?;
+        if response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(is_manifest_content_type)
+        {
+            return None;
+        }
+        response.content_length().filter(|bytes| *bytes > 0)
+    })
+}
+
 pub async fn download_http<F>(
     client: &Client,
     url: impl Into<String>,
@@ -491,6 +523,10 @@ where
             return Err(DownloadError::InvalidResponse(
                 "response body exceeds the advertised total size".into(),
             ));
+        }
+        if !cancellation.admit_bytes(next) {
+            file.flush().await?;
+            return Err(DownloadError::Cancelled);
         }
         if let Err(error) = file.write_all(&chunk).await {
             sync_after_error(&mut file).await;
@@ -1095,6 +1131,29 @@ mod tests {
             socket.flush().await.unwrap();
         });
         (format!("http://{address}/file.mp4"), task)
+    }
+
+    #[tokio::test]
+    async fn byte_admission_stops_before_writing_over_budget_body() {
+        let root = test_path("byte-admission");
+        let destination = root.join("movie.mp4");
+        let (url, server) =
+            one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789").await;
+        let token = CancellationToken::new();
+        token.set_byte_admission(std::sync::Arc::new(|next| next <= 4));
+        let result = download_http(
+            &new_http_client().unwrap(),
+            url,
+            &destination,
+            token,
+            |_| {},
+        )
+        .await;
+        assert!(result.is_err_and(|error| error.is_cancelled()));
+        assert!(!destination.exists());
+        assert!(std::fs::metadata(part_path(&destination)).unwrap().len() <= 4);
+        server.await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

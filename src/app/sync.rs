@@ -39,6 +39,13 @@ pub(crate) const DOMAIN_CONTINUE_HIDDEN: &str = "continue_hidden";
 /// Account membership is shared; every user-data domain is qualified even for
 /// the migrated default profile. Switching locally never changes this directory.
 pub(super) const SCOPED_DOMAINS: &[&str] = &[
+    last_stream::FAMILY_DOMAIN,
+    release_reminders::DOMAIN,
+    smart_offline::DOMAIN,
+    watch_queue::ITEMS,
+    watch_queue::ORDER,
+    watch_queue::CURSOR,
+    super::profile_policy::DOMAIN,
     DOMAIN_LIBRARY,
     DOMAIN_PROGRESS,
     DOMAIN_LAST_STREAM,
@@ -264,9 +271,11 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
 
 /// App snapshots and record mutations share one transaction, even with sync
 /// disabled. A persisted baseline is the only deletion authority.
-type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
+pub(crate) type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
 
 pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    let _delivery = matches!(key, release_reminders::KEY | profile_policy::KEY)
+        .then(release_reminders::delivery_guard);
     let result = persist_sync_snapshot_inner(key, raw, seed);
     // Owner-scoped snapshot writes, including remote projections and metadata
     // cache updates, pass here. Reject derived UI work that read older data
@@ -280,23 +289,32 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     result
 }
 
-fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
-    if profiles::scoped_key(key) && !profiles::writable(&profiles::current_id()) {
-        return Err(
-            storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),
-        );
-    }
-    persistence::register_collections();
-    persistence::flush()
-        .map_err(|error| storage::Error::new(storage::ErrorKind::Transaction, error))?;
-    if !writable_key(key) {
-        return Err(storage::Error::new(
-            storage::ErrorKind::Schema,
-            "unreadable snapshot retained",
-        )
-        .into());
-    }
-    let domains: Vec<SnapshotDomainRecords> = match key {
+/// Decompose without writing, so a selective import can stage every component
+/// in one cloned Store and publish it only after the database commit succeeds.
+pub(crate) fn snapshot_domains(
+    key: &str,
+    raw: &str,
+) -> nova_sync::Result<Vec<SnapshotDomainRecords>> {
+    Ok(match key {
+        last_stream::FAMILY_KEY => vec![(
+            last_stream::FAMILY_DOMAIN,
+            last_stream::family_records(raw)?,
+        )],
+        smart_offline::KEY => vec![(smart_offline::DOMAIN, smart_offline::records(raw)?)],
+        release_reminders::KEY => {
+            vec![(release_reminders::DOMAIN, release_reminders::records(raw)?)]
+        }
+        super::profile_policy::KEY => {
+            let policy: super::profile_policy::ProfilePolicy = serde_json::from_str(raw)?;
+            policy
+                .validate()
+                .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?;
+            vec![(
+                super::profile_policy::DOMAIN,
+                vec![("policy".into(), raw.into(), 0)],
+            )]
+        }
+        watch_queue::KEY => watch_queue::records(raw)?,
         bookmarks::BOOKMARKS_KEY => vec![(
             activity_sync::BOOKMARKS,
             activity_sync::bookmark_records(raw)?,
@@ -386,15 +404,35 @@ fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::R
                 ),
             ]
         }
-        _ => {
-            if metadata_cache_key(key) {
-                storage::try_set_cached_str(key, raw)?;
-            } else {
-                storage::try_set_str(key, raw)?;
-            }
-            return Ok(());
+        _ => Vec::new(),
+    })
+}
+
+fn persist_sync_snapshot_inner(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    if profiles::scoped_key(key) && !profiles::writable(&profiles::current_id()) {
+        return Err(
+            storage::Error::new(storage::ErrorKind::Schema, "profile has been deleted").into(),
+        );
+    }
+    persistence::register_collections();
+    persistence::flush()
+        .map_err(|error| storage::Error::new(storage::ErrorKind::Transaction, error))?;
+    if !writable_key(key) {
+        return Err(storage::Error::new(
+            storage::ErrorKind::Schema,
+            "unreadable snapshot retained",
+        )
+        .into());
+    }
+    let domains = snapshot_domains(key, raw)?;
+    if domains.is_empty() {
+        if metadata_cache_key(key) {
+            storage::try_set_cached_str(key, raw)?;
+        } else {
+            storage::try_set_str(key, raw)?;
         }
-    };
+        return Ok(());
+    }
     // Playback and its activity checkpoint share a transaction. Availability
     // refreshes never produce an Active record, and remote apply never echoes.
     let projection = applying() && !stremio_events::external();
@@ -1252,7 +1290,12 @@ pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
 /// Snapshots used to seed inactive profiles come from disk, never from the
 /// active profile's Shared models. The record owner still exchanges every domain.
 const PROFILE_SNAPSHOTS: &[(&str, &str)] = &[
+    (last_stream::FAMILY_KEY, last_stream::FAMILY_DOMAIN),
+    (smart_offline::KEY, smart_offline::DOMAIN),
+    (release_reminders::KEY, release_reminders::DOMAIN),
+    (watch_queue::KEY, watch_queue::ITEMS),
     (bookmarks::BOOKMARKS_KEY, activity_sync::BOOKMARKS),
+    (super::profile_policy::KEY, super::profile_policy::DOMAIN),
     ("library", DOMAIN_LIBRARY),
     ("episode_progress", DOMAIN_PROGRESS),
     (PREFERENCES_KEY, DOMAIN_PLAYBACK_PREFERENCES),
@@ -1291,6 +1334,13 @@ fn seed_stored_profiles() -> nova_sync::Result<()> {
     };
     for id in ids {
         profiles::with_context(profiles::context_for(&id), || -> nova_sync::Result<()> {
+            let queue_owner = profiles::ProfileStore::capture();
+            if queue_owner.read(watch_queue::KEY)?.is_none()
+                && queue_owner.read("watch_queue:v1")?.is_some()
+            {
+                watch_queue::ensure_migrated(&queue_owner)
+                    .map_err(|error| storage::Error::new(storage::ErrorKind::Schema, error))?;
+            }
             for (key, domain) in PROFILE_SNAPSHOTS {
                 let baseline = format!("sync:baseline:{}", profile_domain(domain));
                 if nova_storage::try_get_str(&baseline)?.is_some() {
@@ -1342,6 +1392,8 @@ fn tombstone_deleted_profile_domain(
 /// provider preferences. Activation reads these snapshots through the same paths
 /// as startup. Raw record-only domains are consumed by their owners on activation.
 fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Result<()> {
+    let _delivery = matches!(base, release_reminders::DOMAIN | profile_policy::DOMAIN)
+        .then(release_reminders::delivery_guard);
     let owner = nova_sync::local_store()?;
     let (records, basis, deleted) = {
         let mut store = owner.lock().unwrap();
@@ -1383,6 +1435,29 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
             return Ok(());
         }
         let snapshot: Option<(&str, String)> = match base {
+            smart_offline::DOMAIN => Some((
+                smart_offline::KEY,
+                projected_map::<serde_json::Value>(&records)?,
+            )),
+            release_reminders::DOMAIN => Some((
+                release_reminders::KEY,
+                projected_map::<release_reminders::Subscription>(&records)?,
+            )),
+            super::profile_policy::DOMAIN => Some((
+                super::profile_policy::KEY,
+                records
+                    .iter()
+                    .find(|(key, _)| key == "policy")
+                    .map(|(_, raw)| raw.clone())
+                    .unwrap_or_else(|| {
+                        serde_json::to_string(&super::profile_policy::ProfilePolicy::default())
+                            .unwrap()
+                    }),
+            )),
+            watch_queue::ITEMS | watch_queue::ORDER | watch_queue::CURSOR => Some((
+                watch_queue::KEY,
+                watch_queue::snapshot(&owner.lock().unwrap(), &profiles::ProfileStore::capture())?,
+            )),
             activity_sync::BOOKMARKS => Some((
                 bookmarks::BOOKMARKS_KEY,
                 activity_sync::bookmark_snapshot(&records)?,
@@ -1402,6 +1477,11 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
             DOMAIN_PROGRESS => Some((
                 EPISODE_PROGRESS_KEY,
                 projected_map::<EpisodeProgress>(&records)?,
+            )),
+            last_stream::FAMILY_DOMAIN => Some((
+                last_stream::FAMILY_KEY,
+                last_stream::portable_families(&projected_map::<serde_json::Value>(&records)?)
+                    .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?,
             )),
             DOMAIN_PLAYBACK_PREFERENCES => {
                 Some((PREFERENCES_KEY, projected_map::<PreferenceValue>(&records)?))
@@ -1511,6 +1591,37 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
     })
 }
 
+/// Materialize only job inputs after a headless merge. This uses durable profile
+/// ownership and the ordinary projection transaction; it publishes no UI or
+/// process-wide provider settings, including for the currently selected ID.
+#[cfg(target_os = "android")]
+pub(super) fn project_headless_profile(owner: &profiles::ProfileStore) -> nova_sync::Result<()> {
+    let pending = nova_sync::local_store()?.lock().unwrap().pending_domains();
+    for domain in pending {
+        let Some((id, base)) = profiles::parse_domain(&domain) else {
+            continue;
+        };
+        if id == owner.id()
+            && matches!(
+                base,
+                DOMAIN_LIBRARY
+                    | DOMAIN_PROGRESS
+                    | DOMAIN_ADDONS
+                    | DOMAIN_PACKAGES
+                    | DOMAIN_PLUGIN_SETTINGS
+                    | DOMAIN_SETTINGS
+                    | DOMAIN_CATEGORY
+                    | release_reminders::DOMAIN
+                    | smart_offline::DOMAIN
+                    | profile_policy::DOMAIN
+            )
+        {
+            project_inactive_profile(id, &domain, base)?;
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Materialize: rebuild app state from remote records
 // ---------------------------------------------------------------------------
@@ -1564,6 +1675,9 @@ impl Bridge {
         // Check the durable baseline before cloning/serializing large histories.
         // Local writes already commit snapshots atomically with sync records.
         for (key, domain) in [
+            (last_stream::FAMILY_KEY, last_stream::FAMILY_DOMAIN),
+            (release_reminders::KEY, release_reminders::DOMAIN),
+            (super::profile_policy::KEY, super::profile_policy::DOMAIN),
             (bookmarks::BOOKMARKS_KEY, activity_sync::BOOKMARKS),
             ("library", DOMAIN_LIBRARY),
             ("episode_progress", DOMAIN_PROGRESS),
@@ -1585,6 +1699,18 @@ impl Bridge {
                 }
                 let state = self.shared.lock().unwrap();
                 let raw = match key {
+                    release_reminders::KEY => {
+                        storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
+                    }
+                    last_stream::FAMILY_KEY | super::profile_policy::KEY => {
+                        // An absent policy has no local edit; an absent family
+                        // snapshot still awaits its cache-file migration. Do not
+                        // fabricate defaults which overwrite either source.
+                        let Some(raw) = storage::try_get_str(key)? else {
+                            return Ok(());
+                        };
+                        raw
+                    }
                     bookmarks::BOOKMARKS_KEY => {
                         storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
                     }
@@ -1718,6 +1844,15 @@ impl Bridge {
     /// Older apps acknowledge unfamiliar domains without materializing them.
     /// Import a stored preference domain when upgrading such a device.
     pub(super) fn restore_playback_preferences_schema(&self) {
+        if storage::try_get_str(last_stream::FAMILY_KEY)
+            .ok()
+            .flatten()
+            .is_none()
+            && projection_store()
+                .is_some_and(|store| !store.records(last_stream::FAMILY_DOMAIN).is_empty())
+        {
+            self.sync_apply_inner(vec![last_stream::FAMILY_DOMAIN.into()], false);
+        }
         if storage::try_get_str(PREFERENCES_KEY)
             .ok()
             .flatten()
@@ -1803,7 +1938,8 @@ impl Bridge {
         let mut active_domains = Vec::new();
         for domain in domains {
             if let Some((id, base)) = nova_sync::parse_profile_domain(&domain) {
-                if id != active || deleted_profiles.contains(id) {
+                if id != active || deleted_profiles.contains(id) || profile_policy::entry_blocked()
+                {
                     if let Err(error) = project_inactive_profile(id, &domain, base) {
                         storage::report(storage::Error::new(
                             storage::ErrorKind::Transaction,
@@ -1845,6 +1981,73 @@ impl Bridge {
                     .cloned()
             });
             match domain.as_str() {
+                smart_offline::DOMAIN => {
+                    if let Err(error) = project_inactive_profile(
+                        &active,
+                        &profile_domain(smart_offline::DOMAIN),
+                        smart_offline::DOMAIN,
+                    ) {
+                        storage::report(storage::Error::new(
+                            storage::ErrorKind::Transaction,
+                            error,
+                        ));
+                        continue;
+                    }
+                    smart_offline::trigger();
+                    if publish_models {
+                        self.refresh_smart_offline();
+                    }
+                }
+                release_reminders::DOMAIN => {
+                    self.sync_apply_json_map::<release_reminders::Subscription>(
+                        release_reminders::DOMAIN,
+                        release_reminders::KEY,
+                    );
+                    if publish_models {
+                        self.reconcile_release_reminders();
+                    }
+                }
+                super::profile_policy::DOMAIN => {
+                    if let Err(error) = project_inactive_profile(
+                        &active,
+                        &profile_domain(super::profile_policy::DOMAIN),
+                        super::profile_policy::DOMAIN,
+                    ) {
+                        storage::report(storage::Error::new(
+                            storage::ErrorKind::Transaction,
+                            error,
+                        ));
+                        continue;
+                    }
+                    self.profile_policy_changed();
+                }
+                watch_queue::ITEMS | watch_queue::ORDER | watch_queue::CURSOR => {
+                    match nova_sync::local_store().and_then(|owner| {
+                        watch_queue::snapshot(
+                            &owner.lock().unwrap(),
+                            &profiles::ProfileStore::capture(),
+                        )
+                    }) {
+                        Ok(raw) => {
+                            if let Err(error) = persist_sync_snapshot(watch_queue::KEY, &raw, false)
+                            {
+                                storage::report(storage::Error::new(
+                                    storage::ErrorKind::Transaction,
+                                    error,
+                                ));
+                                continue;
+                            }
+                            self.shared.lock().unwrap().watch_queue.entries = None;
+                            if publish_models {
+                                self.refresh_watch_queue();
+                            }
+                        }
+                        Err(error) => {
+                            storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                            continue;
+                        }
+                    }
+                }
                 activity_sync::BOOKMARKS => {
                     let result = (|| -> nova_sync::Result<()> {
                         let handle = nova_sync::local_store()?;
@@ -1884,6 +2087,13 @@ impl Bridge {
                     DOMAIN_PLAYBACK_PREFERENCES,
                     PREFERENCES_KEY,
                 ),
+                last_stream::FAMILY_DOMAIN => {
+                    self.sync_apply_json_map::<serde_json::Value>(
+                        last_stream::FAMILY_DOMAIN,
+                        last_stream::FAMILY_KEY,
+                    );
+                    self.last_stream.invalidate_owner(&profiles::current_id());
+                }
                 DOMAIN_LAST_STREAM => {
                     if let Err(error) = self.project_last_stream_choice() {
                         storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
@@ -2715,6 +2925,9 @@ impl Bridge {
     /// Settings → Sync: the enable toggle flipped. Persists the flag and
     /// starts/stops the engine.
     pub(super) fn sync_set_enabled(&self, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.enabled = enabled;
         nova_sync::write_settings(&settings);
@@ -2728,6 +2941,9 @@ impl Bridge {
 
     /// Settings → Sync: add a peer by endpoint id, then sync immediately.
     pub(super) fn sync_add_peer(&self, id: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_sync_peer_input(SharedString::default());
         }
@@ -2743,6 +2959,9 @@ impl Bridge {
 
     /// Settings → Sync: remove a peer by its endpoint id.
     pub(super) fn sync_remove_peer(&self, id: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(engine) = nova_sync::engine() {
             engine.remove_peer(id);
         }
@@ -2751,6 +2970,9 @@ impl Bridge {
 
     /// Settings → Sync: "Sync now".
     pub(super) fn sync_now(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(engine) = nova_sync::engine() {
             addon_packages::retry_pending(self);
             engine.sync_now();
@@ -2760,6 +2982,9 @@ impl Bridge {
 
     /// Settings → Sync: copy this device's endpoint id (best effort).
     pub(super) fn sync_copy_identity(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(engine) = nova_sync::engine() {
             copy_to_clipboard(&engine.identity());
         }
@@ -2793,6 +3018,9 @@ impl Bridge {
 
     /// Settings → Sync: accept or reject an incoming pairing request.
     pub(super) fn sync_respond_pair(&self, id: &str, accept: bool) {
+        if accept && !self.require_profile_management() {
+            return;
+        }
         if let Some(engine) = nova_sync::engine() {
             engine.respond_pair(id, accept);
         }
@@ -2803,6 +3031,9 @@ impl Bridge {
 
     /// Settings → Sync: the device-name override changed.
     pub(super) fn sync_device_name_edited(&self, name: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.device_name = name.trim().to_string();
         nova_sync::write_settings(&settings);
@@ -2810,6 +3041,9 @@ impl Bridge {
 
     /// Settings → Sync: the "ask before accepting" toggle flipped.
     pub(super) fn sync_pair_confirm_changed(&self, confirm: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.require_confirmation = confirm;
         nova_sync::write_settings(&settings);
@@ -2819,6 +3053,9 @@ impl Bridge {
     /// Endpoint builder options are fixed at bind time, so restart the
     /// engine for the change to take effect.
     pub(super) fn sync_local_discovery_changed(&self, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.enable_local_discovery = enabled;
         nova_sync::write_settings(&settings);
@@ -2833,6 +3070,9 @@ impl Bridge {
     /// Settings → Sync: the auto-sync interval preset picked. The background
     /// loop re-reads the interval every few seconds, so no restart is needed.
     pub(super) fn sync_interval_picked(&self, index: i32) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.interval_secs = sync_interval_preset(index);
         nova_sync::write_settings(&settings);
@@ -2842,6 +3082,9 @@ impl Bridge {
     /// Settings → Sync: the "background sync" toggle flipped. Schedules or
     /// cancels the Android periodic job; no engine restart needed.
     pub(super) fn sync_background_changed(&self, enabled: bool) {
+        if !self.require_profile_management() {
+            return;
+        }
         let mut settings = nova_sync::read_settings();
         settings.background_enabled = enabled;
         nova_sync::write_settings(&settings);
@@ -2852,6 +3095,9 @@ impl Bridge {
 
     /// Settings → Sync: create an invite and show its ticket.
     pub(super) fn sync_create_invite(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(engine) = nova_sync::engine() else {
             return;
         };
@@ -2874,6 +3120,9 @@ impl Bridge {
 
     /// Settings → Sync: revoke an outstanding invite by its short id.
     pub(super) fn sync_cancel_invite(&self, id: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         if let Some(engine) = nova_sync::engine() {
             engine.cancel_invite(id);
         }
@@ -2887,11 +3136,17 @@ impl Bridge {
 
     /// Settings → Sync: copy an invite ticket.
     pub(super) fn sync_copy_ticket(&self, ticket: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         copy_to_clipboard(ticket);
     }
 
     /// Settings → Sync: join another device with an invite ticket.
     pub(super) fn sync_join_invite(&self, ticket: &str) {
+        if !self.require_profile_management() {
+            return;
+        }
         let Some(engine) = nova_sync::engine() else {
             return;
         };
@@ -2912,6 +3167,9 @@ impl Bridge {
     /// only launches the activity. A no-op on desktop, where the button is
     /// hidden by `sync_qr_scan_available`.
     pub(super) fn sync_scan_qr(&self) {
+        if !self.require_profile_management() {
+            return;
+        }
         #[cfg(target_os = "android")]
         crate::app::android_qr::start_scan();
         #[cfg(not(target_os = "android"))]

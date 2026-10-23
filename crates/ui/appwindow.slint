@@ -1,4 +1,8 @@
+import { PillButton } from "settings-controls.slint";
 import { CatalogSourceChooser } from "catalog-source-chooser.slint";
+import { BackupPanel } from "backup.slint";
+import { OfflineBridge, BackupBridge } from "@NovaUiShared";
+export { OfflineBridge, BackupBridge }
 import { CompletionRatingPrompt } from "completion-rating.slint";
 import { PlatformIcon } from "platform-icon.slint";
 import { PlaybackEnded } from "playback-ended.slint";
@@ -17,6 +21,7 @@ import { DiscoverBindings, HomeBindings, DetailBindings, SettingsBindings, Calen
 import { DiscoverHost } from "discover-host.slint";
 import { HomeHost } from "home-host.slint";
 import { DetailHost } from "detail-host.slint";
+import { ProfilePinGate, ProfilePolicyEditor } from "profile-pin.slint";
 import { CategoryPickerPopup } from "categories.slint";
 import { LibraryDuplicates } from "library-duplicates.slint";
 import { LibraryHost } from "library-host.slint";
@@ -193,6 +198,11 @@ export component AppWindow inherits Window {
     in-out property <bool> remote_paused <=> RemoteBridge.paused;
     in-out property <bool> remote_muted <=> RemoteBridge.muted;
     in-out property <bool> remote_fullscreen <=> RemoteBridge.fullscreen;
+    in-out property <string> remote_sleep_timer_label <=> RemoteBridge.sleep_timer_label;
+    in-out property <bool> remote_sleep_timer_available <=> RemoteBridge.sleep_timer_available;
+    in-out property <bool> remote_sleep_timer_episodes_available <=> RemoteBridge.sleep_timer_episodes_available;
+    in-out property <bool> remote_sleep_timer_active <=> RemoteBridge.sleep_timer_active;
+    in-out property <bool> remote_sleep_timer_duration <=> RemoteBridge.sleep_timer_duration;
     in-out property <bool> remote_can_pause <=> RemoteBridge.can_pause;
     in-out property <bool> remote_can_mute <=> RemoteBridge.can_mute;
     in-out property <bool> remote_can_stop <=> RemoteBridge.can_stop;
@@ -224,6 +234,7 @@ export component AppWindow inherits Window {
     in-out property <string> remote_semantic_session <=> RemoteBridge.semantic_session;
     in-out property <bool> remote_semantic_success <=> RemoteBridge.semantic_success;
     in-out property <string> remote_semantic_notice <=> RemoteBridge.semantic_notice;
+    in-out property <bool> remote_can_queue <=> RemoteBridge.can_queue;
     in-out property <bool> remote_can_chapters <=> RemoteBridge.can_chapters;
     in-out property <bool> remote_can_subtitle_style <=> RemoteBridge.can_subtitle_style;
     in-out property <bool> remote_can_secondary_subtitles <=> RemoteBridge.can_secondary_subtitles;
@@ -805,12 +816,23 @@ export component AppWindow inherits Window {
     callback onboarding_addon_added(string);
     callback onboarding_finished();
 
+    property <int> profile_pin_focus_request;
+    property <int> profile_policy_focus_request;
+    property <int> backup_focus_request;
     property <int> back_focus_request: 0;
-    changed back_focus_request => { if !root.completion_prompt_visible && !root.playback_end_menu_shown { system_back_scope.focus(); } }
+    changed back_focus_request => {
+        if MoreBridge.pin_open { root.profile_pin_focus_request += 1; }
+        else if MoreBridge.policy_open { root.profile_policy_focus_request += 1; }
+        else if BackupBridge.open { root.backup_focus_request += 1; }
+        else if !root.completion_prompt_visible && !root.playback_end_menu_shown { system_back_scope.focus(); }
+    }
     // Factory construction temporarily blocks focus changes. Recover native
     // keyboard navigation after publication only while the persistent scope
     // still owns focus, so a pointer-focused editor is never interrupted.
     public function focus_mounted_page() {
+        if MoreBridge.pin_open { root.profile_pin_focus_request += 1; return; }
+        if MoreBridge.policy_open { if system_back_scope.has-focus { root.profile_policy_focus_request += 1; } return; }
+        if BackupBridge.open { if system_back_scope.has-focus { root.backup_focus_request += 1; } return; }
         // The wizard retains the underlying page visually. Its Rust callback
         // excludes inputs already owned by the wizard before recovering focus
         // from that underlying page, rather than relying on baseline ownership.
@@ -837,6 +859,9 @@ export component AppWindow inherits Window {
         }
     }
     public function preserve_back_focus() {
+        if MoreBridge.pin_open { root.profile_pin_focus_request += 1; return; }
+        if MoreBridge.policy_open { root.profile_policy_focus_request += 1; return; }
+        if BackupBridge.open { root.backup_focus_request += 1; return; }
         // A late underlying-page mount must not take the active dialog's keys.
         if root.completion_prompt_visible || root.playback_end_menu_shown { return; }
         // Incoming page init can replace focus before outgoing page teardown.
@@ -1034,7 +1059,7 @@ export component AppWindow inherits Window {
     }
     changed show_home => { if (root.show_home) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
-    changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
+    changed show_settings => { if !root.show_settings && !MoreBridge.pin_open { MoreBridge.management_closed(); } if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
     changed player_open => {
         SliderGesture.active = false; SliderGesture.hovered = false;
         root.osd_opacity_changed(root.osd_opacity);
@@ -1129,7 +1154,10 @@ export component AppWindow inherits Window {
     callback downloads_page_action(string, int);
     callback downloads_page_artwork_visible(string, bool);
     callback downloads_page_artwork_active_changed(bool);
-    changed show_downloads => { root.downloads_page_artwork_active_changed(root.show_downloads && root.page_artwork_allowed); }
+    changed show_downloads => {
+        if !root.show_downloads && OfflineBridge.opened {OfflineBridge.closed();}
+        root.downloads_page_artwork_active_changed(root.show_downloads && root.page_artwork_allowed);
+    }
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
     in-out property <[int]> home_catalog_order: [-1, -3, -2];
@@ -1490,6 +1518,10 @@ export component AppWindow inherits Window {
     in-out property <int> system_back_request: 0;
     private property <int> page_back_request: 0;
     changed system_back_request => {
+        if MoreBridge.pin_open { MoreBridge.pin_cancel(); return; }
+        if MoreBridge.policy_open { MoreBridge.management_closed(); return; }
+        if OfflineBridge.opened {OfflineBridge.closed();return;}
+        if BackupBridge.open { if !BackupBridge.busy { BackupBridge.closed(); } return; }
         // Startup selection owns Back even before the first page focus event.
         // The Profiles page may cancel its editor, but cannot leave the picker.
         if root.profiles_require_selection { root.page_back_request += 1; }
@@ -1709,7 +1741,8 @@ export component AppWindow inherits Window {
     // Settings content offset (same mirror pattern as the grids).
     in-out property <length> settings_scroll_y: 0px;
     // Sync reuses the compiled settings shell without its overview.
-    private property <bool> sync_page: false;
+    changed minimized => { if root.minimized { MoreBridge.management_backgrounded(); } }
+    in-out property <bool> sync_page: false;
     in-out property <int> settings_selected_id: 13;
     in-out property <bool> settings_detail_open: root.settings_two_pane;
     out property <bool> settings_two_pane: !root.sync_page && (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
@@ -1824,6 +1857,7 @@ export component AppWindow inherits Window {
     callback auto_next_play();
     in-out property <bool> playback_end_menu_visible: false;
     in-out property <bool> playback_end_menu_has_next: false;
+    in-out property <bool> playback_end_menu_queue: false;
     in-out property <string> playback_end_menu_next_title;
     callback playback_end_stay();
     callback playback_end_next();
@@ -1853,6 +1887,15 @@ export component AppWindow inherits Window {
     in-out property <[ChapterRow]> player_chapters;
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
+    changed sleep_timer_notice => { if root.sleep_timer_notice != "" { sleep_notice_timer.restart(); } }
+    sleep_notice_timer := Timer { interval: 6s; running: false; triggered => { self.stop(); root.sleep_timer_notice = ""; } }
+    in-out property <string> sleep_timer_label <=> PlayerOsdBridge.sleep_timer_label;
+    in-out property <string> sleep_timer_notice <=> PlayerOsdBridge.sleep_timer_notice;
+    in-out property <bool> sleep_timer_available <=> PlayerOsdBridge.sleep_timer_available;
+    in-out property <bool> sleep_timer_episodes_available <=> PlayerOsdBridge.sleep_timer_episodes_available;
+    in-out property <bool> sleep_timer_end_available <=> PlayerOsdBridge.sleep_timer_end_available;
+    in-out property <bool> sleep_timer_active <=> PlayerOsdBridge.sleep_timer_active;
+    in-out property <bool> sleep_timer_duration <=> PlayerOsdBridge.sleep_timer_duration;
     in-out property <string> player_title: "";
     in-out property <string> player_episode_title;
     in-out property <string> player_show_title;
@@ -2321,7 +2364,20 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if CatalogGroupingBridge.chooser_visual_retained && !CatalogGroupingBridge.chooser_open { if e.text == Key.Back { root.system_back_held = true; } accept }
+            if MoreBridge.pin_open {
+                if e.text == Key.Back || e.text == Key.Escape {
+                    if !e.repeat { MoreBridge.pin_cancel(); root.preserve_back_focus(); page_release_timer.start(); } accept
+                } else { reject }
+            } else if MoreBridge.policy_open {
+                if e.text == Key.Back || e.text == Key.Escape {
+                    if !e.repeat { MoreBridge.management_closed(); root.preserve_back_focus(); page_release_timer.start(); } accept
+                } else { reject }
+            } else if OfflineBridge.opened && (e.text == Key.Back || e.text == Key.Escape) {
+                if !e.repeat {OfflineBridge.closed();root.preserve_back_focus();page_release_timer.start();}accept
+            } else if BackupBridge.open && !MoreBridge.pin_open && !MoreBridge.policy_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
+                if !e.repeat && !BackupBridge.busy { BackupBridge.closed(); } accept
+            }
+            else if CatalogGroupingBridge.chooser_visual_retained && !CatalogGroupingBridge.chooser_open { if e.text == Key.Back { root.system_back_held = true; } accept }
             else if CatalogGroupingBridge.chooser_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
                 if !e.repeat && (e.text != Key.Back || !root.system_back_held) { if e.text == Key.Back { root.system_back_held = true; } CatalogGroupingBridge.back_request += 1; } accept
             } else if root.profiles_require_selection && (e.text == Key.Back || e.text == Key.Escape) {
@@ -2781,6 +2837,7 @@ export component AppWindow inherits Window {
         source_title: root.auto_next_preview_source;
         source_metadata: root.auto_next_preview_metadata;
         has_next: root.auto_next_preview || root.playback_end_menu_has_next;
+        queued_next: root.playback_end_menu_queue;
         next_title: root.auto_next_preview ? root.auto_next_preview_title : root.playback_end_menu_next_title;
         show_title: root.player_show_title;
         episode_title: root.player_episode_title;
@@ -2909,6 +2966,14 @@ export component AppWindow inherits Window {
         view_release => { root.update_release_requested(); root.update_notice_visible = false; root.preserve_back_focus(); page_release_timer.start(); }
     }
 
+    if root.sleep_timer_notice != "" && !root.player_open: Rectangle {
+        x: (root.width - self.width) / 2; y: Math.max(root.safe-area-insets.top + 12px, root.height - root.safe-area-insets.bottom - self.height - (root.narrow_ui ? 88px : 24px));
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 600px : 460px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px));
+        height: sleep_notice_label.preferred-height + 24px;
+        border-radius: 10px; background: Theme.current.popup;
+        sleep_notice_label := Text { x: 12px; y: 12px; width: Math.max(0px, parent.width - 24px); text: root.sleep_timer_notice; wrap: word-wrap; color: Theme.current.text_primary; }
+    }
+
     if root.completion_prompt_visible: CompletionRatingPrompt {
         width: parent.width; height: parent.height;
         phone: !InterfaceStyle.tv && (root.is_android || root.narrow_ui);
@@ -2917,6 +2982,21 @@ export component AppWindow inherits Window {
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
     }
+    if BackupBridge.open: BackupPanel { focus-request: root.backup_focus_request; width: 100%; height: 100%; safe-top:root.safe-area-insets.top; safe-bottom:root.safe-area-insets.bottom; safe-left:root.safe-area-insets.left; safe-right:root.safe-area-insets.right; }
+    if MoreBridge.policy_browse: Rectangle {
+        x: root.safe-area-insets.left + 18px;
+        y: root.height - root.safe-area-insets.bottom - self.height - 18px;
+        width: Math.max(1px,root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);
+        height: policy_search_actions.preferred-height + 24px;
+        background: Theme.current.popup; border-radius: Theme.button_corner_radius;
+        policy_search_actions := HorizontalLayout { x:12px; y:12px; width:parent.width - 24px; spacing:12px;
+            if root.modal_visible: PillButton { label:@tr("Allow this title"); wrap_label:true; clicked => { MoreBridge.policy_allow_selected_title(); } }
+            PillButton { label:@tr("Done choosing titles"); wrap_label:true; clicked => { MoreBridge.policy_finish_title_search(); } }
+        }
+    }
+    if MoreBridge.policy_open: profile_policy_editor := ProfilePolicyEditor { focus-request: root.profile_policy_focus_request; width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; }
+    if MoreBridge.pin_open: profile_pin_gate := ProfilePinGate { focus-request: root.profile_pin_focus_request; width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; }
+
     }
 
 }

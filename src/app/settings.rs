@@ -188,12 +188,18 @@ impl Bridge {
             let b = self.clone();
             let callback_schedule = schedule.clone();
             app.on_save_settings(move || {
+                if !b.require_profile_management() {
+                    return;
+                }
                 b.capture_settings();
                 callback_schedule();
             });
             let b = self.clone();
             let callback_schedule = schedule.clone();
             app.on_settings_edited(move |field| {
+                if !b.require_profile_management() {
+                    return;
+                }
                 // Onboarding retains its compact Dark/True black choice.
                 let field = if field == "true_black" {
                     if let Some(app) = b.app() {
@@ -486,6 +492,9 @@ impl Bridge {
     }
 
     pub(super) fn show_settings_page(&self) {
+        if !self.request_settings_management() {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_show_about(false);
             app.set_show_home(false);

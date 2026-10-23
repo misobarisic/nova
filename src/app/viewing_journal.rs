@@ -610,6 +610,9 @@ impl Bridge {
     }
 
     pub(super) fn refresh_viewing_journal(&self) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
         let Some(app) = self.app() else { return };
         let journal = app.global::<JournalBridge>();
         let now_year = year_at(now_secs());
@@ -629,7 +632,16 @@ impl Bridge {
             .min(now_year);
         journal.set_oldest_year(oldest);
         let year = journal.get_year();
-        let summary = summarize(tracker.rows.values(), year);
+        let summary = summarize(
+            tracker.rows.values().filter(|r| {
+                profile_policy::allows_title(
+                    &profiles::ProfileStore::capture(),
+                    &r.media_type,
+                    &r.title_id,
+                )
+            }),
+            year,
+        );
         journal.set_error(if tracker.error {
             text::tr(
                 "Some viewing sessions could not be read. Your saved records have been preserved.",

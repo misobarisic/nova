@@ -3,6 +3,11 @@
 use std::path::Path;
 
 pub fn available_bytes(path: &Path) -> Option<u64> {
+    filesystem_capacity(path).map(|(available, _)| available)
+}
+
+/// Available bytes and total filesystem capacity, using the same filesystem.
+pub fn filesystem_capacity(path: &Path) -> Option<(u64, u64)> {
     let mut existing = path;
     while !existing.exists() {
         existing = existing.parent()?;
@@ -13,7 +18,7 @@ pub fn available_bytes(path: &Path) -> Option<u64> {
 #[cfg(unix)]
 // libc's filesystem counter widths differ between Unix targets.
 #[allow(clippy::unnecessary_cast)]
-fn platform_available(path: &Path) -> Option<u64> {
+fn platform_available(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut info = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -23,11 +28,14 @@ fn platform_available(path: &Path) -> Option<u64> {
         return None;
     }
     let info = unsafe { info.assume_init() };
-    (info.f_bavail as u64).checked_mul(info.f_frsize as u64)
+    Some((
+        (info.f_bavail as u64).checked_mul(info.f_frsize as u64)?,
+        (info.f_blocks as u64).checked_mul(info.f_frsize as u64)?,
+    ))
 }
 
 #[cfg(windows)]
-fn platform_available(path: &Path) -> Option<u64> {
+fn platform_available(path: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -40,23 +48,24 @@ fn platform_available(path: &Path) -> Option<u64> {
     }
     let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut available = 0;
+    let mut total = 0;
     if unsafe {
         GetDiskFreeSpaceExW(
             path.as_ptr(),
             &mut available,
-            std::ptr::null_mut(),
+            &mut total,
             std::ptr::null_mut(),
         )
     } == 0
     {
         None
     } else {
-        Some(available)
+        Some((available, total))
     }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn platform_available(_: &Path) -> Option<u64> {
+fn platform_available(_: &Path) -> Option<(u64, u64)> {
     None
 }
 

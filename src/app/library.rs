@@ -86,6 +86,9 @@ pub(super) fn display_groups_from_index(
     entries: &[LibraryEntry],
     index: &IdentityIndex,
 ) -> LibraryDisplayGroups {
+    if profile_policy::restricted() {
+        return LibraryDisplayGroups::default();
+    }
     LibraryDisplayGroups::from_index(
         entries
             .iter()
@@ -99,6 +102,9 @@ pub(super) fn prepare_display_groups(
     entries: &[LibraryEntry],
     mut episodes: impl FnMut(&str, &str) -> Vec<Video>,
 ) -> LibraryDisplayGroups {
+    if profile_policy::restricted() {
+        return LibraryDisplayGroups::default();
+    }
     let identities = entries
         .iter()
         .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
@@ -158,6 +164,11 @@ thread_local! {
 
 impl Bridge {
     pub(super) fn library_display_groups(&self) -> Arc<LibraryDisplayGroups> {
+        // A physical alias must never replace an explicitly allowed native ID
+        // with an unapproved representative in a restricted Library.
+        if profile_policy::restricted() {
+            return Arc::new(LibraryDisplayGroups::default());
+        }
         let (identities, modal) = {
             let state = self.shared.lock().unwrap();
             (
@@ -313,6 +324,13 @@ impl Bridge {
         let query_matches = groups.matching_query(&all_candidates, &query.trim().to_lowercase());
         let mut candidates = Vec::new();
         for identity in identities {
+            if !profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &identity.type_,
+                &identity.id,
+            ) {
+                continue;
+            }
             let episodes = ((dynamic_filter && identity.watch_status == WatchStatus::Auto)
                 || (smart_watched && identity.type_ != "movie"))
                 .then(|| {
@@ -371,6 +389,7 @@ impl Bridge {
 
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
+        self.enforce_profile_content_policy();
         self.refresh_smart_collections();
         self.migrate_viewing_activity();
         let card_snapshots = self.library_card_snapshots();
@@ -711,6 +730,9 @@ impl Bridge {
     }
 
     fn toggle_current_in_library_inner(&self, allow_duplicate: bool) {
+        if profile_policy::restricted() && !self.require_profile_management() {
+            return;
+        }
         let (id, type_, name, year, poster_url, background_url, genres, description, currently_in) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
@@ -965,6 +987,9 @@ impl Bridge {
     /// index is into the filtered grid and resolves through the same ordered
     /// candidate projection used to render the model.
     pub(super) fn remove_library_at(&self, index: usize) {
+        if profile_policy::restricted() && !self.require_profile_management() {
+            return;
+        }
         let Some(selected) = self.current_library_entry(index) else {
             return;
         };
@@ -1002,6 +1027,12 @@ impl Bridge {
     }
 
     pub(super) fn open_library_entry(&self, e: LibraryEntry) {
+        if profile_policy::entry_blocked() {
+            return;
+        }
+        if !profile_policy::allows_title(&profiles::ProfileStore::capture(), &e.type_, &e.id) {
+            return;
+        }
         if let Some(app) = self.app() {
             let content = (*app).global::<nova_ui_shared::DetailContent>();
             content.set_restoring_navigation(false);
@@ -1596,6 +1627,13 @@ pub(super) fn prepare_progress_cards(
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
+            if !profile_policy::allows_title(
+                &profiles::ProfileStore::capture(),
+                &entry.type_,
+                &entry.id,
+            ) {
+                return None;
+            }
             if !query_matches.contains(&groups.representative(&entry.type_, &entry.id)) {
                 return None;
             }

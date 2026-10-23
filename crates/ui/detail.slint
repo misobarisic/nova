@@ -1,6 +1,6 @@
 import { CatalogGroupingBridge, DetailInfo, InterfaceStyle, Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem, Anim } from "@NovaUiShared";
 
-import { QueueBridge, DetailContent, DetailBridge } from "@NovaUiShared";
+import { OfflineBridge, QueueBridge, DetailContent, DetailBridge, CalendarBridge } from "@NovaUiShared";
 import { TitleArtwork } from "title-artwork.slint";
 import { DetailExtrasPanel } from "detail-extras.slint";
 
@@ -204,6 +204,7 @@ export component DetailPage {
     in property <bool> library_watched: false;
     in property <int> library_activity_action: 0;
     private property <bool> hero_library_focused: false;
+    private property <bool> hero_reminder_focused: false;
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <int> selected_category_count: 0;
     in-out property <[StreamRow]> streams: [];
@@ -420,7 +421,8 @@ export component DetailPage {
         if (root.kb_zone == 0) {
             root.det_top_left();
         } else if (root.kb_zone == 2) {
-            root.hero_library_focused = false;
+            if root.hero_reminder_focused { root.hero_reminder_focused = false; root.hero_library_focused = true; }
+            else { root.hero_library_focused = false; }
         } else if (root.kb_zone == 1) {
             root.kb_tab = root.is_movie ? (root.in_library && root.kb_tab == 0 ? 4 : 0) : (root.kb_tab == 0 ? (root.in_library ? 4 : 3) : root.kb_tab == 4 ? 3 : 0);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
@@ -441,7 +443,8 @@ export component DetailPage {
         if (root.kb_zone == 0) {
             root.det_top_right();
         } else if (root.kb_zone == 2) {
-            root.hero_library_focused = true;
+            if root.hero_library_focused && !root.is_movie { root.hero_reminder_focused = true; root.hero_library_focused = false; }
+            else if !root.hero_reminder_focused { root.hero_library_focused = true; }
         } else if (root.kb_zone == 1) {
             root.kb_tab = root.is_movie ? (root.in_library && root.kb_tab == 0 ? 4 : 0) : (root.kb_tab == 0 ? 3 : root.kb_tab == 3 && root.in_library ? 4 : 0);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
@@ -484,7 +487,8 @@ export component DetailPage {
             if root.kb_tab == 4 { root.tracking_show(); }
             else { root.detail_tab_picked(root.kb_tab); }
         } else if (root.kb_zone == 2) {
-            if (root.hero_library_focused) { root.add_to_library(); }
+            if root.hero_reminder_focused && !root.is_movie { CalendarBridge.toggle_detail(); }
+            else if (root.hero_library_focused) { root.add_to_library(); }
             else { root.watch_now(); }
         } else {
             if (root.det_content() == 2) {
@@ -719,6 +723,7 @@ export component DetailPage {
         { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
         { label: @tr("Remove from library"), enabled: true },
         { label: root.library_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.library_activity_action > 0 },
+        { label: CalendarBridge.detail_subscribed ? @tr("Stop release reminders") : @tr("Remind me"), enabled: !root.is_movie },
     ];
 
     function open_library_menu() {
@@ -729,6 +734,7 @@ export component DetailPage {
     function library_menu_picked(a: int) {
         root.close_menu();
         if (a == 4) { root.open_categories(); }
+        else if (a == 7) { CalendarBridge.toggle_detail(); }
         else { root.library_action(a == 6 ? (root.library_activity_action == 4 ? 6 : 5) : a == 5 ? 4 : a); }
     }
 
@@ -1138,7 +1144,7 @@ export component DetailPage {
                                         border-radius: root.narrow ? 22px : 26px;
                                         background: watch_hero.has-hover ? Theme.current.primary_button_hover : Theme.current.primary_button;
                                         border-width: 1px;
-                                        border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused ? Theme.current.text_bright : Theme.current.primary_button_border;
+                                        border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused && !root.hero_reminder_focused ? Theme.current.text_bright : Theme.current.primary_button_border;
                                         accessible-role: button;
                                         accessible-label: root.watch_label;
                                         HorizontalLayout {
@@ -1210,6 +1216,11 @@ export component DetailPage {
                                     }
                                 }
                             }
+                            if !root.is_movie: TrackingButton {
+                                text: CalendarBridge.detail_subscribed ? @tr("Stop release reminders") : @tr("Remind me");
+                                selected: CalendarBridge.detail_subscribed || (root.kb_active && root.kb_zone == 2 && root.hero_reminder_focused);
+                                clicked => { CalendarBridge.toggle_detail(); }
+                            }
                             if !root.narrow: Rectangle { horizontal-stretch: 1; }
                         }
                     }
@@ -1245,6 +1256,10 @@ export component DetailPage {
                             if root.detail_tab == 0: VerticalLayout {
                                 spacing: 10px;
                                 alignment: start;
+                                if !root.is_movie: HorizontalLayout {
+                                    TrackingButton {text:OfflineBridge.detail_enabled ? @tr("Offline rule enabled") : @tr("Keep offline");selected:OfflineBridge.detail_enabled;clicked=>{OfflineBridge.detail_toggle();}}
+                                    Rectangle {horizontal-stretch:1;}
+                                }
                                 if root.is_movie: HorizontalLayout {
                                     TrackingButton {
                                         text: QueueBridge.detail_queued ? @tr("In watch queue") : @tr("Add to watch queue");

@@ -228,7 +228,7 @@ fn root(parents: &[usize], mut index: usize) -> usize {
 
 /// These catalog formats are globally scoped. Opaque source IDs can be local
 /// aliases, but matching their spelling across titles proves nothing.
-fn canonical_episode_namespace(id: &str) -> Option<&'static str> {
+pub(super) fn canonical_episode_namespace(id: &str) -> Option<&'static str> {
     let (parent, episode) = id.rsplit_once(':')?;
     episode.parse::<u32>().ok()?;
     if let Some((title, season)) = parent.rsplit_once(':')

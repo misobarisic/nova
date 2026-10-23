@@ -25,6 +25,7 @@ impl Bridge {
     }
 
     pub(super) fn show_calendar_page(&self) {
+        self.refresh_release_reminders();
         if let Some(app) = self.app() {
             app.set_show_home(false);
             app.set_show_library(false);
@@ -147,6 +148,11 @@ impl Bridge {
         let mut schedule = Vec::new();
         for e in &entries {
             if e.type_ == "movie"
+                || !profile_policy::allows_title(
+                    &profiles::ProfileStore::capture(),
+                    &e.type_,
+                    &e.id,
+                )
                 || matches!(e.watch_status, WatchStatus::OnHold | WatchStatus::Dropped)
                 || !e.name.to_lowercase().contains(query.trim())
             {

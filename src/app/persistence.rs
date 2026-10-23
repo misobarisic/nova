@@ -14,6 +14,8 @@ pub(super) fn register_collections() {
 }
 
 fn register_for(owner: &profiles::ProfileStore) {
+    owner.register_collection(profile_policy::KEY, storage::CollectionKind::Object);
+    owner.register_collection(smart_offline::KEY, storage::CollectionKind::Object);
     owner.register_collection(
         "library",
         storage::CollectionKind::CompositeArray {

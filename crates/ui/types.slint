@@ -76,6 +76,8 @@ export struct StreamRow {
     /// The device's most recently chosen source for this movie/episode.
     last_used: bool,
     recommended: bool,
+    /// Exact asset also picked by another connected participant in this party.
+    party_recommended: bool,
     download_progress: float,
     download_action: int,
 }

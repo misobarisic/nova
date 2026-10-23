@@ -376,6 +376,13 @@ impl Bridge {
                 extras
                     .related
                     .iter()
+                    .filter(|m| {
+                        profile_policy::allows_title(
+                            &profiles::ProfileStore::capture(),
+                            &m.type_,
+                            &m.id,
+                        )
+                    })
                     .map(|preview| {
                         let pixels = preview.poster.as_deref().and_then(|url| {
                             decoded_cache_get(&sized_cache_key(url, Some(DISPLAY_POSTER_SIDE)))

@@ -1013,3 +1013,653 @@ msgstr "Cross-device sync"
 
 msgid "Powered by TMDB"
 msgstr "Powered by TMDB"
+
+msgid "Sleep timer"
+msgstr "Sleep timer"
+
+msgid "15 minutes"
+msgstr "15 minutes"
+
+msgid "30 minutes"
+msgstr "30 minutes"
+
+msgid "45 minutes"
+msgstr "45 minutes"
+
+msgid "60 minutes"
+msgstr "60 minutes"
+
+msgid "90 minutes"
+msgstr "90 minutes"
+
+msgid "Fewer minutes"
+msgstr "Fewer minutes"
+
+msgid "More minutes"
+msgstr "More minutes"
+
+msgid "Start custom timer"
+msgstr "Start custom timer"
+
+msgid "End of this episode/movie"
+msgstr "End of this episode/movie"
+
+msgid "Fewer episodes"
+msgstr "Fewer episodes"
+
+msgid "More episodes"
+msgstr "More episodes"
+
+msgid "Start episode timer"
+msgstr "Start episode timer"
+
+msgid "Add 15 minutes"
+msgstr "Add 15 minutes"
+
+msgid "Cancel timer"
+msgstr "Cancel timer"
+
+msgid "Minutes: {}"
+msgstr "Minutes: {}"
+
+msgid "Episodes: {}"
+msgstr "Episodes: {}"
+
+msgid "Remind me"
+msgstr "Remind me"
+
+msgid "Stop release reminders"
+msgstr "Stop release reminders"
+
+msgid "Manage reminders / Export calendar"
+msgstr "Manage reminders / Export calendar"
+
+msgid "New releases / Export calendar"
+msgstr "New releases / Export calendar"
+
+msgid "Reminders and calendar export"
+msgstr "Reminders and calendar export"
+
+msgid "Enable device notifications"
+msgstr "Enable device notifications"
+
+msgid "Disable device notifications"
+msgstr "Disable device notifications"
+
+msgid "One daily digest at 09:00 local time. Desktop delivery runs while Nova is open."
+msgstr "One daily digest at 09:00 local time. Desktop delivery runs while Nova is open."
+
+msgid "Released today"
+msgstr "Released today"
+
+msgid "Open release"
+msgstr "Open release"
+
+msgid "Dismiss digest"
+msgstr "Dismiss digest"
+
+msgid "Export scope"
+msgstr "Export scope"
+
+msgid "Subscribed shows"
+msgstr "Subscribed shows"
+
+msgid "Library shows"
+msgstr "Library shows"
+
+msgid "Current Calendar filter"
+msgstr "Current Calendar filter"
+
+msgid "Selected shows"
+msgstr "Selected shows"
+
+msgid "Date range (YYYY-MM-DD)"
+msgstr "Date range (YYYY-MM-DD)"
+
+msgid "Start date"
+msgstr "Start date"
+
+msgid "End date"
+msgstr "End date"
+
+msgid "Start one day earlier"
+msgstr "Start one day earlier"
+
+msgid "Start one day later"
+msgstr "Start one day later"
+
+msgid "End one day earlier"
+msgstr "End one day earlier"
+
+msgid "End one day later"
+msgstr "End one day later"
+
+msgid "Preview and save .ics snapshot"
+msgstr "Preview and save .ics snapshot"
+
+msgid "Export update"
+msgstr "Export update"
+
+msgid "Save / Share .ics"
+msgstr "Save / Share .ics"
+
+msgid "Snapshots do not update automatically. Use a dedicated calendar and replace its snapshot if your importer duplicates updates or ignores cancellations."
+msgstr "Snapshots do not update automatically. Use a dedicated calendar and replace its snapshot if your importer duplicates updates or ignores cancellations."
+
+msgid "Shows: reminders and export selection"
+msgstr "Shows: reminders and export selection"
+
+msgid "Selected for export"
+msgstr "Selected for export"
+
+msgid "Select for export"
+msgstr "Select for export"
+
+# Synced watch queue and receiver-owned continuous playback.
+
+msgid "Continue queue"
+msgstr "Continue queue"
+
+msgid "Autoplay next queued item: On"
+msgstr "Autoplay next queued item: On"
+
+msgid "Autoplay next queued item: Off"
+msgstr "Autoplay next queued item: Off"
+
+msgid "Skip"
+msgstr "Skip"
+
+msgid "Stop queue"
+msgstr "Stop queue"
+
+msgid "CURRENT"
+msgstr "CURRENT"
+
+msgid "Start from this item"
+msgstr "Start from this item"
+
+msgid "Skip queued item"
+msgstr "Skip queued item"
+
+msgid "Ready"
+msgstr "Ready"
+
+msgid "In progress"
+msgstr "In progress"
+
+msgid "Completed"
+msgstr "Completed"
+
+msgid "Finished"
+msgstr "Finished"
+
+msgid "Queue paused. Choose a source, retry, skip or stop the queue."
+msgstr "Queue paused. Choose a source, retry, skip or stop the queue."
+
+msgid "Queue playback is unavailable"
+msgstr "Queue playback is unavailable"
+
+msgid "Queue is unavailable"
+msgstr "Queue is unavailable"
+
+msgid "No pending queue item"
+msgstr "No pending queue item"
+
+msgid "Title is unavailable"
+msgstr "Title is unavailable"
+
+msgid "Queue paused"
+msgstr "Queue paused"
+
+msgid "Next queued item"
+msgstr "Next queued item"
+
+msgid "Queue playing"
+msgstr "Queue playing"
+
+msgid "Play now"
+msgstr "Play now"
+
+msgid "Queue item is unavailable on this device. Sync, then retry or choose a source on the TV."
+msgstr "Queue item is unavailable on this device. Sync, then retry or choose a source on the TV."
+
+msgid "Select and unlock the same profile on the playing device."
+msgstr "Select and unlock the same profile on the playing device."
+
+msgid "Watch party recommended"
+msgstr "Watch party recommended"
+
+msgid "Smart downloads"
+msgstr "Smart downloads"
+
+msgid "Keep offline"
+msgstr "Keep offline"
+
+msgid "Offline rule enabled"
+msgstr "Offline rule enabled"
+
+msgid "Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet."
+msgstr "Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet."
+
+msgid "Pause this profile on this device"
+msgstr "Pause this profile on this device"
+
+msgid "Enable this profile on this device"
+msgstr "Enable this profile on this device"
+
+msgid "Automatic allowance: {} GiB"
+msgstr "Automatic allowance: {} GiB"
+
+msgid "Charging required"
+msgstr "Charging required"
+
+msgid "Charging optional"
+msgstr "Charging optional"
+
+msgid "Open a show and choose Keep offline to add a rule."
+msgstr "Open a show and choose Keep offline to add a rule."
+
+msgid "Pause rule"
+msgstr "Pause rule"
+
+msgid "Resume rule"
+msgstr "Resume rule"
+
+msgid "Keep next {}"
+msgstr "Keep next {}"
+
+msgid "Choose another source"
+msgstr "Choose another source"
+
+msgid "Choose source"
+msgstr "Choose source"
+
+msgid "Retry / Restore offline"
+msgstr "Retry / Restore offline"
+
+msgid "Specials included"
+msgstr "Specials included"
+
+msgid "Specials excluded"
+msgstr "Specials excluded"
+
+msgid "Remove unneeded automatic files"
+msgstr "Remove unneeded automatic files"
+
+msgid "Keep watched automatic files"
+msgstr "Keep watched automatic files"
+
+msgid "Remove rule, keep files"
+msgstr "Remove rule, keep files"
+
+msgid "Remove rule and unneeded files"
+msgstr "Remove rule and unneeded files"
+
+msgid "Waiting for unmetered Wi-Fi or Ethernet"
+msgstr "Waiting for unmetered Wi-Fi or Ethernet"
+
+msgid "Waiting for charging"
+msgstr "Waiting for charging"
+
+msgid "Automatic storage allowance reached"
+msgstr "Automatic storage allowance reached"
+
+msgid "Preserving free storage reserve"
+msgstr "Preserving free storage reserve"
+
+msgid "Execution disabled on this device"
+msgstr "Execution disabled on this device"
+
+msgid "Size unknown — choose Download manually"
+msgstr "Size unknown — choose Download manually"
+
+msgid "Paused by you"
+msgstr "Paused by you"
+
+msgid "Pending background opportunity"
+msgstr "Pending background opportunity"
+
+msgid "Choose a source for smart downloads"
+msgstr "Choose a source for smart downloads"
+
+msgid "Removed manually — use Restore offline"
+msgstr "Removed manually — use Restore offline"
+
+msgid "Download failed — Retry or choose a source"
+msgstr "Download failed — Retry or choose a source"
+
+msgid "Smart downloads ready"
+msgstr "Smart downloads ready"
+
+msgid "Source removed — choose another source"
+msgstr "Source removed — choose another source"
+
+msgid "Source is not allowed"
+msgstr "Source is not allowed"
+
+msgid "No matching release — choose another source"
+msgstr "No matching release — choose another source"
+
+msgid "Choose an exact torrent file for smart downloads"
+msgstr "Choose an exact torrent file for smart downloads"
+
+msgid "Choose a downloadable source"
+msgstr "Choose a downloadable source"
+
+msgid "Source changed — choose another source"
+msgstr "Source changed — choose another source"
+
+msgid "Open an episode and use this source for smart downloads"
+msgstr "Open an episode and use this source for smart downloads"
+
+msgid "Use this source for smart downloads"
+msgstr "Use this source for smart downloads"
+
+msgid "Automatic storage"
+msgstr "Automatic storage"
+
+msgid "Reserved"
+msgstr "Reserved"
+
+msgid "Manually kept"
+msgstr "Manually kept"
+
+msgid "ready"
+msgstr "ready"
+
+msgid "downloading"
+msgstr "downloading"
+
+msgid "Source lookup failed — retry later"
+msgstr "Source lookup failed — retry later"
+
+msgid "Offline settings unavailable"
+msgstr "Offline settings unavailable"
+
+msgid "Over allowance"
+msgstr "Over allowance"
+
+msgid "Profiles enabled on this device"
+msgstr "Profiles enabled on this device"
+
+msgid "Enabled on this device"
+msgstr "Enabled on this device"
+
+msgid "Disabled on this device"
+msgstr "Disabled on this device"
+
+msgid "Backup and import"
+msgstr "Backup and import"
+
+msgid "Data"
+msgstr "Data"
+
+msgid "Export selected data and restore a backup"
+msgstr "Export selected data and restore a backup"
+
+msgid "Map profiles, select components and review changes before importing."
+msgstr "Map profiles, select components and review changes before importing."
+
+msgid "Choose the profiles and personal data to export."
+msgstr "Choose the profiles and personal data to export."
+
+msgid "Presets"
+msgstr "Presets"
+
+msgid "Everything personal"
+msgstr "Everything personal"
+
+msgid "All personal components, including credentials and profile PINs."
+msgstr "All personal components, including credentials and profile PINs."
+
+msgid "Library and viewing"
+msgstr "Library and viewing"
+
+msgid "Library, progress, history, collections, bookmarks and queue."
+msgstr "Library, progress, history, collections, bookmarks and queue."
+
+msgid "Configuration"
+msgstr "Configuration"
+
+msgid "Personal settings, addons, integrations and profile policy."
+msgstr "Personal settings, addons, integrations and profile policy."
+
+msgid "Target profiles"
+msgstr "Target profiles"
+
+msgid "Replace selected components"
+msgstr "Replace selected components"
+
+msgid "Absent records in selected components will be deleted."
+msgstr "Absent records in selected components will be deleted."
+
+msgid "Merge inserts missing records and preserves local conflicts."
+msgstr "Merge inserts missing records and preserves local conflicts."
+
+msgid "Components"
+msgstr "Components"
+
+msgid "Use backup for conflicts"
+msgstr "Use backup for conflicts"
+
+msgid "Import preview"
+msgstr "Import preview"
+
+msgid "Selected configuration includes addon credentials and profile PINs. Imported edits sync to paired devices. Notification delivery and smart downloads stay off on this device."
+msgstr "Selected configuration includes addon credentials and profile PINs. Imported edits sync to paired devices. Notification delivery and smart downloads stay off on this device."
+
+msgid "Export selected data"
+msgstr "Export selected data"
+
+msgid "Import reviewed changes"
+msgstr "Import reviewed changes"
+
+msgid "Build import preview"
+msgstr "Build import preview"
+
+msgid "Rebuild import preview"
+msgstr "Rebuild import preview"
+
+msgid "Choose another backup file"
+msgstr "Choose another backup file"
+
+msgid "Choose backup file to import"
+msgstr "Choose backup file to import"
+
+msgid "Undo last import"
+msgstr "Undo last import"
+
+msgid "Delete recovery copies"
+msgstr "Delete recovery copies"
+
+msgid "Playback progress"
+msgstr "Playback progress"
+
+msgid "Viewing journal"
+msgstr "Viewing journal"
+
+msgid "Viewing activity"
+msgstr "Viewing activity"
+
+msgid "Hidden Continue rows"
+msgstr "Hidden Continue rows"
+
+msgid "Hidden history rows"
+msgstr "Hidden history rows"
+
+msgid "Hidden new episodes"
+msgstr "Hidden new episodes"
+
+msgid "Personal settings and Home"
+msgstr "Personal settings and Home"
+
+msgid "Title playback preferences"
+msgstr "Title playback preferences"
+
+msgid "Addons and configuration"
+msgstr "Addons and configuration"
+
+msgid "Optional addon package files"
+msgstr "Optional addon package files"
+
+msgid "Integration accounts and mappings"
+msgstr "Integration accounts and mappings"
+
+msgid "Smart offline policies"
+msgstr "Smart offline policies"
+
+msgid "This device's compatible preferences"
+msgstr "This device's compatible preferences"
+
+msgid "Create new profile"
+msgstr "Create new profile"
+
+msgid "Choose at least one profile and component"
+msgstr "Choose at least one profile and component"
+
+msgid "Preparing backup…"
+msgstr "Preparing backup…"
+
+msgid "Backup exported"
+msgstr "Backup exported"
+
+msgid "Export cancelled"
+msgstr "Export cancelled"
+
+msgid "Choose a backup file…"
+msgstr "Choose a backup file…"
+
+msgid "Choose target profiles and components, then rebuild the preview"
+msgstr "Choose target profiles and components, then rebuild the preview"
+
+msgid "Unsupported optional components"
+msgstr "Unsupported optional components"
+
+msgid "Import cancelled"
+msgstr "Import cancelled"
+
+msgid "Preparing import preview…"
+msgstr "Preparing import preview…"
+
+msgid "Importing selected data…"
+msgstr "Importing selected data…"
+
+msgid "Import complete. Recovery copy saved; Undo is available."
+msgstr "Import complete. Recovery copy saved; Undo is available."
+
+msgid "Recovery copies deleted"
+msgstr "Recovery copies deleted"
+
+msgid "Archive"
+msgstr "Archive"
+
+msgid "Identical"
+msgstr "Identical"
+
+msgid "Conflicts"
+msgstr "Conflicts"
+
+msgid "Preserved local"
+msgstr "Preserved local"
+
+msgid "Deletions"
+msgstr "Deletions"
+
+msgid "Conflict identities"
+msgstr "Conflict identities"
+
+msgid "Review the exact changes, then import"
+msgstr "Review the exact changes, then import"
+
+msgid "Category assignments omitted because their categories are unavailable"
+msgstr "Category assignments omitted because their categories are unavailable"
+
+msgid "Included"
+msgstr "Included"
+
+msgid "Already installed"
+msgstr "Already installed"
+
+msgid "Reinstall needed"
+msgstr "Reinstall needed"
+
+msgid "Target changed while preview was open. Rebuild the preview before importing."
+msgstr "Target changed while preview was open. Rebuild the preview before importing."
+
+msgid "Device preferences changed while preview was open. Rebuild the preview before importing."
+msgstr "Device preferences changed while preview was open. Rebuild the preview before importing."
+
+msgid "Choose one distinct target for each backup profile"
+msgstr "Choose one distinct target for each backup profile"
+
+msgid "Unlock the target profile before importing"
+msgstr "Unlock the target profile before importing"
+
+msgid "There is no local import to undo"
+msgstr "There is no local import to undo"
+
+msgid "Unsupported backup format version"
+msgstr "Unsupported backup format version"
+
+msgid "Backup manifest is missing"
+msgstr "Backup manifest is missing"
+
+msgid "Duplicate or invalid backup path"
+msgstr "Duplicate or invalid backup path"
+
+msgid "Duplicate or invalid backup component"
+msgstr "Duplicate or invalid backup component"
+
+msgid "Expanded backup exceeds the size limit"
+msgstr "Expanded backup exceeds the size limit"
+
+msgid "Backup exceeds the size limit"
+msgstr "Backup exceeds the size limit"
+
+msgid "Document exceeds the size limit"
+msgstr "Document exceeds the size limit"
+
+msgid "A document picker is already open"
+msgstr "A document picker is already open"
+
+msgid "Document picker could not be opened"
+msgstr "Document picker could not be opened"
+
+msgid "Selected addon package file is missing"
+msgstr "Selected addon package file is missing"
+
+msgid "Missing addon package file"
+msgstr "Missing addon package file"
+
+msgid "Addon package checksum failed"
+msgstr "Addon package checksum failed"
+
+msgid "Addon package identity mismatch"
+msgstr "Addon package identity mismatch"
+
+msgid "Enable release digest"
+msgstr "Enable release digest"
+
+msgid "Disable release digest"
+msgstr "Disable release digest"
+
+msgid "Daily at 09:00 local time. Android can notify; desktop reminders appear here while Nova is open."
+msgstr "Daily at 09:00 local time. Android can notify; desktop reminders appear here while Nova is open."
+
+msgid "Search shows"
+msgstr "Search shows"
+
+msgid "Showing the first 50 matches. Search to find more shows."
+msgstr "Showing the first 50 matches. Search to find more shows."
+
+msgid "Keep downloaded file"
+msgstr "Keep downloaded file"
+
+msgid "Unpin downloaded file"
+msgstr "Unpin downloaded file"
+
+msgid "Skipped expired or unsupported values"
+msgstr "Skipped expired or unsupported values"
+
+msgid "Select"
+msgstr "Select"

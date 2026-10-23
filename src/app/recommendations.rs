@@ -71,6 +71,9 @@ fn visible_candidates(state: &Shared) -> Vec<MetaPreview> {
 
 impl Bridge {
     pub(super) fn recommendation_group(&self) -> Option<HomeCatalogGroup> {
+        if profile_policy::restricted() {
+            return None;
+        }
         let state = self.shared.lock().unwrap();
         if !state
             .cache_settings
@@ -87,6 +90,9 @@ impl Bridge {
     }
 
     pub(super) fn ensure_recommendations_loaded(&self) {
+        if profile_policy::restricted() {
+            return;
+        }
         let (signature, generation) = {
             let mut state = self.shared.lock().unwrap();
             if !state

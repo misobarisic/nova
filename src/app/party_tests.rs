@@ -626,6 +626,7 @@ fn host_title_changes_preserve_membership_and_retire_the_old_timeline() {
                     state.party.choosing_source = true;
                     state.party.snapshot.as_mut().unwrap().participants.push(
                         nova_party::Participant {
+                            source_fingerprint: None,
                             id: "guest".into(),
                             name: "Guest device".into(),
                             is_host: false,
@@ -885,6 +886,154 @@ fn host_next_episode_reaches_the_source_picker_without_leaving_the_room() {
             ));
             assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:1:2");
             assert_eq!(state.playback.as_ref().unwrap().episode_id, "tt123:1:2");
+        },
+    );
+}
+
+#[test]
+fn chosen_source_report_survives_discarded_results_and_retires_on_generation_and_leave() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::chosen_source_report_survives_discarded_results_and_retires_on_generation_and_leave"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let snapshot = room(PartyRole::Guest);
+            select_local_media(&bridge, snapshot.media.as_ref().unwrap());
+            let chosen = StreamUi {
+                id: "chosen".into(),
+                choice_id: None,
+                owner_url: "local-addon".into(),
+                display: "Local choice".into(),
+                card: Default::default(),
+                source: StreamSource::Url(
+                    "https://media.example/exact.mkv?signature=private".into(),
+                ),
+                addon: "Own addon".into(),
+                download: None,
+            };
+            let expected = party_source::fingerprint(&chosen.source).unwrap();
+            bridge.shared.lock().unwrap().streams = vec![chosen.clone()];
+            bridge.note_selected_playback_stream(&chosen);
+            let _request = bridge.begin_playback_request();
+            app.set_player_open(true);
+            app.set_playback_started(true);
+            app.set_duration(120.0);
+            bridge.shared.lock().unwrap().streams.clear();
+            let report = bridge.party_report(Some(&snapshot));
+            assert_eq!(report.source_fingerprint, Some(expected));
+            let mut next = snapshot.clone();
+            next.generation += 1;
+            assert!(
+                bridge
+                    .party_report(Some(&next))
+                    .source_fingerprint
+                    .is_none()
+            );
+            assert!(bridge.shared.lock().unwrap().party.source_choice.is_none());
+            bridge.shared.lock().unwrap().party.snapshot = Some(next.clone());
+            bridge.note_selected_playback_stream(&chosen);
+            assert_eq!(
+                bridge.party_report(Some(&next)).source_fingerprint,
+                Some(expected)
+            );
+            bridge.party_leave();
+            assert!(bridge.shared.lock().unwrap().party.source_choice.is_none());
+            assert!(
+                bridge
+                    .party_report(Some(&next))
+                    .source_fingerprint
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn participant_updates_repaint_only_existing_own_results_without_order_or_focus_changes() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::participant_updates_repaint_only_existing_own_results_without_order_or_focus_changes"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let snapshot = room(PartyRole::Guest);
+            select_local_media(&bridge, snapshot.media.as_ref().unwrap());
+            let row = |id: &str, url: &str| StreamUi {
+                id: id.into(),
+                choice_id: None,
+                owner_url: "local-addon".into(),
+                display: id.into(),
+                card: Default::default(),
+                source: StreamSource::Url(url.into()),
+                addon: "Own addon".into(),
+                download: None,
+            };
+            let own = vec![
+                row("first", "https://media.example/one"),
+                row("second", "https://media.example/two"),
+            ];
+            let fingerprint = party_source::fingerprint(&own[1].source).unwrap();
+            bridge.shared.lock().unwrap().streams = own;
+            let rows: slint::ModelRc<StreamRow> = Rc::new(VecModel::from(vec![
+                StreamRow {
+                    id: "first".into(),
+                    recommended: true,
+                    ..Default::default()
+                },
+                StreamRow {
+                    id: "second".into(),
+                    ..Default::default()
+                },
+            ]))
+            .into();
+            app.set_streams(rows.clone());
+            app.set_detail_kb_s(1);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .participants = vec![nova_party::Participant {
+                id: "host".into(),
+                name: "Host".into(),
+                is_host: true,
+                connected: true,
+                ready: true,
+                buffering: false,
+                position: 20.0,
+                buffered_ahead: 30.0,
+                reason: None,
+                source_fingerprint: Some(fingerprint),
+            }];
+            bridge.party_publish();
+            assert_eq!(app.get_streams().row_count(), 2);
+            assert!(!app.get_streams().row_data(0).unwrap().party_recommended);
+            assert!(app.get_streams().row_data(0).unwrap().recommended);
+            assert!(app.get_streams().row_data(1).unwrap().party_recommended);
+            assert_eq!(app.get_detail_kb_s(), 1);
+            assert!(std::ptr::eq(rows.as_any(), app.get_streams().as_any()));
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .participants[0]
+                .connected = false;
+            bridge.party_publish();
+            assert!(!app.get_streams().row_data(1).unwrap().party_recommended);
+            assert_eq!(app.get_streams().row_data(1).unwrap().id, "second");
+            assert_eq!(app.get_detail_kb_s(), 1);
+            assert_eq!(bridge.shared.lock().unwrap().streams.len(), 2);
+            bridge.party_leave();
         },
     );
 }

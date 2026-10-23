@@ -216,6 +216,9 @@ impl SessionState {
 
 impl Bridge {
     pub(super) fn retry_profile_services(&self) {
+        if super::profile_policy::entry_blocked() {
+            return;
+        }
         self.sessions.reap();
         let session = self.sessions.active();
         if session.services_requested.load(Ordering::Acquire) && self.sessions.can_start(&session) {
@@ -227,6 +230,9 @@ impl Bridge {
         }
     }
     pub(super) fn profile_services_can_start(&self) -> bool {
+        if super::profile_policy::entry_blocked() {
+            return false;
+        }
         self.sessions.resolve().is_ok_and(|session| {
             profiles::is_current(&session.context()) && self.sessions.can_start(&session)
         })

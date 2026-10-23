@@ -10,6 +10,7 @@ export component PlaybackEnded inherits Rectangle {
     in property <string> source_title;
     in property <string> source_metadata;
     in property <bool> has_next;
+    in property <bool> queued_next;
     in property <string> next_title;
     in property <string> show_title;
     in property <string> episode_title;
@@ -97,7 +98,7 @@ export component PlaybackEnded inherits Rectangle {
             spacing: root.short ? 8px : 16px;
             animate y { duration: Anim.transition_slide; easing: ease-out; }
             Text {
-                text: root.preview ? @tr("Next episode") : @tr("Playback finished"); font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
+                text: root.preview ? (root.queued_next ? @tr("Next queued item") : @tr("Next episode")) : @tr("Playback finished"); font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
                 color: Theme.current.accent_soft; horizontal-alignment: center;
             }
             Text {
@@ -112,7 +113,7 @@ export component PlaybackEnded inherits Rectangle {
                 wrap: no-wrap; overflow: elide;
             }
             if root.has_next: Text {
-                text: @tr("Next episode") + (root.next_title == "" ? "" : " · " + root.next_title);
+                text: (root.queued_next ? @tr("Next queued item") : @tr("Next episode")) + (root.next_title == "" ? "" : " · " + root.next_title);
                 font-size: InterfaceStyle.tv ? 20px : 13px; color: Theme.current.text_player_secondary;
                 horizontal-alignment: center; wrap: no-wrap; overflow: elide;
             }
@@ -132,7 +133,7 @@ export component PlaybackEnded inherits Rectangle {
                 horizontal-alignment: center;
             }
             if root.has_next: TrackingButton {
-                text: root.preview ? @tr("Play now") : @tr("Next episode"); primary: true; compact: root.short;
+                text: root.preview ? @tr("Play now") : root.queued_next ? @tr("Next queued item") : @tr("Next episode"); primary: true; compact: root.short;
                 selected: root.selected == 0;
                 clicked => { if root.open { root.next(); } }
             }

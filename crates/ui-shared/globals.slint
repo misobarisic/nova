@@ -64,6 +64,7 @@ export global SettingsDestinations {
     { id: 8, stable-id: "settings:downloads", group: 2, title: @tr("Downloads"), description: @tr("Offline media and cleanup policy"), terms: @tr("Cleanup Auto-delete watched episodes Downloaded episodes") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View") + " " + @tr("Cleanup policy") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View"), aliases: "Downloads Offline media and cleanup policy Cleanup Auto-delete watched episodes Downloaded episodes Auto-delete watched episodes Downloaded episodes View", parent: -1 },
     { id: 9, stable-id: "settings:downloaded-episodes", group: 2, title: @tr("Downloaded episodes"), description: @tr("Episode files stored on this device"), terms: @tr("Downloads offline media downloaded episodes delete Remove") + " " + @tr("DOWNLOADED EPISODES") + " " + @tr("Delete") + " " + @tr("Delete"), aliases: "Downloaded episodes Episode files stored on this device Downloads offline media downloaded episodes delete Remove DOWNLOADED EPISODES Delete", parent: 8 },
     { id: 4, stable-id: "settings:p2p", group: 2, title: @tr("P2P"), description: @tr("Stream P2P with the built-in client"), terms: @tr("Streaming torrents Cache location folder limits size disk usage cleanup rate limit") + " " + @tr("Stream P2P") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage") + " " + @tr("Clear") + " " + @tr("Streaming") + " " + @tr("Stream P2P") + " " + @tr("Cache location and limits") + " " + @tr("Default (app cache folder)") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage and cleanup") + " " + @tr("Disk usage") + " " + @tr("Clear"), aliases: "P2P Stream P2P with the built-in client Streaming torrents Cache location folder limits size disk usage cleanup rate limit Stream P2P Cache size limit Download rate limit No caching Disk usage Clear", parent: -1 },
+    { id: 15, stable-id: "settings:data", group: 2, title: @tr("Data"), description: @tr("Backup and import"), terms: @tr("Export selected data and restore a backup"), aliases: "Data Backup import export restore merge replace recovery Undo", parent: -1 },
     ];
 }
 
@@ -115,4 +116,26 @@ export global SubtitleStyle {
     public pure function step(index: int) -> float {
         return index == 0 ? 0.1 : index == 4 ? 0.05 : 1;
     }
+}
+
+export struct SmartOfflineRow {
+    id:string,title:string,status:string,enabled:bool,keep_count:int,
+    include_specials:bool,cleanup:bool,source_ready:bool,
+}
+export struct OfflineDeviceProfile {id:string,name:string,enabled:bool}
+export global OfflineBridge {
+    in-out property <bool> opened;
+    in-out property <int> focused_index:-1;
+    in-out property <string> focused_policy;
+    in-out property <bool> detail_enabled;
+    in-out property <bool> device_enabled;
+    in-out property <bool> charging_only;
+    in-out property <int> budget_gib:5;
+    in-out property <string> storage_summary;
+    in-out property <string> notice;
+    in-out property <[SmartOfflineRow]> rows;
+    in-out property <[OfflineDeviceProfile]> profiles;
+    callback profile_toggle(string);
+    callback refresh(); callback open_requested(); callback closed(); callback detail_toggle(); callback device_toggle();
+    callback charging_toggle(); callback budget(int); callback action(string,int);
 }

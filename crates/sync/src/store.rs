@@ -386,6 +386,14 @@ impl Store {
         self.pending_domains.iter().cloned().collect()
     }
 
+    /// Queue idempotent runtime publication in the same transaction as a local
+    /// import. The caller must save before waking materialization workers.
+    pub fn mark_pending(&mut self, domain: &str) {
+        if self.pending_domains.insert(domain.to_owned()) {
+            self.clock_dirty = true;
+        }
+    }
+
     pub fn mark_projected(
         &mut self,
         domain: &str,

@@ -27,7 +27,7 @@ pub(super) fn stream_series_scope(media_type: &str, id: &str) -> Option<String> 
 
 /// Only bounded hashes and recognized release facts are cached; never URLs,
 /// credentials, arbitrary addon descriptions or episode-specific file names.
-#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct StreamPreference {
     owner: String,
     binge: Option<String>,
@@ -124,6 +124,26 @@ impl StreamPreference {
                 ("hdtv", &["hdtv"]),
             ]),
         }
+    }
+
+    /// Offline transfers require the chosen family and every recorded quality
+    /// fact. Playback may rank a softer match; unattended disk use may not.
+    pub(super) fn offline_matches(&self, row: &StreamUi) -> bool {
+        let candidate = Self::from_row(row);
+        self.owner == candidate.owner
+            && self.score(&candidate).is_some()
+            && self
+                .resolution
+                .as_ref()
+                .is_none_or(|v| candidate.resolution.as_ref() == Some(v))
+            && self
+                .codec
+                .as_ref()
+                .is_none_or(|v| candidate.codec.as_ref() == Some(v))
+            && self
+                .source
+                .as_ref()
+                .is_none_or(|v| candidate.source.as_ref() == Some(v))
     }
 
     fn score(&self, candidate: &Self) -> Option<u32> {

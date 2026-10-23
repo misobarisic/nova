@@ -1,0 +1,111 @@
+import { Theme, InterfaceStyle, OfflineBridge } from "@NovaUiShared";
+import { ScrollView } from "scrollview.slint";
+import { PillButton } from "settings-controls.slint";
+import { PageHeader } from "page-header.slint";
+component OfflineButton inherits PillButton {
+    in property <bool> selected;
+    in property <bool> highlighted;
+    primary: root.selected;
+    focused: root.highlighted;
+    wrap_label: true;
+    callback picked();
+    callback reveal(length,length);
+    changed keyboard_focused=>{if self.keyboard_focused {root.reveal(root.absolute-position.y,root.height);}}
+    changed highlighted=>{if self.highlighted {root.reveal(root.absolute-position.y,root.height);}}
+    clicked=>{root.picked();}
+}
+export component SmartDownloads inherits Rectangle {
+    in property <length> safe_left;
+    in property <length> safe_right;
+    in property <length> safe_top;
+    in property <length> safe_bottom;
+    private property <length> supporting_font_size: InterfaceStyle.tv ? 20px : 14px;
+    visible: OfflineBridge.opened;
+    background: Theme.current.artwork_canvas;
+    // Cover inert page margins as well as controls and scrolling content.
+    TouchArea {width:100%;height:100%;clicked=>{} scroll-event(event)=>{accept}}
+    private property <int> selected_row <=> OfflineBridge.focused_index;
+    changed selected_row=>{if root.selected_row>=0 && root.selected_row<OfflineBridge.rows.length {OfflineBridge.focused_policy=OfflineBridge.rows[root.selected_row].id;}}
+    private property <int> selected_action:0;
+    private property <int> row_count:OfflineBridge.rows.length;
+    changed row_count=>{root.selected_row=Math.max(-1,Math.min(root.selected_row,root.row_count - 1));}
+    function reveal(y:length,h:length) {
+        let top=y - scroll.absolute-position.y;
+        if top<0px {scroll.content-y=scroll.content-y - top;}
+        else if top+h>scroll.visible-height {scroll.content-y=scroll.content-y - (top+h - scroll.visible-height);}
+    }
+    changed visible => {if self.visible {OfflineBridge.refresh();keys.focus();}}
+    function activate() {
+        if root.selected_row<0 {
+            if root.selected_action==0 {OfflineBridge.closed();}
+            else if root.selected_action==1 {OfflineBridge.device_toggle();}
+            else if root.selected_action==2 {OfflineBridge.budget(-1);}
+            else if root.selected_action==3 {OfflineBridge.budget(1);}
+            else if root.selected_action==4 {OfflineBridge.charging_toggle();}
+            else if root.selected_action - 5<OfflineBridge.profiles.length {OfflineBridge.profile_toggle(OfflineBridge.profiles[root.selected_action - 5].id);}
+        } else if root.selected_row<OfflineBridge.rows.length {
+            let row=OfflineBridge.rows[root.selected_row];
+            if root.selected_action==0 {OfflineBridge.action(row.id,0);}
+            else if root.selected_action==1 {OfflineBridge.action(row.id,2);}
+            else if root.selected_action==2 {OfflineBridge.action(row.id,1);}
+            else if root.selected_action==3 {OfflineBridge.action(row.id,3);}
+            else if root.selected_action==4 {OfflineBridge.action(row.id,4);}
+            else if root.selected_action==5 {OfflineBridge.action(row.id,6);}
+            else if root.selected_action==6 {OfflineBridge.action(row.id,7);}
+            else if root.selected_action==7 {OfflineBridge.action(row.id,5);}
+            else {OfflineBridge.action(row.id,8);}
+        }
+    }
+    keys := FocusScope { width:100%;height:100%;enabled:root.visible;
+        capture-key-pressed(e)=>{
+            if e.text==Key.Escape || e.text==Key.Back {if !e.repeat {OfflineBridge.closed();}accept}
+            else if InterfaceStyle.tv && (e.text==Key.DownArrow || e.text==Key.UpArrow) {
+                root.selected_row=Math.max(-1,Math.min(OfflineBridge.rows.length - 1,root.selected_row+(e.text==Key.DownArrow ? 1 : -1)));root.selected_action=0;accept
+            } else if InterfaceStyle.tv && (e.text==Key.LeftArrow || e.text==Key.RightArrow) {
+                root.selected_action=Math.max(0,Math.min(root.selected_row<0 ? 4 + OfflineBridge.profiles.length : 8,root.selected_action+(e.text==Key.RightArrow ? 1 : -1)));accept
+            } else if InterfaceStyle.tv && (e.text==Key.Return || e.text==" ") {if !e.repeat {root.activate();}accept}else{reject}
+        }
+        scroll := ScrollView {x:root.safe_left;y:root.safe_top;width:parent.width - root.safe_left - root.safe_right;height:parent.height - root.safe_top - root.safe_bottom;content-width:self.visible-width;
+            VerticalLayout {padding:20px;spacing:12px;
+                PageHeader {title:@tr("Smart downloads");show-back:false;narrow:!InterfaceStyle.tv && root.width<700px;}
+                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Back");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==0;picked=>{OfflineBridge.closed();}}
+                Text {font-size:root.supporting_font_size;text:@tr("Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet.");wrap:word-wrap;color:Theme.current.text_muted;}
+                Text {font-size:root.supporting_font_size;text:OfflineBridge.storage_summary;wrap:word-wrap;color:Theme.current.text_primary;}
+                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.device_enabled ? @tr("Pause this profile on this device") : @tr("Enable this profile on this device");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==1;selected:OfflineBridge.device_enabled;picked=>{OfflineBridge.device_toggle();}}
+                HorizontalLayout {spacing:8px;
+                    OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==2;picked=>{OfflineBridge.budget(-1);}}
+                    Text {font-size:root.supporting_font_size;text:@tr("Automatic allowance: {} GiB",OfflineBridge.budget_gib);vertical-alignment:center;color:Theme.current.text_primary;wrap:word-wrap;}
+                    OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==3;picked=>{OfflineBridge.budget(1);}}
+                }
+                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.charging_only ? @tr("Charging required") : @tr("Charging optional");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==4;selected:OfflineBridge.charging_only;picked=>{OfflineBridge.charging_toggle();}}
+                Text {font-size:root.supporting_font_size;text:@tr("Profiles enabled on this device");color:Theme.current.text_primary;}
+                for profile[index] in OfflineBridge.profiles: OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:profile.name + " · " + (profile.enabled ? @tr("Enabled on this device") : @tr("Disabled on this device"));selected:profile.enabled;highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==5 + index;picked=>{OfflineBridge.profile_toggle(profile.id);}}
+                if OfflineBridge.notice!="": Text {font-size:root.supporting_font_size;text:OfflineBridge.notice;wrap:word-wrap;color:Theme.current.text_primary;}
+                if OfflineBridge.rows.length==0: Text {font-size:root.supporting_font_size;text:@tr("Open a show and choose Keep offline to add a rule.");wrap:word-wrap;color:Theme.current.text_muted;}
+                for row[index] in OfflineBridge.rows: rule_card := Rectangle {
+                    border-radius:10px;background:Theme.current.control;
+                    private property <bool> active_row:InterfaceStyle.tv && root.selected_row==index;
+                    changed active_row=>{if self.active_row {root.selected_action=0;}}
+                    height: card.preferred-height + 24px;
+                    card := VerticalLayout {x:12px;y:12px;width:parent.width - 24px;height:self.preferred-height;spacing:8px;
+                        Text {text:row.title;font-size:InterfaceStyle.tv ? 23px : 18px;color:Theme.current.text_primary;wrap:word-wrap;}
+                        rule_status := Text {font-size:root.supporting_font_size;text:row.status;color:Theme.current.text_muted;wrap:word-wrap;}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.enabled ? @tr("Pause rule") : @tr("Resume rule");highlighted:root.selected_row==index && root.selected_action==0;selected:row.enabled;picked=>{OfflineBridge.action(row.id,0);}}
+                        HorizontalLayout {spacing:8px;
+                            OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:root.selected_row==index && root.selected_action==1;picked=>{OfflineBridge.action(row.id,2);}}
+                            Text {font-size:root.supporting_font_size;text:@tr("Keep next {}",row.keep_count);vertical-alignment:center;color:Theme.current.text_primary;}
+                            OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:root.selected_row==index && root.selected_action==2;picked=>{OfflineBridge.action(row.id,1);}}
+                        }
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.source_ready ? @tr("Choose another source") : @tr("Choose source");highlighted:root.selected_row==index && root.selected_action==3;picked=>{OfflineBridge.action(row.id,3);}}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Retry / Restore offline");highlighted:root.selected_row==index && root.selected_action==4;picked=>{OfflineBridge.action(row.id,4);}}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.include_specials ? @tr("Specials included") : @tr("Specials excluded");highlighted:root.selected_row==index && root.selected_action==5;selected:row.include_specials;picked=>{OfflineBridge.action(row.id,6);}}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.cleanup ? @tr("Remove unneeded automatic files") : @tr("Keep watched automatic files");highlighted:root.selected_row==index && root.selected_action==6;selected:row.cleanup;picked=>{OfflineBridge.action(row.id,7);}}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule, keep files");highlighted:root.selected_row==index && root.selected_action==7;picked=>{OfflineBridge.action(row.id,5);}}
+                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule and unneeded files");highlighted:root.selected_row==index && root.selected_action==8;picked=>{OfflineBridge.action(row.id,8);}}
+                    }
+                }
+                Rectangle {height:24px;}
+            }
+        }
+    }
+}

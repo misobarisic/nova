@@ -1,7 +1,6 @@
 # Profiles
 
-More → Profiles creates, renames, selects and deletes personal profiles without
-a PIN. Existing installations migrate into **Default**, retaining their library,
+More → Profiles creates, renames, selects and deletes personal profiles with optional plaintext PINs and restricted mode. Existing installations migrate into **Default**, retaining their library,
 history, settings, addon configuration and record versions. A new profile starts
 with empty personal data and normal application defaults.
 
@@ -46,7 +45,7 @@ account domains `profiles` and `profile_deletions` carry profile names and
 permanent retirement markers. The active selection never filters record
 exchange: every paired device synchronizes every profile. Inactive profile
 records materialize into durable snapshots without changing the screen or local
-selection. `nova/sync/5` and `nova/pair/4` isolate these semantics from older
+selection. `nova/sync/6` and `nova/pair/5` isolate these semantics from older
 clients; all paired devices need an updated Nova. The postcard schema is unchanged.
 
 The deterministic legacy ID is `default`. Its untouched name has a neutral
@@ -144,3 +143,58 @@ credential/outbox, old UI results are discarded, and every shared queue permit i
 released. Retain migration/version, inactive projection, retirement, autosave
 ownership and startup-picker regressions. This is an app-module refactor; it
 does not require a new crate, actor framework or sync wire-schema change.
+
+
+## PINs and restricted profiles
+
+Manage profiles → PIN configures a numeric plaintext PIN (4–8 digits, including
+leading zeros), Require PIN to open, and Restricted mode. Existing profiles
+remain unrestricted. The policy is a separate whole-policy LWW record at
+`profile:{id}:profile_policy` / `policy`; its snapshot is
+`profile:{id}:profile_policy:v1`. Unknown JSON fields survive edits. The semantic
+sync/pair version boundary requires every paired device to update, because old
+clients cannot enforce policy. The postcard layout is unchanged.
+
+Entry locks apply to the startup picker and selecting Current. Locked startup
+keeps a blank personal allocation: provider configuration, addon installation,
+settings/history/Library restoration and feature models wait for the correct
+PIN. Incoming records still materialize durably through inactive projection,
+without starting selected-profile services or publishing its models. A restricted
+profile can be entered without a PIN unless entry locking is enabled. Leaving a
+restricted profile for an unrestricted one checks the destination entry PIN,
+or the current restricted PIN when the destination is unlocked. A successful
+selection authorizes that selection only. Wrong PIN, cancellation, retirement,
+policy revision or activation changes leave the existing selection intact.
+
+Renaming, deleting, editing policy and importing protected profiles require
+their PIN. Current restricted profiles also require their PIN for device,
+sync, addon, integration and backup management. A management grant belongs to
+one activation and exact policy revision. Done/Back, switching, policy changes
+Android backgrounding and desktop minimization revoke it. Restricted Settings
+returns to More on backgrounding so editing cannot continue behind an expired
+grant. Settings/Sync and Backup entry continue automatically after the PIN is
+accepted. PINs and selected policy backups remain
+plaintext; there is no hashing, encryption, recovery service or rate limiter.
+
+Restricted content requires both a typed title allowlist entry and membership
+in that profile's Library. Empty lists permit no titles/sources. **Add title** opens ordinary Discover/search
+inside the management flow; **Allow this title** adds its typed identity to the
+target Library and the policy draft. Save commits the whole policy. All episodes
+of an allowed title are eligible; removing it from Library pauses visibility
+without deleting its allowlist entry. Addon permissions use exact installed
+owner URLs. Explicitly approving **Local files with unknown source** authorizes
+legacy files whose original addon provenance was not retained. A completed
+file must still exist and pass the same title and source checks.
+
+The durable `profile_policy::allows_title` and `allows_addon` helpers serve
+foreground navigation, source lookup/start, remote offers, queue, downloads and
+reminders. Discover/search use only allowed local Library titles; restricted
+Home does not fetch unrestricted provider catalogs or recommendation expansion.
+Policy revisions invalidate pending resolver/player work; current disallowed
+playback checkpoints progress and closes. Paired controllers cannot unlock a
+profile; enter its PIN on the receiver. Backup has an independent policy
+component, with empty archived PINs preserving local PINs under Merge.
+
+Implementation: `src/app/profile_policy.rs`, policy hooks in `sync.rs`,
+`profile_actions.rs`, source/playback modules, and
+`crates/ui/profile-pin.slint` / `MoreBridge`.

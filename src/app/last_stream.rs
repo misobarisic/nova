@@ -10,6 +10,8 @@ use std::{
 };
 
 pub(super) const DOMAIN: &str = "last_stream";
+pub(super) const FAMILY_KEY: &str = "stream_family_preferences:v1";
+pub(super) const FAMILY_DOMAIN: &str = "stream_family_preferences";
 const SELECTION: &str = "selection";
 
 const TTL: u64 = 7 * 24 * 60 * 60;
@@ -18,13 +20,96 @@ const SERIES_MAX_BYTES: u64 = 128 * 1024;
 const SERIES_TTL: u64 = 90 * 24 * 60 * 60;
 const SERIES_LIMIT: usize = 128;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct SeriesChoice {
     preference: super::streams::StreamPreference,
     selected_at: u64,
+    #[serde(flatten)]
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 type SeriesChoices = std::collections::BTreeMap<String, SeriesChoice>;
+
+pub(super) fn portable_families(raw: &str) -> Result<String, String> {
+    if raw.len() as u64 > SERIES_MAX_BYTES {
+        return Err("series stream preferences exceed size limit".into());
+    }
+    let mut values: SeriesChoices = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    prune_series(&mut values, nova_config::now_secs());
+    serde_json::to_string(&values).map_err(|e| e.to_string())
+}
+pub(super) fn family_records(raw: &str) -> nova_sync::Result<Vec<(String, String, u64)>> {
+    let raw = portable_families(raw)
+        .map_err(|e| nova_storage::Error::new(nova_storage::ErrorKind::Schema, e))?;
+    let values: SeriesChoices = serde_json::from_str(&raw)?;
+    values
+        .into_iter()
+        .map(|(id, value)| Ok((id, serde_json::to_string(&value)?, 0)))
+        .collect()
+}
+pub(super) fn backup_families(owner: &super::profiles::ProfileStore) -> Result<String, String> {
+    if let Some(raw) = owner.read(FAMILY_KEY).map_err(|e| e.to_string())? {
+        return portable_families(&raw);
+    }
+    let path = super::profiles::cache_dir(owner.id()).join("series-stream-v1.json");
+    match fs::File::open(path) {
+        Ok(file) => {
+            let mut raw = String::new();
+            file.take(SERIES_MAX_BYTES + 1)
+                .read_to_string(&mut raw)
+                .map_err(|e| e.to_string())?;
+            portable_families(&raw)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok("{}".into()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Compare-and-write prevents a queued pre-import cache flush from restoring
+/// stale preferences after the atomic import changed their durable mirror.
+fn mirror_families(
+    owner: &super::profiles::ProfileStore,
+    expected: &mut Option<String>,
+    raw: &str,
+) -> Result<bool, String> {
+    let handle = nova_sync::local_store().map_err(|e| e.to_string())?;
+    let device = nova_sync::local_device().map_err(|e| e.to_string())?;
+    let mut live = handle.lock().unwrap();
+    let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
+    if owner.retired().map_err(|e| e.to_string())? {
+        return Ok(false);
+    }
+    let current = live
+        .extra_value(&owner.key(FAMILY_KEY))
+        .map_err(|e| e.to_string())?;
+    if &current != expected {
+        *expected = current;
+        return Ok(false);
+    }
+    if let Some(old) = expected.as_deref() {
+        portable_families(old)?;
+    }
+    let mut staged = live.clone();
+    let changed = nova_sync::prepare_snapshot(
+        &mut staged,
+        device,
+        &owner.domain(FAMILY_DOMAIN),
+        &family_records(raw).map_err(|e| e.to_string())?,
+        Some((&owner.key(FAMILY_KEY), raw.into())),
+        false,
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    staged.save().map_err(|e| e.to_string())?;
+    *live = staged;
+    *expected = Some(raw.into());
+    drop(_serial);
+    drop(live);
+    if changed {
+        nova_sync::request_local_sync();
+    }
+    Ok(true)
+}
 
 fn prune_series(choices: &mut SeriesChoices, now: u64) {
     choices.retain(|_, choice| now >= choice.selected_at && now - choice.selected_at < SERIES_TTL);
@@ -64,6 +149,30 @@ pub(super) struct Cache {
     legacy_path: Mutex<Option<PathBuf>>,
 }
 impl Cache {
+    pub(super) fn invalidate_owner(&self, id: &str) {
+        let previous = self.profiles.lock().unwrap().remove(id);
+        drop(previous);
+    }
+    pub(super) fn flush_families(&self, ids: &[String]) -> Result<(), String> {
+        let caches = self
+            .profiles
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| ids.contains(id))
+            .map(|(_, cache)| cache.clone())
+            .collect::<Vec<_>>();
+        for cache in caches {
+            if cache.synced
+                && let Some(owner) = &cache.owner
+            {
+                let raw = serde_json::to_string(&*cache.series.lock().unwrap())
+                    .map_err(|e| e.to_string())?;
+                mirror_families(owner, &mut cache.family_expected.lock().unwrap(), &raw)?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn configure_synced(&self, path: PathBuf) {
         *self.legacy_path.lock().unwrap() = Some(path);
     }
@@ -144,6 +253,8 @@ pub(super) struct ProfileCache {
     wake: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     synced: bool,
+    owner: Option<super::profiles::ProfileStore>,
+    family_expected: Arc<Mutex<Option<String>>>,
 }
 
 impl ProfileCache {
@@ -159,6 +270,12 @@ impl ProfileCache {
     }
 
     fn open_inner(path: PathBuf, synced: bool) -> Self {
+        let owner = super::profiles::ProfileStore::capture();
+        let family_raw = if synced {
+            owner.read(FAMILY_KEY).ok().flatten()
+        } else {
+            None
+        };
         let now = nova_config::now_secs();
         let record = read(&path).filter(|record| record.valid(now));
         let record = Arc::new(Mutex::new(record));
@@ -174,15 +291,30 @@ impl ProfileCache {
                     .flatten()
             })
             .unwrap_or_default();
+        if let Some(raw) = family_raw.as_deref() {
+            series_choices = serde_json::from_str(raw).unwrap_or_default();
+        }
         prune_series(&mut series_choices, now);
         let series = Arc::new(Mutex::new(series_choices));
         let series_state = series.clone();
         let (wake, receiver) = mpsc::channel();
-        let owner = super::profiles::ProfileStore::capture();
+        let family_expected = Arc::new(Mutex::new(family_raw));
+        let expected_worker = family_expected.clone();
+        let worker_owner = owner.clone();
         match std::thread::Builder::new()
             .name("nova-last-stream".into())
             .spawn(move || {
-                owner.run(|| persist_loop(path, state, series_path, series_state, receiver, synced))
+                worker_owner.run(|| {
+                    persist_loop(
+                        path,
+                        state,
+                        series_path,
+                        series_state,
+                        receiver,
+                        synced,
+                        expected_worker,
+                    )
+                })
             }) {
             Ok(worker) => Self {
                 record,
@@ -190,6 +322,8 @@ impl ProfileCache {
                 wake: Some(wake),
                 worker: Some(worker),
                 synced,
+                owner: Some(owner),
+                family_expected,
             },
             Err(error) => {
                 tracing::warn!(%error, "could not start stream choice cache");
@@ -199,6 +333,8 @@ impl ProfileCache {
                     wake: None,
                     worker: None,
                     synced,
+                    owner: Some(owner),
+                    family_expected,
                 }
             }
         }
@@ -216,6 +352,7 @@ impl ProfileCache {
             SeriesChoice {
                 preference,
                 selected_at: now,
+                extra: std::collections::BTreeMap::new(),
             },
         );
         prune_series(&mut series, now);
@@ -365,6 +502,7 @@ fn persist_loop(
     series: Arc<Mutex<SeriesChoices>>,
     receiver: mpsc::Receiver<()>,
     synced: bool,
+    family_expected: Arc<Mutex<Option<String>>>,
 ) {
     let mut saved = None;
     let mut saved_series = None;
@@ -388,6 +526,24 @@ fn persist_loop(
             choices.clone()
         };
         if saved_series.as_ref() != Some(&current_series) {
+            if synced {
+                let owner = super::profiles::ProfileStore::capture();
+                let raw = serde_json::to_string(&current_series).unwrap();
+                match mirror_families(&owner, &mut family_expected.lock().unwrap(), &raw) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Ok(Some(raw)) = owner.read(FAMILY_KEY)
+                            && let Ok(latest) = serde_json::from_str(&raw)
+                        {
+                            *series.lock().unwrap() = latest;
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error,"could not mirror stream family preferences");
+                    }
+                }
+            }
             let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
             if !super::profiles::writable(&super::profiles::current_id()) {
                 break;
@@ -564,6 +720,90 @@ impl super::Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_family_preferences_keep_timestamps_and_never_revive_expired_hints() {
+        let now = nova_config::now_secs();
+        let values = std::collections::BTreeMap::from([
+            (
+                "live",
+                SeriesChoice {
+                    preference: Default::default(),
+                    selected_at: now - 12,
+                    ..Default::default()
+                },
+            ),
+            (
+                "expired",
+                SeriesChoice {
+                    preference: Default::default(),
+                    selected_at: now - SERIES_TTL,
+                    ..Default::default()
+                },
+            ),
+            (
+                "future",
+                SeriesChoice {
+                    preference: Default::default(),
+                    selected_at: now + 100,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let raw = portable_families(&serde_json::to_string(&values).unwrap()).unwrap();
+        let restored: SeriesChoices = serde_json::from_str(&raw).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored["live"].selected_at, now - 12);
+        assert_eq!(family_records(&raw).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_queued_family_mirror_cannot_overwrite_an_imported_snapshot() {
+        const ROOT: &str = "NOVA_FAMILY_IMPORT_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-family-import-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output=std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT,&root).env("XDG_DATA_HOME",root.join("data")).args(["--exact","app::last_stream::tests::a_queued_family_mirror_cannot_overwrite_an_imported_snapshot","--nocapture"]).output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&PathBuf::from(root));
+        let owner = super::super::profiles::ProfileStore::for_profile("family-import");
+        let raw = serde_json::to_string(&std::collections::BTreeMap::from([(
+            "imported",
+            SeriesChoice {
+                preference: Default::default(),
+                selected_at: nova_config::now_secs(),
+                ..Default::default()
+            },
+        )]))
+        .unwrap();
+        let mut expected = None;
+        // An absent KV mirror accepts the original legacy cache hint. Startup
+        // seeding must leave that absence intact until this migration runs.
+        let legacy = raw.replace("\"imported\"", "\"legacy\"");
+        assert!(mirror_families(&owner, &mut expected, &legacy).unwrap());
+        assert_eq!(
+            owner.read(FAMILY_KEY).unwrap().as_deref(),
+            Some(legacy.as_str())
+        );
+        owner.write(FAMILY_KEY, &raw).unwrap();
+        assert!(!mirror_families(&owner, &mut expected, "{}").unwrap());
+        assert_eq!(
+            owner.read(FAMILY_KEY).unwrap().as_deref(),
+            Some(raw.as_str())
+        );
+        assert_eq!(expected.as_deref(), Some(raw.as_str()));
+    }
 
     fn identity(c: char) -> String {
         format!("stream-{}", c.to_string().repeat(64))

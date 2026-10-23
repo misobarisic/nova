@@ -16,6 +16,7 @@ export component MenuRow inherits Rectangle {
     callback activate();
     callback reveal(length, length);
     changed focused => { if root.focused { reveal_timer.start(); } }
+    init => { if root.focused { reveal_timer.start(); } }
     reveal_timer := Timer {
         interval: 1ms; running: false;
         triggered => { self.stop(); if root.focused { root.reveal(root.absolute-position.y, root.height); } }

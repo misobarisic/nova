@@ -20,6 +20,7 @@ pub(super) fn last_publication_micros() -> u64 {
 }
 
 pub(super) fn invalidate() {
+    super::smart_offline::trigger();
     REVISION.fetch_add(1, Ordering::AcqRel);
 }
 

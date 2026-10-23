@@ -1,0 +1,28 @@
+import { PlayerOsdBridge, RemoteBridge, Theme, InterfaceStyle } from "@NovaUiShared";
+import { MenuRow } from "player-menu-row.slint";
+
+// Same focusable controls on desktop, phone and TV; no text keyboard required.
+export component SleepTimerMenu inherits VerticalLayout {
+    in property <bool> remote: false;
+    in property <bool> enabled: true;
+    in property <int> focused_idx: -1;
+    callback reveal(length, length);
+    spacing: 4px;
+    Text {
+        font-size: InterfaceStyle.tv ? 20px : 12px;
+        text: root.remote ? RemoteBridge.sleep_timer_label : PlayerOsdBridge.sleep_timer_label;
+        color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px;
+    }
+    for label[i] in [@tr("Off"), @tr("15 minutes"), @tr("30 minutes"), @tr("45 minutes"), @tr("60 minutes"), @tr("90 minutes"), @tr("Fewer minutes"), @tr("More minutes"), @tr("Start custom timer"), @tr("End of this episode/movie"), @tr("Fewer episodes"), @tr("More episodes"), @tr("Start episode timer"), @tr("Add 15 minutes"), @tr("Cancel timer")]: MenuRow {
+        focused: root.focused_idx == i;
+        label: label;
+        value: i >= 6 && i <= 8 ? @tr("Minutes: {}", PlayerOsdBridge.sleep_custom_minutes)
+            : i >= 10 && i <= 12 ? @tr("Episodes: {}", PlayerOsdBridge.sleep_custom_episodes) : "";
+        enabled: root.enabled && (i == 9 ? (root.remote || PlayerOsdBridge.sleep_timer_end_available)
+            : i >= 10 && i <= 12 ? (root.remote ? RemoteBridge.sleep_timer_episodes_available : PlayerOsdBridge.sleep_timer_episodes_available)
+            : i == 13 ? (root.remote ? RemoteBridge.sleep_timer_duration : PlayerOsdBridge.sleep_timer_duration)
+            : i == 14 ? (root.remote ? RemoteBridge.sleep_timer_active : PlayerOsdBridge.sleep_timer_active) : true);
+        activate => { PlayerOsdBridge.sleep_timer_pick(i, root.remote); }
+        reveal(y,h) => { root.reveal(y,h); }
+    }
+}

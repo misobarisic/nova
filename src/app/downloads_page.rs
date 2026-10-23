@@ -183,6 +183,15 @@ impl Bridge {
         self.refresh_downloads_page();
     }
     pub(super) fn downloads_page_action(&self, id: &str, action: i32) {
+        let owner = profiles::ProfileStore::capture();
+        if self
+            .downloads
+            .job(id)
+            .is_none_or(|job| !smart_offline::allows_download(&owner, &job))
+            || action == 1 && !profile_policy::management_allowed(&owner)
+        {
+            return;
+        }
         let Some(job) = self.downloads.job(id) else {
             return;
         };
@@ -261,7 +270,13 @@ impl Bridge {
                 state.entries.clone(),
             )
         };
-        let jobs = self.downloads.jobs();
+        let owner = profiles::ProfileStore::capture();
+        let jobs = self
+            .downloads
+            .jobs()
+            .into_iter()
+            .filter(|job| smart_offline::allows_download(&owner, job))
+            .collect::<Vec<_>>();
         let mut metadata = HashMap::new();
         for job in &jobs {
             metadata

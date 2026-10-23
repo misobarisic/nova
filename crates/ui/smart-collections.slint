@@ -159,20 +159,20 @@ export component SmartCollectionsEditor inherits Rectangle {
                     height: form_body.preferred-height + 32px;
                     form_body := VerticalLayout {
                         x: 16px; y: 16px; width: parent.width - 32px; height: parent.height - 32px; spacing: 12px;
-                        Text { text: @tr("Collection name"); color: Theme.current.text_primary; font-weight: 600; }
-                        name_input := SettingsInput { focus_changed(f) => { if f { root.choice = 0; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.name; placeholder-text: @tr("Name your collection"); accepted(_) => { root.choice = 1; page_scope.focus(); } }
-                        Text { text: @tr("Media type"); color: Theme.current.text_primary; font-weight: 600; }
+                        Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Collection name"); color: Theme.current.text_primary; font-weight: 600; }
+                        name_input := SettingsInput { text-size: InterfaceStyle.tv ? 20px : 13px; focus_changed(f) => { if f { root.choice = 0; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.name; placeholder-text: @tr("Name your collection"); accepted(_) => { root.choice = 1; page_scope.focus(); } }
+                        Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Media type"); color: Theme.current.text_primary; font-weight: 600; }
                         PillButton { label: SmartCollectionsBridge.media_type == 1 ? @tr("Movies") : SmartCollectionsBridge.media_type == 2 ? @tr("Series") : @tr("Any media type"); focused: page_scope.has-focus && root.choice == 1; clicked => { root.choice = 1; root.activate(); } }
-                        Text { text: @tr("Watch state"); color: Theme.current.text_primary; font-weight: 600; }
+                        Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Watch state"); color: Theme.current.text_primary; font-weight: 600; }
                         PillButton { label: SmartCollectionsBridge.watch_state == 1 ? @tr("Unwatched") : SmartCollectionsBridge.watch_state == 2 ? @tr("Watched") : @tr("Any watch state"); focused: page_scope.has-focus && root.choice == 2; clicked => { root.choice = 2; root.activate(); } }
-                        Text { text: @tr("Genre"); color: Theme.current.text_primary; font-weight: 600; }
-                        genre_input := SettingsInput { focus_changed(f) => { if f { root.choice = 3; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.genre; placeholder-text: @tr("Any genre, or enter one like Sci-Fi"); accepted(_) => { root.choice = 4; root.focus_choice(); } }
-                        Text { text: @tr("Runtime under (minutes)"); color: Theme.current.text_primary; font-weight: 600; wrap: word-wrap; }
-                        runtime_input := SettingsInput { focus_changed(f) => { if f { root.choice = 4; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.max_runtime; placeholder-text: @tr("No limit, or enter minutes"); input-type: number; accepted(_) => { root.choice = 5; page_scope.focus(); } }
-                        Text { text: @tr("For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                        Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Genre"); color: Theme.current.text_primary; font-weight: 600; }
+                        genre_input := SettingsInput { text-size: InterfaceStyle.tv ? 20px : 13px; focus_changed(f) => { if f { root.choice = 3; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.genre; placeholder-text: @tr("Any genre, or enter one like Sci-Fi"); accepted(_) => { root.choice = 4; root.focus_choice(); } }
+                        Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Runtime under (minutes)"); color: Theme.current.text_primary; font-weight: 600; wrap: word-wrap; }
+                        runtime_input := SettingsInput { text-size: InterfaceStyle.tv ? 20px : 13px; focus_changed(f) => { if f { root.choice = 4; root.reveal(self.absolute-position.y, self.height); } } text <=> SmartCollectionsBridge.max_runtime; placeholder-text: @tr("No limit, or enter minutes"); input-type: number; accepted(_) => { root.choice = 5; page_scope.focus(); } }
+                        Text { text: @tr("For example, use Movies + Unwatched + Sci-Fi + 120 for unwatched sci-fi movies under two hours. Titles with an unknown runtime stay out of a runtime-limited collection."); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 20px : 12px; wrap: word-wrap; }
                     }
                 }
-                if SmartCollectionsBridge.error != "": Text { text: SmartCollectionsBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; }
+                if SmartCollectionsBridge.error != "": Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: SmartCollectionsBridge.error; color: Theme.current.text_destructive; wrap: word-wrap; }
                 if !root.confirming_delete: HorizontalLayout {
                     spacing: 10px; alignment: start;
                     PillButton { label: @tr("Save collection"); primary: true; compact: root.narrow; focused: page_scope.has-focus && root.choice == 5; clicked => { root.save(); } }
@@ -181,13 +181,13 @@ export component SmartCollectionsEditor inherits Rectangle {
                 if SmartCollectionsBridge.editing_id != "" && !root.confirming_delete: PillButton { label: @tr("Delete collection"); destructive: true; focused: page_scope.has-focus && root.choice == 7; clicked => { root.start_delete(); } }
                 if root.confirming_delete: VerticalLayout {
                     spacing: 10px;
-                    Text { text: @tr("Delete this collection? Your saved titles and manual categories will stay in your library."); color: Theme.current.text_primary; wrap: word-wrap; }
+                    Text { font-size: InterfaceStyle.tv ? 20px : 12px; text: @tr("Delete this collection? Your saved titles and manual categories will stay in your library."); color: Theme.current.text_primary; wrap: word-wrap; }
                     HorizontalLayout { spacing: 10px; alignment: start;
                         PillButton { label: @tr("Delete"); destructive: true; focused: page_scope.has-focus && root.delete_choice == 0; clicked => { root.delete_collection(); } }
                         PillButton { label: @tr("Keep collection"); focused: page_scope.has-focus && root.delete_choice == 1; clicked => { root.confirming_delete = false; page_scope.focus(); } }
                     }
                 }
-                Text { text: @tr("Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; }
+                Text { text: @tr("Rules use your saved titles, current watch progress and cached metadata. No background searches are needed. Category filters, search and sorting still apply to the collection."); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 20px : 12px; wrap: word-wrap; }
                 Rectangle { height: 12px; }
             }
         }

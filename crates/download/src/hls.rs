@@ -334,6 +334,10 @@ where
                 if asset.key && bytes > 16 {
                     return Err(invalid("Invalid AES-128 key length"));
                 }
+                if !cancel.admit_bytes(downloaded + bytes) {
+                    file.flush().await?;
+                    return Err(DownloadError::Cancelled);
+                }
                 file.write_all(&chunk).await?;
                 transferred += chunk.len() as u64;
                 on_progress(

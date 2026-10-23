@@ -1,0 +1,140 @@
+import { MoreBridge, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { PillButton, SettingsInput, ToggleSwitch, SettingsHeader, SectionHeader, SettingsCard, SettingsRow } from "settings-controls.slint";
+import { ScrollView } from "scrollview.slint";
+
+export component ProfilePinGate inherits Rectangle {
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    background: Theme.current.artwork_canvas;
+    TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+    property <int> choice;
+    in property <int> focus-request;
+    changed focus-request => { scope.focus(); }
+    private property <int> entered_length: MoreBridge.pin_length;
+    changed entered_length => { if root.entered_length < 4 && root.choice == 12 { root.choice = 0; } }
+    function reveal(y:length,h:length) { let top = y - keypad_scroll.absolute-position.y; if top < 0px { keypad_scroll.content-y -= top; } else if top + h > keypad_scroll.visible-height { keypad_scroll.content-y -= top + h - keypad_scroll.visible-height; } }
+    changed choice => { if root.choice == 12 && MoreBridge.pin_length < 4 { root.choice = 13; } }
+    function select(index: int, direction: int) { root.choice = index == 12 && MoreBridge.pin_length < 4 ? (direction < 0 ? 11 : 13) : index; }
+    function pick(index: int) {
+        if index < 9 { MoreBridge.pin_input_edit(index + 1); }
+        else if index == 9 { MoreBridge.pin_input_edit(-1); }
+        else if index == 10 { MoreBridge.pin_input_edit(0); }
+        else if index == 11 { MoreBridge.pin_input_edit(-2); }
+        else if index == 12 { if MoreBridge.pin_length < 4 { return; } MoreBridge.pin_submit(MoreBridge.pin_input); MoreBridge.pin_input_edit(-1); }
+        else { MoreBridge.pin_input_edit(-1); MoreBridge.pin_cancel(); }
+    }
+    init => { focus_timer.start(); }
+    focus_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); scope.focus(); } }
+    scope := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.Escape || e.text == Key.Back { root.pick(13); accept }
+            else if e.text == Key.Backspace { root.pick(11); accept }
+            else if e.text == Key.Return || e.text == " " { if !e.repeat { root.pick(root.choice); } accept }
+            else if e.text == Key.UpArrow { root.select(Math.max(0, root.choice - 3), -1); accept }
+            else if e.text == Key.DownArrow { root.select(Math.min(13, root.choice + 3), 1); accept }
+            else if e.text == Key.LeftArrow { root.select(Math.max(0, root.choice - 1), -1); accept }
+            else if e.text == Key.RightArrow || e.text == Key.Tab { root.select(Math.mod(root.choice + (e.modifiers.shift ? 13 : 1), 14), e.modifiers.shift ? -1 : 1); accept }
+            else if e.text == "0" { root.pick(10); accept }
+            else if e.text == "1" { root.pick(0); accept }
+            else if e.text == "2" { root.pick(1); accept }
+            else if e.text == "3" { root.pick(2); accept }
+            else if e.text == "4" { root.pick(3); accept }
+            else if e.text == "5" { root.pick(4); accept }
+            else if e.text == "6" { root.pick(5); accept }
+            else if e.text == "7" { root.pick(6); accept }
+            else if e.text == "8" { root.pick(7); accept }
+            else if e.text == "9" { root.pick(8); accept }
+            else { reject }
+        }
+        keypad_scroll := ScrollView {
+            x: root.safe-left + Math.max(16px, (parent.width - root.safe-left - root.safe-right - 460px) / 2); y: root.safe-top + 20px;
+            width: Math.max(1px,Math.min(460px, parent.width - root.safe-left - root.safe-right - 32px)); height: Math.max(1px,parent.height - root.safe-top - root.safe-bottom - 40px);
+            content-width: self.visible-width; content-height: keypad.preferred-height;
+            keypad := VerticalLayout { width: 100%; spacing: 14px;
+            Text { text: @tr("Enter PIN"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 38px : 28px; horizontal-alignment: center; }
+            Text { text: @tr("Unlock on this device"); font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_secondary; horizontal-alignment: center; }
+            Text { text: MoreBridge.pin_input; color: Theme.current.text_bright; font-size: 30px; min-height: 40px; horizontal-alignment: center; }
+            Text { text: MoreBridge.pin_error; font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_destructive; wrap: word-wrap; }
+            for row in 4: HorizontalLayout {
+                width: keypad.width; spacing: 12px;
+                for column in 3: PillButton {
+                    width: (keypad.width - 24px) / 3;
+                    horizontal-stretch: 0;
+                    label: row * 3 + column < 9 ? "" + (row * 3 + column + 1) : column == 0 ? @tr("Clear") : column == 1 ? "0" : @tr("Delete");
+                    focused: root.choice == row * 3 + column;
+                    changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } }
+                    clicked => { root.choice = row * 3 + column; root.pick(root.choice); scope.focus(); }
+                }
+            }
+            HorizontalLayout {
+                width: keypad.width; spacing: 12px;
+                PillButton { width: (keypad.width - 12px) / 2; wrap_label: true; label: @tr("Unlock"); focused: root.choice == 12; changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } enabled: MoreBridge.pin_length >= 4; clicked => { root.pick(12); scope.focus(); } }
+                PillButton { width: (keypad.width - 12px) / 2; wrap_label: true; label: @tr("Cancel"); focused: root.choice == 13; changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } clicked => { root.pick(13); } }
+            }
+        }
+    }
+    }
+}
+
+export component ProfilePolicyEditor inherits Rectangle {
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    background: Theme.current.artwork_canvas;
+    TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+    property <int> choice;
+    in property <int> focus-request;
+    changed focus-request => { scope.focus(); }
+    property <bool> pin_selected: root.choice == 0 && SettingsStyle.keyboard-mode;
+    changed pin_selected => { if root.pin_selected { root.reveal(pin_input.absolute-position.y, pin_input.height); } }
+    property <int> count: 6 + MoreBridge.policy_titles.length + MoreBridge.policy_addons.length;
+    function activate() {
+        if root.choice == 0 { pin_input.focus_at_end(); }
+        else if root.choice == 1 { MoreBridge.policy_entry = !MoreBridge.policy_entry; }
+        else if root.choice == 2 { MoreBridge.policy_restricted = !MoreBridge.policy_restricted; }
+        else if root.choice == 3 { MoreBridge.policy_search_titles(); }
+        else if root.choice < 4 + MoreBridge.policy_titles.length { MoreBridge.policy_title_toggle(MoreBridge.policy_title_keys[root.choice - 4]); }
+        else if root.choice < 4 + MoreBridge.policy_titles.length + MoreBridge.policy_addons.length { MoreBridge.policy_addon_toggle(MoreBridge.policy_addon_keys[root.choice - 4 - MoreBridge.policy_titles.length]); }
+        else if root.choice == root.count - 2 { MoreBridge.policy_save(); }
+        else { MoreBridge.management_closed(); }
+    }
+    function reveal(y: length,h:length) { let top = y - scroll.absolute-position.y; if top < 0px { scroll.content-y -= top; } else if top + h > scroll.visible-height { scroll.content-y -= top + h - scroll.visible-height; } }
+    init => { focus_timer.start(); }
+    focus_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); scope.focus(); } }
+    scope := FocusScope {
+        width: 100%; height: 100%;
+        capture-key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back { MoreBridge.management_closed(); accept }
+            else if e.text == Key.Tab || e.text == Key.UpArrow || e.text == Key.DownArrow { SettingsStyle.keyboard-mode = true; root.choice = Math.mod(root.choice + root.count + (e.text == Key.UpArrow || e.modifiers.shift ? -1 : 1),root.count); scope.focus(); accept }
+            else { reject }
+        }
+        key-pressed(e) => { if e.text == Key.Return || e.text == " " { if !e.repeat { root.activate(); } accept } else { reject } }
+        scroll := ScrollView {
+            x: root.safe-left + Math.max(16px,(parent.width - root.safe-left - root.safe-right - 720px) / 2); y: root.safe-top + 20px; width: Math.max(1px,Math.min(720px,parent.width - root.safe-left - root.safe-right - 32px)); height: Math.max(1px,parent.height - root.safe-top - root.safe-bottom - 40px);
+            content-width: self.visible-width; content-height: body.preferred-height;
+            body := VerticalLayout {
+                width: 100%; spacing: 14px;
+                SettingsHeader { title: @tr("Profile PIN and restrictions"); introduction: @tr("Use 4–8 digits; leave empty to remove the PIN."); back => { MoreBridge.management_closed(); } }
+                pin_input := SettingsInput { text <=> MoreBridge.policy_pin; placeholder-text: @tr("Profile PIN"); input-type: InputType.number; text-size: InterfaceStyle.tv ? 22px : 16px; height: InterfaceStyle.tv ? 56px : 44px; border-color: root.pin_selected || self.has-focus ? Theme.current.focus_ring : Theme.current.control_border; changed has-focus => { if self.has-focus { root.choice = 0; root.reveal(self.absolute-position.y,self.height); } } }
+                SettingsCard { VerticalLayout { spacing: 1px;
+                    SettingsRow { row-title: @tr("Require PIN to open"); ToggleSwitch { name: @tr("Require PIN to open"); checked <=> MoreBridge.policy_entry; focused: root.choice == 1; changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } } }
+                    SettingsRow { row-title: @tr("Restricted mode"); ToggleSwitch { name: @tr("Restricted mode"); checked <=> MoreBridge.policy_restricted; focused: root.choice == 2; changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } } }
+                } }
+                SectionHeader { label: @tr("Allowed library titles"); }
+                Text { text: @tr("Empty lists allow no content. Removed library titles stay unavailable until added again."); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
+                PillButton { label: @tr("Add title"); focused: root.choice == 3; changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } clicked => { MoreBridge.policy_search_titles(); } }
+                for title[index] in MoreBridge.policy_titles: PillButton { width: parent.width; wrap_label: true; label: (MoreBridge.policy_title_checks[index] ? "✓ " : "○ ") + title; focused: root.choice == index + 4; clicked => { root.choice = index + 4; MoreBridge.policy_title_toggle(MoreBridge.policy_title_keys[index]); } changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } }
+                SectionHeader { label: @tr("Allowed source addons"); }
+                for addon[index] in MoreBridge.policy_addons: PillButton { width: parent.width; wrap_label: true; label: (MoreBridge.policy_addon_checks[index] ? "✓ " : "○ ") + addon; focused: root.choice == index + 4 + MoreBridge.policy_titles.length; clicked => { root.choice = index + 4 + MoreBridge.policy_titles.length; MoreBridge.policy_addon_toggle(MoreBridge.policy_addon_keys[index]); } changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } }
+                Text { text: MoreBridge.pin_error; font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_destructive; wrap: word-wrap; }
+                PillButton { label: @tr("Save"); focused: root.choice == root.count - 2; clicked => { MoreBridge.policy_save(); } changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } }
+                PillButton { label: @tr("Cancel"); focused: root.choice == root.count - 1; clicked => { MoreBridge.management_closed(); } changed focused => { if self.focused { root.reveal(self.absolute-position.y,self.height); } } }
+            }
+        }
+    }
+}

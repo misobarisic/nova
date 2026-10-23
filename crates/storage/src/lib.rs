@@ -351,36 +351,49 @@ pub fn try_scan_prefix(prefix: &str) -> Result<Vec<(String, String)>, Error> {
     scan_from(database()?, prefix)
 }
 
+/// Read several namespaces from one redb read transaction. This avoids both
+/// cross-profile export skew and decoding unrelated metadata-cache values.
+pub fn try_scan_prefixes(prefixes: &[String]) -> Result<Vec<(String, String)>, Error> {
+    let prefixes = prefixes.iter().map(String::as_str).collect::<Vec<_>>();
+    scan_prefixes_from(database()?, &prefixes)
+}
+
 fn scan_from(db: &Database, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+    scan_prefixes_from(db, &[prefix])
+}
+
+fn scan_prefixes_from(db: &Database, prefixes: &[&str]) -> Result<Vec<(String, String)>, Error> {
     let txn = db.begin_read().map_err(transaction)?;
     let mut out = BTreeMap::new();
-    match txn.open_table(KV) {
-        Ok(table) => {
-            for entry in table.range(prefix..).map_err(transaction)? {
-                let (key, value) = entry.map_err(transaction)?;
-                if !key.value().starts_with(prefix) {
-                    break;
+    for &prefix in prefixes {
+        match txn.open_table(KV) {
+            Ok(table) => {
+                for entry in table.range(prefix..).map_err(transaction)? {
+                    let (key, value) = entry.map_err(transaction)?;
+                    if !key.value().starts_with(prefix) {
+                        break;
+                    }
+                    let value = collections::read(&txn, key.value(), value.value())?
+                        .unwrap_or_else(|| value.value().to_owned());
+                    out.insert(key.value().to_string(), value);
                 }
-                let value = collections::read(&txn, key.value(), value.value())?
-                    .unwrap_or_else(|| value.value().to_owned());
-                out.insert(key.value().to_string(), value);
             }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(transaction(e)),
         }
-        Err(redb::TableError::TableDoesNotExist(_)) => {}
-        Err(e) => return Err(transaction(e)),
-    }
-    match txn.open_table(CACHE) {
-        Ok(table) => {
-            for entry in table.range(prefix..).map_err(transaction)? {
-                let (key, value) = entry.map_err(transaction)?;
-                if !key.value().starts_with(prefix) {
-                    break;
+        match txn.open_table(CACHE) {
+            Ok(table) => {
+                for entry in table.range(prefix..).map_err(transaction)? {
+                    let (key, value) = entry.map_err(transaction)?;
+                    if !key.value().starts_with(prefix) {
+                        break;
+                    }
+                    out.insert(key.value().to_string(), codec::decode(value.value())?);
                 }
-                out.insert(key.value().to_string(), codec::decode(value.value())?);
             }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(transaction(e)),
         }
-        Err(redb::TableError::TableDoesNotExist(_)) => {}
-        Err(e) => return Err(transaction(e)),
     }
     Ok(out.into_iter().collect())
 }
@@ -569,6 +582,29 @@ mod tests {
                 ("cache:b".into(), "new".into())
             ]
         );
+    }
+
+    #[test]
+    fn consistent_multi_prefix_snapshot_ignores_unselected_corrupt_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("snapshot.redb")).unwrap();
+        write(&db, "profile:a:settings", "{}", false);
+        write(&db, "profile:b:library", "[]", false);
+        write(&db, "profile:c:settings", "unselected", false);
+        let txn = db.begin_write().unwrap();
+        txn.open_table(CACHE)
+            .unwrap()
+            .insert("episodes:corrupt", b"broken".as_slice())
+            .unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            scan_prefixes_from(&db, &["profile:a:", "profile:b:"]).unwrap(),
+            vec![
+                ("profile:a:settings".into(), "{}".into()),
+                ("profile:b:library".into(), "[]".into())
+            ]
+        );
+        assert!(scan_from(&db, "").is_err());
     }
 
     #[test]
