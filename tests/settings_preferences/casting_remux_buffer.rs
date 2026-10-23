@@ -1,42 +1,15 @@
 //! Casting retention choices stay accessible, synced and independent of local playback backend.
 #![cfg(not(feature = "live-preview"))]
+use crate::preference_support::{key, reveal as reveal_control, settle};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{ComponentHandle, VecModel};
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{cell::RefCell, rc::Rc};
 
-fn settle(app: &nova::AppWindow) {
-    for _ in 0..6 {
-        for item in ElementQuery::from_root(app)
-            .match_predicate(|_| true)
-            .find_all()
-        {
-            let _ = (item.size(), item.absolute_position());
-        }
-        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
-    }
-}
 fn control(app: &nova::AppWindow) -> Option<ElementHandle> {
     ElementHandle::find_by_element_id(app, "SettingsPlayerModule::remux_buffer").next()
 }
 fn reveal(app: &nova::AppWindow) -> ElementHandle {
-    for attempt in 0..80 {
-        settle(app);
-        if let Some(item) = control(app) {
-            let y = item.absolute_position().y;
-            app.set_settings_scroll_y((app.get_settings_scroll_y() - y + 300.0).min(0.0));
-            settle(app);
-            return control(app).unwrap();
-        }
-        app.set_settings_scroll_y(-80.0 * (attempt + 1) as f32);
-    }
-    panic!("missing casting remux buffer choice");
-}
-fn key(app: &nova::AppWindow, key: slint::platform::Key) {
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
-    settle(app);
+    reveal_control(app, || control(app), "casting remux buffer choice")
 }
 
 #[test]

@@ -1,44 +1,8 @@
 //! Paused OSD preference uses the normal accessible Settings toggle and row routing.
 #![cfg(not(feature = "live-preview"))]
-use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
+use crate::preference_support::{key, reveal, settle, toggle};
 use slint::ComponentHandle;
-use std::{cell::RefCell, rc::Rc, time::Duration};
-
-fn settle(app: &nova::AppWindow) {
-    for _ in 0..6 {
-        for item in ElementQuery::from_root(app)
-            .match_predicate(|_| true)
-            .find_all()
-        {
-            let _ = (item.size(), item.absolute_position());
-        }
-        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
-    }
-}
-fn toggle(app: &nova::AppWindow, label: &str) -> Option<ElementHandle> {
-    ElementHandle::find_by_accessible_label(app, label)
-        .find(|item| item.accessible_role() == Some(AccessibleRole::Checkbox))
-}
-fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
-    for attempt in 0..80 {
-        settle(app);
-        if let Some(item) = toggle(app, label) {
-            let y = item.absolute_position().y;
-            app.set_settings_scroll_y((app.get_settings_scroll_y() - y + 300.0).min(0.0));
-            settle(app);
-            return toggle(app, label).unwrap();
-        }
-        app.set_settings_scroll_y(-80.0 * (attempt + 1) as f32);
-    }
-    panic!("missing paused controls switch");
-}
-fn key(app: &nova::AppWindow, key: slint::platform::Key) {
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
-    settle(app);
-}
+use std::{cell::RefCell, rc::Rc};
 
 #[test]
 fn paused_controls_toggle_translates_and_keeps_neighboring_keyboard_rows() {
@@ -71,7 +35,7 @@ fn paused_controls_toggle_translates_and_keeps_neighboring_keyboard_rows() {
                 app.set_player_backend_index(0);
                 app.set_settings_scroll_y(0.0);
                 app.set_keep_controls_visible_while_paused(false);
-                let item = reveal(&app, label);
+                let item = reveal(&app, || toggle(&app, label), label);
                 assert!(item.size().height >= 44.0);
                 assert!(item.absolute_position().x >= 0.0);
                 assert!(item.absolute_position().x + item.size().width <= width as f32 + 1.0);

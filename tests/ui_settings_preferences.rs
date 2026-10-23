@@ -9,6 +9,9 @@ mod destinations;
 #[path = "support/settings.rs"]
 mod settings_support;
 
+#[path = "settings_preferences/support.rs"]
+mod preference_support;
+
 #[path = "settings_preferences/downloads.rs"]
 mod downloads;
 
