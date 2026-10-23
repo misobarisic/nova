@@ -1,90 +1,114 @@
-# nova
+# Nova
 
-A cross-platform (Linux and Windows desktop + Android) media catalog / player app in the
-style of Stremio. It talks to Stremio-protocol addons over HTTP, plays direct
-URLs with an in-window **mpv** player, streams torrents through an embedded
-BitTorrent client, and syncs library state across devices over
-[iroh](https://iroh.computer) (opt-in, end-to-end encrypted, no account).
-
-Anime releases can be linked to **MyAnimeList** and **AniList** from a saved
-title’s Tracking tab. Connect an account in Settings → Tracking, review the
-episode matches, and choose whether to apply saved watch history. See
-[tracking behavior](docs/tracking-behavior.md) for account, mapping, and delivery details.
+Nova is a media catalog and player for **Linux, Windows and Android**, with
+phone, desktop and TV interfaces. Browse Stremio-compatible addon catalogs,
+play direct streams or torrents with the embedded **mpv** player, and optionally
+sync your library between devices without a Nova account.
 
 > **Alpha software:** Nova is under active development. Expect bugs, incomplete features, and breaking changes between releases.
 
-- Language: Rust 2024, UI in [Slint](https://slint.dev) 1.18
-- Root package `nova`; heavy subsystems (player, sync, torrent, storage, UI)
-  live in leaf crates under `crates/` so app-logic edits stay cheap to build
+## Features
 
-## Quick start
+- **Discovery and library:** search addon catalogs, browse recommendations,
+  organize titles into categories, and filter your library with Smart
+  collections. Continue Watching, watch history and new-episode rows help you
+  pick up where you left off.
+- **Playback:** audio and subtitle selection, subtitle appearance controls,
+  chapters, bookmarks, screenshots, resume preferences, optional next-episode
+  autoplay and a sleep timer.
+- **Planning:** a synced watch queue for movies and individual episodes, with
+  optional receiver-owned continuous playback; viewing history and statistics.
+- **Offline viewing:** manual downloads and per-show Smart downloads that keep
+  the next few episodes ready within device storage, network and charging
+  limits. Automatic downloads require device opt-in.
+- **Across devices:** opt-in, end-to-end encrypted library sync over
+  [iroh](https://iroh.computer), paired-device remote playback, and watch
+  parties. Party stream recommendations highlight matching sources already
+  available through your own addons.
+- **Profiles:** separate libraries, progress, addons and preferences, with
+  optional PINs and restricted title/source allowlists.
+- **Calendar and reminders:** browse upcoming releases, choose reminders for
+  each new episode or a complete season, and export an ICS calendar. Desktop
+  reminders appear in-app while Nova is open; Android supports OS notifications.
+  Full-season reminders need confirmed season metadata.
+- **Backup and import:** choose profiles and data to export, preview an import,
+  merge or replace selected components, and review recovery changes after an
+  import.
+- **Integrations:** MyAnimeList and AniList tracking, Stremio library sync, and
+  Simkl, MDBList and Trakt integrations. Account setup and supported behavior
+  vary by service.
+
+For details, see [library behavior](docs/library-behavior.md),
+[player behavior](docs/player-behavior.md), [Smart downloads](docs/smart-downloads.md),
+[watch parties](docs/watch-party.md), [profiles](docs/profiles.md),
+[Calendar](docs/calendar.md), [backups](docs/backups.md),
+[anime tracking](docs/tracking-behavior.md), [Stremio sync](docs/stremio-sync.md)
+and [list services](docs/list-services.md).
+
+## Addons
+
+Configure compatible Stremio-protocol addons in **Settings → Addons**.
+JavaScript providers can also be installed from local ZIP packages. Nova does
+not bundle JavaScript addons or an addon repository; AniKoto and Supernova
+are packaged separately. See [addon packages](docs/addon-packages.md).
+
+## Build and run
+
+Nova uses Rust 2024 and [Slint](https://slint.dev). The Nix development shells
+provide the platform toolchains and dependencies.
 
 ```sh
-nix develop              # desktop toolchain (rust, slint deps, mpv, …)
-cargo run                # run the desktop app (binary: target/debug/nova)
-cargo dev                # hot-reloading UI preview (Linux debug only)
+nix develop                    # desktop toolchain and native dependencies
+cargo run --locked             # run the desktop app
+cargo dev                      # hot-reloading UI preview (Linux debug only)
 
-cargo check              # whole workspace
-cargo test               # workspace tests (unit + headless Slint UI tests)
-cargo test -p nova-sync --lib   # fast sync-crate unit tests
+cargo check --workspace --locked
+cargo test --workspace --locked
+cargo test -p nova-sync --lib --locked
 ```
 
-Android Cargo builds use `--no-default-features --features android,update-check`. Enter
-`nix develop .#android` before using Android Make targets; Make assumes the
-required toolchain is already active. See `docs/project-structure.md` for all
-targets. The Android and Windows Nix shells build minimal mpv/FFmpeg dependencies
-from pinned sources and reuse cached results. Linux uses system libraries.
+For an Android release build:
+
+```sh
+nix develop .#android --command make android-build-release
+```
+
+Android Cargo builds use `--no-default-features --features android,update-check`.
+Android and Windows shells fetch pinned mpv/FFmpeg binaries from
+[nova-vendor](https://github.com/misobarisic/nova-vendor); Linux uses system
+libraries. See the [project map](docs/project-structure.md) for build targets,
+platform dependencies and packaging details.
 
 ## Versions and updates
 
-About shows the installed version. Development builds use the last reachable
-version tag plus the short commit hash (`v0.0.29-abc12345`, with `-dirty` for
-local source edits). They skip automatic update checks, including builds compiled in
-release mode. About still offers a manual check. Clean, matching tagged release
-builds check GitHub daily while Nova is in the foreground, retrying failures
-after a cooldown. The bottom-right notice opens the release page in a browser.
+[Releases](https://github.com/misobarisic/nova/releases) provide tagged builds.
+About shows the installed version and offers a manual update check. Clean,
+matching tagged release builds can check GitHub daily while Nova is in the
+foreground; development builds skip automatic checks, including when compiled
+in release mode. Development versions include the last reachable tag and a
+short commit hash, with `-dirty` for local source changes.
 
-Keep the root Cargo version at the last release between tags. Bump it when
-preparing a release, and tag that commit `v<version>`; tagged CI rejects a
-mismatch. Android's version name and code come from that Cargo version, so
-subsequent development commits retain the last release's installation code.
-Changing the previous placeholder `0.1.0` to `0.0.29` lowers the Android code;
-existing installations may need an uninstall/reinstall, which clears app data.
+Keep the root Cargo version at the last release between tags. To prepare a
+release, bump it and tag that commit `v<version>`; tagged CI rejects a mismatch.
+Android's version name and installation code are derived from that version;
+packaging reserves an installation epoch to keep current releases newer than
+older placeholder builds. See the project map for the version-code scheme.
 
-Packagers can remove all automatic and manual checks with
+Packagers can omit automatic and manual update checks with
 `cargo build --release --no-default-features --features desktop`.
-For Android Make targets, use `UPDATE_FEATURES=` to omit them.
-The About automatic-check preference and cached release result are device-local.
-
-## License
-
-Nova's original code is licensed under GPL-3.0-or-later; see [`LICENSE`](LICENSE).
-The Settings → About page lists the Rust crates and bundled native components
-used by the build, includes their license texts, and opens source links. The
-catalog is generated from the locked dependency graph at build time. See
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the vendor inventory.
-
-Nova starts without bundled JavaScript addons or an addon repository. Install a
-local addon ZIP from Settings → Addons; see [addon packages](docs/addon-packages.md)
-for packaging AniKoto and Supernova separately.
-
-## Where things live
-
-- `src/` — app logic + UI bridge (state, pages, playback, sync wiring)
-- `crates/ui/` — Slint components (`.slint` sources of truth for the UI)
-- `crates/sync/` — cross-device record sync over iroh
-- `crates/tracking/` — MAL/AniList accounts, episode mappings and progress delivery
-- `crates/providers/` — addon metadata, identity matching and ZIP-installed providers
-- `crates/player/` — in-window mpv playback (+ Android JNI glue)
-- `crates/torrent/`, `crates/download/`, `crates/media/`, `crates/storage/`, `crates/config/`, `crates/addons/`
-- `tests/` — headless Slint integration tests (run with `i-slint-backend-testing`, no display)
-- `docs/` — `project-structure.md` is the canonical map of the project
-  (workspace layout, data flow, persistence keys, sync protocol); read it
-  before exploring, and keep it current with structural changes
+For Android Make targets, use `UPDATE_FEATURES=`.
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md) for coding conventions, commit messages, and required
-formatting, lint, build, and test checks. Use
-[the project map](docs/project-structure.md) for code navigation and
-[the behavior references](docs/) for the implemented feature contracts.
+Read [AGENTS.md](AGENTS.md) for coding conventions and required checks.
+[docs/project-structure.md](docs/project-structure.md) maps the workspace,
+UI bridges, data flow, persisted state and protocols. App logic lives in
+`src/`; the Slint UI and heavier subsystems live in leaf crates under `crates/`.
+Behavior references and headless UI regressions live in `docs/` and `tests/`.
+
+## License
+
+Nova's original code is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).
+Settings → About lists the build's Rust crates and bundled native components,
+license texts and source links. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for the vendor inventory.
