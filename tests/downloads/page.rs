@@ -226,7 +226,8 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
         );
         assert!(!app.get_show_downloads());
         reopen_downloads(&app);
-        click(&app, "Remove download");
+        click(&app, "Delete downloaded file");
+        click(&app, "Delete file");
         click(&app, "Collapse series");
         let groups = app.get_downloads_page_groups();
         let mut group = groups.row_data(0).unwrap();
@@ -254,7 +255,7 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
             [
                 (SharedString::from("download-stable-job"), 0),
                 (SharedString::from("download-stable-job"), 0),
-                (SharedString::from("download-stable-job"), 1),
+                (SharedString::from("download-stable-job"), 3),
             ]
         })
         .collect::<Vec<_>>();
@@ -609,4 +610,489 @@ fn long_download_actions_preserve_readable_episode_and_transfer_text() {
         }
     }
     slint::select_bundled_translation("en").unwrap();
+}
+
+#[test]
+fn offline_file_deletion_defaults_to_cancel_and_keeps_captured_identity() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::offline_file_deletion_defaults_to_cancel_and_keeps_captured_identity"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_downloads_page_action(move |id, action| {
+        recorded.borrow_mut().push((id.to_string(), action))
+    });
+    let episodes = Rc::new(VecModel::from(vec![nova::DownloadEpisode {
+        id: "original-job".into(),
+        title: "Original downloaded episode".into(),
+        action_kind: 4,
+        action_label: "Play".into(),
+        ..Default::default()
+    }]));
+    app.set_downloads_page_groups(
+        Rc::new(VecModel::from(vec![nova::DownloadGroup {
+            id: "group".into(),
+            title: "Series".into(),
+            episodes: episodes.clone().into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    for (width, height, tv) in [(390, 844, false), (1280, 900, false), (1280, 720, true)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        episodes.set_row_data(
+            0,
+            nova::DownloadEpisode {
+                id: "original-job".into(),
+                title: "Original downloaded episode".into(),
+                action_kind: 4,
+                action_label: "Play".into(),
+                ..Default::default()
+            },
+        );
+        click(&app, "Delete downloaded file");
+        assert_eq!(
+            actions.borrow().len(),
+            0,
+            "opening confirmation must not delete a file"
+        );
+        key(&app, slint::platform::Key::Return.into());
+        assert!(
+            actions.borrow().is_empty(),
+            "Cancel is the safe default on every input mode"
+        );
+        assert!(app.get_show_downloads());
+        click(&app, "Delete downloaded file");
+        key(&app, slint::platform::Key::Back.into());
+        assert!(actions.borrow().is_empty());
+        assert!(
+            app.get_show_downloads(),
+            "Back dismisses the confirmation first"
+        );
+        click(&app, "Delete downloaded file");
+        // Replace the row while the confirmation is open, as a timer refresh,
+        // completion or re-sort can do. Confirmation retains the original ID.
+        episodes.set_row_data(
+            0,
+            nova::DownloadEpisode {
+                id: "replacement-job".into(),
+                title: "A different episode".into(),
+                action_kind: 4,
+                action_label: "Play".into(),
+                ..Default::default()
+            },
+        );
+        if tv {
+            key(&app, slint::platform::Key::DownArrow.into());
+            key(&app, slint::platform::Key::Return.into());
+        } else {
+            click(&app, "Delete file");
+        }
+        assert_eq!(
+            actions.borrow().as_slice(),
+            &[("original-job".to_string(), 3)]
+        );
+        actions.borrow_mut().clear();
+    }
+}
+
+#[test]
+fn failed_download_explanations_wrap_above_recovery_actions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::failed_download_explanations_wrap_above_recovery_actions"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_downloads_page_transfers(Rc::new(VecModel::from(vec![nova::DownloadEpisode {
+        id: "failed-job".into(), title: "Episode with a failed download".into(),
+        details: "The server stopped responding while downloading this episode. Check your network connection, then retry the download or choose another stream with a working source. This full explanation must remain readable on every screen size.".into(),
+        action_kind: 3, action_label: "Retry download".into(), ..Default::default()
+    }])).into());
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    for (width, height, tv) in [
+        (320, 1200, false),
+        (800, 600, false),
+        (1280, 900, false),
+        (1280, 900, true),
+    ] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        for _ in 0..4 {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+        }
+        let row = ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow")
+            .next()
+            .unwrap();
+        let details = row
+            .query_descendants()
+            .match_id("DownloadEpisodeRow::failure_details")
+            .find_first()
+            .unwrap();
+        let retry = row
+            .query_descendants()
+            .match_id("DownloadEpisodeRow::episode_action")
+            .find_first()
+            .unwrap();
+        let recovery = ElementHandle::find_by_accessible_label(&app, "Choose another stream")
+            .next()
+            .unwrap();
+        assert!(
+            details.size().height > if tv { 24.0 } else { 18.0 },
+            "explanation wraps instead of eliding at {width}"
+        );
+        assert!(details.size().width >= row.size().width - 17.0);
+        assert!(details.absolute_position().y >= retry.absolute_position().y + retry.size().height);
+        assert!(
+            details.absolute_position().y + details.size().height <= recovery.absolute_position().y
+        );
+        assert!(
+            recovery.absolute_position().y + recovery.size().height
+                <= row.absolute_position().y + row.size().height
+        );
+    }
+}
+
+// Force geometry before advancing the deferred reveal tick, matching the
+// embedded page's normal layout/event-loop publication sequence.
+fn settle_download_geometry(app: &nova::AppWindow) {
+    for _ in 0..4 {
+        for component in [
+            "DownloadDeleteDialog",
+            "DownloadEpisodeRow",
+            "DownloadButton",
+        ] {
+            for element in ElementHandle::find_by_element_type_name(app, component) {
+                let _ = (element.absolute_position(), element.size());
+            }
+        }
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+    }
+}
+
+fn assert_download_control_visible(app: &nova::AppWindow, label: &str) {
+    let control = ElementHandle::find_by_accessible_label(app, label)
+        .next()
+        .unwrap();
+    let top = control.absolute_position().y;
+    assert!(
+        top >= 0.0 && top + control.size().height <= app.window().size().height as f32,
+        "{label} must be visible before activation: top={top}, size={:?}, viewport={:?}",
+        control.size(),
+        app.window().size()
+    );
+}
+
+#[test]
+fn delete_confirmation_reveals_selected_action_after_long_title_and_rotation() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::delete_confirmation_reveals_selected_action_after_long_title_and_rotation"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_downloads_page_action(move |id, action| {
+        recorded.borrow_mut().push((id.to_string(), action))
+    });
+    app.set_downloads_page_groups(
+        Rc::new(VecModel::from(vec![nova::DownloadGroup {
+            id: "group".into(),
+            title: "Series".into(),
+            episodes: Rc::new(VecModel::from(vec![nova::DownloadEpisode {
+                id: "long-title-job".into(),
+                title: "A very long downloaded episode title with meaningful words "
+                    .repeat(100)
+                    .into(),
+                action_kind: 4,
+                action_label: "Play".into(),
+                ..Default::default()
+            }]))
+            .into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    for (width, height, tv) in [(800, 320, false), (1280, 360, true)] {
+        app.global::<nova::InterfaceStyle>().set_tv(false);
+        app.window().set_size(slint::PhysicalSize::new(390, 844));
+        settle_download_geometry(&app);
+        click(&app, "Delete downloaded file");
+        settle_download_geometry(&app);
+        assert_download_control_visible(&app, "Cancel");
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        settle_download_geometry(&app);
+        assert_download_control_visible(&app, "Cancel");
+        key(&app, slint::platform::Key::Tab.into());
+        settle_download_geometry(&app);
+        assert_download_control_visible(&app, "Delete file");
+        key(&app, slint::platform::Key::UpArrow.into());
+        settle_download_geometry(&app);
+        assert_download_control_visible(&app, "Cancel");
+        key(&app, slint::platform::Key::Return.into());
+        assert!(
+            actions.borrow().is_empty(),
+            "rotation and reveal retain the safe selection"
+        );
+    }
+}
+
+#[test]
+fn tv_pages_through_long_failure_and_reveals_each_selected_action() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tv_pages_through_long_failure_and_reveals_each_selected_action"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.set_downloads_page_transfers(Rc::new(VecModel::from(vec![nova::DownloadEpisode {
+        id: "long-failure".into(), title: "Failed episode".into(),
+        details: "The source failed while downloading. Check the connection and retry or choose another source. ".repeat(100).into(),
+        action_kind: 3, action_label: "Retry download".into(), ..Default::default()
+    }])).into());
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_downloads_page_action(move |id, action| {
+        recorded.borrow_mut().push((id.to_string(), action))
+    });
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    settle_download_geometry(&app);
+    // Search -> filters -> sort -> failed transfer starts at the primary action.
+    for _ in 0..3 {
+        key(&app, slint::platform::Key::DownArrow.into());
+        settle_download_geometry(&app);
+    }
+    assert_download_control_visible(&app, "Retry download");
+    key(&app, slint::platform::Key::RightArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Cancel download");
+    key(&app, slint::platform::Key::RightArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Choose another stream");
+    key(&app, slint::platform::Key::LeftArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Cancel download");
+    key(&app, slint::platform::Key::LeftArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Retry download");
+    let details = || {
+        ElementHandle::find_by_element_id(&app, "DownloadEpisodeRow::failure_details")
+            .next()
+            .unwrap()
+    };
+    let initial_top = details().absolute_position().y;
+    assert!(
+        details().size().height > 720.0,
+        "fixture must exceed the viewport"
+    );
+    key(&app, slint::platform::Key::DownArrow.into());
+    settle_download_geometry(&app);
+    assert!(
+        details().absolute_position().y < initial_top,
+        "Down pages through the explanation before leaving the transfer"
+    );
+    let mut previous = details().absolute_position().y;
+    for _ in 0..80 {
+        if details().absolute_position().y + details().size().height <= 700.0 {
+            break;
+        }
+        key(&app, slint::platform::Key::DownArrow.into());
+        settle_download_geometry(&app);
+        let current = details().absolute_position().y;
+        assert!(current < previous, "each Down reveals more explanation");
+        previous = current;
+    }
+    assert!(
+        details().absolute_position().y + details().size().height <= 700.0,
+        "the end of the full explanation is reachable"
+    );
+    key(&app, slint::platform::Key::RightArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Cancel download");
+    key(&app, slint::platform::Key::RightArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Choose another stream");
+    key(&app, slint::platform::Key::Return.into());
+    assert_eq!(
+        actions.borrow().as_slice(),
+        &[("long-failure".to_string(), 2)]
+    );
+}
+
+#[test]
+fn tv_error_paging_request_belongs_to_one_job_across_row_changes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tv_error_paging_request_belongs_to_one_job_across_row_changes"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.set_downloads_page_transfers(Rc::new(VecModel::from((1..=3).map(|index| nova::DownloadEpisode {
+        id: format!("failed-{index}").into(), title: format!("Failed episode {index}").into(),
+        details: "The source failed while downloading. Check your connection and retry the download. ".repeat(60).into(),
+        action_kind: 3, action_label: format!("Retry {index}").into(), ..Default::default()
+    }).collect::<Vec<_>>())).into());
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_downloads_page_action(move |id, action| {
+        recorded.borrow_mut().push((id.to_string(), action))
+    });
+    app.invoke_navigate_section(5);
+    app.show().unwrap();
+    settle_download_geometry(&app);
+    // Query the heading/controls while they are visible. ElementHandle omits
+    // offscreen layout elements after paging far into a failure explanation.
+    let scroll = ElementHandle::find_by_element_id(&app, "DownloadsPage::groups-scroll")
+        .next()
+        .unwrap();
+    let controls = ElementHandle::find_by_element_id(&app, "DownloadsPage::download_controls")
+        .next()
+        .unwrap();
+    let readable_top = scroll.absolute_position().y + controls.size().height + 28.0;
+    for _ in 0..3 {
+        key(&app, slint::platform::Key::DownArrow.into());
+        settle_download_geometry(&app);
+    }
+    let first_details_handle =
+        ElementHandle::find_by_element_id(&app, "DownloadEpisodeRow::failure_details")
+            .next()
+            .unwrap();
+    let first_details = || &first_details_handle;
+    for _ in 0..80 {
+        if first_details().absolute_position().y + first_details().size().height <= 700.0 {
+            break;
+        }
+        key(&app, slint::platform::Key::DownArrow.into());
+        settle_download_geometry(&app);
+    }
+    assert!(first_details().absolute_position().y + first_details().size().height <= 700.0);
+    // Only the first delegate may consume this request. A newly focused
+    // second/third failed row must not page or move again on the same key.
+    key(&app, slint::platform::Key::DownArrow.into());
+    settle_download_geometry(&app);
+    assert_download_control_visible(&app, "Retry 2");
+    key(&app, slint::platform::Key::Return.into());
+    assert_eq!(actions.borrow().last(), Some(&("failed-2".to_string(), 0)));
+    // Scope the handle to the delegate containing the stable Retry 2 action;
+    // visibility-filtered global iteration no longer has stable row indexes.
+    let second_row = ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow")
+        .find(|row| {
+            row.query_descendants()
+                .find_all()
+                .iter()
+                .any(|item| item.accessible_label().as_deref() == Some("Retry 2"))
+        })
+        .unwrap();
+    let second_details_handle = second_row
+        .query_descendants()
+        .match_id("DownloadEpisodeRow::failure_details")
+        .find_first()
+        .unwrap();
+    let second_details = || &second_details_handle;
+    let before_page = second_details().absolute_position().y;
+    key(&app, slint::platform::Key::DownArrow.into());
+    settle_download_geometry(&app);
+    assert!(
+        second_details().absolute_position().y < before_page,
+        "the next request pages only the second job"
+    );
+    // The primary row enters aligned to the bottom of the viewport. Its
+    // explanation begins below that row, so the first Down can reveal more
+    // text while its beginning still remains visible. Page until some text
+    // actually lies above the readable lane before expecting Up to scroll.
+    for _ in 0..10 {
+        if second_details().absolute_position().y < readable_top - 1.0 {
+            break;
+        }
+        key(&app, slint::platform::Key::DownArrow.into());
+        settle_download_geometry(&app);
+    }
+    let scrolled_top = second_details().absolute_position().y;
+    assert!(
+        scrolled_top < readable_top - 1.0,
+        "fixture has explanation text above the readable lane"
+    );
+    key(&app, slint::platform::Key::UpArrow.into());
+    settle_download_geometry(&app);
+    assert!(
+        second_details().absolute_position().y > scrolled_top,
+        "Up reveals the hidden beginning"
+    );
+    key(&app, slint::platform::Key::Return.into());
+    assert_eq!(
+        actions.borrow().last(),
+        Some(&("failed-2".to_string(), 0)),
+        "Up first pages toward the beginning of the same explanation"
+    );
+    key(&app, slint::platform::Key::UpArrow.into());
+    settle_download_geometry(&app);
+    key(&app, slint::platform::Key::Return.into());
+    assert_eq!(
+        actions.borrow().last(),
+        Some(&("failed-1".to_string(), 2)),
+        "reverse entry shows the previous explanation's tail/recovery action"
+    );
+    let tail_top = first_details().absolute_position().y;
+    key(&app, slint::platform::Key::UpArrow.into());
+    settle_download_geometry(&app);
+    assert!(
+        first_details().absolute_position().y > tail_top,
+        "Up reviews the previous explanation from its tail instead of skipping it"
+    );
+    let mut previous = first_details().absolute_position().y;
+    let mut reached_beginning = false;
+    for _ in 0..80 {
+        key(&app, slint::platform::Key::UpArrow.into());
+        settle_download_geometry(&app);
+        let current = first_details().absolute_position().y;
+        if (current - previous).abs() < 0.5 {
+            // After reaching the beginning, one more Up leaves the first row
+            // for Sort. It must not jump back into another failed delegate.
+            reached_beginning = true;
+            break;
+        }
+        assert!(
+            current > previous,
+            "reverse paging moves steadily toward the beginning"
+        );
+        previous = current;
+    }
+    assert!(
+        reached_beginning,
+        "the full explanation is reviewable in reverse before leaving"
+    );
 }

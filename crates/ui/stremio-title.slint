@@ -1,12 +1,14 @@
 import { DetailBridge, SettingsBridge, Theme } from "@NovaUiShared";
-import { SettingsInput, PillButton } from "settings-controls.slint";
-import { Dropdown } from "dropdown.slint";
-import { TrackingButton, HistoryToggle } from "tracking-controls.slint";
+import { TrackingButton, HistoryToggle, TrackingInput, TrackingDropdown, TrackingPillButton } from "tracking-controls.slint";
 
 // This body shares the Tracking page's scroll viewport and stable Back owner.
 export component StremioTitle inherits VerticalLayout {
     spacing: 12px;
     alignment: start;
+    property <int> candidates_start: 6 + (SettingsBridge.stremio_connected ? 2 : 0);
+    property <int> mapping_start: root.candidates_start + (SettingsBridge.stremio_connected && DetailBridge.stremio_title_match == "" ? DetailBridge.stremio_title_candidates.length : 0);
+    property <int> confirm_start: root.mapping_start + (DetailBridge.stremio_title_match != "" ? DetailBridge.stremio_title_mapping.length : 0);
+    property <int> linked_start: root.confirm_start + (DetailBridge.stremio_title_can_confirm ? (SettingsBridge.stremio_mode_index == 1 ? 2 : 1) : 0);
     property <bool> include_history: false;
     property <string> query_text;
     Text {
@@ -19,14 +21,16 @@ export component StremioTitle inherits VerticalLayout {
         text: @tr("Connect Stremio in Settings → Integrations first.");
         wrap: word-wrap; min-width: 0px; color: Theme.current.text_settings;
     }
-    if SettingsBridge.stremio_connected: SettingsInput {
+    if SettingsBridge.stremio_connected: TrackingInput {
+        nav-index: 6;
         placeholder-text: @tr("Search Stremio titles or enter a catalog ID");
         enabled: !DetailBridge.stremio_title_busy;
         accepted => { DetailBridge.stremio_title_search(self.full-text); }
         changed full-text => { root.query_text = self.full-text; root.include_history = false; }
     }
     // Searching is an explicit action; typing never sends account requests.
-    if SettingsBridge.stremio_connected: PillButton {
+    if SettingsBridge.stremio_connected: TrackingPillButton {
+        nav-index: 7;
         label: @tr("Find Stremio matches");
         enabled: !DetailBridge.stremio_title_busy;
         clicked => { DetailBridge.stremio_title_search(root.query_text); }
@@ -38,6 +42,7 @@ export component StremioTitle inherits VerticalLayout {
     if SettingsBridge.stremio_connected && DetailBridge.stremio_title_match == "": VerticalLayout {
         spacing: 8px;
         for row[index] in DetailBridge.stremio_title_candidates: TrackingButton {
+            nav-index: root.candidates_start + index;
             text: row.title + " · " + row.detail;
             enabled: !DetailBridge.stremio_title_busy;
             clicked => { DetailBridge.stremio_title_pick(index); }
@@ -52,7 +57,8 @@ export component StremioTitle inherits VerticalLayout {
         for row[index] in DetailBridge.stremio_title_mapping: VerticalLayout {
             spacing: 4px;
             Text { text: row.label; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
-            Dropdown {
+            TrackingDropdown {
+                nav-index: root.mapping_start + index;
                 model: DetailBridge.stremio_title_options;
                 current-index: row.source_row;
                 roomy: true;
@@ -60,17 +66,20 @@ export component StremioTitle inherits VerticalLayout {
             }
         }
     }
-    if DetailBridge.stremio_title_can_confirm && SettingsBridge.stremio_mode_index == 1: HistoryToggle { checked <=> root.include_history; }
+    if DetailBridge.stremio_title_can_confirm && SettingsBridge.stremio_mode_index == 1: HistoryToggle { nav-index: root.confirm_start; checked <=> root.include_history; }
     if DetailBridge.stremio_title_can_confirm: TrackingButton {
+        nav-index: root.confirm_start + (SettingsBridge.stremio_mode_index == 1 ? 1 : 0);
         text: @tr("Enable Stremio for this title"); primary: true;
         enabled: !DetailBridge.stremio_title_busy;
         clicked => { DetailBridge.stremio_title_confirm(SettingsBridge.stremio_mode_index == 0 || root.include_history); }
     }
-    if DetailBridge.stremio_title_linked && SettingsBridge.stremio_mode_index == 1: PillButton {
+    if DetailBridge.stremio_title_linked && SettingsBridge.stremio_mode_index == 1: TrackingPillButton {
+        nav-index: root.linked_start;
         label: @tr("Sync now"); enabled: !SettingsBridge.stremio_busy;
         clicked => { SettingsBridge.stremio_sync(); }
     }
-    if DetailBridge.stremio_title_linked: PillButton {
+    if DetailBridge.stremio_title_linked: TrackingPillButton {
+        nav-index: root.linked_start + (SettingsBridge.stremio_mode_index == 1 ? 1 : 0);
         label: @tr("Stop tracking this title"); destructive: true;
         clicked => { DetailBridge.stremio_title_unlink(); }
     }

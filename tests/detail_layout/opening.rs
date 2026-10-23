@@ -103,6 +103,151 @@ fn assert_still_at(app: &nova::AppWindow, y: f32) {
 }
 
 #[test]
+fn rotation_keeps_the_visible_episode_in_view() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "rotation_keeps_the_visible_episode_in_view"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_is_android(true);
+    app.set_touch_menus(true);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_modal_episodes(true);
+    app.set_detail_tab(3);
+    app.set_selected_title("Keep my place".into());
+    app.set_episode_rows(
+        Rc::new(VecModel::from(
+            (0..24)
+                .map(|i| nova::EpisodeRow {
+                    id: format!("episode-{i}").into(),
+                    text: format!("Episode {i}").into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_episode_total(24);
+    app.set_season_cards(
+        Rc::new(VecModel::from(
+            (1..=3)
+                .map(|season| nova::SeasonCard {
+                    name: format!("Season {season}").into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(
+        i_slint_core::lengths::LogicalEdges::new(24.0, 0.0, 20.0, 0.0),
+    );
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.window().show().unwrap();
+    settle();
+    (*app)
+        .global::<nova_ui_shared::DetailContent>()
+        .invoke_restore_scroll_y(-1800.0);
+    settle();
+    let reading_episode = || {
+        let toolbar = element(&app, "DetailEpisodesModule::episode_toolbar");
+        let reading_top = toolbar.absolute_position().y + toolbar.size().height;
+        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::episode_title")
+            .filter(|item| item.absolute_position().y >= reading_top)
+            .find_map(|item| item.accessible_label())
+            .expect("an episode title below the pinned toolbar")
+    };
+    let reading_line = || {
+        (*app)
+            .global::<nova_ui_shared::DetailContent>()
+            .get_episodes_viewport_top()
+            + element(&app, "DetailEpisodesModule::episode_toolbar")
+                .size()
+                .height
+            + 8.0
+    };
+    let reading_card = || {
+        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::ep_card")
+            .find(|card| {
+                let y = card.absolute_position().y;
+                y <= reading_line() && y + card.size().height + 24.0 > reading_line()
+            })
+            .expect("an episode card crossing the reading line")
+    };
+    let card = reading_card();
+    let fraction = (card.absolute_position().y - reading_line()) / card.size().height;
+    let anchor = reading_episode();
+    for (turn, (width, height)) in [
+        (844, 390),
+        (390, 844),
+        (1200, 700),
+        (390, 844),
+        (844, 390),
+        (390, 844),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        app.global::<nova::Anim>().set_enabled(turn >= 3);
+        app.global::<nova::Anim>().set_transitions(turn >= 3);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(
+            if width < height {
+                i_slint_core::lengths::LogicalEdges::new(24.0, 0.0, 20.0, 0.0)
+            } else {
+                i_slint_core::lengths::LogicalEdges::new(0.0, 24.0, 0.0, 28.0)
+            },
+        );
+        settle();
+        let actual = (card.absolute_position().y - reading_line()) / card.size().height;
+        assert!(
+            (actual - fraction).abs() < 0.015,
+            "rotation to {width}x{height} moved reading fraction {fraction} to {actual}"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, &anchor)
+                .next()
+                .is_some(),
+            "rotation to {width}x{height} lost {anchor}; scroll {}",
+            (*app)
+                .global::<nova_ui_shared::DetailContent>()
+                .invoke_scroll_y()
+        );
+    }
+    // Later scrolling replaces the reading anchor, including returning to the
+    // exact offset restored by the previous resize.
+    let content = (*app).global::<nova_ui_shared::DetailContent>();
+    let offset = content.invoke_scroll_y();
+    content.invoke_restore_scroll_y(offset - 700.0);
+    settle();
+    content.invoke_restore_scroll_y(offset);
+    settle();
+    let anchor = reading_episode();
+    let card = reading_card();
+    let fraction = (card.absolute_position().y - reading_line()) / card.size().height;
+    app.window().set_size(slint::PhysicalSize::new(844, 390));
+    settle();
+    let actual = (card.absolute_position().y - reading_line()) / card.size().height;
+    assert!(
+        (actual - fraction).abs() < 0.015,
+        "scrolling must replace the saved reading fraction"
+    );
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, &anchor)
+            .next()
+            .is_some()
+    );
+}
+
+#[test]
 fn opening_and_backend_focus_changes_do_not_scroll_but_keyboard_and_playback_do() {
     if !crate::isolation::run(concat!(
         module_path!(),

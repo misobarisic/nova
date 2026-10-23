@@ -1,4 +1,4 @@
-import { Theme, DetailBridge, DetailContent } from "@NovaUiShared";
+import { Theme, DetailBridge, DetailContent, InterfaceStyle } from "@NovaUiShared";
 import { TrackingPanel } from "../ui/tracking-panel.slint";
 import { SettingsBackButton } from "../ui/settings-controls.slint";
 export component DetailTrackingModule inherits Window {
@@ -8,6 +8,15 @@ export component DetailTrackingModule inherits Window {
     public function validate_entry() { panel.validate_entry(); }
     public function focus_tracking() { panel.focus_panel(); }
     public function nested_back() { panel.nested_back(); }
+    private property <int> reveal_request: DetailContent.tracking_reveal_request;
+    changed reveal_request => {
+        if InterfaceStyle.tv && DetailBridge.tracking_open {
+            let top = DetailContent.tracking_focus_y - tracking_scroll.absolute-position.y;
+            let height = DetailContent.tracking_focus_height;
+            let delta = top < panel.focus-top-inset ? top - panel.focus-top-inset : top + height > tracking_scroll.height - 12px ? top + height - tracking_scroll.height + 12px : 0px;
+            tracking_scroll.content-y = Math.clamp(tracking_scroll.content-y - delta, Math.min(0px, tracking_scroll.height - tracking_scroll.content-height), 0px);
+        }
+    }
     root_focus := FocusScope {
         width: 100%; height: 100%;
         key-pressed(e) => {

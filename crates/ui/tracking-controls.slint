@@ -1,4 +1,7 @@
-import { Theme, Anim, InterfaceStyle } from "@NovaUiShared";
+import { Theme, Anim, InterfaceStyle, DetailContent, SettingsStyle } from "@NovaUiShared";
+import { SettingsInput, PillButton } from "settings-controls.slint";
+import { Dropdown } from "dropdown.slint";
+import { CheckBox } from "std-widgets.slint";
 import { ControlTouchArea } from "control-input.slint";
 import { IcClose, IcChevronRight, IcSync, IcMyAnimeList, IcAniList, IcEdit, IcOpenInNew, IcHistory, IcDelete, IcInfo, IcTag } from "icons.slint";
 
@@ -12,7 +15,28 @@ export component TrackingButton inherits Rectangle {
     in property <bool> compact: false;
     in property <int> icon: 0; // 1 close, 2 reload, 3 forward, 4 MAL, 5 AniList.
     callback clicked();
+    callback nav-focused();
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            root.nav-focused();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+
     out property <bool> has-focus: focus.has-focus;
+    changed has-focus => { if root.has-focus && InterfaceStyle.tv && root.nav-index >= 0 { DetailContent.tracking_tv_index = root.nav-index; } }
     // Wrapped and translated action labels must grow the control rather than
     // disappear behind a fixed-height ellipsis on narrow screens.
     min-height: Math.max(InterfaceStyle.tv ? 56px : 0px, Math.max(root.icon >= 6 ? 68px : root.primary && !root.compact ? 52px : 44px, label.preferred-height + 24px));
@@ -55,7 +79,10 @@ export component TrackingButton inherits Rectangle {
     focus := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
-            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
+            // A focused scope can still receive its activation key while an
+            // asynchronous update disables it; validate before dispatching.
+            if !root.enabled { reject }
+            else if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
         }
     }
     touch := ControlTouchArea {
@@ -84,6 +111,24 @@ export component MappingChip inherits Rectangle {
 export component HistoryToggle inherits Rectangle {
     in-out property <bool> checked;
     in property <bool> enabled: true;
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+
     in property <bool> compact: false;
     callback toggled();
     height: Math.max(root.compact ? 44px : 56px, labels.preferred-height + (root.compact ? 4px : 12px));
@@ -107,18 +152,138 @@ export component HistoryToggle inherits Rectangle {
             width: 48px; background: transparent;
             Rectangle {
                 y: (parent.height - self.height) / 2;
-                width: 48px; height: 28px; border-radius: 14px; background: root.checked ? Theme.current.accent : Theme.current.tracking_toggle;
-                Rectangle {
-                    x: root.checked ? 24px : 4px; y: 4px; width: 20px; height: 20px;
+                width: 48px; height: 28px; border-radius: 14px;
+                private property <color> target-background: root.checked ? Theme.current.accent : Theme.current.tracking_toggle;
+                private property <color> state-background: self.target-background;
+                private property <bool> state-motion: Anim.enabled;
+                animate state-background { duration: Anim.control_state; easing: ease-out; }
+                changed target-background => { self.state-background = self.target-background; }
+                // Reassign with the current duration so master-off cancels an old
+                // animation instead of reviving it when motion is enabled again.
+                changed state-motion => { self.state-background = self.target-background; }
+                background: Anim.enabled ? self.state-background : self.target-background;
+                history_knob := Rectangle {
+                    private property <length> target-x: root.checked ? 24px : 4px;
+                    private property <length> state-x: self.target-x;
+                    private property <bool> state-motion: Anim.enabled;
+                    animate state-x { duration: Anim.control_state; easing: ease-out; }
+                    changed target-x => { self.state-x = self.target-x; }
+                    // Reassign with the current duration so master-off cancels an old
+                    // animation instead of reviving it when motion is enabled again.
+                    changed state-motion => { self.state-x = self.target-x; }
+                    x: Anim.enabled ? self.state-x : self.target-x;
+                    y: 4px; width: 20px; height: 20px;
                     border-radius: 10px; background: Theme.current.text_tracking_primary;
-                    animate x { duration: Anim.enabled ? 140ms : 0ms; easing: ease-out; }
                 }
             }
         }
     }
     focus := FocusScope {
         enabled: root.enabled;
-        key-pressed(e) => { if e.text == Key.Return || e.text == " " { root.checked = !root.checked; root.toggled(); accept } else { reject } }
+        key-pressed(e) => { if !root.enabled { reject } else if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.checked = !root.checked; root.toggled(); } accept } else { reject } }
     }
     TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.checked = !root.checked; root.toggled(); } }
+}
+
+// Native editors/popups keep their own activation and text-editing behavior.
+export component TrackingInput inherits SettingsInput {
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+}
+
+// Native editors/popups keep their own activation and text-editing behavior.
+export component TrackingDropdown inherits Dropdown {
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+}
+
+// Native editors/popups keep their own activation and text-editing behavior.
+export component TrackingCheckBox inherits Rectangle {
+    // Standard CheckBox has no child slot. Own the focus timer in this wrapper
+    // and forward the public state and native focus to the unchanged widget.
+    in property <string> text;
+    in property <bool> enabled: true;
+    in-out property <bool> checked;
+    callback toggled();
+    forward-focus: checkbox;
+    min-height: InterfaceStyle.tv ? 56px : 0px;
+    min-width: 0px;
+    vertical-stretch: 0;
+    HorizontalLayout {
+        checkbox := CheckBox {
+            text: root.text;
+            enabled: root.enabled;
+            checked <=> root.checked;
+            toggled => { root.toggled(); }
+        }
+    }
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+}
+
+// Service title actions retain their existing Settings pill appearance.
+export component TrackingPillButton inherits PillButton {
+    // A negative index leaves standalone/settings controls outside page traversal.
+    in property <int> nav-index: -1;
+    property <bool> tv-current: InterfaceStyle.tv && root.nav-index >= 0 && root.enabled && DetailContent.tracking_tv_index == root.nav-index;
+    property <int> nav-epoch: DetailContent.tracking_tv_epoch;
+    changed tv-current => { if root.tv-current { nav_timer.start(); } }
+    changed nav-epoch => { if root.tv-current { nav_timer.start(); } }
+    init => { if root.tv-current { nav_timer.start(); } }
+    nav_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.claim_tv_focus(); } }
+    function claim_tv_focus() {
+        if root.tv-current {
+            SettingsStyle.keyboard-mode = true;
+            root.focus();
+            DetailContent.tracking_focus_y = root.absolute-position.y;
+            DetailContent.tracking_focus_height = root.height;
+            DetailContent.tracking_reveal_request += 1;
+        }
+    }
+
 }

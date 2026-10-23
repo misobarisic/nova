@@ -33,6 +33,9 @@ pub fn prepare_subpages(shared: &std::rc::Rc<NovaUiSharedSharedGlobals>) {
     content.set_restoring_navigation(false);
     content.set_tracking_back_request(0);
     content.set_tracking_focus_request(0);
+    content.set_tracking_tv_index(0);
+    content.set_tracking_tv_epoch(0);
+    content.set_tracking_tv_entry_start(0);
 }
 
 /// Factories reuse the native parent slot and initialized shared globals.

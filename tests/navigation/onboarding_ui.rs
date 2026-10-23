@@ -65,7 +65,7 @@ fn assert_language_checkmark(app: &nova::AppWindow) {
         })
         .expect("selected language control must be reachable by scrolling");
     let check = ElementHandle::find_by_element_type_name(app, "IcCheck")
-        .next()
+        .find(|check| check.computed_opacity() > 0.99)
         .unwrap();
     let choice = button.absolute_position();
     let mark = check.absolute_position();
@@ -276,7 +276,9 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
     let initial_language = app.get_language_index();
     app.set_onboarding_step(1);
     settle(&app);
-    let checkmarks: Vec<_> = ElementHandle::find_by_element_type_name(&app, "IcCheck").collect();
+    let checkmarks: Vec<_> = ElementHandle::find_by_element_type_name(&app, "IcCheck")
+        .filter(|check| check.computed_opacity() > 0.99)
+        .collect();
     assert_eq!(
         checkmarks.len(),
         1,
@@ -577,4 +579,149 @@ fn ordered_playback_languages_share_settings_edits_and_exclusive_modes() {
         .last()
         .unwrap();
     assert!(footer.size().height >= 44.0);
+}
+
+#[test]
+fn language_selection_checkmarks_crossfade_without_geometry_or_state_delay() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::language_selection_checkmarks_crossfade_without_geometry_or_state_delay"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_onboarding_visible(true);
+    app.set_onboarding_step(1);
+    app.set_language_index(0);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(false);
+    app.global::<nova::Anim>().set_hover(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    app.window().show().unwrap();
+    settle(&app);
+    let marks = || {
+        ElementHandle::find_by_element_id(&app, "LanguageCard::language_check").collect::<Vec<_>>()
+    };
+    // Exercise property tracking once per simulated render frame, including
+    // the changed callbacks that drive the retained animated intermediates.
+    let advance = |milliseconds| {
+        for _ in 0..milliseconds {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            for current in marks() {
+                let _ = (
+                    current.computed_opacity(),
+                    current.absolute_position(),
+                    current.size(),
+                );
+            }
+        }
+    };
+    assert_eq!(marks().len(), 2);
+    assert!(
+        marks()[0].computed_opacity() > 0.99 && marks()[1].computed_opacity() < 0.01,
+        "unexpected language endpoints: {:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    let geometry = marks()
+        .iter()
+        .map(|mark| (mark.absolute_position(), mark.size()))
+        .collect::<Vec<_>>();
+    app.set_language_index(1);
+    assert_eq!(
+        app.get_language_index(),
+        1,
+        "selection state updates immediately"
+    );
+    for mark in marks() {
+        let _ = mark.computed_opacity();
+    }
+    advance(70);
+    for mark in marks() {
+        let opacity = mark.computed_opacity();
+        assert!(
+            opacity > 0.05 && opacity < 0.95,
+            "retained language indicator has an intermediate frame: {opacity}"
+        );
+    }
+    advance(120);
+    assert!(
+        marks()[0].computed_opacity() < 0.01 && marks()[1].computed_opacity() > 0.99,
+        "unexpected language endpoints: {:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        marks()
+            .iter()
+            .map(|mark| (mark.absolute_position(), mark.size()))
+            .collect::<Vec<_>>(),
+        geometry
+    );
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_language_index(0);
+    assert!(
+        marks()[0].computed_opacity() > 0.99 && marks()[1].computed_opacity() < 0.01,
+        "master-off selection is instant; opacity={:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    for mark in marks() {
+        let _ = mark.computed_opacity();
+    }
+    advance(170);
+    assert!(
+        marks()[0].computed_opacity() > 0.99 && marks()[1].computed_opacity() < 0.01,
+        "unexpected language endpoints: {:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    app.set_language_index(1);
+    for mark in marks() {
+        let _ = mark.computed_opacity();
+    }
+    advance(35);
+    let moving = marks()[0].computed_opacity();
+    assert!(
+        moving > 0.01 && moving < 0.99,
+        "expected in-flight language check, opacity={moving}"
+    );
+    app.global::<nova::Anim>().set_enabled(false);
+    advance(16);
+    assert!(
+        marks()[0].computed_opacity() < 0.01 && marks()[1].computed_opacity() > 0.99,
+        "disabling motion snaps in-flight language checks on the next frame; opacity={:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    assert!(
+        marks()[0].computed_opacity() < 0.01 && marks()[1].computed_opacity() > 0.99,
+        "quick re-enable keeps the snapped visual state; opacity={:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
+    advance(16);
+    assert!(
+        marks()[0].computed_opacity() < 0.01 && marks()[1].computed_opacity() > 0.99,
+        "quick re-enable must not resume stale interpolation; opacity={:?}",
+        marks()
+            .iter()
+            .map(|mark| mark.computed_opacity())
+            .collect::<Vec<_>>()
+    );
 }

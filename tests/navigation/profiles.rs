@@ -2,7 +2,7 @@
 use crate::isolation;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 const PROFILE_NAME: &str = "A long profile name that wraps on a compact phone";
@@ -813,4 +813,106 @@ fn policy_editor_wraps_focus_back_to_pin_and_reveals_add_title() {
     let add = button(&app, "Add title");
     assert!(add.absolute_position().y >= 0.0);
     assert!(add.absolute_position().y + add.size().height <= 568.5);
+}
+
+#[test]
+fn profile_selection_indicator_crossfades_and_master_off_is_instant() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::profile_selection_indicator_crossfades_and_master_off_is_instant"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = picker(true);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(false);
+    app.global::<nova::Anim>().set_hover(false);
+    let check = || {
+        ElementHandle::find_by_element_id(&app, "ProfileChoiceRow::selection_check")
+            .next()
+            .unwrap()
+    };
+    // Exercise property tracking once per simulated render frame, including
+    // the changed callbacks that drive the retained animated intermediates.
+    let advance = |milliseconds| {
+        for _ in 0..milliseconds {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            let current = check();
+            let _ = (
+                current.computed_opacity(),
+                current.absolute_position(),
+                current.size(),
+            );
+        }
+    };
+    let geometry = (check().absolute_position(), check().size());
+    assert!(
+        check().computed_opacity() > 0.99,
+        "expected selected indicator, opacity={}",
+        check().computed_opacity()
+    );
+    let profiles = app.get_profiles();
+    let mut row = profiles.row_data(0).unwrap();
+    row.active = false;
+    profiles.set_row_data(0, row.clone());
+    let _ = check().computed_opacity();
+    advance(70);
+    let middle = check().computed_opacity();
+    assert!(
+        middle > 0.05 && middle < 0.95,
+        "profile check crossfades while page transitions and hover are off: {middle}"
+    );
+    advance(120);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "expected hidden indicator, opacity={}",
+        check().computed_opacity()
+    );
+    assert_eq!((check().absolute_position(), check().size()), geometry);
+    app.global::<nova::Anim>().set_enabled(false);
+    row.active = true;
+    profiles.set_row_data(0, row);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "master-off selection is instant; opacity={}",
+        check().computed_opacity()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    let _ = check().computed_opacity();
+    advance(170);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "expected selected indicator, opacity={}",
+        check().computed_opacity()
+    );
+    let mut row = profiles.row_data(0).unwrap();
+    row.active = false;
+    profiles.set_row_data(0, row);
+    let _ = check().computed_opacity();
+    advance(35);
+    let moving = check().computed_opacity();
+    assert!(
+        moving > 0.01 && moving < 0.99,
+        "expected in-flight indicator, opacity={moving}"
+    );
+    app.global::<nova::Anim>().set_enabled(false);
+    advance(16);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "disabling motion snaps an in-flight profile check on the next frame; opacity={}",
+        check().computed_opacity()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "quick re-enable keeps the snapped visual state; opacity={}",
+        check().computed_opacity()
+    );
+    advance(16);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "quick re-enable must not resume stale interpolation; opacity={}",
+        check().computed_opacity()
+    );
 }

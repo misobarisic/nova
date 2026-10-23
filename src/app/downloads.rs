@@ -1044,6 +1044,28 @@ impl DownloadCoordinator {
         self.remove_many(&HashSet::from([id.to_owned()]));
     }
 
+    /// Page action 1 cancels an incomplete transfer; action 3 explicitly
+    /// confirms deletion of a completed file. Check and claim atomically so
+    /// a timer/worker completion cannot change what the user authorized.
+    pub(super) fn remove_from_page(&self, id: &str, completed: bool) -> bool {
+        let pending = {
+            let mut state = self.inner.state();
+            let Some(job) = state.manifest.jobs.iter().find(|job| job.id == id) else {
+                return false;
+            };
+            if (job.phase == DownloadPhase::Completed) != completed {
+                return false;
+            }
+            self.claim_removals(&mut state, &HashSet::from([id.to_owned()]))
+        };
+        let Some(pending) = pending else { return false };
+        for job in &pending.jobs {
+            smart_offline::suppress_removed_job(job);
+        }
+        self.finish_removals(pending);
+        true
+    }
+
     /// Separate the short in-memory authority claim from persistence/file IO.
     fn claim_removals(
         &self,
@@ -3572,6 +3594,39 @@ mod tests {
     }
 
     #[test]
+    fn page_removal_requires_confirmation_for_current_completion_state() {
+        let coordinator = DownloadCoordinator::new(temp_root("page-removal-confirmation"));
+        let path = coordinator.inner.root.join("http/completed/episode.mkv");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"offline file").unwrap();
+        coordinator.inner.state().manifest.jobs = vec![
+            DownloadJob {
+                id: "completed".into(),
+                phase: DownloadPhase::Completed,
+                artifact_path: Some(path.clone()),
+                ..Default::default()
+            },
+            DownloadJob {
+                id: "transfer".into(),
+                phase: DownloadPhase::Paused,
+                ..Default::default()
+            },
+        ];
+        // A stale cancel callback after worker completion cannot delete files.
+        assert!(!coordinator.remove_from_page("completed", false));
+        assert!(path.exists());
+        assert!(!coordinator.remove_from_page("transfer", true));
+        assert!(!coordinator.remove_from_page("missing", true));
+        assert!(coordinator.remove_from_page("completed", true));
+        assert!(!path.exists());
+        assert!(coordinator.job("completed").is_none());
+        assert!(coordinator.job("transfer").is_some());
+        assert!(!coordinator.remove_from_page("completed", true));
+        assert!(coordinator.remove_from_page("transfer", false));
+        fs::remove_dir_all(&coordinator.inner.root).unwrap();
+    }
+
+    #[test]
     fn job_status_exposes_progress_and_action() {
         let mut job = DownloadJob::new("job-1", JobSource::http("https://cdn.example/movie.mp4"));
         job.display = "Addon\nMovie 1080p".into();
@@ -3585,6 +3640,10 @@ mod tests {
         assert_eq!(DownloadCoordinator::action_kind(&job), 1);
         assert_eq!(DownloadCoordinator::action_label(&job), "Pause download");
         assert!((DownloadCoordinator::progress_fraction(&job) - 0.5).abs() < 0.001);
+        job.total_bytes = None;
+        job.resource_progress = Some((3, 12));
+        assert!(DownloadCoordinator::status_text(&job).contains("25%"));
+        assert_eq!(DownloadCoordinator::progress_fraction(&job), 0.25);
     }
 
     #[test]

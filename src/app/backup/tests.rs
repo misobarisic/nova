@@ -568,3 +568,169 @@ fn import_commits_snapshots_baselines_fresh_records_receipt_and_safe_undo_togeth
     assert_eq!(restored["auto_next_episode"], true);
     assert_eq!(profiles::current_id(), "default");
 }
+
+// Storage and sync globals are process-owned; keep these regressions isolated
+// from each other and from the larger atomic import scenario above.
+fn isolated_backup_regression(name: &str) -> bool {
+    const ROOT: &str = "NOVA_BACKUP_FOCUSED_TEST_ROOT";
+    let Some(root) = std::env::var_os(ROOT) else {
+        let root = std::env::temp_dir().join(format!(
+            "nova-backup-{name}-{}-{}",
+            std::process::id(),
+            nova_config::now_ms()
+        ));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env(ROOT, &root)
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .args([
+                "--exact",
+                &format!("{}::{name}", module_path!()),
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return false;
+    };
+    nova_storage::init_at(&std::path::PathBuf::from(root));
+    profiles::initialize().unwrap();
+    true
+}
+
+#[test]
+fn skipped_profiles_preserve_choices_and_never_create_or_mutate_targets() {
+    if !isolated_backup_regression(
+        "skipped_profiles_preserve_choices_and_never_create_or_mutate_targets",
+    ) {
+        return;
+    }
+    let mut manifest = manifest();
+    manifest.profiles[0].components[0] = archive::Component {
+        name: "continue_hidden".into(),
+        schema_version: 1,
+        path: "profiles/p1/continue_hidden.json".into(),
+        item_count: 0,
+        sha256: String::new(),
+    };
+    let mut skipped = manifest.profiles[0].clone();
+    skipped.archive_profile_id = "p2".into();
+    skipped.name = "Skipped household".into();
+    skipped.components[0].path = "profiles/p2/continue_hidden.json".into();
+    manifest.profiles.push(skipped);
+    let bytes = archive::encode(
+        manifest,
+        &BTreeMap::from([
+            (
+                ("p1".into(), "continue_hidden".into()),
+                payload(&[("shared", json!(1))]),
+            ),
+            (
+                ("p2".into(), "continue_hidden".into()),
+                payload(&[("skipped", json!(2))]),
+            ),
+        ]),
+    )
+    .unwrap();
+    let archive = archive::decode(&bytes).unwrap();
+    let owner = ProfileStore::for_profile("default");
+    owner
+        .persist_snapshot("continue_hidden", r#"{"shared":9,"local":7}"#, false)
+        .unwrap();
+    let mut choices = super::choices(&archive).unwrap();
+    choices[0].target = "default".into();
+    choices[0].create = false;
+    choices[1].replace = true;
+    choices[1].use_backup.insert("continue_hidden".into());
+    let saved = choices[1].clone();
+    choices[1].included = false;
+    let merged = preview(archive.clone(), choices.clone()).unwrap();
+    assert_eq!(merged.choices.len(), 1);
+    assert_eq!(merged.rows.len(), 1);
+    assert_eq!(merged.rows[0].counts.conflicts, 1);
+    assert_eq!(merged.rows[0].counts.updated, 0);
+    assert_eq!(merged.selection, choices);
+    apply(&merged).unwrap();
+    assert_eq!(
+        owner.read("continue_hidden").unwrap().as_deref(),
+        Some(r#"{"local":7,"shared":9}"#)
+    );
+    assert!(
+        !profiles::list()
+            .unwrap()
+            .iter()
+            .any(|profile| profile.id == saved.target)
+    );
+    assert!(
+        nova_storage::try_scan_prefix(&format!("profile:{}:", saved.target))
+            .unwrap()
+            .is_empty()
+    );
+    choices[1].included = true;
+    // Re-including a source restores every choice, including Replace/conflicts.
+    assert!(choices[1] == saved);
+    choices[1].included = false;
+    choices[1].target = "default".into();
+    choices[1].create = false;
+    assert!(
+        preview(archive.clone(), choices.clone()).is_ok(),
+        "skipped sources do not reserve a target"
+    );
+    choices[0].replace = true;
+    choices[0].use_backup.insert("continue_hidden".into());
+    let replacement = preview(archive, choices).unwrap();
+    assert_eq!(replacement.rows[0].counts.deleted, 1);
+    let mut stale = replacement.clone();
+    stale.selection[1].included = true;
+    assert!(apply(&stale).unwrap_err().contains("Selection changed"));
+    apply(&replacement).unwrap();
+    let restored: serde_json::Value =
+        serde_json::from_str(&owner.read("continue_hidden").unwrap().unwrap()).unwrap();
+    assert_eq!(restored, json!({"shared":1}));
+    let raw: serde_json::Value = serde_json::to_value(&saved).unwrap();
+    let mut legacy = raw.as_object().unwrap().clone();
+    legacy.remove("included");
+    assert!(
+        serde_json::from_value::<Choice>(legacy.into())
+            .unwrap()
+            .included,
+        "old recovery receipts keep their selected profiles"
+    );
+}
+
+#[test]
+fn recovery_deletion_requires_the_exact_reviewed_inventory() {
+    if !isolated_backup_regression("recovery_deletion_requires_the_exact_reviewed_inventory") {
+        return;
+    }
+    let first = format!("{RECOVERY_PREFIX}1000-1");
+    let second = format!("{RECOVERY_PREFIX}2000-2");
+    nova_storage::try_write_batch(&[(first.clone(), Some("first".into()))]).unwrap();
+    let reviewed = recovery_inventory().unwrap();
+    assert_eq!(reviewed.len(), 1);
+    assert!(delete_reviewed_recovery(&[]).is_err());
+    // Requesting, reviewing and abandoning confirmation performs no writes.
+    assert_eq!(recovery_inventory().unwrap(), reviewed);
+    nova_storage::try_write_batch(&[(second.clone(), Some("second".into()))]).unwrap();
+    assert!(
+        delete_reviewed_recovery(&reviewed)
+            .unwrap_err()
+            .contains("changed")
+    );
+    assert_eq!(recovery_inventory().unwrap().len(), 2);
+    let reviewed = recovery_inventory().unwrap();
+    nova_storage::try_write_batch(&[(first, Some("modified".into()))]).unwrap();
+    assert!(
+        delete_reviewed_recovery(&reviewed).is_err(),
+        "even changes to an existing copy require review"
+    );
+    let reviewed = recovery_inventory().unwrap();
+    delete_reviewed_recovery(&reviewed).unwrap();
+    assert!(recovery_inventory().unwrap().is_empty());
+}

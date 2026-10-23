@@ -140,6 +140,7 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
             "image-cache",
             "downloads",
             "p2p",
+            "data",
         ]
         .into_iter()
         .map(|id| format!("settings:{id}"))

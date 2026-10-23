@@ -1,4 +1,4 @@
-import { SettingsSync, InterfaceStyle, Theme, Anim, SettingsStyle, SettingsDestinations, SettingsDestination } from "@NovaUiShared";
+import { SettingsSync, SettingsBridge, SettingsContent, InterfaceStyle, Theme, Anim, SettingsStyle, SettingsDestinations, SettingsDestination } from "@NovaUiShared";
 import { SettingSyncBadge } from "settings-sync.slint";
 
 import { ControlTouchArea } from "control-input.slint";
@@ -111,18 +111,38 @@ export component ToggleSwitch inherits Rectangle {
         height: 24px;
         border-radius: 12px;
         border-width: 1px;
-        border-color: checked ? Theme.current.accent_soft : Theme.current.border_overlay;
-        background: checked ? Theme.current.accent_soft : Theme.current.settings_control;
-        animate background { duration: Anim.hover_fast; }
+        private property <color> target-border-color: root.checked ? Theme.current.accent_soft : Theme.current.border_overlay;
+        private property <color> state-border-color: self.target-border-color;
+        private property <color> target-background: root.checked ? Theme.current.accent_soft : Theme.current.settings_control;
+        private property <color> state-background: self.target-background;
+        private property <bool> state-motion: Anim.enabled;
+        animate state-border-color, state-background { duration: Anim.control_state; easing: ease-out; }
+        changed target-border-color => { self.state-border-color = self.target-border-color; }
+        changed target-background => { self.state-background = self.target-background; }
+        // Reassign with the current duration so master-off cancels an old
+        // animation instead of reviving it when motion is enabled again.
+        changed state-motion => { self.state-border-color = self.target-border-color; self.state-background = self.target-background; }
+        border-color: Anim.enabled ? self.state-border-color : self.target-border-color;
+        background: Anim.enabled ? self.state-background : self.target-background;
 
         knob := Rectangle {
-            x: checked ? parent.width - self.width - 3px : 3px;
+            private property <length> target-x: root.checked ? parent.width - self.width - 3px : 3px;
+            private property <length> state-x: self.target-x;
+            private property <color> target-background: root.checked ? root.active-thumb-color : Theme.current.toggle_knob;
+            private property <color> state-background: self.target-background;
+            private property <bool> state-motion: Anim.enabled;
+            animate state-x, state-background { duration: Anim.control_state; easing: ease-out; }
+            changed target-x => { self.state-x = self.target-x; }
+            changed target-background => { self.state-background = self.target-background; }
+            // Reassign with the current duration so master-off cancels an old
+            // animation instead of reviving it when motion is enabled again.
+            changed state-motion => { self.state-x = self.target-x; self.state-background = self.target-background; }
+            x: Anim.enabled ? self.state-x : self.target-x;
+            background: Anim.enabled ? self.state-background : self.target-background;
             y: (parent.height - self.height) / 2;
             width: 18px;
             height: 18px;
             border-radius: 9px;
-            background: checked ? root.active-thumb-color : Theme.current.toggle_knob;
-            animate x { duration: Anim.hover_fast; }
         }
     }
 
@@ -453,14 +473,29 @@ export component Segmented inherits HorizontalLayout {
         border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
         border-width: self.focus_visible ? 2px : (Theme.true_black ? 1px : 0px);
         border-color: self.focus_visible ? Theme.current.focus_ring : Theme.current.control_border;
-        background: root.current_index == i ? Theme.current.selection_fill : transparent;
+        private property <color> target-background: root.current_index == i ? Theme.current.selection_fill : transparent;
+        private property <color> state-background: self.target-background;
+        private property <bool> state-motion: Anim.enabled;
+        animate state-background { duration: Anim.control_state; easing: ease-out; }
+        changed target-background => { self.state-background = self.target-background; }
+        // Reassign with the current duration so master-off cancels an old
+        // animation instead of reviving it when motion is enabled again.
+        changed state-motion => { self.state-background = self.target-background; }
+        background: Anim.enabled ? self.state-background : self.target-background;
         opacity: root.enabled && i != root.disabled_index ? 1 : 0.45;
-        animate background { duration: Anim.hover_fast; }
 
         seg_lbl := Text {
             text: opt;
             font-size: InterfaceStyle.tv ? 20px : 13px;
-            color: root.current_index == i ? Theme.current.text_selected : Theme.current.text_settings;
+            private property <color> target-color: root.current_index == i ? Theme.current.text_selected : Theme.current.text_settings;
+            private property <color> state-color: self.target-color;
+            private property <bool> state-motion: Anim.enabled;
+            animate state-color { duration: Anim.control_state; easing: ease-out; }
+            changed target-color => { self.state-color = self.target-color; }
+            // Reassign with the current duration so master-off cancels an old
+            // animation instead of reviving it when motion is enabled again.
+            changed state-motion => { self.state-color = self.target-color; }
+            color: Anim.enabled ? self.state-color : self.target-color;
             vertical-alignment: center;
         }
 
@@ -570,6 +605,37 @@ export component SectionHeader inherits HorizontalLayout {
     }
 }
 
+// Shared by ordinary Settings rows and the stacked playback-speed control.
+// Waiting for the mounted anchor avoids guessing row offsets in the shell or
+// racing the shell's saved-scroll restoration on the first layout frame.
+export component SettingsSearchHighlight inherits Rectangle {
+    in property <string> setting-key;
+    out property <bool> highlighted: root.setting-key != ""
+        && SettingsContent.search_target_key == root.setting-key
+        && SettingsContent.search_target_section == SettingsBridge.sel
+        && SettingsBridge.sub_open;
+    width: 100%; height: 100%;
+    accessible-role: groupbox;
+    accessible-id: root.highlighted ? "setting-highlight:" + root.setting-key : "";
+    background: root.highlighted ? Theme.current.settings_selected_wash : transparent;
+    border-width: root.highlighted ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    border-radius: 8px;
+    Timer {
+        interval: 32ms;
+        running: root.highlighted && SettingsContent.search_target_pending;
+        triggered => {
+            // Read the current request, rather than retaining a stale row or
+            // callback across Back, another search, or a leaf replacement.
+            if root.highlighted && SettingsContent.search_target_pending
+                && root.width > 0px && root.height > 0px && SettingsContent.content_min_height > 0px {
+                SettingsContent.search_target_pending = false;
+                SettingsContent.reveal_detail_control(root.absolute-position.y, root.height);
+            }
+        }
+    }
+}
+
 // One setting row: title + description on the left, any control(s) after.
 // Rows share a solid card surface and separate with inset rules.
 export component SettingsRow inherits Rectangle {
@@ -577,11 +643,14 @@ export component SettingsRow inherits Rectangle {
     in property <string> setting-key: "";
     in property <string> row-title: "";
     in property <string> row-desc: "";
+    accessible-role: groupbox;
+    accessible-id: root.setting-key == "" ? "" : "setting:" + root.setting-key;
     // Section-like rows have no trailing control to reserve a text column for.
     in property <bool> full-width-text: false;
     in property <bool> tinted: false;
     in property <length> row-min-height: InterfaceStyle.tv ? 88px : 64px;
     background: Theme.current.card;
+    SettingsSearchHighlight { setting-key: root.setting-key; }
 
     property <length> inner-width: Math.max(0px, self.width - 32px);
     property <length> control-width: controls.preferred-width;

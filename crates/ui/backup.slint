@@ -3,15 +3,22 @@ import { PillButton, SettingsCard, SettingsHeader, SettingsRow, SectionHeader, T
 import { ScrollView } from "scrollview.slint";
 
 component BackupChoice inherits SettingsRow {
+    in property <bool> active: true;
     in property <bool> checked;
     in property <bool> focused;
     callback picked();
-    ToggleSwitch { name: root.row-title; checked: root.checked; focused: root.focused; enabled: !BackupBridge.busy; toggled => { root.picked(); } }
+    // A click writes the switch's local checked property. Restore the owner
+    // after the callback, including denied/no-op requests; later model/preset
+    // changes remain authoritative while this delegate stays mounted.
+    changed checked => { toggle.checked = root.checked; }
+    toggle := ToggleSwitch { name: root.row-title; checked: root.checked; focused: root.focused; enabled: root.active && !BackupBridge.busy; toggled => { root.picked(); toggle.checked = root.checked; } }
 }
 
 export component BackupPanel inherits Rectangle {
+    in property <bool> active: true;
+    changed active => { if root.active { focus_timer.start(); } else { focus_timer.stop(); } }
     in property <int> focus-request;
-    changed focus-request => { scope.focus(); }
+    changed focus-request => { if root.active { scope.focus(); } }
     in property <length> safe-top;
     in property <length> safe-bottom;
     in property <length> safe-left;
@@ -26,19 +33,31 @@ export component BackupPanel inherits Rectangle {
     property <int> mode_index: root.mapping_start + BackupBridge.mappings.length;
     property <int> component_start: root.mode_index + (BackupBridge.importing ? 1 : 0);
     property <int> conflict_start: root.component_start + BackupBridge.components.length;
-    property <int> action_start: root.conflict_start + BackupBridge.conflicts.length;
-    property <int> count: root.action_start + (BackupBridge.importing && BackupBridge.preview_ready ? 6 : 5);
+    property <int> preview_start: root.conflict_start + BackupBridge.conflicts.length;
+    property <int> action_start: root.preview_start + BackupBridge.preview_rows.length;
+    property <int> count: BackupBridge.recovery_confirmation ? BackupBridge.recovery_rows.length + 2 : root.action_start + (BackupBridge.importing && BackupBridge.preview_ready ? 6 : 5);
+    property <bool> confirming: BackupBridge.recovery_confirmation;
+    changed confirming => { root.choice = 0; root.backward = false; if root.active { scope.focus(); } }
+    property <bool> backward: false;
+    property <length> review-offset;
+    property <length> review-height;
+    property <bool> reviewing: root.confirming ? root.choice > 0 && root.choice <= BackupBridge.recovery_rows.length : root.choice >= root.preview_start && root.choice < root.action_start;
     changed count => { root.choice = Math.min(root.choice,root.count - 1); }
     function activate() {
-        if BackupBridge.busy { return; }
+        if !root.active || BackupBridge.busy { return; }
+        if root.confirming {
+            if root.choice == 0 { BackupBridge.cancel_delete_recovery(); }
+            else if root.choice == BackupBridge.recovery_rows.length + 1 { BackupBridge.confirm_delete_recovery(); }
+            return;
+        }
         if root.choice == 0 { BackupBridge.closed(); }
         else if root.choice < 4 { BackupBridge.preset(root.choice - 1); }
         else if root.choice < root.mapping_start { BackupBridge.toggle_profile(BackupBridge.profiles[root.choice - root.profile_start].id); }
         else if root.choice < root.mode_index { BackupBridge.cycle_target(BackupBridge.mappings[root.choice - root.mapping_start].id); }
         else if BackupBridge.importing && root.choice == root.mode_index { BackupBridge.mode_changed(!BackupBridge.replace); }
         else if root.choice < root.conflict_start { BackupBridge.toggle_component(BackupBridge.components[root.choice - root.component_start].id); }
-        else if root.choice < root.action_start { BackupBridge.toggle_conflict(BackupBridge.conflicts[root.choice - root.conflict_start].id); }
-        else {
+        else if root.choice < root.preview_start { BackupBridge.toggle_conflict(BackupBridge.conflicts[root.choice - root.conflict_start].id); }
+        else if root.choice >= root.action_start {
             let action=root.choice - root.action_start;
             if action==0 {
                 if !BackupBridge.importing { BackupBridge.export_file(); }
@@ -53,17 +72,49 @@ export component BackupPanel inherits Rectangle {
     }
     function reveal(y:length,h:length) {
         let top=y - scroll.absolute-position.y;
-        if top<0px { scroll.content-y -=top; }
+        // Oversized rows start at the reading edge. Down/Up then page through
+        // the remainder before advancing focus to the next/previous control.
+        if h > scroll.visible-height {
+            scroll.content-y -= root.backward ? top+h - scroll.visible-height : top;
+        } else if top<0px { scroll.content-y -=top; }
         else if top+h>scroll.visible-height {scroll.content-y -=top+h - scroll.visible-height;}
     }
-    init => { focus_timer.start(); }
-    focus_timer := Timer { interval:1ms; running:false; triggered => {self.stop(); scope.focus();} }
+    function review(y:length,h:length) {
+        root.review-offset = y - body.absolute-position.y;
+        root.review-height = h;
+        root.reveal(y,h);
+    }
+    function page_review(up:bool) -> bool {
+        if !root.reviewing { return false; }
+        let top = root.review-offset + body.absolute-position.y - scroll.absolute-position.y;
+        if up && top < -1px {
+            scroll.content-y += Math.min(scroll.visible-height * 0.75,-top);
+            return true;
+        } else if !up && top + root.review-height > scroll.visible-height + 1px {
+            scroll.content-y -= Math.min(scroll.visible-height * 0.75,top + root.review-height - scroll.visible-height);
+            return true;
+        }
+        return false;
+    }
+    init => { if root.active { focus_timer.start(); } }
+    focus_timer := Timer { interval:1ms; running:false; triggered => {self.stop(); if root.active { scope.focus(); }} }
     scope := FocusScope {
+        enabled: root.active;
         width:100%; height:100%;
         capture-key-pressed(e) => {
-            if e.text == Key.Escape || e.text == Key.Back { if !BackupBridge.busy {BackupBridge.closed();} accept }
+            if e.text == Key.Escape || e.text == Key.Back { if !BackupBridge.busy {if root.confirming {BackupBridge.cancel_delete_recovery();} else {BackupBridge.closed();}} accept }
+            else if e.text == Key.PageUp || e.text == Key.PageDown {
+                if !BackupBridge.busy { SettingsStyle.keyboard-mode=true; root.page_review(e.text == Key.PageUp); } accept
+            }
             else if e.text == Key.Tab || e.text == Key.UpArrow || e.text == Key.DownArrow {
-                if !BackupBridge.busy { SettingsStyle.keyboard-mode=true; root.choice=Math.mod(root.choice+root.count+(e.text==Key.UpArrow || e.modifiers.shift ? -1:1),root.count); scope.focus(); } accept
+                if !BackupBridge.busy {
+                    SettingsStyle.keyboard-mode=true;
+                    root.backward=e.text==Key.UpArrow || e.modifiers.shift;
+                    if e.text == Key.Tab || !root.page_review(root.backward) {
+                        root.choice=Math.mod(root.choice+root.count+(root.backward ? -1:1),root.count);
+                    }
+                    scope.focus();
+                } accept
             } else {reject}
         }
         key-pressed(e) => {if e.text==Key.Return || e.text==" " {if !e.repeat {root.activate();} accept} else {reject}}
@@ -73,41 +124,76 @@ export component BackupPanel inherits Rectangle {
             content-width:self.visible-width; content-height:body.preferred-height;
             body := VerticalLayout {
                 width:100%; spacing:16px;
-                SettingsHeader { title:@tr("Backup and import"); introduction:BackupBridge.importing ? @tr("Map profiles, select components and review changes before importing."):@tr("Choose the profiles and personal data to export."); back_focused:root.choice==0; back=>{if !BackupBridge.busy {BackupBridge.closed();}} changed back_focused=>{if self.back_focused {root.reveal(self.absolute-position.y,self.height);}} }
+                if !root.confirming: VerticalLayout {
+                width:100%; spacing:16px;
+                SettingsHeader { title:@tr("Backup and import"); introduction:BackupBridge.importing ? @tr("Map profiles, select components and review changes before importing."):@tr("Choose the profiles and personal data to export."); back_focused:root.choice==0; back=>{if root.active && !BackupBridge.busy {BackupBridge.closed();}} changed back_focused=>{if self.back_focused {root.reveal(self.absolute-position.y,self.height);}} }
                 SectionHeader { label:@tr("Presets"); }
                 SettingsCard {
-                    SettingsRow {row-title:@tr("Everything personal");row-desc:@tr("All personal components, including credentials and profile PINs.");PillButton {label:@tr("Select");focused:root.choice==1;enabled:!BackupBridge.busy;clicked=>{BackupBridge.preset(0);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
-                    SettingsRow {row-title:@tr("Library and viewing");row-desc:@tr("Library, progress, history, collections, bookmarks and queue.");PillButton {label:@tr("Select");focused:root.choice==2;enabled:!BackupBridge.busy;clicked=>{BackupBridge.preset(1);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
-                    SettingsRow {row-title:@tr("Configuration");row-desc:@tr("Personal settings, addons, integrations and profile policy.");PillButton {label:@tr("Select");focused:root.choice==3;enabled:!BackupBridge.busy;clicked=>{BackupBridge.preset(2);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
+                    SettingsRow {row-title:@tr("Everything personal");row-desc:@tr("All personal components, including credentials and profile PINs.");PillButton {label:@tr("Select");focused:root.choice==1;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.preset(0);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
+                    SettingsRow {row-title:@tr("Library and viewing");row-desc:@tr("Library, progress, history, collections, bookmarks and queue.");PillButton {label:@tr("Select");focused:root.choice==2;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.preset(1);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
+                    SettingsRow {row-title:@tr("Configuration");row-desc:@tr("Personal settings, addons, integrations and profile policy.");PillButton {label:@tr("Select");focused:root.choice==3;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.preset(2);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
                 }
                 SectionHeader {label:BackupBridge.importing ? @tr("Target profiles"):@tr("Profiles");}
                 SettingsCard {
-                    for row[index] in BackupBridge.profiles: BackupChoice {row-title:row.label;checked:row.checked;focused:root.choice==root.profile_start+index;picked=>{root.choice=root.profile_start+index;BackupBridge.toggle_profile(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                    for row[index] in BackupBridge.mappings: SettingsRow {row-title:row.label;row-desc:row.target;PillButton {label:@tr("Change");focused:root.choice==root.mapping_start+index;enabled:!BackupBridge.busy;clicked=>{root.choice=root.mapping_start+index;BackupBridge.cycle_target(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
+                    for row[index] in BackupBridge.profiles: BackupChoice {active:root.active;row-title:BackupBridge.importing ? @tr("Include profile: {}",row.label):row.label;row-desc:BackupBridge.importing ? @tr("Skipping keeps this profile's target, component and conflict choices for later."):"";checked:row.checked;focused:root.choice==root.profile_start+index;picked=>{root.choice=root.profile_start+index;BackupBridge.toggle_profile(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                    for row[index] in BackupBridge.mappings: SettingsRow {row-title:row.label;row-desc:row.target;PillButton {label:@tr("Change");focused:root.choice==root.mapping_start+index;enabled:root.active && !BackupBridge.busy;clicked=>{root.choice=root.mapping_start+index;BackupBridge.cycle_target(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}}
                 }
                 if BackupBridge.importing: SettingsCard {
-                    BackupChoice {row-title:@tr("Replace selected components");row-desc:BackupBridge.replace ? @tr("Absent records in selected components will be deleted."):@tr("Merge inserts missing records and preserves local conflicts.");checked:BackupBridge.replace;focused:root.choice==root.mode_index;picked=>{BackupBridge.mode_changed(!BackupBridge.replace);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                    BackupChoice {active:root.active;row-title:@tr("Replace selected components");row-desc:BackupBridge.replace ? @tr("Absent records in selected components will be deleted."):@tr("Merge inserts missing records and preserves local conflicts.");checked:BackupBridge.replace;focused:root.choice==root.mode_index;picked=>{BackupBridge.mode_changed(!BackupBridge.replace);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
                 }
                 SectionHeader {label:@tr("Components");}
                 SettingsCard {
-                    for row[index] in BackupBridge.components: BackupChoice {row-title:row.label;checked:row.checked;focused:root.choice==root.component_start+index;picked=>{root.choice=root.component_start+index;BackupBridge.toggle_component(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                    for row[index] in BackupBridge.components: BackupChoice {active:root.active;row-title:row.label;checked:row.checked;focused:root.choice==root.component_start+index;picked=>{root.choice=root.component_start+index;BackupBridge.toggle_component(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
                 }
                 if BackupBridge.conflicts.length>0: SectionHeader {label:@tr("Use backup for conflicts");}
                 if BackupBridge.conflicts.length>0: SettingsCard {
-                    for row[index] in BackupBridge.conflicts: BackupChoice {row-title:row.label;checked:row.checked;focused:root.choice==root.conflict_start+index;picked=>{root.choice=root.conflict_start+index;BackupBridge.toggle_conflict(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                    for row[index] in BackupBridge.conflicts: BackupChoice {active:root.active;row-title:row.label;checked:row.checked;focused:root.choice==root.conflict_start+index;picked=>{root.choice=root.conflict_start+index;BackupBridge.toggle_conflict(row.id);}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
                 }
                 if BackupBridge.preview_rows.length>0: SectionHeader {label:@tr("Import preview");}
-                if BackupBridge.preview_rows.length>0: SettingsCard {for row in BackupBridge.preview_rows: SettingsRow {row-desc:row;full-width-text:true;}}
+                if BackupBridge.preview_rows.length>0: Text {text:@tr("Use Up and Down to review every preview row. Long rows scroll before focus moves to the next action.");color:Theme.current.text_settings;font-size:InterfaceStyle.tv ? 20px:14px;wrap:word-wrap;}
+                if BackupBridge.preview_rows.length>0: SettingsCard {
+                    for row[index] in BackupBridge.preview_rows: SettingsRow {
+                        row-desc:row;full-width-text:true;
+                        accessible-role:text;accessible-label:row;
+                        property <bool> focused:root.choice==root.preview_start+index;
+                        property <length> review-position:self.absolute-position.y - body.absolute-position.y;
+                        changed review-position=>{if self.focused {root.review-offset=self.review-position;}}
+                        changed height=>{if self.focused {root.review-height=self.height;}}
+                        border-width:self.focused ? 2px:0px;border-color:Theme.current.focus_ring;
+                        changed focused=>{if self.focused {root.review(self.absolute-position.y,self.height);}}
+                    }
+                }
                 Text {text:@tr("Selected configuration includes addon credentials and profile PINs. Imported edits sync to paired devices. Notification delivery and smart downloads stay off on this device.");color:Theme.current.text_settings;font-size:InterfaceStyle.tv ? 20px:14px;wrap:word-wrap;}
                 if BackupBridge.status!="": SettingsCard {SettingsRow {row-desc:BackupBridge.status;full-width-text:true;}}
                 // Only actions valid for the current stage participate in focus.
-                PillButton {label:!BackupBridge.importing ? @tr("Export selected data"):BackupBridge.preview_ready ? @tr("Import reviewed changes"):@tr("Build import preview");wrap_label:true;roomy:true;primary:true;focused:root.choice==root.action_start;enabled:!BackupBridge.busy;clicked=>{root.choice=root.action_start;root.activate();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                if BackupBridge.importing && BackupBridge.preview_ready: PillButton {label:@tr("Rebuild import preview");wrap_label:true;roomy:true;focused:root.choice==root.action_start+1;enabled:!BackupBridge.busy;clicked=>{BackupBridge.build_preview();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                PillButton {label:BackupBridge.importing ? @tr("Choose another backup file"):@tr("Choose backup file to import");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 2:1);enabled:!BackupBridge.busy;clicked=>{BackupBridge.import_file();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                PillButton {label:@tr("Undo last import");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 3:2);enabled:!BackupBridge.busy;clicked=>{BackupBridge.undo();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                PillButton {label:@tr("Delete recovery copies");wrap_label:true;roomy:true;destructive:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 4:3);enabled:!BackupBridge.busy;clicked=>{BackupBridge.delete_recovery();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
-                PillButton {label:@tr("Done");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 5:4);enabled:!BackupBridge.busy;clicked=>{BackupBridge.closed();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                PillButton {label:!BackupBridge.importing ? @tr("Export selected data"):BackupBridge.preview_ready ? @tr("Import reviewed changes"):@tr("Build import preview");wrap_label:true;roomy:true;primary:true;focused:root.choice==root.action_start;enabled:root.active && !BackupBridge.busy;clicked=>{root.choice=root.action_start;root.activate();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                if BackupBridge.importing && BackupBridge.preview_ready: PillButton {label:@tr("Rebuild import preview");wrap_label:true;roomy:true;focused:root.choice==root.action_start+1;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.build_preview();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                PillButton {label:BackupBridge.importing ? @tr("Choose another backup file"):@tr("Choose backup file to import");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 2:1);enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.import_file();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                PillButton {label:@tr("Undo last import");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 3:2);enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.undo();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                PillButton {label:@tr("Delete recovery copies");wrap_label:true;roomy:true;destructive:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 4:3);enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.delete_recovery();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                PillButton {label:@tr("Done");wrap_label:true;roomy:true;focused:root.choice==root.action_start+(BackupBridge.importing && BackupBridge.preview_ready ? 5:4);enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.closed();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                }
+                if root.confirming: VerticalLayout {
+                    width:100%;spacing:16px;
+                    SettingsHeader {title:@tr("Delete recovery copies");introduction:@tr("These local copies let you undo imports. Deleting them is permanent.");back=>{if root.active {BackupBridge.cancel_delete_recovery();}}}
+                    Text {text:@tr("Delete {n} recovery copy permanently?" | "Delete {n} recovery copies permanently?" % BackupBridge.recovery_rows.length);color:Theme.current.text_bright;font-size:InterfaceStyle.tv ? 22px:16px;wrap:word-wrap;}
+                    PillButton {label:@tr("Cancel");wrap_label:true;roomy:true;primary:true;focused:root.choice==0;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.cancel_delete_recovery();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                    SettingsCard {
+                        for row[index] in BackupBridge.recovery_rows: SettingsRow {
+                            row-desc:row;full-width-text:true;
+                            accessible-role:text;accessible-label:row;
+                            property <bool> focused:root.choice==index+1;
+                            property <length> review-position:self.absolute-position.y - body.absolute-position.y;
+                            changed review-position=>{if self.focused {root.review-offset=self.review-position;}}
+                            changed height=>{if self.focused {root.review-height=self.height;}}
+                            border-width:self.focused ? 2px:0px;border-color:Theme.current.focus_ring;
+                            changed focused=>{if self.focused {root.review(self.absolute-position.y,self.height);}}
+                        }
+                    }
+                    PillButton {label:@tr("Permanently delete recovery copies");wrap_label:true;roomy:true;destructive:true;focused:root.choice==BackupBridge.recovery_rows.length+1;enabled:root.active && !BackupBridge.busy;clicked=>{BackupBridge.confirm_delete_recovery();}changed focused=>{if self.focused {root.reveal(self.absolute-position.y,self.height);}}}
+                }
             }
         }
     }
+    if !root.active: TouchArea { width:100%; height:100%; scroll-event=>{accept} }
 }

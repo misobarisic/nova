@@ -1,4 +1,4 @@
-import { InterfaceStyle, Theme, SettingsStyle } from "@NovaUiShared";
+import { InterfaceStyle, Theme, SettingsStyle, Anim } from "@NovaUiShared";
 import { IcMusic, IcCaptions, IcPlay, IcSettingsGear, IcCheck, IcChevronRight } from "icons.slint";
 
 // Shared category/track row: measured title, optional secondary text, and a
@@ -76,13 +76,33 @@ export component MenuRow inherits Rectangle {
         text: root.value; color: Theme.current.text_secondary;
         font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide;
     }
-    if root.selected: IcCheck {
+    // Retain the glyphs so both selection and deselection can fade without
+    // moving the label or rebuilding the row's native focus target.
+    checkmark := IcCheck {
         x: root.width - 30px; y: (root.height - self.height) / 2;
         width: 18px; height: 18px; fill: Theme.current.accent_soft;
+        private property <float> target-opacity: root.selected ? 1 : 0;
+        private property <float> state-opacity: self.target-opacity;
+        private property <bool> state-motion: Anim.enabled;
+        animate state-opacity { duration: Anim.control_state; easing: ease-out; }
+        changed target-opacity => { self.state-opacity = self.target-opacity; }
+        // Reassign with the current duration so master-off cancels an old
+        // animation instead of reviving it when motion is enabled again.
+        changed state-motion => { self.state-opacity = self.target-opacity; }
+        opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
     }
-    if root.submenu && !root.selected: IcChevronRight {
+    if root.submenu: IcChevronRight {
         x: root.width - 28px; y: (root.height - self.height) / 2;
         width: 16px; height: 16px; fill: Theme.current.text_muted;
+        private property <float> target-opacity: root.selected ? 0 : 1;
+        private property <float> state-opacity: self.target-opacity;
+        private property <bool> state-motion: Anim.enabled;
+        animate state-opacity { duration: Anim.control_state; easing: ease-out; }
+        changed target-opacity => { self.state-opacity = self.target-opacity; }
+        // Reassign with the current duration so master-off cancels an old
+        // animation instead of reviving it when motion is enabled again.
+        changed state-motion => { self.state-opacity = self.target-opacity; }
+        opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
     }
     row_t := TouchArea {
         enabled: root.enabled;

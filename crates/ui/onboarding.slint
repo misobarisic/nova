@@ -13,7 +13,15 @@ component LanguageCard inherits Rectangle {
     callback clicked();
     height: 64px; min-width: 0px;
     border-width: 1px; border-radius: 8px;
-    border-color: root.selected ? Theme.current.accent : Theme.current.control_border;
+    // Reassigning the animated value on a master-switch change evaluates
+    // the current duration: 0ms cancels motion before it can resume later.
+    private property <color> target-border: root.selected ? Theme.current.accent : Theme.current.control_border;
+    private property <color> state-border: self.target-border;
+    private property <bool> motion-enabled: Anim.enabled;
+    animate state-border { duration: Anim.control_state; easing: ease-in-out; }
+    changed target-border => { self.state-border = self.target-border; }
+    changed motion-enabled => { self.state-border = self.target-border; }
+    border-color: Anim.enabled ? self.state-border : self.target-border;
     background: Theme.current.settings_control;
     HorizontalLayout {
         padding: 10px; padding-right: 16px; spacing: 8px;
@@ -22,8 +30,15 @@ component LanguageCard inherits Rectangle {
             clicked => { root.clicked(); }
         }
         Rectangle { horizontal-stretch: 1; }
-        if root.selected: Rectangle {
+        language_check := Rectangle {
             width: 20px; height: language_button.height;
+            private property <float> target-opacity: root.selected ? 1 : 0;
+            private property <float> state-opacity: self.target-opacity;
+            private property <bool> motion-enabled: Anim.enabled;
+            animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
+            changed target-opacity => { self.state-opacity = self.target-opacity; }
+            changed motion-enabled => { self.state-opacity = self.target-opacity; }
+            opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
             IcCheck {
                 width: 20px; height: 20px;
                 y: (parent.height - self.height) / 2;

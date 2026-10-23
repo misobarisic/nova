@@ -1,6 +1,5 @@
 import { DetailBridge, Theme } from "@NovaUiShared";
-import { PillButton } from "settings-controls.slint";
-import { CheckBox } from "std-widgets.slint";
+import { TrackingPillButton, TrackingCheckBox } from "tracking-controls.slint";
 
 // Service indices belong only to this subsystem: 0 Simkl, 1 MDBList, 2 Trakt.
 export component ListServicesTitle inherits VerticalLayout {
@@ -13,13 +12,14 @@ export component ListServicesTitle inherits VerticalLayout {
     Text { text: DetailBridge.list_services_title_identity; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
     Text { text: DetailBridge.list_services_title_status; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
     if !DetailBridge.list_services_title_connected: Text { text: @tr("Connect this service in Settings → Integrations first."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
-    if !DetailBridge.list_services_title_selected && DetailBridge.list_services_title_connected: CheckBox { text: @tr("Include watched episodes"); checked <=> root.include_history; }
-    if !DetailBridge.list_services_title_selected && DetailBridge.list_services_title_connected: PillButton {
+    if !DetailBridge.list_services_title_selected && DetailBridge.list_services_title_connected: TrackingCheckBox { nav-index: 6; text: @tr("Include watched episodes"); checked <=> root.include_history; }
+    if !DetailBridge.list_services_title_selected && DetailBridge.list_services_title_connected: TrackingPillButton {
+        nav-index: 7;
         label: @tr("Start syncing this title"); primary: true; wrap_label: true;
         enabled: !DetailBridge.list_services_title_busy && DetailBridge.list_services_title_resolved;
         clicked => { DetailBridge.list_services_title_select(root.service, true, root.include_history); }
     }
-    if DetailBridge.list_services_title_selected: PillButton { label: @tr("Sync this title now"); primary: true; wrap_label: true; enabled: DetailBridge.list_services_title_connected && !DetailBridge.list_services_title_busy; clicked => { DetailBridge.list_services_title_sync(root.service); } }
-    if DetailBridge.list_services_title_selected: PillButton { label: @tr("Stop syncing this title"); wrap_label: true; clicked => { DetailBridge.list_services_title_select(root.service, false, false); } }
+    if DetailBridge.list_services_title_selected: TrackingPillButton { nav-index: 6; label: @tr("Sync this title now"); primary: true; wrap_label: true; enabled: DetailBridge.list_services_title_connected && !DetailBridge.list_services_title_busy; clicked => { DetailBridge.list_services_title_sync(root.service); } }
+    if DetailBridge.list_services_title_selected: TrackingPillButton { nav-index: 7; label: @tr("Stop syncing this title"); wrap_label: true; clicked => { DetailBridge.list_services_title_select(root.service, false, false); } }
     Text { text: @tr("Sync combines saved titles and watched episodes. Removing a title or marking it unwatched does not delete the other service's history."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
 }

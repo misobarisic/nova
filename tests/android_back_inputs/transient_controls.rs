@@ -157,7 +157,7 @@ fn removing_a_download_keeps_back_in_more() {
             .set_downloads_page_groups(Default::default());
     });
     idle();
-    click(&app, "Remove download");
+    click(&app, "Cancel download");
     assert_eq!(app.get_downloads_page_groups().row_count(), 0);
     back(&app);
     assert!(!app.get_show_downloads());

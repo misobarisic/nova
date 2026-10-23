@@ -12,10 +12,10 @@ export component DetailEpisodesModule inherits Window {
         else { DetailContent.focus_shell(); }
     }
     private property <int> generation;
-    init => { root.generation = DetailContent.episodes_generation; root.publish_size(); }
+    init => { root.generation = DetailContent.episodes_generation; root.publish_size(); root.request_reflow(); }
     private property <length> measured_height: body.preferred-height;
     changed measured_height => { root.publish_size(); }
-    changed width => { root.publish_size(); }
+    changed width => { root.publish_size(); root.request_reflow(); }
     function publish_size() {
         if root.generation == DetailContent.episodes_generation && DetailBridge.detail_tab == 3 { DetailContent.episodes_height = root.measured_height; }
     }
@@ -41,6 +41,84 @@ export component DetailEpisodesModule inherits Window {
     property <length> season_card_w: DetailBridge.narrow ? Math.min(180px, Math.max(120px, (DetailContent.shell_width - 40px - DetailBridge.safe-left - DetailBridge.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * root.card-gap) / root.season_cols);
     // Columns actually used (partial last row still packs left).
     property <int> season_grid_cols: Math.min(root.season_cols, DetailBridge.season_cards.length);
+
+    // A pixel offset names different episodes after columns reflow. Remember
+    // the card at the reading line, and restore its position after layout.
+    // Only actual scrolling replaces that anchor, so repeated rotations keep
+    // the same episode even when it lands in another column on wide screens.
+    private property <int> anchor_index: -1;
+    private property <string> anchor_id;
+    private property <float> anchor_fraction;
+    private property <bool> reflow_pending: true;
+    private property <int> capture_request;
+    private property <int> restore_request;
+    private property <length> restored_scroll_y;
+    private property <bool> ignore_restored_scroll;
+    private property <length> settled_width;
+    private property <length> settled_viewport_width;
+    private property <length> settled_viewport_height;
+    private property <length> settled_viewport_top;
+    private property <bool> settled_narrow;
+    private property <length> viewport_width: DetailBridge.viewport_width;
+    private property <length> viewport_height: DetailBridge.viewport_height;
+    private property <length> viewport_top: DetailContent.episodes_viewport_top;
+    private property <length> scroll_y: DetailContent.episodes_scroll_y;
+    changed viewport_width => { root.request_reflow(); }
+    changed viewport_height => { root.request_reflow(); }
+    changed viewport_top => { root.request_reflow(); }
+    changed scroll_y => {
+        if !root.reflow_pending && root.width == root.settled_width
+            && root.viewport_width == root.settled_viewport_width
+            && root.viewport_height == root.settled_viewport_height
+            && root.viewport_top == root.settled_viewport_top
+            && DetailBridge.narrow == root.settled_narrow {
+            let restored = root.ignore_restored_scroll
+                && Math.abs(root.scroll_y - root.restored_scroll_y) <= 0.5px;
+            root.ignore_restored_scroll = false;
+            if !restored {
+                root.anchor_index = -1;
+                root.capture_request += 1;
+            }
+        }
+    }
+    function request_reflow() {
+        root.reflow_pending = true;
+        reflow_t.start();
+        reflow_t.restart();
+    }
+    function finish_reflow() {
+        root.settled_width = root.width;
+        root.settled_viewport_width = root.viewport_width;
+        root.settled_viewport_height = root.viewport_height;
+        root.settled_viewport_top = root.viewport_top;
+        root.settled_narrow = DetailBridge.narrow;
+        root.restored_scroll_y = DetailContent.scroll_y();
+        root.ignore_restored_scroll = true;
+        root.reflow_pending = false;
+    }
+    reflow_t := Timer {
+        interval: 1ms;
+        triggered => {
+            self.stop();
+            root.publish_size();
+            if root.anchor_index >= 0 && root.anchor_index < DetailBridge.episode_rows.length
+                && DetailBridge.episode_rows[root.anchor_index].id == root.anchor_id {
+                root.restore_request += 1;
+            } else {
+                root.anchor_index = -1;
+                root.finish_reflow();
+            }
+        }
+    }
+
+    // Keep the list opaque independently of the hero's renderer surface and
+    // opacity. The canvas starts below the toolbar, leaving the hero intact.
+    episode_canvas := Rectangle {
+        x: -root.absolute-position.x;
+        y: episode_grid.absolute-position.y - root.absolute-position.y;
+        width: DetailContent.shell_width; height: Math.max(0px, root.height - self.y);
+        background: Theme.current.artwork_canvas;
+    }
 
     body := VerticalLayout { height: self.preferred-height;
 
@@ -380,10 +458,30 @@ export component DetailEpisodesModule inherits Window {
                 }
             }
 
-            GridLayout {
+            episode_grid := GridLayout {
                 spacing: root.card-gap;
 
                 for e[i] in DetailBridge.episode_rows: ep_card := Rectangle {
+                    private property <int> capture: root.capture_request;
+                    changed capture => {
+                        let line = root.viewport_top + episode_toolbar.height + 8px;
+                        if e.id != "" && self.absolute-position.y <= line
+                            && self.absolute-position.y + self.height + root.card-gap > line
+                            && (root.anchor_index < 0 || i < root.anchor_index) {
+                            root.anchor_index = i;
+                            root.anchor_id = e.id;
+                            root.anchor_fraction = (self.absolute-position.y - line) / self.height;
+                        }
+                    }
+                    private property <int> restore: root.restore_request;
+                    changed restore => {
+                        if i == root.anchor_index && e.id == root.anchor_id {
+                            let line = root.viewport_top + episode_toolbar.height + 8px;
+                            DetailContent.restore_scroll_y(DetailContent.scroll_y()
+                                + line + root.anchor_fraction * self.height - self.absolute-position.y);
+                            root.finish_reflow();
+                        }
+                    }
                     // Reveal after the season/page model and the
                     // outer scroll geometry have settled.
                     property <int> reveal_request: DetailBridge.episode_reveal_request;

@@ -26,6 +26,8 @@ export component MenuSheet inherits Rectangle {
     in property <bool> keyboard_navigation: InterfaceStyle.tv;
     in property <string> sheet_title: "";
     in property <[SheetItem]> items: [];
+    // Opt in to a single-choice menu. Action sheets keep their existing rows.
+    in property <int> selected_index: -1;
     // Bottom system-bar inset (Android gesture/nav bar), bound by the
     // page like `safe-top`. 0 on desktop/web.
     in property <length> safe-bottom: 0px;
@@ -197,20 +199,79 @@ export component MenuSheet inherits Rectangle {
                             width: 100%;
                             spacing: 4px;
 
-                            for it[i] in root.items: Rectangle {
+                            for it[i] in root.items: menu_row := Rectangle {
+                                property <bool> state-motion: Anim.enabled;
+                                property <float> selected-target: root.selected_index == i ? 1 : 0;
+                                property <float> animated-selection: self.selected-target;
+                                property <color> ring-target: root.selected_index == i ? Theme.current.accent : Theme.current.text_muted;
+                                property <color> animated-ring: self.ring-target;
+                                animate animated-selection, animated-ring { duration: Anim.control_state; easing: ease-out; }
+                                changed selected-target => { self.animated-selection = self.selected-target; }
+                                changed ring-target => { self.animated-ring = self.ring-target; }
+                                // Zero duration alone does not stop a running
+                                // animation. Retarget while disabled as well as
+                                // bypassing it, so re-enabling cannot jump back.
+                                changed state-motion => {
+                                    if !self.state-motion {
+                                        self.animated-selection = self.selected-target;
+                                        self.animated-ring = self.ring-target;
+                                    }
+                                }
                                 height: InterfaceStyle.tv ? 64px : 48px;
                                 border-radius: 8px;
                                 border-width: root.keyboard_navigation && (InterfaceStyle.tv || SettingsStyle.keyboard-mode) && root.tv-index == i ? 2px : 0px;
                                 border-color: Theme.current.focus_ring;
                                 background: btn_touch.has-hover ? Theme.current.control_hover : transparent;
-                                // Expose the row to the accessibility tree (and
-                                // headless tests, which locate a specific
-                                // action by label rather than by traversal
-                                // index — Rectangle rows are unsearchable).
-                                accessible-role: button;
-                                accessible-label: it.label;
+                                // Retain the wash and dot so checked-state
+                                // changes can fade in both directions. The
+                                // focus outline and semantic value stay instant.
+                                if root.selected_index >= 0: Rectangle {
+                                    x: 2px; y: 2px;
+                                    width: parent.width - 4px; height: parent.height - 4px;
+                                    border-radius: 6px;
+                                    background: Theme.current.settings_selected_wash;
+                                    opacity: Anim.enabled ? menu_row.animated-selection : menu_row.selected-target;
+                                }
+                                // Slint requires static accessibility roles.
+                                // Exactly one full-row semantic item exposes
+                                // the shared visual and pointer target below.
+                                if root.selected_index < 0: Rectangle {
+                                    width: 100%; height: 100%;
+                                    accessible-role: button;
+                                    accessible-label: it.label;
+                                    accessible-enabled: it.enabled;
+                                }
+                                if root.selected_index >= 0: Rectangle {
+                                    width: 100%; height: 100%;
+                                    accessible-role: radio-button;
+                                    accessible-label: it.label;
+                                    accessible-enabled: it.enabled;
+                                    accessible-checkable: true;
+                                    accessible-checked: root.selected_index == i;
+                                }
+
+                                if root.selected_index >= 0: Rectangle {
+                                    x: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: InterfaceStyle.tv ? 22px : 18px;
+                                    height: self.width;
+                                    border-radius: self.width / 2;
+                                    border-width: 2px;
+                                    border-color: Anim.enabled ? menu_row.animated-ring : menu_row.ring-target;
+                                    Rectangle {
+                                        width: parent.width / 2;
+                                        height: self.width;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: self.width / 2;
+                                        background: Theme.current.accent;
+                                        opacity: Anim.enabled ? menu_row.animated-selection : menu_row.selected-target;
+                                    }
+                                }
 
                                 Text {
+                                    x: root.selected_index >= 0 ? 48px : 0px;
+                                    width: parent.width - self.x - (root.selected_index >= 0 ? 16px : 0px);
                                     text: it.label;
                                     color: it.enabled ? Theme.current.text_primary : Theme.current.text_disabled;
                                     font-size: InterfaceStyle.tv ? 22px : 15px;

@@ -1,14 +1,111 @@
 import { StremioTitle } from "stremio-title.slint";
 import { ListServicesTitle } from "list-services-title.slint";
-import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent, DetailBridge, SettingsBridge } from "@NovaUiShared";
-import { CheckBox, Spinner } from "std-widgets.slint";
-import { SettingsInput } from "settings-controls.slint";
-import { TrackingButton, MappingChip, HistoryToggle } from "tracking-controls.slint";
+import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent, DetailBridge, SettingsBridge, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { Spinner } from "std-widgets.slint";
+import { TrackingButton, MappingChip, HistoryToggle, TrackingInput, TrackingCheckBox } from "tracking-controls.slint";
 
 // Matches, linked entries and their action cards share one scroll viewport.
 // Keep the last card clear of the bottom edge, without taking space from entries.
 export component TrackingPanel inherits Rectangle {
     in property <bool> open;
+    // Dense visual order includes expanded entry leaves without retaining handles
+    // to conditional controls. Native inputs and popups keep Left/Right themselves.
+    property <int> back_count: !root.compact && root.candidate_title != "" ? 1 : 0;
+    property <int> entry_count: root.active_entry_id == "" ? 0 : root.entry_editing ? 5 + (root.links[DetailContent.active_entry_index].dates_writable ? 4 : 0) : 7 + (root.entry_history_confirm ? 2 : 0) + (root.entry_unlink_confirm ? 2 : 0);
+    property <int> entry_start: root.links_start + DetailContent.active_entry_index + 1;
+    changed entry_start => {
+        let previous = DetailContent.tracking_tv_entry_start;
+        if InterfaceStyle.tv && root.active_entry_id != "" && previous > 0 && DetailContent.tracking_tv_index >= previous && DetailContent.tracking_tv_index < previous + root.entry_count {
+            DetailContent.tracking_tv_index += root.entry_start - previous;
+        }
+        DetailContent.tracking_tv_entry_start = root.entry_start;
+    }
+    property <int> links_start: 6 + root.back_count;
+    property <int> links_count: !root.has_setup && root.candidate_title == "" ? root.links.length + root.entry_count : 0;
+    property <int> setup_start: root.links_start + root.links_count;
+    property <int> choose_start: root.setup_start + (root.setup_review ? root.setup.length : 0);
+    property <int> search_start: root.choose_start + (root.candidate_title == "" ? 1 : 0);
+    property <int> reload_start: root.search_start + (root.manual_search ? 2 : 0);
+    property <int> candidates_start: root.reload_start + (!root.setup_review && root.candidate_title == "" ? 1 : 0);
+    property <int> alignment_start: root.candidates_start + (root.manual_search || (!root.has_setup && root.candidate_title == "") ? root.candidates.length : 0);
+    property <int> review_start: root.alignment_start + (root.candidate_title != "" ? 6 + (root.individual_mode ? root.mapping_rows.length : 0) : 0);
+    property <int> anime_count: root.review_start + (root.setup_review ? 2 : 0);
+    property <int> stremio_count: (SettingsBridge.stremio_connected ? 2 : 0)
+        + (SettingsBridge.stremio_connected && DetailBridge.stremio_title_match == "" ? DetailBridge.stremio_title_candidates.length : 0)
+        + (DetailBridge.stremio_title_match != "" ? DetailBridge.stremio_title_mapping.length : 0)
+        + (DetailBridge.stremio_title_can_confirm ? (SettingsBridge.stremio_mode_index == 1 ? 2 : 1) : 0)
+        + (DetailBridge.stremio_title_linked ? (SettingsBridge.stremio_mode_index == 1 ? 2 : 1) : 0);
+    property <int> service_count: DetailBridge.list_services_title_selected ? 2 : DetailBridge.list_services_title_connected ? 2 : 0;
+    property <int> nav_count: root.selected_service < 2 ? root.anime_count : 6 + (root.selected_service == 2 ? root.stremio_count : root.service_count);
+    changed nav_count => { root.repair_focus(); }
+    changed width => { root.repair_focus(); }
+    changed candidates => { root.repair_focus(); }
+    out property <length> focus-top-inset: root.manual_search && DetailContent.tracking_tv_index != root.search_start && DetailContent.tracking_tv_index != root.search_start + 1 ? 56px : 12px;
+    changed busy => { root.repair_focus(); }
+    changed can_confirm => { root.repair_focus(); }
+    property <bool> stremio_busy: DetailBridge.stremio_title_busy;
+    property <bool> stremio_sync_busy: SettingsBridge.stremio_busy;
+    property <bool> list_busy: DetailBridge.list_services_title_busy;
+    property <bool> list_resolved: DetailBridge.list_services_title_resolved;
+    property <bool> list_connected: DetailBridge.list_services_title_connected;
+    changed stremio_busy => { root.repair_focus(); }
+    changed stremio_sync_busy => { root.repair_focus(); }
+    changed list_busy => { root.repair_focus(); }
+    changed list_resolved => { root.repair_focus(); }
+    changed list_connected => { root.repair_focus(); }
+    pure function skip_range(index: int, direction: int, start: int, end: int) -> int {
+        return index >= start && index < end ? (direction > 0 ? end : start - 1) : index;
+    }
+    pure function skip_stremio(index: int, direction: int) -> int {
+        let mapping_start = 6 + (SettingsBridge.stremio_connected ? 2 : 0) + (SettingsBridge.stremio_connected && DetailBridge.stremio_title_match == "" ? DetailBridge.stremio_title_candidates.length : 0);
+        let confirm_start = mapping_start + (DetailBridge.stremio_title_match != "" ? DetailBridge.stremio_title_mapping.length : 0);
+        let confirm_index = confirm_start + (SettingsBridge.stremio_mode_index == 1 ? 1 : 0);
+        let linked_start = confirm_start + (DetailBridge.stremio_title_can_confirm ? (SettingsBridge.stremio_mode_index == 1 ? 2 : 1) : 0);
+        if DetailBridge.stremio_title_busy && index >= 6 && index < mapping_start { return root.skip_range(index, direction, 6, mapping_start); }
+        if DetailBridge.stremio_title_busy && DetailBridge.stremio_title_can_confirm && index == confirm_index { return index + direction; }
+        if SettingsBridge.stremio_busy && DetailBridge.stremio_title_linked && SettingsBridge.stremio_mode_index == 1 && index == linked_start { return index + direction; }
+        return index;
+    }
+    pure function available_index(index: int, direction: int) -> int {
+        let bounded = Math.clamp(index, 0, Math.max(0, root.nav_count - 1));
+        if root.selected_service < 2 {
+            if root.busy { return Math.clamp(bounded, 2, 5); }
+            return root.candidate_title != "" && !root.can_confirm && bounded == root.review_start - 1 ? Math.max(root.alignment_start, bounded - 1) : bounded;
+        }
+        if root.selected_service == 2 {
+            // Search/results, confirmation and sync are the three independently
+            // disabled blocks; cross all adjacent blocks in either direction.
+            let skipped = root.skip_stremio(root.skip_stremio(root.skip_stremio(bounded, direction), direction), direction);
+            return skipped < root.nav_count ? skipped : root.skip_stremio(root.skip_stremio(root.skip_stremio(root.nav_count - 1, -1), -1), -1);
+        }
+        if DetailBridge.list_services_title_selected && (!DetailBridge.list_services_title_connected || DetailBridge.list_services_title_busy) && bounded == 6 { return direction > 0 ? 7 : 5; }
+        if !DetailBridge.list_services_title_selected && (!DetailBridge.list_services_title_resolved || DetailBridge.list_services_title_busy) && bounded == 7 { return 6; }
+        return bounded;
+    }
+    function repair_focus() {
+        if InterfaceStyle.tv && root.open {
+            DetailContent.tracking_tv_index = root.available_index(DetailContent.tracking_tv_index, -1);
+            DetailContent.tracking_tv_epoch += 1;
+        }
+    }
+    public function move_focus(direction: int) {
+        if InterfaceStyle.tv {
+            SettingsStyle.keyboard-mode = true;
+            DetailContent.tracking_tv_index = root.available_index(DetailContent.tracking_tv_index + direction, direction);
+            DetailContent.tracking_tv_epoch += 1;
+        }
+    }
+    function reveal_service(x: length, width: length) {
+        if InterfaceStyle.tv {
+            let left = x - service_rail.absolute-position.x;
+            if left < 0px { service_rail.content-x -= left; }
+            else if left + width > service_rail.width { service_rail.content-x -= left + width - service_rail.width; }
+        }
+    }
+    function submit_search(query: string) {
+        if !root.busy { root.search(root.selected_service, query); }
+    }
+
     in property <[TrackingLinkRow]> links;
     in property <[TrackingCandidateRow]> candidates;
     in-out property <int> selected_service;
@@ -43,6 +140,10 @@ export component TrackingPanel inherits Rectangle {
     in-out property <bool> entry_history_confirm <=> DetailContent.entry_history_confirm;
     in-out property <bool> entry_unlink_confirm <=> DetailContent.entry_unlink_confirm;
     function close_entry() {
+        // Reclaim native focus before removing an entry control, so Back's
+        // release remains in the persistent window capture chain.
+        if root.open { panel_focus.focus(); }
+        if InterfaceStyle.tv && root.active_entry_id != "" { DetailContent.tracking_tv_index = root.links_start + DetailContent.active_entry_index; }
         root.active_entry_id = "";
         DetailContent.entry_generation += 1;
         DetailContent.entry_height = 0px;
@@ -69,7 +170,10 @@ export component TrackingPanel inherits Rectangle {
             else { DetailContent.active_entry_index = index; }
         }
     }
-    public function focus_panel() { panel_focus.focus(); }
+    public function focus_panel() {
+        panel_focus.focus();
+        root.repair_focus();
+    }
 
     in property <int> back_request;
     property <int> last_back_request: -1;
@@ -103,22 +207,24 @@ export component TrackingPanel inherits Rectangle {
         root.individual_mode = false;
         root.close_entry();
         if root.candidate_title != "" { root.manual_search = false; }
+        if InterfaceStyle.tv { DetailContent.tracking_tv_index = root.candidate_title != "" ? root.alignment_start : root.setup_start; }
         // Adjust/search can remove the focused input. Keep a persistent
         // control focused so Android Back stays in the window capture chain.
-        if root.open { panel_focus.focus(); }
+        if root.open { root.focus_panel(); }
     }
     changed setup_revision => {
         root.close_entry();
         root.include_history = false;
         root.manual_search = false;
-        if root.open { panel_focus.focus(); }
+        if root.open { root.focus_panel(); }
     }
     changed manual_search => {
-        if root.open { panel_focus.focus(); }
+        if InterfaceStyle.tv { DetailContent.tracking_tv_index = root.manual_search ? root.search_start : root.choose_start; }
+        if root.open { root.focus_panel(); }
     }
-    init => { panel_focus.focus(); root.last_back_request = root.back_request; }
+    init => { root.focus_panel(); root.last_back_request = root.back_request; }
     in property <int> focus_request;
-    changed focus_request => { panel_focus.focus(); }
+    changed focus_request => { root.focus_panel(); }
     callback back_to_details();
     callback accept_setup(string, bool);
     callback adjust_setup(int);
@@ -142,10 +248,17 @@ export component TrackingPanel inherits Rectangle {
     panel_focus := FocusScope {
         width: 100%;
         height: 100%;
+        capture-key-pressed(e) => {
+            if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                root.move_focus(e.text == Key.UpArrow ? -1 : 1); accept
+            } else { reject }
+        }
         key-pressed(e) => {
             if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
                 if !e.repeat { DetailContent.dispatch_back(); }
                 accept
+            } else if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.move_focus(e.text == Key.LeftArrow ? -1 : 1); accept
             } else { reject }
         }
         panel_layout := VerticalLayout {
@@ -173,6 +286,7 @@ export component TrackingPanel inherits Rectangle {
                     }
                 }
                 if root.selected_service < 2 && root.candidate_title != "": TrackingButton {
+                    nav-index: 6;
                     width: 120px;
                     text: @tr("Back to review");
                     quiet: true;
@@ -190,30 +304,42 @@ export component TrackingPanel inherits Rectangle {
                     x: 0px; y: 0px; width: self.preferred-width; height: self.preferred-height;
                     spacing: 8px; alignment: start;
                     service_mal := TrackingButton {
+                        nav-index: 0;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 144px; text: "MyAnimeList"; icon: 4;
                         selected: root.selected_service == 0;
                         enabled: root.selected_service >= 2 || !root.busy;
                         clicked => { if root.selected_service != 0 { root.selected_service = 0; root.query_text = ""; root.search(0, ""); } }
                     }
                     TrackingButton {
+                        nav-index: 1;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 104px; text: "AniList"; icon: 5;
                         selected: root.selected_service == 1;
                         enabled: root.selected_service >= 2 || !root.busy;
                         clicked => { if root.selected_service != 1 { root.selected_service = 1; root.query_text = ""; root.search(1, ""); } }
                     }
                     TrackingButton {
+                        nav-index: 2;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 104px; text: "Stremio"; selected: root.selected_service == 2;
                         clicked => { if root.selected_service != 2 { root.recover_entry_focus(); root.selected_service = 2; DetailBridge.stremio_title_search(""); } }
                     }
                     TrackingButton {
+                        nav-index: 3;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 88px; text: "Simkl"; selected: root.selected_service == 3;
                         clicked => { if root.selected_service != 3 { root.recover_entry_focus(); root.selected_service = 3; DetailBridge.list_services_title_open(0); } }
                     }
                     TrackingButton {
+                        nav-index: 4;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 104px; text: "MDBList"; selected: root.selected_service == 4;
                         clicked => { if root.selected_service != 4 { root.recover_entry_focus(); root.selected_service = 4; DetailBridge.list_services_title_open(1); } }
                     }
                     TrackingButton {
+                        nav-index: 5;
+                        nav-focused => { root.reveal_service(self.absolute-position.x, self.width); }
                         width: 88px; text: "Trakt"; selected: root.selected_service == 5;
                         clicked => { if root.selected_service != 5 { root.recover_entry_focus(); root.selected_service = 5; DetailBridge.list_services_title_open(2); } }
                     }
@@ -269,6 +395,7 @@ export component TrackingPanel inherits Rectangle {
                                 Text { text: row.state; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
                                 Text { text: @tr("Progress") + ": " + row.progress; color: Theme.current.text_secondary; }
                                 TrackingButton {
+                                    nav-index: root.links_start + index + (root.active_entry_id != "" && DetailContent.active_entry_index < index ? root.entry_count : 0);
                                     text: root.active_entry_id == row.id ? @tr("Back to review") : @tr("More"); quiet: true;
                                     clicked => {
                                         if root.active_entry_id == row.id { root.close_entry(); }
@@ -276,6 +403,8 @@ export component TrackingPanel inherits Rectangle {
                                             root.close_entry();
                                             DetailContent.activate_entry(row.id, index);
                                             root.entry_more = true;
+                                            DetailContent.tracking_tv_entry_start = root.links_start + index + 1;
+                                            if InterfaceStyle.tv { DetailContent.tracking_tv_index = DetailContent.tracking_tv_entry_start; root.repair_focus(); }
                                         }
                                     }
                                 }
@@ -317,7 +446,7 @@ export component TrackingPanel inherits Rectangle {
                                         Text { text: release.season; color: Theme.current.accent_vivid; font-size: 13px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
                                         Text { text: release.title; color: Theme.current.text_tracking_primary; font-size: 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
                                     }
-                                    TrackingButton { width: 76px; text: @tr("Adjust"); quiet: true; enabled: !root.busy; clicked => { root.adjust_setup(index); } }
+                                    TrackingButton { nav-index: root.setup_start + index; width: 76px; text: @tr("Adjust"); quiet: true; enabled: !root.busy; clicked => { root.adjust_setup(index); } }
                                 }
                                 if release.source_range != "" && release.target_range != "": HorizontalLayout {
                                     spacing: 8px;
@@ -333,6 +462,7 @@ export component TrackingPanel inherits Rectangle {
                         }
                     }
                     if root.candidate_title == "": TrackingButton {
+                        nav-index: root.choose_start;
                         text: @tr("Choose another release");
                         icon: 3;
                         enabled: !root.busy;
@@ -345,6 +475,7 @@ export component TrackingPanel inherits Rectangle {
                         changed origin => { root.manual_search_origin = self.origin; }
                     }
                     if !root.setup_review && root.candidate_title == "": TrackingButton {
+                        nav-index: root.reload_start;
                         text: root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");
                         quiet: true;
                         icon: 2;
@@ -367,7 +498,7 @@ export component TrackingPanel inherits Rectangle {
                                 Text { text: candidate.title; color: Theme.current.text_tracking_primary; font-weight: 600; wrap: word-wrap; min-width: 0px; }
                                 Text { text: candidate.detail; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
                                 Text { text: candidate.reason; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
-                                TrackingButton { text: @tr("Select release"); accessible-label: candidate.title; enabled: !root.busy; clicked => { root.pick(index); } }
+                                TrackingButton { nav-index: root.candidates_start + index; text: @tr("Select release"); accessible-label: candidate.title; enabled: !root.busy; clicked => { root.pick(index); } }
                             }
                         }
                     }
@@ -384,25 +515,25 @@ export component TrackingPanel inherits Rectangle {
                             Text { text: root.candidate_title; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0px; font-weight: 700; }
                             Text { text: @tr("Check the episode range. Use individual assignments only when the numbering differs."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
                             Text { text: @tr("First source row"); color: Theme.current.text_secondary; }
-                            first := SettingsInput { text <=> root.edit_first; accessible-label: @tr("First source row"); }
+                            first := TrackingInput { nav-index: root.alignment_start; text <=> root.edit_first; accessible-label: @tr("First source row"); }
                             Text { text: @tr("Last source row"); color: Theme.current.text_secondary; }
-                            last := SettingsInput { text <=> root.edit_last; accessible-label: @tr("Last source row"); }
+                            last := TrackingInput { nav-index: root.alignment_start + 1; text <=> root.edit_last; accessible-label: @tr("Last source row"); }
                             Text { text: @tr("First tracker episode"); color: Theme.current.text_secondary; }
-                            offset := SettingsInput { text <=> root.edit_start; accessible-label: @tr("First tracker episode"); }
-                            TrackingButton { text: @tr("Preview alignment"); enabled: !root.busy; clicked => { root.preview(first.text, last.text, offset.text); } }
-                            CheckBox { text: @tr("Edit individual episodes"); checked <=> root.individual_mode; }
+                            offset := TrackingInput { nav-index: root.alignment_start + 2; text <=> root.edit_start; accessible-label: @tr("First tracker episode"); }
+                            TrackingButton { nav-index: root.alignment_start + 3; text: @tr("Preview alignment"); enabled: !root.busy; clicked => { root.preview(first.text, last.text, offset.text); } }
+                            TrackingCheckBox { nav-index: root.alignment_start + 4; text: @tr("Edit individual episodes"); checked <=> root.individual_mode; }
                             if root.individual_mode: VerticalLayout {
                                 spacing: 8px;
                                 Text { text: @tr("Adjust individual assignments below. Leave empty to exclude a source episode."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                                for mapping in root.mapping_rows: VerticalLayout {
+                                for mapping[index] in root.mapping_rows: VerticalLayout {
                                     spacing: 4px;
                                     vertical-stretch: 0;
                                     Text { text: mapping.label; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                                    SettingsInput { text: mapping.target_episode; placeholder-text: @tr("Tracker episode or empty"); accessible-label: mapping.label; edited(value) => { root.assign(mapping.source_row, value); } }
+                                    TrackingInput { nav-index: root.alignment_start + 5 + index; text: mapping.target_episode; placeholder-text: @tr("Tracker episode or empty"); accessible-label: mapping.label; edited(value) => { root.assign(mapping.source_row, value); } }
                                 }
                                 for label in root.preview_rows: Text { text: label; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
                             }
-                            TrackingButton { text: root.has_setup ? @tr("Save adjustment") : @tr("Confirm alignment"); primary: true; enabled: root.can_confirm && !root.busy; clicked => { root.confirm(); } }
+                            TrackingButton { nav-index: root.review_start - 1; text: root.has_setup ? @tr("Save adjustment") : @tr("Confirm alignment"); primary: true; enabled: root.can_confirm && !root.busy; clicked => { root.confirm(); } }
                         }
                     }
                     if root.setup_review: Rectangle {
@@ -419,8 +550,8 @@ export component TrackingPanel inherits Rectangle {
                             if root.wide && !root.compact: Text { text: @tr("Ready to track"); color: Theme.current.text_tracking_primary; font-size: 20px; font-weight: 600; }
                             Text { text: root.setup_summary; color: Theme.current.text_episode_metadata; font-size: 13px; wrap: word-wrap; min-width: 0px; }
                             if root.wide && !root.compact: Text { text: @tr("Only linked episodes will update your tracker."); color: Theme.current.text_detail_metadata; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-                            HistoryToggle { checked <=> root.include_history; enabled: !root.busy; compact: root.compact; }
-                            TrackingButton { text: @tr("Start tracking"); primary: true; compact: root.compact; enabled: !root.busy; clicked => { root.accept_setup(root.setup_revision, root.include_history); } }
+                            HistoryToggle { nav-index: root.review_start; checked <=> root.include_history; enabled: !root.busy; compact: root.compact; }
+                            TrackingButton { nav-index: root.review_start + 1; text: @tr("Start tracking"); primary: true; compact: root.compact; enabled: !root.busy; clicked => { root.accept_setup(root.setup_revision, root.include_history); } }
                         }
                     }
                     content_end := Rectangle { height: 12px; vertical-stretch: 0; }
@@ -445,15 +576,18 @@ export component TrackingPanel inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 8px;
-                SettingsInput {
+                manual_query := TrackingInput {
+                    nav-index: root.search_start;
                     text <=> root.query_text;
+                    accepted(value) => { root.submit_search(value); }
                     placeholder-text: @tr("Title, ID, or official anime URL");
                     accessible-label: @tr("Tracker search");
                     min-width: 0px;
                 }
                 TrackingButton {
+                    nav-index: root.search_start + 1;
                     text: @tr("Search tracker"); enabled: !root.busy;
-                    clicked => { root.search(root.selected_service, root.query_text); }
+                    clicked => { root.submit_search(manual_query.full-text); }
                 }
             }
         }

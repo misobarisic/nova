@@ -916,3 +916,430 @@ fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
         failures.borrow().join("\n")
     );
 }
+
+fn settle_navigation(app: &nova::AppWindow) {
+    for _ in 0..12 {
+        for element in ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+    }
+}
+
+fn tracking_key(app: &nova::AppWindow, text: impl Into<SharedString>) {
+    let text = text.into();
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    settle_navigation(app);
+}
+
+fn navigation_fixture(tv: bool) -> nova::AppWindow {
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(tv);
+    app.window().set_size(slint::PhysicalSize::new(960, 640));
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_selected_title(s("Tracking remote regression"));
+    app.set_tracking_open(true);
+    let weak = app.as_weak();
+    app.on_tracking_close(move || weak.upgrade().unwrap().set_tracking_open(false));
+    let weak = app.as_weak();
+    app.on_tracking_cancel_adjust(move || {
+        weak.upgrade()
+            .unwrap()
+            .set_tracking_candidate_title("".into())
+    });
+    app.window().show().unwrap();
+    settle_navigation(&app);
+    app
+}
+
+fn assert_tracking_control_visible(app: &nova::AppWindow, label: &str) {
+    let control = ElementHandle::find_by_accessible_label(app, label)
+        .find(|element| {
+            matches!(
+                element.accessible_role(),
+                Some(AccessibleRole::Button | AccessibleRole::TextInput | AccessibleRole::Checkbox)
+            )
+        })
+        .unwrap_or_else(|| panic!("focused control must be mounted and revealed: {label}"));
+    let scroll = detail_scroll(app).unwrap();
+    let position = control.absolute_position();
+    let size = control.size();
+    let viewport = scroll.absolute_position();
+    assert!(
+        position.y >= viewport.y - 0.5
+            && position.y + size.height <= viewport.y + scroll.size().height + 0.5,
+        "{label} must be fully visible: {position:?}, {size:?}"
+    );
+}
+
+#[test]
+fn tracking_tv_arrows_reach_services_candidates_alignment_and_review() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tracking_tv_arrows_reach_services_candidates_alignment_and_review"
+    )) {
+        return;
+    }
+    use slint::platform::Key;
+    let app = navigation_fixture(true);
+    let services = Rc::new(RefCell::new(Vec::new()));
+    let recorded = services.clone();
+    app.on_list_services_title_select(move |service, enabled, history| {
+        recorded.borrow_mut().push((service, enabled, history));
+    });
+    app.set_list_services_title_connected(true);
+    app.set_list_services_title_resolved(true);
+    for _ in 0..5 {
+        tracking_key(&app, Key::RightArrow);
+    }
+    tracking_key(&app, Key::Return);
+    assert_eq!(app.get_tracking_service(), 5);
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::DownArrow);
+    assert_tracking_control_visible(&app, "Start syncing this title");
+    tracking_key(&app, Key::Return);
+    assert_eq!(&*services.borrow(), &[(2, true, false)]);
+    // Return to the first service using only remote keys.
+    for _ in 0..7 {
+        tracking_key(&app, Key::UpArrow);
+    }
+    tracking_key(&app, Key::Return);
+    assert_eq!(app.get_tracking_service(), 0);
+    app.set_tracking_candidates(
+        Rc::new(VecModel::from(
+            (0..12)
+                .map(|index| nova::TrackingCandidateRow {
+                    title: format!("Remote release {index}").into(),
+                    detail: s("TV · 12 episodes"),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let recorded = picks.clone();
+    let weak = app.as_weak();
+    app.on_tracking_pick(move |index| {
+        recorded.borrow_mut().push(index);
+        weak.upgrade()
+            .unwrap()
+            .set_tracking_candidate_title(s("Chosen remote release"));
+    });
+    app.set_tracking_range_first(s("1"));
+    app.set_tracking_range_last(s("12"));
+    app.set_tracking_range_start(s("1"));
+    app.set_tracking_can_confirm(true);
+    app.set_tracking_mapping_rows(
+        Rc::new(VecModel::from(
+            (0..3)
+                .map(|index| nova::TrackingMappingRow {
+                    source_row: index,
+                    label: format!("Remote episode {index}").into(),
+                    target_episode: format!("{}", index + 1).into(),
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    settle_navigation(&app);
+    for _ in 0..19 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    assert_tracking_control_visible(&app, "Remote release 11");
+    tracking_key(&app, Key::Return);
+    assert_eq!(&*picks.borrow(), &[11]);
+    assert_tracking_control_visible(&app, "First source row");
+    let previews = Rc::new(RefCell::new(Vec::new()));
+    let recorded = previews.clone();
+    app.on_tracking_preview(move |first, last, start| {
+        recorded
+            .borrow_mut()
+            .push((first.to_string(), last.to_string(), start.to_string()));
+    });
+    for _ in 0..3 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        &*previews.borrow(),
+        &[("1".to_string(), "12".to_string(), "1".to_string())]
+    );
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::Return); // Reveal individual assignments.
+    for _ in 0..4 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    let confirms = Rc::new(Cell::new(0));
+    let recorded = confirms.clone();
+    app.on_tracking_confirm(move || recorded.set(recorded.get() + 1));
+    assert_tracking_control_visible(&app, "Confirm alignment");
+    tracking_key(&app, Key::Return);
+    assert_eq!(confirms.get(), 1);
+    app.set_tracking_can_confirm(false);
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        confirms.get(),
+        1,
+        "a disabled confirmation cannot be submitted"
+    );
+    tracking_key(&app, Key::Back);
+    assert!(app.get_tracking_open());
+    assert!(app.get_tracking_candidate_title().is_empty());
+    app.set_tracking_candidates(Rc::new(VecModel::default()).into());
+    app.set_tracking_setup_active(true);
+    app.set_tracking_setup_revision(s("remote-review"));
+    app.set_tracking_setup(
+        Rc::new(VecModel::from(vec![nova::TrackingSetupRow {
+            title: s("Remote review release"),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    let accepts = Rc::new(RefCell::new(Vec::new()));
+    let recorded = accepts.clone();
+    app.on_tracking_accept_setup(move |revision, history| {
+        recorded.borrow_mut().push((revision.to_string(), history));
+    });
+    settle_navigation(&app);
+    // Start at the service rail regardless of the replaced body's focus index.
+    for _ in 0..20 {
+        tracking_key(&app, Key::UpArrow);
+    }
+    for _ in 0..9 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    assert_tracking_control_visible(&app, "Start tracking");
+    tracking_key(&app, Key::Return);
+    tracking_key(&app, Key::UpArrow);
+    tracking_key(&app, Key::Return);
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        &*accepts.borrow(),
+        &[
+            ("remote-review".to_string(), false),
+            ("remote-review".to_string(), true)
+        ]
+    );
+}
+
+#[test]
+fn tracking_manual_search_enter_and_button_share_busy_guard() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tracking_manual_search_enter_and_button_share_busy_guard"
+    )) {
+        return;
+    }
+    use slint::platform::Key;
+    let app = navigation_fixture(false);
+    let searches = Rc::new(RefCell::new(Vec::new()));
+    let recorded = searches.clone();
+    app.on_tracking_search(move |service, query| {
+        recorded.borrow_mut().push((service, query.to_string()))
+    });
+    ElementHandle::find_by_accessible_label(&app, "Choose another release")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle_navigation(&app);
+    ElementHandle::find_by_accessible_label(&app, "Tracker search")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    tracking_key(&app, "Remote title");
+    tracking_key(&app, Key::Return);
+    assert_eq!(&*searches.borrow(), &[(0, "Remote title".to_string())]);
+    app.set_tracking_busy(true);
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        searches.borrow().len(),
+        1,
+        "Enter must respect tracker busy state"
+    );
+    app.set_tracking_busy(false);
+    settle_navigation(&app);
+    ElementHandle::find_by_accessible_label(&app, "Search tracker")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle_navigation(&app);
+    assert_eq!(
+        &*searches.borrow(),
+        &[
+            (0, "Remote title".to_string()),
+            (0, "Remote title".to_string())
+        ]
+    );
+}
+
+#[test]
+fn tracking_tv_entry_editor_and_confirmations_restore_remote_focus() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tracking_tv_entry_editor_and_confirmations_restore_remote_focus"
+    )) {
+        return;
+    }
+    use slint::platform::Key;
+    let app = navigation_fixture(true);
+    app.set_tracking_links(
+        Rc::new(VecModel::from(vec![nova::TrackingLinkRow {
+            id: s("remote-binding"),
+            title: s("Remote linked release"),
+            progress: s("3"),
+            score: s("7"),
+            dates_writable: false,
+            history_preview: s("Update saved watched progress"),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = edits.clone();
+    app.on_tracking_edit(
+        move |id, progress, status, score, set_started, started, set_completed, completed| {
+            recorded.borrow_mut().push((
+                id.to_string(),
+                progress.to_string(),
+                status,
+                score.to_string(),
+                set_started,
+                started.to_string(),
+                set_completed,
+                completed.to_string(),
+            ));
+        },
+    );
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_tracking_action(move |id, action| recorded.borrow_mut().push((id.to_string(), action)));
+    settle_navigation(&app);
+    for _ in 0..6 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    tracking_key(&app, Key::Return); // Expand this stable-ID entry.
+    assert_tracking_control_visible(&app, "Edit tracker entry");
+    tracking_key(&app, Key::Return);
+    assert_tracking_control_visible(&app, "Tracker progress");
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::DownArrow); // Read-only dates are skipped.
+    assert_tracking_control_visible(&app, "Save tracker edits");
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        &*edits.borrow(),
+        &[(
+            "remote-binding".to_string(),
+            "3".to_string(),
+            0,
+            "7".to_string(),
+            false,
+            String::new(),
+            false,
+            String::new()
+        )]
+    );
+    // The same stable-ID entry can expose writable dates. Exercise its native
+    // popup and actual input keys instead of assigning values through the model.
+    app.set_tracking_links(
+        Rc::new(VecModel::from(vec![nova::TrackingLinkRow {
+            id: s("remote-binding"),
+            title: s("Remote linked release"),
+            progress: s("3"),
+            score: s("7"),
+            dates_writable: true,
+            history_preview: s("Update saved watched progress"),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    settle_navigation(&app);
+    tracking_key(&app, Key::Return); // Reopen Edit with the recovered focus.
+    assert_tracking_control_visible(&app, "Tracker progress");
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::Return); // Open the status dropdown.
+    tracking_key(&app, Key::DownArrow);
+    tracking_key(&app, Key::Return); // Select Watching and close the popup.
+    let status = ElementHandle::find_by_accessible_label(&app, "Tracker status")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("status dropdown must retain focus after selection");
+    assert!(
+        status
+            .query_descendants()
+            .match_predicate(|item: &ElementHandle| {
+                item.accessible_label().as_deref() == Some("Watching")
+            })
+            .find_first()
+            .is_some(),
+        "TV selection must update the closed dropdown"
+    );
+    tracking_key(&app, Key::DownArrow); // Score.
+    tracking_key(&app, Key::DownArrow); // Change start date.
+    tracking_key(&app, Key::Return);
+    tracking_key(&app, Key::DownArrow);
+    assert_tracking_control_visible(&app, "Start date");
+    tracking_key(&app, "2026-10-23");
+    tracking_key(&app, Key::DownArrow); // Leave the input for the finish toggle.
+    tracking_key(&app, Key::UpArrow); // Return without remounting or losing text.
+    assert_tracking_control_visible(&app, "Start date");
+    let started = ElementHandle::find_by_accessible_label(&app, "Start date")
+        .find(|item| item.accessible_role() == Some(AccessibleRole::TextInput))
+        .unwrap();
+    assert_eq!(started.accessible_value().as_deref(), Some("2026-10-23"));
+    tracking_key(&app, Key::DownArrow); // Change finish date.
+    tracking_key(&app, Key::Return);
+    tracking_key(&app, Key::DownArrow);
+    assert_tracking_control_visible(&app, "Finish date");
+    tracking_key(&app, "2026-10-24");
+    tracking_key(&app, Key::DownArrow);
+    assert_tracking_control_visible(&app, "Save tracker edits");
+    tracking_key(&app, Key::Return);
+    assert_eq!(
+        edits.borrow().last(),
+        Some(&(
+            "remote-binding".to_string(),
+            "3".to_string(),
+            1,
+            "7".to_string(),
+            true,
+            "2026-10-23".to_string(),
+            true,
+            "2026-10-24".to_string()
+        )),
+        "Save must receive the dropdown selection and both explicitly enabled dates"
+    );
+    for _ in 0..5 {
+        tracking_key(&app, Key::DownArrow);
+    }
+    tracking_key(&app, Key::Return);
+    assert_tracking_control_visible(&app, "Confirm history update");
+    assert!(
+        actions.borrow().is_empty(),
+        "opening a confirmation cannot submit it"
+    );
+    tracking_key(&app, Key::Back);
+    assert!(app.get_tracking_open());
+    assert!(
+        actions.borrow().is_empty(),
+        "Back cancels the nested confirmation"
+    );
+    tracking_key(&app, Key::Return); // Reopen through the recovered history action.
+    tracking_key(&app, Key::Return);
+    assert_eq!(&*actions.borrow(), &[("remote-binding".to_string(), 2)]);
+    tracking_key(&app, Key::Back);
+    assert!(app.get_tracking_open(), "first Back collapses More");
+    assert_tracking_control_visible(&app, "More");
+    tracking_key(&app, Key::Back);
+    assert!(!app.get_tracking_open(), "next Back closes Tracking");
+}

@@ -12,6 +12,7 @@ export global DetailContent {
     in-out property <length> episodes_slot_height;
     // Absolute top of the retained shell viewport for section-local sticky controls.
     in-out property <length> episodes_viewport_top;
+    in-out property <length> episodes_scroll_y;
     in-out property <length> episodes_height;
     in-out property <int> episodes_generation;
     in-out property <length> entry_slot_width;
@@ -35,6 +36,14 @@ export global DetailContent {
     in-out property <int> similar_reveal_request;
     in-out property <int> tracking_back_request;
     in-out property <int> tracking_focus_request;
+    // Tracking controls span the page and its separately compiled entry leaf.
+    // Keep only focus identity here; the panel owns traversal and the viewport.
+    in-out property <int> tracking_tv_index;
+    in-out property <int> tracking_tv_epoch;
+    in-out property <int> tracking_tv_entry_start;
+    in-out property <length> tracking_focus_y;
+    in-out property <length> tracking_focus_height;
+    in-out property <int> tracking_reveal_request;
     pure callback entry_index(string) -> int;
     callback validate_entry();
     callback activate_entry(string, int);

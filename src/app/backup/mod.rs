@@ -16,8 +16,10 @@ fn recovery_sequence(key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Choice {
+    #[serde(default = "included_by_default")]
+    pub included: bool,
     pub source: String,
     pub target: String,
     pub name: String,
@@ -26,6 +28,10 @@ struct Choice {
     pub replace: bool,
     pub use_backup: BTreeSet<String>,
 }
+fn included_by_default() -> bool {
+    true
+}
+
 #[derive(Clone, Default)]
 struct Counts {
     pub archived: usize,
@@ -49,6 +55,8 @@ struct PreviewRow {
 struct Preview {
     pub archive: Archive,
     pub choices: Vec<Choice>,
+    // Keep skipped profiles too: asynchronous previews must match every choice.
+    selection: Vec<Choice>,
     pub rows: Vec<PreviewRow>,
     revisions: BTreeMap<String, String>,
     edits: BTreeMap<String, Option<String>>,
@@ -230,6 +238,7 @@ fn choices(archive: &Archive) -> Result<Vec<Choice>, String> {
             let sequence = nova_storage::try_allocate_local_sequence("profiles", 1)
                 .map_err(|e| e.to_string())?;
             Ok(Choice {
+                included: true,
                 source: profile.archive_profile_id.clone(),
                 target: format!("p{device:x}_{sequence:x}"),
                 name: profile.name.clone(),
@@ -286,9 +295,10 @@ fn count(local: &Payload, backup: &Payload, result: &Payload) -> Counts {
 
 fn preview(archive: Archive, choices: Vec<Choice>) -> Result<Preview, String> {
     app::persistence::flush()?;
+    let selection = choices.clone();
     let choices = choices
         .into_iter()
-        .filter(|choice| !choice.components.is_empty())
+        .filter(|choice| choice.included && !choice.components.is_empty())
         .collect::<Vec<_>>();
     let mut targets = BTreeSet::new();
     let mut sources = BTreeSet::new();
@@ -302,6 +312,7 @@ fn preview(archive: Archive, choices: Vec<Choice>) -> Result<Preview, String> {
     let mut result = Preview {
         archive: archive.clone(),
         choices: choices.clone(),
+        selection,
         rows: Vec::new(),
         revisions: BTreeMap::new(),
         edits: BTreeMap::new(),
@@ -550,6 +561,14 @@ fn preview(archive: Archive, choices: Vec<Choice>) -> Result<Preview, String> {
 }
 
 fn apply(preview: &Preview) -> Result<Vec<String>, String> {
+    if preview
+        .selection
+        .iter()
+        .filter(|choice| choice.included && !choice.components.is_empty())
+        .ne(preview.choices.iter())
+    {
+        return Err("Selection changed; rebuild the preview before importing".into());
+    }
     // Delivery's read-modify-write owner precedes record/profile locks. This
     // prevents an in-flight digest from restoring activation after import.
     let _delivery = app::release_reminders::delivery_guard();
@@ -766,6 +785,28 @@ fn publish_staged(
     commit(&mut staged)?;
     *live = staged;
     Ok(())
+}
+
+fn recovery_inventory() -> Result<Vec<(String, String)>, String> {
+    let mut rows = nova_storage::try_scan_prefix(RECOVERY_PREFIX).map_err(|e| e.to_string())?;
+    rows.sort_by_key(|(key, _)| recovery_sequence(key));
+    Ok(rows)
+}
+
+fn delete_reviewed_recovery(reviewed: &[(String, String)]) -> Result<(), String> {
+    // Import receipt creation/pruning uses this serial too. A newly created
+    // recovery copy must never be deleted by an older confirmation.
+    let _serial = profiles::WRITE_SERIAL.lock().unwrap();
+    if reviewed.is_empty() || recovery_inventory()? != reviewed {
+        return Err("Recovery copies changed. Review them again before deleting.".into());
+    }
+    nova_storage::try_write_batch(
+        &reviewed
+            .iter()
+            .map(|(key, _)| (key.clone(), None))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn undo_preview() -> Result<Preview, String> {

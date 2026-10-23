@@ -1,6 +1,6 @@
 //! Automatic category pills must work with no user-created categories.
 use i_slint_backend_testing::ElementHandle;
-use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
+use slint::{ComponentHandle, LogicalPosition, Model, SharedString, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[test]
@@ -84,4 +84,115 @@ fn filter_bar_lists_auto_buckets_without_user_categories() {
             "selected pill must fit at {width}px"
         );
     }
+}
+
+#[test]
+fn category_assignment_checkmark_fades_with_immediate_flag_and_no_layout_shift() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::category_assignment_checkmark_fades_with_immediate_flag_and_no_layout_shift"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_categories_modal(true);
+    app.set_category_rows(
+        Rc::new(VecModel::from(vec![nova::CategoryRow {
+            name: "Anime".into(),
+        }]))
+        .into(),
+    );
+    let flags = Rc::new(VecModel::from(vec![false]));
+    app.set_modal_category_flags(flags.clone().into());
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(false);
+    app.global::<nova::Anim>().set_hover(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.window().show().unwrap();
+    let check = || {
+        ElementHandle::find_by_element_id(&app, "CategoryPickerPopup::category_check")
+            .next()
+            .unwrap()
+    };
+    // Exercise property tracking once per simulated render frame, including
+    // the changed callbacks that drive the retained animated intermediates.
+    let advance = |milliseconds| {
+        for _ in 0..milliseconds {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            let current = check();
+            let _ = (
+                current.computed_opacity(),
+                current.absolute_position(),
+                current.size(),
+            );
+        }
+    };
+    let geometry = (check().absolute_position(), check().size());
+    advance(200);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "expected hidden indicator, opacity={}",
+        check().computed_opacity()
+    );
+    flags.set_row_data(0, true);
+    assert_eq!(app.get_modal_category_flags().row_data(0), Some(true));
+    let _ = check().computed_opacity();
+    advance(70);
+    let middle = check().computed_opacity();
+    assert!(
+        middle > 0.05 && middle < 0.95,
+        "category membership check has an intermediate frame: {middle}"
+    );
+    advance(120);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "expected selected indicator, opacity={}",
+        check().computed_opacity()
+    );
+    assert_eq!((check().absolute_position(), check().size()), geometry);
+    app.global::<nova::Anim>().set_enabled(false);
+    flags.set_row_data(0, false);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "master-off category assignment is instant; opacity={}",
+        check().computed_opacity()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    let _ = check().computed_opacity();
+    advance(170);
+    assert!(
+        check().computed_opacity() < 0.01,
+        "expected hidden indicator, opacity={}",
+        check().computed_opacity()
+    );
+    flags.set_row_data(0, true);
+    let _ = check().computed_opacity();
+    advance(35);
+    let moving = check().computed_opacity();
+    assert!(
+        moving > 0.01 && moving < 0.99,
+        "expected in-flight indicator, opacity={moving}"
+    );
+    app.global::<nova::Anim>().set_enabled(false);
+    advance(16);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "disabling motion snaps an in-flight category check on the next frame; opacity={}",
+        check().computed_opacity()
+    );
+    app.global::<nova::Anim>().set_enabled(true);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "quick re-enable keeps the snapped visual state; opacity={}",
+        check().computed_opacity()
+    );
+    advance(16);
+    assert!(
+        check().computed_opacity() > 0.99,
+        "quick re-enable must not resume stale interpolation; opacity={}",
+        check().computed_opacity()
+    );
 }

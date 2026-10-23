@@ -323,6 +323,18 @@ pub fn tr(english: &str) -> &str {
             "Dopustite obavijesti u postavkama Androida, a zatim ponovno uključite dostavu"
         }
         "Unlock profile management first" => "Najprije otključajte upravljanje profilom",
+        "Export options changed; preview this export again" => {
+            "Postavke izvoza su promijenjene; ponovno pregledajte izvoz"
+        }
+        "Preview this export again before saving" => "Ponovno pregledajte izvoz prije spremanja",
+        "Selection changed; rebuild the preview before importing" => {
+            "Odabir je promijenjen; ponovno pripremite pregled prije uvoza"
+        }
+        "Recovery copies changed. Review them again before deleting." => {
+            "Kopije za oporavak su promijenjene. Ponovno ih pregledajte prije brisanja."
+        }
+        "There are no recovery copies to delete" => "Nema kopija za oporavak za brisanje",
+        "Unreadable recovery copy" => "Nečitljiva kopija za oporavak",
         "Profile changed; preview this export again" => {
             "Profil je promijenjen; ponovno pregledajte izvoz"
         }

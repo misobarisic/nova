@@ -217,8 +217,11 @@ replaces its row, preventing its old index from acting on a different show.
   model is rebuilt so displayed indices keep matching the visible entries.
 - Backing out of an entry restores the absolute scroll offset; a fully hidden
   focused card is revealed, a partially visible one is left alone.
-- Keyboard zones cover filter bar + grid; focus survives the modal
-  round-trip (state lives on `AppWindow`).
+- Keyboard zones cover page navigation, saved-collection/category filters,
+  the sort/view/search toolbar, and the grid on desktop and TV. Desktop Tab /
+  Shift+Tab reaches the toolbar; Ctrl+F explicitly opens and focuses search,
+  including while the saved-collection rail owns focus. Returning from Detail
+  retains query/card state without opening the editor or keyboard.
 - Empty-hint text when there are no entries (or none pass the filter).
 
 ## Detail interplay

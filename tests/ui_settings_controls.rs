@@ -12,5 +12,8 @@ mod selectors;
 #[path = "settings_controls/slider_drag.rs"]
 mod slider_drag;
 
+#[path = "settings_controls/state_motion.rs"]
+mod state_motion;
+
 #[path = "settings_controls/theme.rs"]
 mod theme;

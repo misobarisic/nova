@@ -188,7 +188,7 @@ impl Bridge {
             .downloads
             .job(id)
             .is_none_or(|job| !smart_offline::allows_download(&owner, &job))
-            || action == 1 && !profile_policy::management_allowed(&owner)
+            || matches!(action, 1 | 3) && !profile_policy::management_allowed(&owner)
         {
             return;
         }
@@ -196,7 +196,16 @@ impl Bridge {
             return;
         };
         match action {
-            1 => self.remove_download(id),
+            // The coordinator checks completion under the same lock that
+            // claims removal: a transfer finishing after a stale × click must
+            // never turn cancellation into deletion of an offline file.
+            1 | 3 => {
+                if !self.downloads.remove_from_page(id, action == 3) {
+                    return;
+                }
+                self.apply_stream_filter();
+                self.downloads_list_to_ui();
+            }
             2 if job.phase == DownloadPhase::Failed => self.reselect_failed_download(job.clone()),
             0 => match job.phase {
                 DownloadPhase::Completed => self.play_download(id),
@@ -329,12 +338,7 @@ impl Bridge {
                         badge: "↓".into(),
                         details: DownloadCoordinator::status_text(&job).into(),
                         state: 1,
-                        progress: job
-                            .total_bytes
-                            .filter(|total| *total > 0)
-                            .map_or(0.0, |total| {
-                                (job.bytes_downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32
-                            }),
+                        progress: DownloadCoordinator::progress_fraction(&job),
                         action_label: DownloadCoordinator::action_label(&job).into(),
                         action_kind: DownloadCoordinator::action_kind(&job),
                     });

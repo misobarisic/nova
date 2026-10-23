@@ -819,6 +819,52 @@ export component AppWindow inherits Window {
     property <int> profile_pin_focus_request;
     property <int> profile_policy_focus_request;
     property <int> backup_focus_request;
+    // Data is a Settings submenu even though its management flow lives above
+    // the compiled shell. Keep the outgoing surface until push/pop completes.
+    private property <bool> backup_open: BackupBridge.open;
+    private property <bool> backup_visual_retained: false;
+    private property <bool> backup_motion: Anim.enabled && Anim.transitions;
+    private property <float> backup_slide: 0.0;
+    animate backup_slide { duration: root.backup_motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> backup_alpha: 0.0;
+    animate backup_alpha { duration: root.backup_motion ? Anim.transition_fade : 0ms; }
+    function finish_backup_exit() {
+        backup_exit_tick.stop();
+        if !root.backup_open && root.backup_visual_retained {
+            root.backup_visual_retained = false;
+            root.preserve_back_focus();
+            root.focus_mounted_page();
+        }
+    }
+    changed backup_open => {
+        backup_entry_tick.stop(); backup_exit_tick.stop();
+        if root.backup_open {
+            root.backup_visual_retained = true;
+            if root.backup_motion { backup_entry_tick.start(); }
+            else { root.backup_slide = 1.0; root.backup_alpha = 1.0; }
+        } else {
+            root.preserve_back_focus();
+            root.backup_slide = 0.0; root.backup_alpha = 0.0;
+            if root.backup_visual_retained && root.backup_motion { backup_exit_tick.start(); }
+            else { root.finish_backup_exit(); }
+        }
+    }
+    changed backup_motion => {
+        if !root.backup_motion {
+            backup_entry_tick.stop();
+            root.backup_slide = root.backup_open ? 1.0 : 0.0;
+            root.backup_alpha = root.backup_open ? 1.0 : 0.0;
+            root.finish_backup_exit();
+        }
+    }
+    backup_entry_tick := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); if root.backup_open { root.backup_slide = 1.0; root.backup_alpha = 1.0; } }
+    }
+    backup_exit_tick := Timer {
+        interval: Math.max(Anim.transition_slide, Anim.transition_fade); running: false;
+        triggered => { root.finish_backup_exit(); }
+    }
     property <int> back_focus_request: 0;
     changed back_focus_request => {
         if MoreBridge.pin_open { root.profile_pin_focus_request += 1; }
@@ -833,6 +879,7 @@ export component AppWindow inherits Window {
         if MoreBridge.pin_open { root.profile_pin_focus_request += 1; return; }
         if MoreBridge.policy_open { if system_back_scope.has-focus { root.profile_policy_focus_request += 1; } return; }
         if BackupBridge.open { if system_back_scope.has-focus { root.backup_focus_request += 1; } return; }
+        if root.backup_visual_retained { return; }
         // The wizard retains the underlying page visually. Its Rust callback
         // excludes inputs already owned by the wizard before recovering focus
         // from that underlying page, rather than relying on baseline ownership.
@@ -1521,7 +1568,14 @@ export component AppWindow inherits Window {
         if MoreBridge.pin_open { MoreBridge.pin_cancel(); return; }
         if MoreBridge.policy_open { MoreBridge.management_closed(); return; }
         if OfflineBridge.opened {OfflineBridge.closed();return;}
-        if BackupBridge.open { if !BackupBridge.busy { BackupBridge.closed(); } return; }
+        if BackupBridge.open {
+            if !BackupBridge.busy {
+                if BackupBridge.recovery_confirmation { BackupBridge.cancel_delete_recovery(); }
+                else { BackupBridge.closed(); }
+            }
+            return;
+        }
+        if root.backup_visual_retained { return; }
         // Startup selection owns Back even before the first page focus event.
         // The Profiles page may cancel its editor, but cannot leave the picker.
         if root.profiles_require_selection { root.page_back_request += 1; }
@@ -2375,8 +2429,12 @@ export component AppWindow inherits Window {
             } else if OfflineBridge.opened && (e.text == Key.Back || e.text == Key.Escape) {
                 if !e.repeat {OfflineBridge.closed();root.preserve_back_focus();page_release_timer.start();}accept
             } else if BackupBridge.open && !MoreBridge.pin_open && !MoreBridge.policy_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
-                if !e.repeat && !BackupBridge.busy { BackupBridge.closed(); } accept
+                if !e.repeat && !BackupBridge.busy {
+                    if BackupBridge.recovery_confirmation { BackupBridge.cancel_delete_recovery(); }
+                    else { BackupBridge.closed(); }
+                } accept
             }
+            else if root.backup_visual_retained && !root.backup_open { accept }
             else if CatalogGroupingBridge.chooser_visual_retained && !CatalogGroupingBridge.chooser_open { if e.text == Key.Back { root.system_back_held = true; } accept }
             else if CatalogGroupingBridge.chooser_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
                 if !e.repeat && (e.text != Key.Back || !root.system_back_held) { if e.text == Key.Back { root.system_back_held = true; } CatalogGroupingBridge.back_request += 1; } accept
@@ -2681,10 +2739,11 @@ export component AppWindow inherits Window {
     if root.settings_page_mounted: SettingsHost {
         viewport_width: self.width; viewport_height: self.height;
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
-        opacity: root.more_subpage_alpha;
+        x: more_content_host.width * root.more_subpage_offset
+            - (root.backup_motion && root.backup_visual_retained ? 0.28 * more_content_host.width * root.backup_slide : 0px);
+        opacity: root.more_subpage_alpha * (root.backup_motion && root.backup_visual_retained ? 1.0 - root.backup_alpha : 1.0);
         external_navigation: true;
-        active: !root.more_return_pending;
+        active: !root.more_return_pending && !root.backup_visual_retained;
         standalone_sync: root.sync_page;
         two_pane: root.settings_two_pane;
         cache_busy: root.cache_busy;
@@ -2982,7 +3041,20 @@ export component AppWindow inherits Window {
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
     }
-    if BackupBridge.open: BackupPanel { focus-request: root.backup_focus_request; width: 100%; height: 100%; safe-top:root.safe-area-insets.top; safe-bottom:root.safe-area-insets.bottom; safe-left:root.safe-area-insets.left; safe-right:root.safe-area-insets.right; }
+    if root.backup_open || root.backup_visual_retained: backup_host := Rectangle {
+        width: 100%; height: 100%; clip: true;
+        // Cover the exposed edge throughout both directions of the push/pop.
+        TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+        backup_page := BackupPanel {
+            x: (1.0 - root.backup_slide) * root.width;
+            opacity: root.backup_alpha;
+            active: root.backup_open;
+            focus-request: root.backup_focus_request;
+            width: 100%; height: 100%;
+            safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+            safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
+        }
+    }
     if MoreBridge.policy_browse: Rectangle {
         x: root.safe-area-insets.left + 18px;
         y: root.height - root.safe-area-insets.bottom - self.height - 18px;

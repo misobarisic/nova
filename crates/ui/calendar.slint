@@ -156,12 +156,17 @@ export component CalendarPage inherits Rectangle {
         let next = !digest && (candidate == 2 || candidate == 3) ? (d > 0 ? 4 : 1) : candidate == 16 && !CalendarBridge.export_ready ? (d > 0 ? 17 : 15) : candidate;
         root.tools-focus = next;
     }
+    function choose-export-scope(scope: int) {
+        CalendarBridge.export_scope = scope;
+        CalendarBridge.export_ready = false;
+        CalendarBridge.export_preview = "";
+    }
     function tool-activate() {
         if root.tools-focus == 0 { root.close-layer(); }
         else if root.tools-focus == 1 { CalendarBridge.reminder_action(0); }
         else if root.tools-focus == 2 { CalendarBridge.reminder_action(5); }
         else if root.tools-focus == 3 { CalendarBridge.reminder_action(4); }
-        else if root.tools-focus >= 4 && root.tools-focus <= 7 { CalendarBridge.export_scope = root.tools-focus - 4; }
+        else if root.tools-focus >= 4 && root.tools-focus <= 7 { root.choose-export-scope(root.tools-focus - 4); }
         else if root.tools-focus == 8 || root.tools-focus == 9 || root.tools-focus == 17 { root.focus-tool(); }
         else if root.tools-focus >= 10 && root.tools-focus <= 13 { CalendarBridge.reminder_action(root.tools-focus); }
         else if root.tools-focus == 14 { CalendarBridge.reminder_action(1); }
@@ -464,7 +469,7 @@ export component CalendarPage inherits Rectangle {
                     if CalendarBridge.digest_text != "": PlannerButton { label: @tr("Dismiss digest"); reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == 3; picked => { CalendarBridge.reminder_action(4); } }
                     SectionHeader { label: @tr("Export scope"); }
                     for label[i] in [@tr("Subscribed shows"), @tr("Library shows"), @tr("Current Calendar filter"), @tr("Selected shows")]: PlannerButton {
-                        label: label; selected: CalendarBridge.export_scope == i; reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == i + 4; picked => { CalendarBridge.export_scope = i; CalendarBridge.export_ready = false; }
+                        label: label; selected: CalendarBridge.export_scope == i; reveal(y,h) => { tools-panel.reveal(y,h); } tv-focused: root.tools-focus == i + 4; picked => { root.choose-export-scope(i); }
                     }
                     SectionHeader { label: @tr("Date range (YYYY-MM-DD)"); }
                     tools_input_8 := SearchField {
@@ -520,10 +525,11 @@ export component CalendarPage inherits Rectangle {
         safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
         max_h: root.height * 0.85;
         sheet_title: @tr("Release reminders");
+        selected_index: root.reminder-target-mode;
         items: [
-            { label: (root.reminder-target-mode == 0 ? "✓ " : "") + @tr("Off"), enabled: true },
-            { label: (root.reminder-target-mode == 1 ? "✓ " : "") + @tr("Each new episode"), enabled: true },
-            { label: (root.reminder-target-mode == 2 ? "✓ " : "") + @tr("Full season released"), enabled: true },
+            { label: @tr("Off"), enabled: true },
+            { label: @tr("Each new episode"), enabled: true },
+            { label: @tr("Full season released"), enabled: true },
         ];
         picked(mode) => { let key = root.reminder-target; root.reminder-target = ""; page_scope.focus(); CalendarBridge.set_subscription_mode(key, mode); }
         closed => { root.close-layer(); }

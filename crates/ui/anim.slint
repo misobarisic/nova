@@ -15,7 +15,11 @@ export global Anim {
     // Page / subpage slide and entrance fades.
     out property <duration> transition_slide: (enabled && transitions) ? 260ms : 0ms;
     out property <duration> transition_fade: (enabled && transitions) ? 220ms : 0ms;
-    // Hover / focus feedback (button fills, card lift, toggle knob, …).
+    // Control state feedback is separate from pointer hover and page changes.
+    // The master switch makes toggles, selection fills and checkmarks instant;
+    // disabling Hover effects or Page transitions does not change their feedback.
+    out property <duration> control_state: enabled ? 140ms : 0ms;
+    // Hover / focus feedback (button fills, card lift, …).
     out property <duration> hover_fast: (enabled && hover) ? 120ms : 0ms;
     out property <duration> hover_lift: (enabled && hover) ? 150ms : 0ms;
     // Player OSD fades and control reveals.

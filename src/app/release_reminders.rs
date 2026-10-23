@@ -954,6 +954,11 @@ impl Bridge {
                 }
                 state.release_reminders.pending = None;
                 drop(state);
+                if let Some(app) = b.app() {
+                    let ui = app.global::<crate::CalendarBridge>();
+                    ui.set_export_ready(false);
+                    ui.set_export_preview("".into());
+                }
                 b.refresh_release_reminders();
             });
         let b = self.clone();
@@ -1315,29 +1320,42 @@ impl Bridge {
     }
     fn save_release_calendar(&self, action: i32) {
         let owner = profiles::ProfileStore::capture();
-        if !profile_policy::management_allowed(&owner) {
-            self.reminder_status(text::tr("Unlock profile management first"));
-            return;
-        }
         let Some(app) = self.app() else {
             return;
         };
+        let bridge = app.global::<crate::CalendarBridge>();
+        // A preview is single-use. Clear its visible state on every attempt,
+        // including rejected saves and failed replacement previews.
+        bridge.set_export_ready(false);
+        bridge.set_export_preview("".into());
+        if !profile_policy::management_allowed(&owner) {
+            self.shared.lock().unwrap().release_reminders.pending = None;
+            self.reminder_status(text::tr("Unlock profile management first"));
+            return;
+        }
         if action == 6 {
             let pending = {
                 let mut shared = self.shared.lock().unwrap();
                 if shared.release_reminders.owner != owner.id() {
                     shared.release_reminders.pending = None;
+                    drop(shared);
+                    self.reminder_status(text::tr("Profile changed; preview this export again"));
                     return;
                 }
                 shared.release_reminders.pending.take()
             };
             let Some((ledger, ics, revision, inputs)) = pending else {
+                self.reminder_status(text::tr("Preview this export again before saving"));
                 return;
             };
-            if revision != profile_policy::revision(&owner)
-                || inputs != self.release_export_token(&app)
-            {
+            if revision != profile_policy::revision(&owner) {
                 self.reminder_status(text::tr("Profile changed; preview this export again"));
+                return;
+            }
+            if inputs != self.release_export_token(&app) {
+                self.reminder_status(text::tr(
+                    "Export options changed; preview this export again",
+                ));
                 return;
             }
             let b = self.clone();
@@ -1362,11 +1380,9 @@ impl Bridge {
                     });
                 },
             );
-            app.global::<crate::CalendarBridge>()
-                .set_export_ready(false);
             return;
         }
-        let bridge = app.global::<crate::CalendarBridge>();
+        self.shared.lock().unwrap().release_reminders.pending = None;
         let result = (|| -> Result<_, String> {
             let mut ledger: ExportLedger = load(&owner, EXPORT_KEY)?;
             if action != 3 || ledger.namespace.is_empty() {
@@ -1454,6 +1470,7 @@ impl Bridge {
             text::release_export_preview(series, count, omitted, cancelled).into(),
         );
         bridge.set_export_ready(true);
+        bridge.set_reminder_status("".into());
         let inputs = self.release_export_token(&app);
         self.shared.lock().unwrap().release_reminders.pending =
             Some((ledger, ics, profile_policy::revision(&owner), inputs));
@@ -1630,6 +1647,151 @@ mod tests {
                 .map(|at| at.timestamp())
                 .unwrap_or(now);
         (title, item, events, now)
+    }
+    #[test]
+    fn stale_export_save_clears_preview_and_fresh_preview_recovers() {
+        const ROOT: &str = "NOVA_RELEASE_EXPORT_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-release-export-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .env("XDG_DATA_HOME", root.join("data"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("APPDATA", root.join("data"))
+                .env("LOCALAPPDATA", root.join("cache"))
+                .args([
+                    "--exact",
+                    "app::release_reminders::tests::stale_export_save_clears_preview_and_fresh_preview_recovers",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let completed = root.join("completed").is_file();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success() && completed,
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        nova_storage::init_at(&root);
+        profiles::initialize().unwrap();
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        #[cfg(feature = "desktop")]
+        let (hi, _) = std::sync::mpsc::channel();
+        #[cfg(feature = "desktop")]
+        let (lo, _) = std::sync::mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            #[cfg(feature = "desktop")]
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let owner = profiles::ProfileStore::capture();
+        bridge.refresh_release_reminders();
+        let ui = app.global::<crate::CalendarBridge>();
+        ui.set_export_start("2026-10-23".into());
+        ui.set_export_end("2027-01-21".into());
+        let preview = || {
+            bridge.release_reminder_action(1);
+            assert!(ui.get_export_ready());
+            assert!(!ui.get_export_preview().is_empty());
+            assert!(
+                ui.get_reminder_status().is_empty(),
+                "a fresh preview clears the old error"
+            );
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .release_reminders
+                    .pending
+                    .is_some()
+            );
+        };
+        let rejected = |reason: &str| {
+            bridge.release_reminder_action(6);
+            assert!(!ui.get_export_ready());
+            assert!(ui.get_export_preview().is_empty());
+            assert_eq!(ui.get_reminder_status(), text::tr(reason));
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .release_reminders
+                    .pending
+                    .is_none()
+            );
+            assert!(
+                owner.read(EXPORT_KEY).unwrap().is_none(),
+                "rejected saves never advance the ledger"
+            );
+        };
+        // A backend-side change may arrive after the UI has shown Save. The
+        // final input receipt must still reject that snapshot without a dialog.
+        preview();
+        ui.set_export_scope(1);
+        rejected("Export options changed; preview this export again");
+        rejected("Preview this export again before saving");
+        preview();
+        ui.set_export_start("2026-10-24".into());
+        rejected("Export options changed; preview this export again");
+        preview();
+        app.set_calendar_search("changed".into());
+        rejected("Export options changed; preview this export again");
+        preview();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .release_reminders
+            .selected
+            .insert(title_key("series", "one"));
+        rejected("Export options changed; preview this export again");
+        preview();
+        let mut policy = profile_policy::ProfilePolicy::default();
+        policy.extra.insert("future".into(), true.into());
+        owner
+            .write(
+                profile_policy::KEY,
+                &serde_json::to_string(&policy).unwrap(),
+            )
+            .unwrap();
+        rejected("Profile changed; preview this export again");
+        preview();
+        bridge.shared.lock().unwrap().release_reminders.owner = "another-profile".into();
+        rejected("Profile changed; preview this export again");
+        bridge.refresh_release_reminders();
+        preview();
+        ui.set_export_end("invalid".into());
+        bridge.release_reminder_action(1);
+        assert!(!ui.get_export_ready());
+        assert!(ui.get_export_preview().is_empty());
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .release_reminders
+                .pending
+                .is_none()
+        );
+        ui.set_export_end("2027-01-21".into());
+        preview();
+        std::fs::write(root.join("completed"), "export recovery checked").unwrap();
     }
     #[test]
     fn subscription_modes_are_backward_compatible_and_round_trip_unknown_fields() {

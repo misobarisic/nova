@@ -29,6 +29,12 @@ export global SettingsContent {
     in-out property <length> detail_cover_right;
     in-out property <length> content_min_height;
     in-out property <length> content_preferred_height;
+    // Search navigation crosses the shell/compiled-leaf mount boundary. A
+    // matching row consumes the one-shot reveal; the key keeps its visible
+    // highlight until the next navigation or search. Never persist this state.
+    in-out property <string> search_target_key;
+    in-out property <int> search_target_section: -1;
+    in-out property <bool> search_target_pending: false;
     in-out property <bool> dl_revealed: true;
     in-out property <bool> input_focused: false;
     in-out property <int> kb_ac: 0;
@@ -80,6 +86,12 @@ export global SettingsContent {
     callback schedule_setting(string);
     callback focus_shell();
 
+    public function clear_search_target() {
+        SettingsContent.search_target_pending = false;
+        SettingsContent.search_target_key = "";
+        SettingsContent.search_target_section = -1;
+    }
+
     // Filter rows follow all existing Player controls on both backends. Keep
     // this calculation shared so leaf focus marks and shell arrows agree.
     public pure function kb_player_stream_filters_row() -> int {
@@ -123,6 +135,7 @@ export global SettingsContent {
     }
 
     public function reset_state() {
+        SettingsContent.clear_search_target();
         SettingsContent.detail_sticky_top = 0px;
         SettingsContent.detail_header_height = 0px;
         SettingsContent.detail_pinned_controls_height = 0px;

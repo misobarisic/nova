@@ -1,4 +1,5 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
+import { SettingsSearch } from "settings-search.slint";
 import { BackupBridge } from "@NovaUiShared";
 import { InterfaceStyle, SmartCollectionsBridge, CatalogGroupingBridge, StreamFiltersBridge, SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
 import { SmartCollectionsEditor } from "smart-collections.slint";
@@ -17,7 +18,11 @@ export component SettingsPage {
     // Keep submenu layout inputs current without relaying backend values.
     private property <length> content_shell_width: root.width;
     changed content_shell_width => { SettingsContent.shell_width = root.content_shell_width; }
-    changed detail_width => { SettingsContent.detail_width = root.detail_width; }
+    changed detail_width => {
+        SettingsContent.detail_width = root.detail_width;
+        if SettingsContent.search_target_key != "" { SettingsContent.search_target_pending = true; }
+    }
+    changed height => { if SettingsContent.search_target_key != "" { SettingsContent.search_target_pending = true; } }
     public function prepare_submenu() {
         SettingsContent.shell_width = root.width;
         SettingsContent.detail_width = root.detail_width;
@@ -35,6 +40,7 @@ export component SettingsPage {
     changed standalone_sync => { root.apply_page_mode(); }
     in property <bool> external_navigation: false;
     in property <bool> active: true;
+    changed active => { if !root.active { SettingsContent.clear_search_target(); } }
     in property <[TrackingAccountRow]> tracking_accounts;
     in property <string> tracking_notice;
     callback tracking_connect(int,string,string);
@@ -469,7 +475,7 @@ export component SettingsPage {
         if (root.two_pane) { root.sub_open = true; }
     }
     changed sel => { SliderGesture.active = false; SliderGesture.hovered = false; SettingsContent.detail_pinned_controls_height = 0px; }
-    changed sub_open => { SliderGesture.active = false; SliderGesture.hovered = false; }
+    changed sub_open => { SliderGesture.active = false; SliderGesture.hovered = false; if !root.sub_open { SettingsContent.clear_search_target(); } }
     property <int> focus_request: SettingsStyle.focus-request;
     property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
     changed native_keyboard_mode => { root.kb_active = self.native_keyboard_mode; }
@@ -561,6 +567,13 @@ export component SettingsPage {
     property <bool> reset_pending: false;
     in-out property <string> search_query: "";
     property <bool> search_active: root.search_query != "" && !root.search_matches(root.search_query, "");
+    // Availability can change between a click and the compiled leaf's first
+    // layout (backend/encoder or profile switches). Discard that request rather
+    // than letting an absent row reveal itself much later.
+    private property <bool> search_target_current: SettingsContent.search_target_key == ""
+        || (root.active && root.sub_open && root.sel == SettingsContent.search_target_section
+            && SettingsSearch.target(root.sel).key == SettingsContent.search_target_key);
+    changed search_target_current => { if !root.search_target_current { SettingsContent.clear_search_target(); } }
     property <int> reveal_request: 0;
     in-out property <[length]> page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
     pure callback search_matches(string, string) -> bool;
@@ -612,9 +625,13 @@ export component SettingsPage {
     }
     function land_title(id: int) -> string { return SettingsDestinations.entries[root.destination_index(id)].title; }
     function land_desc(id: int) -> string { return SettingsDestinations.entries[root.destination_index(id)].description; }
+    function land_search_description(id: int) -> string {
+        let target = SettingsSearch.target(id);
+        return target.key != "" ? target.title : root.land_desc(id);
+    }
     function land_avail(id: int) -> bool {
         let entry = SettingsDestinations.entries[root.destination_index(id)];
-        return id != 7 && root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : root.search_matches(root.search_query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases));
+        return id != 7 && root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : SettingsSearch.target(id).key != "" || root.search_matches(root.search_query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases));
     }
     function group_available(group: int) -> bool {
         if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(14) || root.land_avail(6) || root.land_avail(5); }
@@ -672,7 +689,7 @@ export component SettingsPage {
         if (root.destination_index(id) > root.destination_index(13) && root.land_avail(13)) { return 13; }
         return id;
     }
-    changed search_query => { root.kb_land = root.land_first(); land_scroll.content-y = 0px; }
+    changed search_query => { SettingsContent.clear_search_target(); root.kb_land = root.land_first(); land_scroll.content-y = 0px; }
 
     // First keyboard zone of the currently open subpage.
     function page_first_zone() -> int {
@@ -692,6 +709,7 @@ export component SettingsPage {
     }
 
     public function open_page(id: int) {
+        SettingsContent.clear_search_target();
         if id == 15 { BackupBridge.opened(); return; }
         if (root.sel >= 0) { root.page_scrolls[root.sel] = root.scroll_y; }
         // The nested downloaded-episodes list gets an entrance transition:
@@ -711,7 +729,26 @@ export component SettingsPage {
         root.kb_zone = root.page_first_zone();
     }
 
+    function open_search_result(id: int) {
+        let target = SettingsSearch.target(id);
+        // Yield native text focus before mounting a leaf. Subsequent remote
+        // arrows then operate on the same row that touch users see highlighted.
+        nav_scope.focus();
+        root.open_page(id);
+        if target.key != "" {
+            root.kb_zone = target.zone;
+            if target.zone == 9 { root.kb_pr = target.row; }
+            else if target.zone == 6 { root.kb_dr = target.row; }
+            else if target.zone == 10 { root.kb_anr = target.row; }
+            else if target.zone == 5 { root.kb_hr = target.row; }
+            SettingsContent.search_target_section = id;
+            SettingsContent.search_target_key = target.key;
+            SettingsContent.search_target_pending = true;
+        }
+    }
+
     function close_page() {
+        SettingsContent.clear_search_target();
         // The outgoing subpage can own a focused editor or tracking's blur
         // scope. Keep Back routed after the close animation removes it.
         nav_scope.focus();
@@ -1012,6 +1049,7 @@ export component SettingsPage {
     }
 
     function kb_up() {
+        SettingsContent.clear_search_target();
         if root.kb_zone == 18 { root.kb_zone = 0; return; }
         if root.kb_zone == 19 {
             let control = SettingsBridge.addon_browser_control;
@@ -1120,6 +1158,7 @@ export component SettingsPage {
     }
 
     function kb_down() {
+        SettingsContent.clear_search_target();
         if root.kb_zone == 18 {
             root.kb_zone = SettingsBridge.addon_browser_tab == 1 ? 19 : 1;
             SettingsBridge.addon_browser_control = 0;
@@ -1747,7 +1786,7 @@ export component SettingsPage {
             return;
         }
         if (root.kb_zone == 8) {
-            root.open_page(root.kb_land);
+            root.open_search_result(root.kb_land);
         } else if (root.kb_zone == 0) {
             if (root.phone_layout) {
                 root.system_back();
@@ -2076,11 +2115,11 @@ export component SettingsPage {
                                                 destination-id: entry.stable-id;
                                                 icon-kind: entry.id;
                                                 title: entry.parent < 0 ? entry.title : root.land_title(entry.parent) + " › " + entry.title;
-                                                subtitle: entry.description;
+                                                subtitle: root.land_search_description(entry.id);
                                                 selected: root.two_pane && root.sel == entry.id;
                                                 focused: root.kb_active && root.kb_zone == 8 && root.kb_land == entry.id;
                                                 interactive: !root.sub_open || root.two_pane;
-                                                picked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_land = entry.id; root.open_page(entry.id); }
+                                                picked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_land = entry.id; root.open_search_result(entry.id); }
                                                 in property <int> request: root.reveal_request;
                                                 changed request => { if (root.kb_zone == 8 && root.kb_land == entry.id) { root.reveal_navigation(self.absolute-position.y - land_scroll.absolute-position.y - land_scroll.content-y, self.height); } }
                                                 changed focused => { if (self.focused) { root.reveal_navigation(self.absolute-position.y - land_scroll.absolute-position.y - land_scroll.content-y, self.height); } }

@@ -7,7 +7,7 @@ import { SubtitleControls } from "../ui/subtitle-controls.slint";
 
 import { SpeedControl } from "../ui/speedcontrol.slint";
 
-import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting, AddonIconButton, PillButton } from "../ui/settings-controls.slint";
+import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsSearchHighlight, SettingsCard, NumericSetting, AddonIconButton, PillButton } from "../ui/settings-controls.slint";
 import { Dropdown } from "../ui/dropdown.slint";
 
 import { PlaybackLanguagePicker } from "../ui/playback-language-picker.slint";
@@ -427,6 +427,9 @@ export component SettingsPlayerModule inherits Window {
                 // text (same split as the cache sliders).
                 if SettingsContent.narrow && SettingsBridge.player_backend_index == 0: Rectangle {
                     background: Theme.current.card;
+                    accessible-role: groupbox;
+                    accessible-id: "setting:playback_speed";
+                    SettingsSearchHighlight { setting-key: "playback_speed"; }
 
                     VerticalLayout {
                         width: 100%;

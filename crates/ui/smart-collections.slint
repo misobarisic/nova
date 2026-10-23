@@ -12,6 +12,9 @@ export component SmartCollectionsRail inherits Rectangle {
     in property <bool> touch_menus;
     in-out property <int> choice: 0;
     callback exit(int);
+    // The rail owns native focus; let Library handle its page keyboard shortcuts.
+    callback search_requested();
+    callback tab_requested(bool);
     public function focus_shell() { scope.focus(); }
     private property <length> row-height: InterfaceStyle.tv ? 56px : 44px;
     visible: SmartCollectionsBridge.rows.length > 0;
@@ -34,7 +37,13 @@ export component SmartCollectionsRail inherits Rectangle {
         width: 100%; height: 100%;
         key-pressed(e) => {
             SettingsStyle.keyboard-mode = true;
-            if e.text == Key.UpArrow || e.text == Key.DownArrow { root.exit(e.text == Key.UpArrow ? -1 : 1); accept }
+            if e.modifiers.control && (e.text == "f" || e.text == "F") {
+                if !e.repeat { root.search_requested(); }
+                accept
+            } else if !InterfaceStyle.tv && e.text == Key.Tab {
+                root.tab_requested(e.modifiers.shift);
+                accept
+            } else if e.text == Key.UpArrow || e.text == Key.DownArrow { root.exit(e.text == Key.UpArrow ? -1 : 1); accept }
             else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
                 root.choice = Math.max(0, Math.min(SmartCollectionsBridge.rows.length, root.choice + (e.text == Key.LeftArrow ? -1 : 1)));
                 accept

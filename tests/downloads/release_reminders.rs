@@ -1,5 +1,5 @@
 //! Reminder tools remain reachable at phone widths and with a TV remote.
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{
     ComponentHandle, ModelRc, VecModel,
     platform::{Key, WindowEvent},
@@ -99,23 +99,29 @@ fn reminder_tools_fit_phone_and_tv_back_closes_one_layer() {
             vec![("[\"series\",\"one\"]".to_string(), 2)]
         );
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
-        calendar.set_tools_focus(18);
-        key(&app, Key::Return.into());
-        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
-        assert!(
-            ElementHandle::find_by_accessible_label(&app, "Full season released")
-                .next()
-                .is_some(),
-            "reminder choice reopens before Back"
-        );
-        key(&app, Key::Back.into());
-        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
-        assert!(
-            ElementHandle::find_by_element_id(&app, "CalendarPage::tools-panel")
-                .next()
-                .is_some(),
-            "Back closes only the reminder choice"
-        );
+        for mode in 0..=2 {
+            calendar.set_reminder_modes(ModelRc::new(VecModel::from(vec![mode])));
+            calendar.set_tools_focus(18);
+            key(&app, Key::Return.into());
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+            for (index, label) in ["Off", "Each new episode", "Full season released"]
+                .into_iter()
+                .enumerate()
+            {
+                let row = ElementHandle::find_by_accessible_label(&app, label)
+                    .find(|row| row.accessible_role() == Some(AccessibleRole::RadioButton))
+                    .expect("reminder mode is a labelled radio choice");
+                assert_eq!(row.accessible_checked(), Some(index as i32 == mode));
+            }
+            key(&app, Key::Back.into());
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+            assert!(
+                ElementHandle::find_by_element_id(&app, "CalendarPage::tools-panel")
+                    .next()
+                    .is_some(),
+                "Back closes only the reminder choice"
+            );
+        }
         assert_eq!(chosen_modes.borrow().len(), 1);
         calendar.set_tools_focus(8);
         key(&app, Key::Return.into());
@@ -136,5 +142,74 @@ fn reminder_tools_fit_phone_and_tv_back_closes_one_layer() {
                 .is_none()
         );
         app.hide().unwrap();
+    }
+}
+
+#[test]
+fn export_scope_changes_invalidate_preview_for_pointer_keyboard_and_tv() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::export_scope_changes_invalidate_preview_for_pointer_keyboard_and_tv"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (width, tv) in [(360, false), (1920, true)] {
+        for input in ["pointer", "return", "space"] {
+            let app = nova::AppWindow::new().unwrap();
+            app.global::<nova::Anim>().set_enabled(false);
+            app.global::<nova::InterfaceStyle>().set_tv(tv);
+            app.window().set_size(slint::PhysicalSize::new(width, 1080));
+            app.invoke_navigate_section(4);
+            let calendar = app.global::<nova::CalendarBridge>();
+            app.show().unwrap();
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(350));
+            tap(
+                &app,
+                ElementHandle::find_by_element_id(&app, "CalendarPage::tools_button")
+                    .next()
+                    .unwrap(),
+            );
+            for (scope, label) in [
+                "Subscribed shows",
+                "Library shows",
+                "Current Calendar filter",
+                "Selected shows",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                calendar.set_export_scope((scope as i32 + 1) % 4);
+                calendar.set_export_ready(true);
+                calendar.set_export_preview("A previously prepared snapshot".into());
+                calendar.set_tools_focus(scope as i32 + 4);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+                match input {
+                    "pointer" => tap(
+                        &app,
+                        ElementHandle::find_by_accessible_label(&app, label)
+                            .next()
+                            .unwrap(),
+                    ),
+                    "return" => key(&app, Key::Return.into()),
+                    _ => key(&app, " ".into()),
+                }
+                assert_eq!(
+                    calendar.get_export_scope(),
+                    scope as i32,
+                    "{input}, TV={tv}"
+                );
+                assert!(!calendar.get_export_ready(), "{input}, TV={tv}");
+                assert!(calendar.get_export_preview().is_empty(), "{input}, TV={tv}");
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+                assert!(
+                    ElementHandle::find_by_accessible_label(&app, "Save / Share .ics")
+                        .next()
+                        .is_none(),
+                    "a changed scope requires a new preview: {input}, TV={tv}"
+                );
+            }
+            app.hide().unwrap();
+        }
     }
 }

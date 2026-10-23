@@ -763,45 +763,52 @@ export component DetailPage {
         // Fade both artwork and its black backing to the page canvas. Leaving
         // the backing opaque creates a black band above the coloured scrim.
         property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
-        Rectangle {
-            x: 0px;
-            y: 0px;
-            width: 100%;
-            height: root.backdrop_height;
-            background: Theme.current.artwork_backdrop;
-            opacity: 1 - page.backdrop_fade;
-        }
+        // Rotation may recreate renderer surfaces. Retire fully faded artwork
+        // rather than leaving an invisible cached image behind the episode list.
+        if page.backdrop_fade < 1: Rectangle {
+            x: 0px; y: 0px;
+            width: 100%; height: root.backdrop_height + 60px;
+            clip: true;
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: root.backdrop_height;
+                background: Theme.current.artwork_backdrop;
+                opacity: 1 - page.backdrop_fade;
+            }
 
-        // Keep the artwork edge-to-edge behind the floating controls. The
-        // scrims protect text while preserving the bright upper-right artwork.
-        // Square masks with baked palette colours avoid thin-texture sampling
-        // and offscreen colorization artifacts on resize or page recreation.
-        backdrop_art := Image {
-            x: 0px;
-            // A small parallax lift, capped so the backdrop cannot slide
-            // away while the user browses long episode or stream lists.
-            y: Math.max(root.narrow ? -56px : -80px, Math.min(0px, det_scroll.content-y * 0.12));
-            source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
-            image-fit: cover;
-            width: 100%;
-            height: root.backdrop_height;
-            opacity: 1 - page.backdrop_fade;
-        }
-        Image {
-            x: 0px;
-            y: 0px;
-            width: 100%;
-            height: root.backdrop_height + 60px;
-            source: Theme.detail_bottom_scrim;
-            image-fit: fill;
-        }
-        if !root.narrow: Image {
-            x: 0px;
-            y: 0px;
-            width: 100%;
-            height: root.backdrop_height + 60px;
-            source: Theme.detail_side_scrim;
-            image-fit: fill;
+            // Keep the artwork edge-to-edge behind the floating controls. The
+            // scrims protect text while preserving the bright upper-right artwork.
+            // Square masks with baked palette colours avoid thin-texture sampling
+            // and offscreen colorization artifacts on resize or page recreation.
+            backdrop_art := Image {
+                x: 0px;
+                // A small parallax lift, capped so the backdrop cannot slide
+                // away while the user browses long episode or stream lists.
+                y: Math.max(root.narrow ? -56px : -80px, Math.min(0px, det_scroll.content-y * 0.12));
+                source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
+                image-fit: cover;
+                width: 100%;
+                height: root.backdrop_height;
+                opacity: 1 - page.backdrop_fade;
+            }
+            Image {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: root.backdrop_height + 60px;
+                source: Theme.detail_bottom_scrim;
+                image-fit: fill;
+            }
+            if !root.narrow: Image {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: root.backdrop_height + 60px;
+                source: Theme.detail_side_scrim;
+                image-fit: fill;
+            }
         }
 
         // Fixed above the artwork but below controls, so parallax/scrolling
@@ -1009,7 +1016,8 @@ export component DetailPage {
 
             det_scroll := Flickable {
                 property <length> viewport_top: self.absolute-position.y;
-                init => { DetailContent.episodes_viewport_top = self.viewport_top; }
+                init => { DetailContent.episodes_viewport_top = self.viewport_top; DetailContent.episodes_scroll_y = self.content-y; }
+                changed content-y => { DetailContent.episodes_scroll_y = self.content-y; }
                 changed viewport_top => { DetailContent.episodes_viewport_top = self.viewport_top; }
                 width: 100%;
                 min-height: 0px;
@@ -1503,10 +1511,11 @@ export component DetailPage {
             safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
             max_h: root.height * 0.85;
             sheet_title: @tr("Release reminders");
+            selected_index: CalendarBridge.detail_reminder_mode;
             items: [
-                { label: (CalendarBridge.detail_reminder_mode == 0 ? "✓ " : "") + @tr("Off"), enabled: true },
-                { label: (CalendarBridge.detail_reminder_mode == 1 ? "✓ " : "") + @tr("Each new episode"), enabled: true },
-                { label: (CalendarBridge.detail_reminder_mode == 2 ? "✓ " : "") + @tr("Full season released"), enabled: true },
+                { label: @tr("Off"), enabled: true },
+                { label: @tr("Each new episode"), enabled: true },
+                { label: @tr("Full season released"), enabled: true },
             ];
             picked(mode) => { root.close_menu(); CalendarBridge.set_detail_reminder(mode); }
             closed => { root.close_menu(); }

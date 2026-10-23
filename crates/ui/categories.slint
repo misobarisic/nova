@@ -1,4 +1,4 @@
-import { Theme, CategoryRow } from "@NovaUiShared";
+import { Theme, Anim, CategoryRow } from "@NovaUiShared";
 
 import { Button } from "std-widgets.slint";
 import { ScrollView } from "scrollview.slint";
@@ -177,7 +177,15 @@ export component CategoryPickerPopup {
                             col: Math.mod(i, root.chip_cols);
                             height: root.width < 430px ? 44px : 30px;
                             border-radius: root.width < 430px ? 22px : 15px;
-                            background: chip_touch.has-hover ? (root.modal_category_flags[i] ? Theme.current.accent_pressed : Theme.current.control_hover) : (root.modal_category_flags[i] ? Theme.current.accent : Theme.current.control);
+                            // Reassigning the animated value on a master-switch change evaluates
+                            // the current duration: 0ms cancels motion before it can resume later.
+                            private property <color> target-background: chip_touch.has-hover ? (root.modal_category_flags[i] ? Theme.current.accent_pressed : Theme.current.control_hover) : (root.modal_category_flags[i] ? Theme.current.accent : Theme.current.control);
+                            private property <color> state-background: self.target-background;
+                            private property <bool> motion-enabled: Anim.enabled;
+                            animate state-background { duration: Anim.control_state; easing: ease-in-out; }
+                            changed target-background => { self.state-background = self.target-background; }
+                            changed motion-enabled => { self.state-background = self.target-background; }
+                            background: Anim.enabled ? self.state-background : self.target-background;
                             border-width: root.kb_active && root.kb_zone == 0 && root.kb_idx == i ? 2px : 0px;
                             border-color: Theme.current.text_bright;
 
@@ -193,7 +201,14 @@ export component CategoryPickerPopup {
                                         width: 100%;
                                         alignment: center;
 
-                                        if root.modal_category_flags[i]: IcCheck {
+                                        category_check := IcCheck {
+                                            private property <float> target-opacity: root.modal_category_flags[i] ? 1 : 0;
+                                            private property <float> state-opacity: self.target-opacity;
+                                            private property <bool> motion-enabled: Anim.enabled;
+                                            animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
+                                            changed target-opacity => { self.state-opacity = self.target-opacity; }
+                                            changed motion-enabled => { self.state-opacity = self.target-opacity; }
+                                            opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
                                             x: (parent.width - self.width) / 2;
                                             width: 12px;
                                             height: 12px;
@@ -204,7 +219,13 @@ export component CategoryPickerPopup {
 
                                 Text {
                                     text: cat.name;
-                                    color: root.modal_category_flags[i] ? Theme.current.on_accent : Theme.current.text_primary;
+                                    private property <color> target-color: root.modal_category_flags[i] ? Theme.current.on_accent : Theme.current.text_primary;
+                                    private property <color> state-color: self.target-color;
+                                    private property <bool> motion-enabled: Anim.enabled;
+                                    animate state-color { duration: Anim.control_state; easing: ease-in-out; }
+                                    changed target-color => { self.state-color = self.target-color; }
+                                    changed motion-enabled => { self.state-color = self.target-color; }
+                                    color: Anim.enabled ? self.state-color : self.target-color;
                                     font-size: 12px;
                                     font-weight: root.modal_category_flags[i] ? 600 : 400;
                                     vertical-alignment: center;

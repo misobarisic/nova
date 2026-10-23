@@ -1,4 +1,4 @@
-import { MoreBridge, ProfileRow, Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { MoreBridge, ProfileRow, Theme, Anim, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { SettingsCard, SettingsInput, PillButton, ToggleSwitch, SettingsBackButton } from "settings-controls.slint";
 import { ControlTouchArea } from "control-input.slint";
@@ -39,7 +39,15 @@ component ProfileChoiceRow inherits Rectangle {
     vertical-stretch: 0;
     border-radius: Theme.card_corner_radius;
     border-width: root.selected || root.focus-visible ? 2px : 1px;
-    border-color: root.focus-visible ? Theme.current.focus_ring : root.selected ? Theme.current.accent : Theme.current.control_border;
+    // Reassigning the animated value on a master-switch change evaluates
+    // the current duration: 0ms cancels motion before it can resume later.
+    private property <color> target-border: root.focus-visible ? Theme.current.focus_ring : root.selected ? Theme.current.accent : Theme.current.control_border;
+    private property <color> state-border: self.target-border;
+    private property <bool> motion-enabled: Anim.enabled;
+    animate state-border { duration: Anim.control_state; easing: ease-in-out; }
+    changed target-border => { self.state-border = self.target-border; }
+    changed motion-enabled => { self.state-border = self.target-border; }
+    border-color: Anim.enabled ? self.state-border : self.target-border;
     background: touch.feedback-active && root.interactive ? Theme.current.settings_control : Theme.current.card;
     opacity: root.interactive ? 1 : 0.45;
     private property <bool> focus-visible: SettingsStyle.keyboard-mode && (root.focused || row_focus.has-focus);
@@ -70,11 +78,28 @@ component ProfileChoiceRow inherits Rectangle {
         }
         Rectangle {
             width: InterfaceStyle.tv ? 32px : 24px; height: self.width;
-            if root.selected: Rectangle {
+            // Retain both indicators so selection can crossfade in place.
+            selection_check := Rectangle {
                 width: 100%; height: 100%; border-radius: self.width / 2; background: Theme.current.accent;
+                private property <float> target-opacity: root.selected ? 1 : 0;
+                private property <float> state-opacity: self.target-opacity;
+                private property <bool> motion-enabled: Anim.enabled;
+                animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
+                changed target-opacity => { self.state-opacity = self.target-opacity; }
+                changed motion-enabled => { self.state-opacity = self.target-opacity; }
+                opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
                 IcCheck { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; fill: Theme.current.on_accent; }
             }
-            if !root.selected: IcChevronRight { width: 100%; height: 100%; fill: Theme.current.text_muted; }
+            IcChevronRight {
+                width: 100%; height: 100%; fill: Theme.current.text_muted;
+                private property <float> target-opacity: root.selected ? 0 : 1;
+                private property <float> state-opacity: self.target-opacity;
+                private property <bool> motion-enabled: Anim.enabled;
+                animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
+                changed target-opacity => { self.state-opacity = self.target-opacity; }
+                changed motion-enabled => { self.state-opacity = self.target-opacity; }
+                opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
+            }
         }
     }
     forward-focus: row_focus;

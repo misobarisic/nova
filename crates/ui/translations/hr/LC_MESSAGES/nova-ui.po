@@ -5267,3 +5267,57 @@ msgstr "Svaka nova epizoda"
 
 msgid "Full season released"
 msgstr "Cijela sezona objavljena"
+
+msgid "Delete downloaded file"
+msgstr "Izbriši preuzetu datoteku"
+
+msgid "Cancel download"
+msgstr "Otkaži preuzimanje"
+
+msgid "Delete downloaded file?"
+msgstr "Izbrisati preuzetu datoteku?"
+
+msgid "This file will be deleted from this device."
+msgstr "Ova će datoteka biti izbrisana s ovog uređaja."
+
+msgid "Delete file"
+msgstr "Izbriši datoteku"
+
+msgid "Include profile: {}"
+msgstr "Uključi profil: {}"
+
+msgid "Skipping keeps this profile's target, component and conflict choices for later."
+msgstr "Preskakanje zadržava odredište, odabrane dijelove i izbore pri sukobu za ovaj profil."
+
+msgid "Use Up and Down to review every preview row. Long rows scroll before focus moves to the next action."
+msgstr "Tipkama gore i dolje pregledajte svaki red pregleda. Dugi redovi pomiču se prije prelaska na sljedeću radnju."
+
+msgid "These local copies let you undo imports. Deleting them is permanent."
+msgstr "Ove lokalne kopije omogućuju poništavanje uvoza. Njihovo brisanje je trajno."
+
+msgid "Permanently delete recovery copies"
+msgstr "Trajno izbriši kopije za oporavak"
+
+msgid "Export options changed; preview this export again"
+msgstr "Postavke izvoza su promijenjene; ponovno pregledajte izvoz"
+
+msgid "Preview this export again before saving"
+msgstr "Ponovno pregledajte izvoz prije spremanja"
+
+msgid "Selection changed; rebuild the preview before importing"
+msgstr "Odabir je promijenjen; ponovno pripremite pregled prije uvoza"
+
+msgid "Recovery copies changed. Review them again before deleting."
+msgstr "Kopije za oporavak su promijenjene. Ponovno ih pregledajte prije brisanja."
+
+msgid "There are no recovery copies to delete"
+msgstr "Nema kopija za oporavak za brisanje"
+
+msgid "Unreadable recovery copy"
+msgstr "Nečitljiva kopija za oporavak"
+
+msgid "Delete {n} recovery copy permanently?"
+msgid_plural "Delete {n} recovery copies permanently?"
+msgstr[0] "Trajno izbrisati {n} kopiju za oporavak?"
+msgstr[1] "Trajno izbrisati {n} kopije za oporavak?"
+msgstr[2] "Trajno izbrisati {n} kopija za oporavak?"

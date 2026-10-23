@@ -18,6 +18,9 @@ mod layout;
 #[path = "settings_navigation/navigation.rs"]
 mod navigation;
 
+#[path = "settings_navigation/search.rs"]
+mod search;
+
 #[path = "settings_navigation/overflow.rs"]
 mod overflow;
 

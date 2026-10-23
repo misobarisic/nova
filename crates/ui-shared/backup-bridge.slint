@@ -6,6 +6,8 @@ export global BackupBridge {
     in-out property <bool> importing;
     in-out property <bool> preview_ready;
     in-out property <bool> replace;
+    in-out property <bool> recovery_confirmation;
+    in-out property <[string]> recovery_rows;
     in-out property <string> status;
     in-out property <[BackupOption]> profiles;
     in-out property <[BackupOption]> components;
@@ -26,4 +28,6 @@ export global BackupBridge {
     callback apply_import();
     callback undo();
     callback delete_recovery();
+    callback cancel_delete_recovery();
+    callback confirm_delete_recovery();
 }

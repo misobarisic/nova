@@ -825,3 +825,247 @@ fn controls_retain_outgoing_snapshot_disable_input_and_cancel_stale_exit_on_reop
     assert!(page().is_none(), "reduced-motion navigation is immediate");
     assert_eq!(closed.get(), 3);
 }
+
+#[test]
+fn tv_stream_offers_reveal_the_action_and_description_in_both_directions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tv_stream_offers_reveal_the_action_and_description_in_both_directions"
+    )) {
+        return;
+    }
+    use slint::{VecModel, platform::Key};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("offer-session".into());
+    app.set_remote_offers(
+        Rc::new(VecModel::from(
+            (0..12)
+                .map(|index| nova::RemoteOfferRow {
+                    id: format!("offer-{index}").into(),
+                    title: format!("Stream offer {index}").into(),
+                    description: format!(
+                        "Release {index}: 1080p with multiple audio and subtitle tracks. \
+                         This description wraps across lines so the selected source details \
+                         must be revealed along with its action."
+                    )
+                    .into(),
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let record = picked.clone();
+    app.on_remote_stream_picked(move |index| record.borrow_mut().push(index));
+    let backs = Rc::new(std::cell::Cell::new(0));
+    let record = backs.clone();
+    app.on_remote_device_close(move || record.set(record.get() + 1));
+    app.window().show().unwrap();
+    let mut expected = Vec::new();
+    for (width, height) in [(640, 480), (1280, 720)] {
+        app.set_remote_controls_open(false);
+        settle_remote();
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_remote_controls_open(true);
+        settle_remote();
+        let viewport =
+            ElementHandle::find_by_element_id(&app, "RemoteControlsPage::controls_scroll")
+                .next()
+                .unwrap();
+        let assert_revealed = |index: i32| {
+            let title = format!("Stream offer {index}");
+            let row = ElementHandle::find_by_accessible_label(&app, &title)
+                .find(|item| item.accessible_role() == Some(AccessibleRole::Groupbox))
+                .unwrap_or_else(|| panic!("selected offer {index} must be accessible"));
+            let top = row.absolute_position().y;
+            let bottom = top + row.size().height;
+            let viewport_top = viewport.absolute_position().y;
+            let viewport_bottom = viewport_top + viewport.size().height;
+            assert!(
+                top >= viewport_top - 0.5 && bottom <= viewport_bottom + 0.5,
+                "offer {index} including description must fit at {width}x{height}: \
+                 {top}..{bottom}, viewport {viewport_top}..{viewport_bottom}"
+            );
+        };
+        for index in 0..12 {
+            key(&app, Key::DownArrow);
+            settle_remote();
+            assert_revealed(index);
+            key(&app, Key::Return);
+            assert_eq!(picked.borrow().last(), Some(&index));
+            expected.push(index);
+        }
+        for index in (0..11).rev() {
+            key(&app, Key::UpArrow);
+            settle_remote();
+            assert_revealed(index);
+            key(&app, Key::Return);
+            assert_eq!(picked.borrow().last(), Some(&index));
+            expected.push(index);
+        }
+    }
+    assert_eq!(*picked.borrow(), expected);
+    key(&app, Key::Escape);
+    assert_eq!(backs.get(), 1, "Back from an offer detaches its controls");
+}
+
+#[test]
+fn tv_long_stream_description_pages_before_leaving_its_visible_action() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tv_long_stream_description_pages_before_leaving_its_visible_action"
+    )) {
+        return;
+    }
+    use slint::{VecModel, platform::Key};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("long-offer-session".into());
+    app.set_remote_offers(
+        Rc::new(VecModel::from(vec![
+            nova::RemoteOfferRow {
+                id: "previous".into(),
+                title: "Previous offer".into(),
+                ..Default::default()
+            },
+            nova::RemoteOfferRow {
+                id: "long".into(),
+                title: "Long description offer".into(),
+                description:
+                    "Release details with audio languages, subtitle tracks and source metadata. "
+                        .repeat(300)
+                        .into(),
+            },
+            nova::RemoteOfferRow {
+                id: "next".into(),
+                title: "Next offer".into(),
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let record = picked.clone();
+    app.on_remote_stream_picked(move |index| record.borrow_mut().push(index));
+    app.window().show().unwrap();
+    for (width, height) in [(640, 480), (1280, 720)] {
+        app.set_remote_controls_open(false);
+        settle_remote();
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_remote_controls_open(true);
+        settle_remote();
+        key(&app, Key::DownArrow);
+        settle_remote();
+        key(&app, Key::DownArrow);
+        settle_remote();
+        let action = ElementHandle::find_by_accessible_label(&app, "Long description offer")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap();
+        let description =
+            ElementHandle::find_by_element_id(&app, "RemoteStreamOffer::offer_description")
+                .max_by(|left, right| {
+                    left.size()
+                        .height
+                        .partial_cmp(&right.size().height)
+                        .unwrap()
+                })
+                .unwrap();
+        let viewport =
+            ElementHandle::find_by_element_id(&app, "RemoteStreamOffer::description_scroll")
+                .max_by(|left, right| {
+                    left.size()
+                        .height
+                        .partial_cmp(&right.size().height)
+                        .unwrap()
+                })
+                .unwrap();
+        assert!(
+            (viewport.absolute_position().y
+                - action.absolute_position().y
+                - action.size().height
+                - 4.0)
+                .abs()
+                < 0.5,
+            "description viewport y={} must follow action y={}, height={} by 4px",
+            viewport.absolute_position().y,
+            action.absolute_position().y,
+            action.size().height
+        );
+        assert!(description.size().height > viewport.size().height * 2.0);
+        let assert_visible_action = || {
+            let top = action.absolute_position().y;
+            assert!(
+                top >= 18.0 - 0.5 && top + action.size().height <= height as f32 - 18.0 + 0.5,
+                "long offer action must remain visible at {width}x{height}"
+            );
+        };
+        assert_visible_action();
+        assert!((description.absolute_position().y - viewport.absolute_position().y).abs() < 0.5);
+        let mut pages = 0;
+        while description.absolute_position().y + description.size().height
+            > viewport.absolute_position().y + viewport.size().height + 0.5
+        {
+            let previous = description.absolute_position().y;
+            key(&app, Key::DownArrow);
+            settle_remote();
+            assert!(description.absolute_position().y < previous - 0.5);
+            assert_visible_action();
+            key(&app, Key::Return);
+            assert_eq!(picked.borrow().last(), Some(&1), "paging retains the offer");
+            pages += 1;
+            assert!(pages < 100, "the full description must be reachable");
+        }
+        assert!(pages > 1);
+        key(&app, Key::DownArrow);
+        settle_remote();
+        key(&app, Key::Return);
+        assert_eq!(
+            picked.borrow().last(),
+            Some(&2),
+            "Down leaves after the last page"
+        );
+
+        key(&app, Key::UpArrow);
+        settle_remote();
+        assert_visible_action();
+        assert!(
+            (description.absolute_position().y + description.size().height
+                - viewport.absolute_position().y
+                - viewport.size().height)
+                .abs()
+                < 0.5
+        );
+        let mut reverse_pages = 0;
+        while description.absolute_position().y < viewport.absolute_position().y - 0.5 {
+            let previous = description.absolute_position().y;
+            key(&app, Key::UpArrow);
+            settle_remote();
+            assert!(description.absolute_position().y > previous + 0.5);
+            assert_visible_action();
+            key(&app, Key::Return);
+            assert_eq!(picked.borrow().last(), Some(&1));
+            reverse_pages += 1;
+            assert!(reverse_pages < 100);
+        }
+        assert!(reverse_pages > 1);
+        key(&app, Key::UpArrow);
+        settle_remote();
+        key(&app, Key::Return);
+        assert_eq!(
+            picked.borrow().last(),
+            Some(&0),
+            "Up leaves after the first page"
+        );
+    }
+}

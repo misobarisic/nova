@@ -1,7 +1,7 @@
 //! Detail library controls: save state in the hero, saved-only sync/options,
 //! and the same watched/status/removal actions as a library card.
 
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, LogicalPosition, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -452,16 +452,22 @@ fn release_reminders_live_in_options_with_explicit_modes_and_safe_back() {
             1,
             "closing the mode chooser restores Detail keyboard navigation"
         );
-        calendar.set_detail_reminder_mode(2);
-        click(&app, element(&app, "DetailPage::library_options_button"));
-        click_label(&app, "Release reminders");
-        assert!(
-            ElementHandle::find_by_accessible_label(&app, "✓ Full season released")
-                .next()
-                .is_some()
-        );
-        app.set_system_back_request(app.get_system_back_request() + 1);
-        settle();
+        for mode in 0..=2 {
+            calendar.set_detail_reminder_mode(mode);
+            click(&app, element(&app, "DetailPage::library_options_button"));
+            click_label(&app, "Release reminders");
+            for (index, label) in ["Off", "Each new episode", "Full season released"]
+                .into_iter()
+                .enumerate()
+            {
+                let row = ElementHandle::find_by_accessible_label(&app, label)
+                    .find(|row| row.accessible_role() == Some(AccessibleRole::RadioButton))
+                    .expect("reminder mode is a labelled radio choice");
+                assert_eq!(row.accessible_checked(), Some(index as i32 == mode));
+            }
+            app.set_system_back_request(app.get_system_back_request() + 1);
+            settle();
+        }
         assert!(app.get_modal_visible());
         assert_eq!(
             *modes.borrow(),

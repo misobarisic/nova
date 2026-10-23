@@ -7,8 +7,10 @@ profile PINs in plaintext. Addon package binaries and compatible device
 preferences are separate, unchecked options. Downloads, device sync identity,
 paired peers, notification receipts and running service jobs are excluded.
 
-To import, choose a file, map each source profile to a new or existing profile,
-select components and build the preview. New is the default target, including
+To import, choose a file, use **Include profile** to select sources, map each
+included source to a new or existing profile, select components and build the
+preview. Skipping a source keeps its mapping, component and conflict choices for
+later; skipped sources do not create profiles or change existing targets. New is the default target, including
 for the common `default` source ID. Two sources cannot share one target. A
 retired profile ID cannot be restored. Existing target names and the selected
 profile remain unchanged. Protected targets use their ordinary management PIN.
@@ -18,7 +20,10 @@ backup for conflicts** for a component to choose its archived conflicts.
 Replace changes only selected components and deletes records missing from those
 components. Empty and omitted components are different. The preview reports
 archive/new/identical/conflicting/updated/preserved/deleted records and examples
-of conflicting identities. Records include whole order/cursor registers where
+of conflicting identities. Up and Down visit every preview row before the Import
+action; rows taller than the screen scroll in readable steps before focus moves
+on. Page Up and Page Down also scroll the selected preview row. Records include
+whole order/cursor registers where
 those values are atomic. Library title identity includes media type; categories
 match their exact stored name. Unknown categories are omitted from imported
 assignments and reported. Missing addon packages are reported as requiring
@@ -69,7 +74,10 @@ local/peer edits and unrelated new records remain. A component's Use backup
 choice can explicitly override those conflicts. Undo creates compensating edits
 at new sync versions; it cannot undo a completed external API operation. It
 leaves newly created profile identities available rather than retiring them.
-**Delete recovery copies** removes the local copies. Recovery copies are local
+**Delete recovery copies** first lists the retained copies with their dates,
+profiles and component counts, then asks for permanent deletion. Cancel is the
+default; Back or Cancel preserves every copy. If the inventory changes during
+review, deletion requires a fresh confirmation. Recovery copies are local
 plaintext data, like the exports.
 
 Desktop exports fsync a temporary file before atomic replacement (including

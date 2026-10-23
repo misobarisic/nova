@@ -335,3 +335,262 @@ fn tv_library_keeps_standard_columns_and_remote_context_actions() {
     assert_eq!(app.get_library_min_cols(), 8);
     assert!((elements(&app, "library_card")[0].size().width - standard_width).abs() < 1.0);
 }
+
+#[test]
+fn desktop_keyboard_reaches_library_toolbar_and_search_without_entry_autofocus() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::desktop_keyboard_reaches_library_toolbar_and_search_without_entry_autofocus"
+    )) {
+        return;
+    }
+    use slint::platform::{Key, WindowEvent};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_library(true);
+    app.set_library_category_names(Rc::new(VecModel::from(vec!["Watching".into()])).into());
+    app.set_library(
+        Rc::new(VecModel::from(vec![nova::MediaCard {
+            id: "keyboard-title".into(),
+            title: "Keyboard title".into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    let changes = Rc::new(RefCell::new(0));
+    let record = changes.clone();
+    app.on_library_view_changed(move || *record.borrow_mut() += 1);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let record = opened.clone();
+    app.on_library_item_picked(move |index| record.borrow_mut().push(index));
+    let key = |text: slint::SharedString| {
+        app.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+        settle();
+    };
+    app.window().show().unwrap();
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        app.set_library_kb_zone(0);
+        settle();
+        key("x".into());
+        assert!(!app.get_library_search_open());
+        assert!(app.get_library_query().is_empty());
+
+        // The existing arrow route includes the toolbar between filters/cards.
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 1);
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 3);
+        for _ in 0..3 {
+            key(Key::LeftArrow.into());
+        }
+        let before = *changes.borrow();
+        key(Key::Return.into());
+        assert_eq!(*changes.borrow(), before + 1, "sort refreshes its view");
+        key(Key::RightArrow.into());
+        key(Key::Return.into());
+        assert!(!app.get_library_list_view());
+        key(Key::RightArrow.into());
+        key(Key::Return.into());
+        assert!(app.get_library_list_view());
+        key(Key::RightArrow.into());
+        key(Key::Return.into());
+        assert!(app.get_library_search_open());
+        key("needle".into());
+        assert_eq!(app.get_library_query(), "needle");
+        key(Key::Escape.into());
+        assert!(!app.get_library_search_open());
+        assert!(app.get_library_query().is_empty());
+        assert_eq!(app.get_library_kb_zone(), 3);
+
+        // Tab and Shift+Tab share toolbar state, with no pointer/editor needed.
+        app.set_library_kb_zone(0);
+        key(Key::Tab.into()); // sort
+        key(Key::Tab.into()); // grid
+        key(Key::Tab.into()); // list
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Shift.into(),
+        });
+        key(Key::Tab.into()); // back to grid
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Shift.into(),
+        });
+        key(Key::Return.into());
+        assert!(!app.get_library_list_view(), "Shift+Tab returns to grid");
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 2);
+        key(Key::Return.into());
+
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        key("f".into());
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+        assert!(app.get_library_search_open(), "Ctrl+F opens Library search");
+        assert_eq!(app.get_library_kb_zone(), 3);
+        key("retained".into());
+        assert_eq!(app.get_library_query(), "retained");
+        key(Key::Tab.into());
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 2);
+        key(Key::Return.into());
+
+        // Returning to Library preserves its card and query, without typing
+        // into the editor until search is explicitly activated again.
+        app.set_modal_visible(true);
+        settle();
+        app.set_modal_visible(false);
+        settle();
+        assert_eq!(app.get_library_kb_zone(), 2);
+        key("x".into());
+        assert_eq!(app.get_library_query(), "retained");
+        key(Key::Escape.into());
+        assert!(!app.get_library_search_open());
+    }
+    assert_eq!(*opened.borrow(), [0, 0, 0, 0]);
+
+    // With no filters or results the toolbar remains reachable and usable.
+    app.set_library_category_names(Default::default());
+    app.set_library(Default::default());
+    app.set_library_kb_zone(0);
+    key(Key::DownArrow.into());
+    assert_eq!(app.get_library_kb_zone(), 3);
+    key(Key::RightArrow.into());
+    key(Key::RightArrow.into());
+    key(Key::RightArrow.into());
+    key(Key::Return.into());
+    assert!(app.get_library_search_open());
+}
+
+#[test]
+fn library_search_shortcut_works_while_smart_collections_owns_focus() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::library_search_shortcut_works_while_smart_collections_owns_focus"
+    )) {
+        return;
+    }
+    use slint::platform::{Key, WindowEvent};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_show_library(true);
+    app.set_library(
+        Rc::new(VecModel::from(vec![nova::MediaCard {
+            id: "keyboard-title".into(),
+            title: "Keyboard title".into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    let smart = app.global::<nova::SmartCollectionsBridge>();
+    smart.set_rows(
+        Rc::new(VecModel::from(vec![nova::SmartCollectionRow {
+            id: "weekend".into(),
+            name: "Weekend".into(),
+        }]))
+        .into(),
+    );
+    smart.on_selected(|_| panic!("page keyboard shortcuts must not pick a smart collection"));
+    let key = |text: slint::SharedString| {
+        app.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+        settle();
+    };
+    app.window().show().unwrap();
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        app.set_library_kb_zone(0);
+        settle();
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 4);
+        // Tab leaves the rail's native scope for Library's Sort control.
+        key(Key::Tab.into());
+        assert_eq!(app.get_library_kb_zone(), 3);
+        key("x".into());
+        assert!(!app.get_library_search_open());
+        assert!(app.get_library_query().is_empty());
+        let previous_sort = app.get_library_sort();
+        key(Key::Return.into());
+        assert_eq!(app.get_library_sort(), (previous_sort + 1) % 3);
+        key(Key::UpArrow.into());
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 4);
+
+        // Shift+Tab targets the Search button, without opening its editor.
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Shift.into(),
+        });
+        key(Key::Tab.into());
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Shift.into(),
+        });
+        assert_eq!(app.get_library_kb_zone(), 3);
+        key("x".into());
+        assert!(!app.get_library_search_open());
+        assert!(app.get_library_query().is_empty());
+        key(Key::Return.into());
+        assert!(app.get_library_search_open());
+        key(Key::Escape.into());
+        key(Key::UpArrow.into());
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 4);
+
+        // An arrow is handled by the rail itself, ensuring this exercises its
+        // separate FocusScope instead of only setting Library's zone value.
+        key(Key::RightArrow.into());
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        key("f".into());
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+        assert!(app.get_library_search_open());
+        assert_eq!(app.get_library_kb_zone(), 3);
+        assert!(app.get_library_query().is_empty());
+        key("retained".into());
+        assert_eq!(app.get_library_query(), "retained");
+        key(Key::Tab.into());
+        key(Key::DownArrow.into());
+        assert_eq!(app.get_library_kb_zone(), 2);
+        app.set_modal_visible(true);
+        settle();
+        app.set_modal_visible(false);
+        settle();
+        assert_eq!(app.get_library_kb_zone(), 2);
+        key("x".into());
+        assert_eq!(app.get_library_query(), "retained");
+        key(Key::UpArrow.into()); // toolbar
+        key(Key::UpArrow.into()); // page navigation
+        key(Key::DownArrow.into()); // smart collections
+        assert_eq!(app.get_library_kb_zone(), 4);
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        key("f".into());
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+        assert!(
+            app.get_library_search_open(),
+            "Ctrl+F keeps existing search open"
+        );
+        assert_eq!(app.get_library_query(), "retained");
+        key(Key::Escape.into());
+        assert!(!app.get_library_search_open());
+        assert!(app.get_library_query().is_empty());
+    }
+}

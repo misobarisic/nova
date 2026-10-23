@@ -1,7 +1,7 @@
 use super::*;
 use nova_ui::backend_text as text;
 use nova_ui_shared::{BackupMapping, BackupOption};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -11,10 +11,36 @@ struct State {
     preview: Option<Preview>,
     selected_profiles: BTreeSet<String>,
     selected_components: BTreeSet<String>,
+    recovery_review: Option<Vec<(String, String)>>,
 }
 fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
     std::rc::Rc::new(VecModel::from(rows)).into()
 }
+fn update_rows<T: Clone + PartialEq + 'static>(
+    current: &ModelRc<T>,
+    rows: Vec<T>,
+    same_id: impl Fn(&T, &T) -> bool,
+) -> Option<ModelRc<T>> {
+    if let Some(existing) = current.as_any().downcast_ref::<VecModel<T>>()
+        && existing.row_count() == rows.len()
+        && existing
+            .iter()
+            .zip(&rows)
+            .all(|(old, row)| same_id(&old, row))
+    {
+        // A checked change must reach the existing toggle delegate, so its
+        // thumb and checkmark animations can interpolate from the old value.
+        for (index, row) in rows.into_iter().enumerate() {
+            if existing.row_data(index).as_ref() != Some(&row) {
+                existing.set_row_data(index, row);
+            }
+        }
+        None
+    } else {
+        Some(model(rows))
+    }
+}
+
 fn label(name: &str) -> String {
     text::tr(
         adapters::COMPONENTS
@@ -37,102 +63,125 @@ fn changed(app: &crate::AppWindow, state: &mut State) {
 }
 fn publish_options(app: &crate::AppWindow, state: &State) {
     let ui = app.global::<crate::BackupBridge>();
-    if let Some(archive) = &state.archive {
-        ui.set_profiles(model(Vec::<BackupOption>::new()));
-        ui.set_mappings(model(
-            state
-                .choices
-                .iter()
-                .map(|choice| BackupMapping {
-                    id: choice.source.clone().into(),
-                    label: choice.name.clone().into(),
-                    target: if choice.create {
-                        text::tr("Create new profile").to_string()
-                    } else {
-                        profiles::list()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .find(|profile| profile.id == choice.target)
-                            .map(|profile| profile.name)
-                            .unwrap_or_else(|| choice.target.clone())
-                    }
-                    .into(),
-                })
-                .collect(),
-        ));
-        ui.set_components(model(
-            state
-                .choices
-                .iter()
-                .flat_map(|choice| {
-                    archive
-                        .manifest
-                        .profiles
-                        .iter()
-                        .find(|profile| profile.archive_profile_id == choice.source)
+    let (profile_rows, mapping_rows, component_rows, conflict_rows) = if let Some(archive) =
+        &state.archive
+    {
+        let profile_rows = state
+            .choices
+            .iter()
+            .map(|choice| BackupOption {
+                id: choice.source.clone().into(),
+                label: choice.name.clone().into(),
+                checked: choice.included,
+            })
+            .collect();
+        let mapping_rows = state
+            .choices
+            .iter()
+            .map(|choice| BackupMapping {
+                id: choice.source.clone().into(),
+                label: choice.name.clone().into(),
+                target: if choice.create {
+                    text::tr("Create new profile").to_string()
+                } else {
+                    profiles::list()
+                        .unwrap_or_default()
                         .into_iter()
-                        .flat_map(move |profile| {
-                            profile
-                                .components
-                                .iter()
-                                .filter(move |component| {
-                                    archive.payloads.contains_key(&(
-                                        choice.source.clone(),
-                                        component.name.clone(),
-                                    ))
-                                })
-                                .map(move |component| BackupOption {
-                                    id: format!("{}\0{}", choice.source, component.name).into(),
-                                    label: format!(
-                                        "{} / {} ({})",
-                                        choice.name,
-                                        label(&component.name),
-                                        component.item_count
-                                    )
-                                    .into(),
-                                    checked: choice.components.contains(&component.name),
-                                })
-                        })
-                })
-                .collect(),
-        ));
-        ui.set_conflicts(model(
-            state
-                .choices
-                .iter()
-                .flat_map(|choice| {
-                    choice.components.iter().map(move |name| BackupOption {
-                        id: format!("{}\0{name}", choice.source).into(),
-                        label: format!("{} / {}", choice.name, label(name)).into(),
-                        checked: choice.use_backup.contains(name),
+                        .find(|profile| profile.id == choice.target)
+                        .map(|profile| profile.name)
+                        .unwrap_or_else(|| choice.target.clone())
+                }
+                .into(),
+            })
+            .collect();
+        let component_rows = state
+            .choices
+            .iter()
+            .filter(|choice| choice.included)
+            .flat_map(|choice| {
+                archive
+                    .manifest
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.archive_profile_id == choice.source)
+                    .into_iter()
+                    .flat_map(move |profile| {
+                        profile
+                            .components
+                            .iter()
+                            .filter(move |component| {
+                                archive
+                                    .payloads
+                                    .contains_key(&(choice.source.clone(), component.name.clone()))
+                            })
+                            .map(move |component| BackupOption {
+                                id: format!("{}\0{}", choice.source, component.name).into(),
+                                label: format!(
+                                    "{} / {} ({})",
+                                    choice.name,
+                                    label(&component.name),
+                                    component.item_count
+                                )
+                                .into(),
+                                checked: choice.components.contains(&component.name),
+                            })
                     })
+            })
+            .collect();
+        let conflict_rows = state
+            .choices
+            .iter()
+            .filter(|choice| choice.included)
+            .flat_map(|choice| {
+                choice.components.iter().map(move |name| BackupOption {
+                    id: format!("{}\0{name}", choice.source).into(),
+                    label: format!("{} / {}", choice.name, label(name)).into(),
+                    checked: choice.use_backup.contains(name),
                 })
-                .collect(),
-        ));
+            })
+            .collect();
+        (profile_rows, mapping_rows, component_rows, conflict_rows)
     } else {
-        ui.set_profiles(model(
-            profiles::list()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|profile| BackupOption {
-                    id: profile.id.clone().into(),
-                    label: profile.name.into(),
-                    checked: state.selected_profiles.contains(&profile.id),
-                })
-                .collect(),
-        ));
-        ui.set_mappings(model(Vec::<BackupMapping>::new()));
-        ui.set_components(model(
-            adapters::COMPONENTS
-                .iter()
-                .map(|(name, _)| BackupOption {
-                    id: (*name).into(),
-                    label: label(name).into(),
-                    checked: state.selected_components.contains(*name),
-                })
-                .collect(),
-        ));
-        ui.set_conflicts(model(Vec::<BackupOption>::new()));
+        let profile_rows = profiles::list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|profile| BackupOption {
+                id: profile.id.clone().into(),
+                label: profile.name.into(),
+                checked: state.selected_profiles.contains(&profile.id),
+            })
+            .collect();
+        let mapping_rows = Vec::<BackupMapping>::new();
+        let component_rows = adapters::COMPONENTS
+            .iter()
+            .map(|(name, _)| BackupOption {
+                id: (*name).into(),
+                label: label(name).into(),
+                checked: state.selected_components.contains(*name),
+            })
+            .collect();
+        let conflict_rows = Vec::<BackupOption>::new();
+        (profile_rows, mapping_rows, component_rows, conflict_rows)
+    };
+    if let Some(rows) = update_rows(&ui.get_profiles(), profile_rows, |old, row| {
+        old.id == row.id
+    }) {
+        ui.set_profiles(rows);
+    }
+    if let Some(rows) = update_rows(&ui.get_mappings(), mapping_rows, |old, row| {
+        old.id == row.id
+    }) {
+        ui.set_mappings(rows);
+    }
+    if let Some(rows) = update_rows(&ui.get_components(), component_rows, |old, row| {
+        old.id == row.id
+    }) {
+        ui.set_components(rows);
+    }
+    if let Some(rows) = update_rows(&ui.get_conflicts(), conflict_rows, |old, row| {
+        old.id == row.id
+    }) {
+        ui.set_conflicts(rows);
     }
     ui.set_importing(state.archive.is_some());
 }
@@ -162,6 +211,7 @@ pub(super) fn install(app: &crate::AppWindow) {
         state.archive = None;
         state.choices.clear();
         state.preview = None;
+        state.recovery_review = None;
         state.selected_profiles = BTreeSet::from([profiles::current_id()]);
         state.selected_components = adapters::COMPONENTS
             .iter()
@@ -169,6 +219,8 @@ pub(super) fn install(app: &crate::AppWindow) {
             .map(|(name, _)| (*name).into())
             .collect();
         let ui = app.global::<crate::BackupBridge>();
+        ui.set_recovery_confirmation(false);
+        ui.set_recovery_rows(model(Vec::<slint::SharedString>::new()));
         ui.set_open(true);
         ui.set_busy(false);
         ui.set_replace(false);
@@ -178,10 +230,13 @@ pub(super) fn install(app: &crate::AppWindow) {
         publish_options(&app, &state);
     });
     let weak = app.as_weak();
+    let state_closed = state.clone();
     ui.on_closed(move || {
         if let Some(app) = weak.upgrade() {
             let ui = app.global::<crate::BackupBridge>();
             if !ui.get_busy() {
+                state_closed.lock().unwrap().recovery_review = None;
+                ui.set_recovery_confirmation(false);
                 ui.set_open(false);
                 app::bridge::with_global_bridge(|bridge| bridge.close_profile_management());
                 app.recover_back_focus();
@@ -239,6 +294,18 @@ pub(super) fn install(app: &crate::AppWindow) {
     ui.on_toggle_profile(move |id| {
         if let Some(app) = weak.upgrade() {
             let mut state = state_profiles.lock().unwrap();
+            if state.archive.is_some() {
+                if let Some(choice) = state
+                    .choices
+                    .iter_mut()
+                    .find(|choice| choice.source == id.as_str())
+                {
+                    choice.included = !choice.included;
+                }
+                changed(&app, &mut state);
+                publish_options(&app, &state);
+                return;
+            }
             if !state.selected_profiles.contains(id.as_str())
                 && !app::bridge::with_global_bridge(|bridge| {
                     bridge.require_target_profile_management(id.as_str())
@@ -416,7 +483,7 @@ pub(super) fn install(app: &crate::AppWindow) {
             let result=result.and_then(|bytes|bytes.map(|bytes|archive::decode(&bytes).and_then(|archive|super::choices(&archive).map(|choices|(archive,choices)))).transpose());
             profiles::with_context(context,|| {let _=profiles::invoke_from_event_loop(move ||if let Some(app)=weak.upgrade() {
                 app.global::<crate::BackupBridge>().set_busy(false);
-                match result {Ok(Some((archive,choices)))=>{let unsupported=archive.unsupported.join(", ");let mut state=state.lock().unwrap();state.archive=Some(archive);state.choices=choices;changed(&app,&mut state);publish_options(&app,&state);if unsupported.is_empty() {status(&app,"Choose target profiles and components, then rebuild the preview");} else {status(&app,&format!("{}: {unsupported}",text::tr("Unsupported optional components")));}},Ok(None)=>status(&app,"Import cancelled"),Err(error)=>status(&app,&error)}
+                match result {Ok(Some((archive,choices)))=>{let unsupported=archive.unsupported.join(", ");let mut state=state.lock().unwrap();state.archive=Some(archive);state.choices=choices;app.global::<crate::BackupBridge>().set_replace(false);changed(&app,&mut state);publish_options(&app,&state);if unsupported.is_empty() {status(&app,"Choose target profiles and components, then rebuild the preview");} else {status(&app,&format!("{}: {unsupported}",text::tr("Unsupported optional components")));}},Ok(None)=>status(&app,"Import cancelled"),Err(error)=>status(&app,&error)}
             });});
         });
     });
@@ -440,7 +507,7 @@ pub(super) fn install(app: &crate::AppWindow) {
         if !targets_allowed(
             choices
                 .iter()
-                .filter(|choice| !choice.create && !choice.components.is_empty())
+                .filter(|choice| choice.included && !choice.create && !choice.components.is_empty())
                 .map(|choice| choice.target.clone()),
         ) {
             return;
@@ -465,8 +532,23 @@ pub(super) fn install(app: &crate::AppWindow) {
             return;
         }
         let Some(app) = weak.upgrade() else { return };
-        let Some(preview) = state_apply.lock().unwrap().preview.clone() else {
-            return;
+        let preview = {
+            let mut state = state_apply.lock().unwrap();
+            let Some(preview) = state.preview.clone() else {
+                return;
+            };
+            if preview.selection != state.choices
+                || state.archive.as_ref().map(|archive| &archive.checksum)
+                    != Some(&preview.archive.checksum)
+            {
+                changed(&app, &mut state);
+                status(
+                    &app,
+                    "Selection changed; rebuild the preview before importing",
+                );
+                return;
+            }
+            preview
         };
         let targets = preview
             .choices
@@ -545,7 +627,7 @@ pub(super) fn install(app: &crate::AppWindow) {
                     if let Ok(preview) = &result {
                         let mut state = state.lock().unwrap();
                         state.archive = Some(preview.archive.clone());
-                        state.choices = preview.choices.clone();
+                        state.choices = preview.selection.clone();
                         publish_options(&app, &state);
                         app.global::<crate::BackupBridge>().set_replace(true);
                     }
@@ -555,22 +637,78 @@ pub(super) fn install(app: &crate::AppWindow) {
         });
     });
     let weak = app.as_weak();
+    let state_delete = state.clone();
     ui.on_delete_recovery(move || {
         if !allowed() {
             return;
         }
         let Some(app) = weak.upgrade() else { return };
-        let result = nova_storage::try_scan_prefix(RECOVERY_PREFIX).and_then(|rows| {
-            nova_storage::try_write_batch(
-                &rows
-                    .into_iter()
-                    .map(|(key, _)| (key, None))
-                    .collect::<Vec<_>>(),
-            )
-        });
-        match result {
+        if app.global::<crate::BackupBridge>().get_busy() {
+            return;
+        }
+        match recovery_inventory() {
+            Ok(rows) if rows.is_empty() => status(&app, "There are no recovery copies to delete"),
+            Ok(rows) => {
+                let inventory = rows
+                    .iter()
+                    .map(|(key, raw)| {
+                        match serde_json::from_str::<Receipt>(raw) {
+                            Ok(receipt) => format!(
+                                "{} · {} · {}: {}",
+                                text::journal_date(receipt.created_at, true),
+                                receipt
+                                    .choices
+                                    .iter()
+                                    .map(|choice| choice.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                text::tr("Components"),
+                                receipt.components.len()
+                            ),
+                            Err(_) => format!(
+                                "{} #{}",
+                                text::tr("Unreadable recovery copy"),
+                                recovery_sequence(key)
+                            ),
+                        }
+                        .into()
+                    })
+                    .collect();
+                state_delete.lock().unwrap().recovery_review = Some(rows);
+                let ui = app.global::<crate::BackupBridge>();
+                ui.set_recovery_rows(model(inventory));
+                ui.set_recovery_confirmation(true);
+            }
+            Err(error) => status(&app, &error),
+        }
+    });
+    let weak = app.as_weak();
+    let state_cancel = state.clone();
+    ui.on_cancel_delete_recovery(move || {
+        state_cancel.lock().unwrap().recovery_review = None;
+        if let Some(app) = weak.upgrade() {
+            app.global::<crate::BackupBridge>()
+                .set_recovery_confirmation(false);
+        }
+    });
+    let weak = app.as_weak();
+    let state_confirm = state.clone();
+    ui.on_confirm_delete_recovery(move || {
+        if !allowed() {
+            return;
+        }
+        let Some(app) = weak.upgrade() else { return };
+        let ui = app.global::<crate::BackupBridge>();
+        if ui.get_busy() || !ui.get_recovery_confirmation() {
+            return;
+        }
+        let Some(reviewed) = state_confirm.lock().unwrap().recovery_review.take() else {
+            return;
+        };
+        ui.set_recovery_confirmation(false);
+        match delete_reviewed_recovery(&reviewed) {
             Ok(()) => status(&app, "Recovery copies deleted"),
-            Err(error) => status(&app, &error.to_string()),
+            Err(error) => status(&app, &error),
         }
     });
     // A committed receipt survives a crash between storage and UI publication.
@@ -633,16 +771,28 @@ fn show_preview(
     ui.set_busy(false);
     match result {
         Ok(preview) => {
+            let mut state = state.lock().unwrap();
+            if state.choices != preview.selection
+                || state.archive.as_ref().map(|archive| &archive.checksum)
+                    != Some(&preview.archive.checksum)
+            {
+                changed(app, &mut state);
+                status(
+                    app,
+                    "Selection changed; rebuild the preview before importing",
+                );
+                return;
+            }
             ui.set_preview_rows(model(preview.rows.iter().map(|row| {
                 let c=&row.counts;
                 format!("{} / {}\n{}: {} · {}: {} · {}: {} · {}: {} · {}: {} · {}: {} · {}: {}{}{}",row.profile,label(&row.component),text::tr("Archive"),c.archived,text::tr("New"),c.added,text::tr("Identical"),c.identical,text::tr("Conflicts"),c.conflicts,text::tr("Updates"),c.updated,text::tr("Preserved local"),c.preserved,text::tr("Deletions"),c.deleted,if c.examples.is_empty() {String::new()} else {format!("\n{}: {}",text::tr("Conflict identities"),c.examples.join(", "))},if row.notes.is_empty() {String::new()} else {format!("\n{}",row.notes.join("\n"))}).into()
             }).collect()));
-            state.lock().unwrap().preview = Some(preview);
+            state.preview = Some(preview);
             ui.set_preview_ready(true);
             status(app, "Review the exact changes, then import");
         }
         Err(error) => {
-            ui.set_preview_ready(false);
+            changed(app, &mut state.lock().unwrap());
             status(app, &error);
         }
     }
@@ -668,5 +818,116 @@ fn activate(domains: Vec<String>) {
     }
     if let Err(error) = nova_storage::try_write_batch(&[(ACTIVATION_KEY.into(), None)]) {
         nova_storage::report(error);
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    use i_slint_core::model::{ModelChangeListener, ModelChangeListenerContainer};
+    use std::{cell::RefCell, pin::Pin};
+
+    #[derive(Default)]
+    struct Changes(RefCell<Vec<usize>>);
+    impl ModelChangeListener for Changes {
+        fn row_changed(self: Pin<&Self>, row: usize) {
+            self.0.borrow_mut().push(row);
+        }
+        fn row_added(self: Pin<&Self>, _: usize, _: usize) {
+            panic!("a checked change must retain the existing delegates");
+        }
+        fn row_removed(self: Pin<&Self>, _: usize, _: usize) {
+            panic!("a checked change must retain the existing delegates");
+        }
+        fn reset(self: Pin<&Self>) {
+            panic!("a checked change must retain the existing delegates");
+        }
+    }
+
+    fn option(id: &str, checked: bool) -> BackupOption {
+        BackupOption {
+            id: id.into(),
+            label: id.into(),
+            checked,
+        }
+    }
+
+    #[test]
+    fn checked_updates_keep_model_identity_and_notify_only_the_changed_row() {
+        let rows = model(vec![option("p1", false), option("p2", true)]);
+        let original = rows.clone();
+        let changes = Box::pin(ModelChangeListenerContainer::<Changes>::default());
+        rows.model_tracker()
+            .attach_peer(changes.as_ref().model_peer());
+        for checked in [true, false] {
+            let replacement = update_rows(
+                &rows,
+                vec![option("p1", checked), option("p2", true)],
+                |old, row| old.id == row.id,
+            );
+            assert!(
+                replacement.is_none(),
+                "on and off both update the mounted model"
+            );
+            assert!(std::ptr::eq(rows.as_any(), original.as_any()));
+            assert_eq!(rows.row_data(0).unwrap().checked, checked);
+            assert!(rows.row_data(1).unwrap().checked);
+        }
+        assert_eq!(&*changes.0.borrow(), &[0, 0]);
+        let replacement = update_rows(
+            &rows,
+            vec![option("p1", false), option("p2", true)],
+            |old, row| old.id == row.id,
+        );
+        assert!(replacement.is_none());
+        assert_eq!(
+            &*changes.0.borrow(),
+            &[0, 0],
+            "unchanged publishes must not restart animation"
+        );
+    }
+
+    #[test]
+    fn mapping_changes_update_the_existing_profile_row() {
+        let rows = model(vec![BackupMapping {
+            id: "p1".into(),
+            label: "Household".into(),
+            target: "Create new profile".into(),
+        }]);
+        let replacement = update_rows(
+            &rows,
+            vec![BackupMapping {
+                id: "p1".into(),
+                label: "Household".into(),
+                target: "Guest".into(),
+            }],
+            |old, row| old.id == row.id,
+        );
+        assert!(replacement.is_none());
+        assert_eq!(rows.row_data(0).unwrap().target, "Guest");
+    }
+
+    #[test]
+    fn excluding_sources_or_changing_ids_replaces_the_filtered_model() {
+        let rows = model(vec![
+            option("p1\0library", true),
+            option("p2\0library", false),
+        ]);
+        for next in [
+            vec![option("p1\0library", true)],
+            vec![option("p2\0library", false), option("p1\0library", true)],
+            vec![option("p1\0library", true), option("p3\0library", false)],
+            Vec::new(),
+        ] {
+            let replacement = update_rows(&rows, next.clone(), |old, row| old.id == row.id)
+                .expect("membership/order changes must publish the new source selection");
+            assert!(!std::ptr::eq(rows.as_any(), replacement.as_any()));
+            assert_eq!(replacement.iter().collect::<Vec<_>>(), next);
+            assert_eq!(
+                rows.row_count(),
+                2,
+                "replacement cannot retarget old delegates"
+            );
+        }
     }
 }

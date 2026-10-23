@@ -309,6 +309,88 @@ component RemoteToolsSurface inherits Rectangle {
     if !root.active: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
 }
 
+// TV descriptions can be longer than the controls viewport. Keep the source
+// action visible while the D-pad pages its release details before leaving it.
+component RemoteStreamOffer inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> enabled;
+    in property <bool> selected;
+    in property <int> entry-direction: 1;
+    in property <length> viewport-height;
+    callback reveal(length, length);
+    callback picked();
+    callback move_requested(int);
+    callback back_requested();
+    min-width: 0px;
+    horizontal-stretch: 1;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+    accessible-description: root.description;
+    height: offer_action.height + (root.description != "" ? 4px + description_scroll.height : 0px);
+    forward-focus: offer_keys;
+    function enter() {
+        description_scroll.content-y = root.entry-direction < 0
+            ? Math.min(0px, description_scroll.visible-height - description_scroll.content-height) : 0px;
+        offer_keys.focus();
+        root.reveal(root.absolute-position.y, root.height);
+    }
+    changed selected => { if root.selected { root.enter(); } }
+    init => { if root.selected { root.enter(); } }
+    changed height => { if root.selected { root.reveal(root.absolute-position.y, root.height); } }
+    function page(direction: int) -> bool {
+        let minimum = Math.min(0px, description_scroll.visible-height - description_scroll.content-height);
+        let target = Math.clamp(description_scroll.content-y - direction * Math.max(1px, description_scroll.visible-height * 0.85), minimum, 0px);
+        if Math.abs(target - description_scroll.content-y) < 0.5px { return false; }
+        description_scroll.content-y = target;
+        return true;
+    }
+    offer_keys := FocusScope {
+        enabled: root.enabled && InterfaceStyle.tv;
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " {
+                if !e.repeat { root.picked(); } accept
+            } else if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { root.back_requested(); } accept
+            } else if e.text == Key.DownArrow || e.text == Key.RightArrow || e.text == Key.UpArrow || e.text == Key.LeftArrow {
+                SettingsStyle.keyboard-mode = true;
+                let direction = e.text == Key.DownArrow || e.text == Key.RightArrow ? 1 : -1;
+                if !root.page(direction) { root.move_requested(direction); }
+                accept
+            } else { reject }
+        }
+    }
+    offer_action := PillButton {
+        x: 0px; y: 0px;
+        width: 100%;
+        focused: root.selected;
+        label: root.title;
+        wrap_label: true;
+        enabled: root.enabled;
+        clicked => { root.picked(); }
+    }
+    description_scroll := ScrollView {
+        x: 0px;
+        y: offer_action.height + 4px;
+        width: 100%;
+        visible: root.description != "";
+        height: InterfaceStyle.tv
+            ? Math.min(offer_description.preferred-height, Math.max(1px, root.viewport-height - offer_action.height - 4px))
+            : offer_description.preferred-height;
+        content-width: self.visible-width;
+        content-height: offer_description.preferred-height;
+        mouse-drag-pan-enabled: true;
+        offer_description := Text {
+            width: 100%;
+            height: self.preferred-height;
+            text: root.description;
+            color: Theme.current.text_muted;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // This surface receives metadata and controls only. It has no player overlay,
 // video image, decoder, URL or local playback state.
 export component RemoteControlsPage inherits Rectangle {
@@ -371,10 +453,12 @@ export component RemoteControlsPage inherits Rectangle {
     // Keep a page-local order while native editors and sliders handle their
     // own keys first. Mounted controls claim focus from tv-index, so rebuilding
     // a conditional section never leaves references to a destroyed element.
+    private property <int> tv-offer-direction: 1;
     function tv_move(direction: int) {
         SettingsStyle.keyboard-mode = true;
+        root.tv-offer-direction = direction;
         if direction > 0 {
-            if root.tv-index >= 16 && root.tv-index < 16 + RemoteBridge.offers.length { root.tv-index += 1; focus.focus(); return; }
+            if root.tv-index >= 16 && root.tv-index < 16 + RemoteBridge.offers.length { root.tv-index += 1; return; }
             if root.tv-index < 0 && (root.ready && RemoteBridge.can_stop) { root.tv-index = 0; return; }
             if root.tv-index < 1 && (root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0) { root.tv-index = 1; return; }
             if root.tv-index < 2 && (root.ready && RemoteBridge.can_seek) { root.tv-index = 2; return; }
@@ -392,7 +476,7 @@ export component RemoteControlsPage inherits Rectangle {
             if root.tv-index < 14 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 14; return; }
             if root.tv-index < 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
             if root.tv-index < 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
-            if root.tv-index < 17 && RemoteBridge.offers.length > 0 { root.tv-index = 17; focus.focus(); return; }
+            if root.tv-index < 17 && RemoteBridge.offers.length > 0 { root.tv-index = 17; return; }
             if root.ready && root.has_tools && root.tv-index < 17 + RemoteBridge.offers.length { root.tv-index = 17 + RemoteBridge.offers.length; return; }
             if RemoteBridge.can_queue && RemoteBridge.connected && root.tv-index < 18 + RemoteBridge.offers.length { root.tv-index = 18 + RemoteBridge.offers.length; return; }
             if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_active && root.tv-index < 19 + RemoteBridge.offers.length { root.tv-index = 19 + RemoteBridge.offers.length; return; }
@@ -405,7 +489,7 @@ export component RemoteControlsPage inherits Rectangle {
             if RemoteBridge.can_queue && root.ready && RemoteBridge.queue_active && root.tv-index > 19 + RemoteBridge.offers.length { root.tv-index = 19 + RemoteBridge.offers.length; return; }
             if RemoteBridge.can_queue && RemoteBridge.connected && root.tv-index > 18 + RemoteBridge.offers.length { root.tv-index = 18 + RemoteBridge.offers.length; return; }
             if root.ready && root.has_tools && root.tv-index > 17 + RemoteBridge.offers.length { root.tv-index = 17 + RemoteBridge.offers.length; return; }
-            if root.tv-index > 17 && root.tv-index <= 17 + RemoteBridge.offers.length { root.tv-index -= 1; focus.focus(); return; }
+            if root.tv-index > 17 && root.tv-index <= 17 + RemoteBridge.offers.length { root.tv-index -= 1; return; }
             if root.tv-index > 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
             if root.tv-index > 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
             if root.tv-index > 14 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 14; return; }
@@ -639,9 +723,17 @@ export component RemoteControlsPage inherits Rectangle {
                         init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Cancel"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 16; } RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
                 }
                 if RemoteBridge.offers.length > 0: Text { text: @tr("Choose a stream"); color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
-                for offer[index] in RemoteBridge.offers: VerticalLayout { spacing: 4px;
-                    PillButton { focused: InterfaceStyle.tv && root.tv-index == 17 + index; label: offer.title; wrap_label: true; enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 17 + index; } RemoteBridge.stream_picked(index); } }
-                    if offer.description != "": Text { text: offer.description; color: Theme.current.text_muted; wrap: word-wrap; }
+                for offer[index] in RemoteBridge.offers: remote_offer := RemoteStreamOffer {
+                    title: offer.title;
+                    description: offer.description;
+                    selected: InterfaceStyle.tv && root.tv-index == 17 + index;
+                    entry-direction: root.tv-offer-direction;
+                    viewport-height: controls_scroll.visible-height;
+                    enabled: root.ready;
+                    reveal(y, h) => { root.tv_reveal(y, h); }
+                    move_requested(direction) => { root.tv_move(direction); }
+                    back_requested => { root.go_back(); }
+                    picked => { if InterfaceStyle.tv { root.tv-index = 17 + index; } RemoteBridge.stream_picked(index); }
                 }
                 Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
             }
