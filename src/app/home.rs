@@ -173,6 +173,8 @@ impl HomeShowcaseCache {
 
 struct ContinueRowDraft {
     id: String,
+    type_: String,
+    episode_id: String,
     title: String,
     subtitle: String,
     episode_title: String,
@@ -182,6 +184,26 @@ struct ContinueRowDraft {
     poster_url: String,
     progress: f32,
     badge: i32,
+}
+
+/// A queued Home projection may outlive a synced/manual completion. Prune
+/// against live progress before exposing rows, keeping row/action indexes equal.
+fn prune_watched_new_episode_rows(state: &mut Shared) {
+    let Shared {
+        entries,
+        progress,
+        new_episodes_list,
+        ..
+    } = state;
+    new_episodes_list.retain(|row| {
+        entries.iter().any(|entry| {
+            entry.id == row.series_id
+                && entry.type_ == row.type_
+                && entry.watch_status == WatchStatus::Auto
+        }) && !progress
+            .get(&progress_map_key(&row.series_id, &row.episode_id))
+            .is_some_and(|record| record.watched)
+    });
 }
 
 struct UpcomingRowDraft {
@@ -2155,7 +2177,10 @@ impl Bridge {
 
     fn current_episode_home_rows(&self, new: bool) -> Vec<ContinueRow> {
         let (list, enabled) = {
-            let state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock().unwrap();
+            if new {
+                prune_watched_new_episode_rows(&mut state);
+            }
             (
                 if new {
                     state.new_episodes_list.clone()
@@ -2226,6 +2251,8 @@ impl Bridge {
             let art_url = home_card_art_url(&e.poster_url, video, episode_artwork);
             drafts.push(ContinueRowDraft {
                 id: c.series_id.clone(),
+                type_: c.type_.clone(),
+                episode_id: c.episode_id.clone(),
                 title: e.name.clone(),
                 subtitle,
                 episode_title: video.map(episode_row_label).unwrap_or_default(),
@@ -4559,6 +4586,46 @@ mod tests {
     }
 
     #[test]
+    fn completed_sync_rows_cannot_remain_in_new_episode_actions() {
+        let mut state = Shared::default();
+        state.entries = vec![
+            library_entry("zom", "series", "Zom 100", WatchStatus::Auto),
+            library_entry("returning", "series", "Returning", WatchStatus::Auto),
+        ];
+        for n in 1..=14 {
+            let episode = format!("zom:{n}");
+            state.progress.insert(
+                progress_map_key("zom", &episode),
+                progress("zom", &episode, 0.0, true, 50),
+            );
+        }
+        state.new_episodes_list = vec![
+            ContinueEntry {
+                series_id: "zom".into(),
+                type_: "series".into(),
+                episode_id: "zom:1".into(),
+                updated_at_secs: 1,
+            },
+            ContinueEntry {
+                series_id: "returning".into(),
+                type_: "series".into(),
+                episode_id: "returning:2".into(),
+                updated_at_secs: 2,
+            },
+        ];
+        prune_watched_new_episode_rows(&mut state);
+        assert_eq!(state.new_episodes_list.len(), 1);
+        assert_eq!(
+            state.new_episodes_list[0].series_id, "returning",
+            "removing a stale row must keep subsequent action indexes aligned"
+        );
+        assert!(
+            state.progress.values().all(|record| record.watched),
+            "projection must never change watched history"
+        );
+    }
+
+    #[test]
     fn home_projection_rebuilds_use_current_typed_rows_and_preserve_day_indices() {
         const TEST_DIR: &str = "NOVA_HOME_PROJECTION_TEST_DIR";
         let Some(root) = std::env::var_os(TEST_DIR) else {
@@ -4776,6 +4843,42 @@ mod tests {
             activity.get("up-a").map(|v| v.phase),
             Some(ViewingPhase::AwaitingReturn)
         );
+        // A delayed Home result must not resurrect a fully watched episode
+        // after peer progress changes, even without navigating to Library.
+        let metadata = super::super::progress_projection::Metadata::new(
+            |type_, id| {
+                (
+                    read_episodes_cache_for(type_, id),
+                    read_meta_header_for(type_, id),
+                )
+            },
+            || true,
+        );
+        let groups = bridge.library_display_groups();
+        let pending = {
+            let mut state = bridge.shared.lock().unwrap();
+            prepare_progress_home(
+                &mut state,
+                &metadata,
+                &read_viewing_activity(),
+                &HashMap::new(),
+                &groups,
+            )
+        };
+        assert_eq!(pending.new.len(), 1);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let episode = "returning:new";
+            state.progress.insert(
+                progress_map_key("returning", episode),
+                progress("returning", episode, 0.0, true, 100),
+            );
+        }
+        // Publish the already-prepared stale row against the latest progress.
+        bridge.publish_progress_home(pending);
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        assert!(bridge.shared.lock().unwrap().new_episodes_list.is_empty());
+        assert!(bridge.current_new_episode_rows().is_empty());
         verify_history_catalog_projection(&bridge, &app);
     }
 
@@ -5408,6 +5511,8 @@ pub(super) fn prepare_progress_home(
                 });
                 Some(ContinueRowDraft {
                     id: c.series_id.clone(),
+                    type_: c.type_.clone(),
+                    episode_id: c.episode_id.clone(),
                     title: e.name.clone(),
                     subtitle: video
                         .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
@@ -5508,8 +5613,19 @@ pub(super) fn prepare_progress_home(
 }
 
 impl Bridge {
-    pub(super) fn publish_progress_home(&self, prepared: PreparedProgressHome) {
+    pub(super) fn publish_progress_home(&self, mut prepared: PreparedProgressHome) {
         let Some(app) = self.app() else { return };
+        {
+            let mut state = self.shared.lock().unwrap();
+            prune_watched_new_episode_rows(&mut state);
+            prepared.new.retain(|draft| {
+                state.new_episodes_list.iter().any(|row| {
+                    row.series_id == draft.id
+                        && row.type_ == draft.type_
+                        && row.episode_id == draft.episode_id
+                })
+            });
+        }
         let old_continue = app.get_home_continue();
         let old_new = app.get_home_new_episodes();
         let old_upcoming = app.get_home_upcoming();
