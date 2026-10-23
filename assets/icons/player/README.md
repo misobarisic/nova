@@ -18,6 +18,7 @@ SVGs from [lucide-icons/lucide at `c29c276f16590cf017126671535ad8c792be64d8`](ht
 | Subtitle menu appearance shortcut | `sliders-horizontal.svg` |
 | Chapters | `list-video.svg` |
 | Try another stream | `refresh-cw.svg` |
+| Sleep timer | `moon-star.svg` |
 
 Lucide's [official metadata](https://github.com/lucide-icons/lucide/blob/c29c276f16590cf017126671535ad8c792be64d8/icons/eighth-note.json)
 lists `music-2` as a deprecated alias of the pictured single flagged note,

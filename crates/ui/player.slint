@@ -643,6 +643,7 @@ component SettingsMenu inherits Rectangle {
                         }
                         MenuRow {
                             label: @tr("Sleep timer"); value: PlayerOsdBridge.sleep_timer_label; submenu: true;
+                            icon: @image-url("../../assets/icons/player/moon-star.svg");
                             enabled: PlayerOsdBridge.sleep_timer_available;
                             focused: root.focused_idx == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
                             reveal(y,h) => { root.reveal_row(y,h); }
@@ -1910,6 +1911,8 @@ export component PlayerOverlay {
     }
 
     function backdrop_single_tap(was_visible: bool) {
+        // Startup accepts only exit/recovery actions, including pointer input.
+        if !root.playback_started { return; }
         // Hover can reveal the controls before a click. Playback intent must
         // not depend on whether that hover happened to wake the OSD first.
         if InterfaceStyle.tv {

@@ -117,6 +117,16 @@ fn initial_loading_has_only_back_and_title_fallback_and_keeps_errors_visible() {
         for key_code in [Key::RightArrow, Key::UpArrow] {
             key(&app, key_code);
         }
+        let position = slint::LogicalPosition::new(width as f32 / 2.0, height as f32 / 2.0);
+        app.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        app.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        settle(&app, 300);
         assert_eq!(transport.get(), 0);
         app.set_show_stream_loading_text(false);
         settle(&app, 60);
