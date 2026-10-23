@@ -27,7 +27,14 @@ The ZIP in `../nova-addons/addons/reanime` independently ports Yuzono's ReAnime
 source: popular/latest/search JSON catalogs, details, available episodes, explicit
 MAL/AniList/IMDb IDs, sub/dub FlixCloud servers and deferred fresh-token resolution.
 It uses the generic Streams/Metadata switches, enrichment and conservative episode
-mapper. Native IDs use `reanime:<slug>` and `reanime:ep:<encoded slug/number>`;
+mapper. Version 0.1.2 discovers up to six family inventories through at most two
+bounded searches and same-family prequel/sequel entries, prioritizing the requested
+season before the detail-fetch cap. Explicit source season labels supplement
+translated titles. Appended rows beyond a declared regular count stay playable
+natively but are excluded from canonical regular-episode sequences. Matching IMDb
+show IDs may connect alternate title names without bypassing season/count proof;
+conflicting IDs never match. QuickJS/source-shaped regressions are in
+`src/reanime_tests.rs`, using `test-fixtures/addons/reanime` snapshots. Native IDs use `reanime:<slug>` and `reanime:ep:<encoded slug/number>`;
 rotating embed/server IDs never become watched-history identities.
 
 FlixCloud extraction uses Yuzono's external `enc-dec.app` service for token,

@@ -13,6 +13,8 @@ mod metadata;
 mod models;
 mod package;
 pub mod plugin_settings;
+#[cfg(test)]
+mod reanime_tests;
 mod registry;
 pub use package::{AddonPackage, MAX_ARCHIVE_BYTES};
 mod runtime;

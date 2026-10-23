@@ -1,0 +1,14 @@
+{
+  "id": "nova.reanime",
+  "version": "0.1.2",
+  "name": "Re:ANIME",
+  "description": "Re:ANIME catalogs, search, and FlixCloud sub/dub streams. Requires Nova with FlixCloud playback support.",
+  "resources": ["catalog", "meta", "stream"],
+  "types": ["series"],
+  "idPrefixes": ["reanime:"],
+  "catalogs": [
+    {"type":"series","id":"reanime.popular","name":"Re:ANIME Popular","extra":[{"name":"skip"}]},
+    {"type":"series","id":"reanime.latest","name":"Re:ANIME Latest","extra":[{"name":"skip"}]},
+    {"type":"series","id":"reanime.search","name":"Re:ANIME Search","extra":[{"name":"search","isRequired":true},{"name":"skip"}]}
+  ]
+}

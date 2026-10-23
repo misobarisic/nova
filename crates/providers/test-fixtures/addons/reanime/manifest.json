@@ -1,0 +1,25 @@
+{
+  "formatVersion": 1,
+  "id": "reanime",
+  "name": "Re:ANIME",
+  "version": "0.1.2",
+  "entry": "index.js",
+  "permissions": {
+    "domains": ["reanime.to", "flixcloud.cc", "enc-dec.app", "rundowncdn.top"],
+    "addonMetadata": true,
+    "httpPost": true,
+    "flixcloudPlayback": true
+  },
+  "limits": {
+    "requestTimeoutMs": 30000,
+    "resolverTimeoutMs": 30000,
+    "responseBytes": 2097152,
+    "redirects": 3,
+    "requestsPerOperation": 32
+  },
+  "capabilities": {
+    "contextualStreams": true,
+    "configurableCapabilities": true
+  },
+  "assets": []
+}
