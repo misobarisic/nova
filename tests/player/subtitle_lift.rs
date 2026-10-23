@@ -13,10 +13,9 @@ fn advance(app: &nova::AppWindow, millis: u64) {
         }
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
     }
-    let _ = ElementHandle::find_by_element_id(app, "PlayerOverlay::osd")
-        .next()
-        .unwrap()
-        .computed_opacity();
+    if let Some(osd) = ElementHandle::find_by_element_id(app, "PlayerOverlay::osd").next() {
+        let _ = osd.computed_opacity();
+    }
 }
 
 #[test]
@@ -76,11 +75,11 @@ fn subtitle_clearance_tracks_controls_fade_rotation_and_reduced_motion() {
     assert!(published.get().1 > 0.0 && published.get().1 < 1.0);
     advance(&app, 200);
     assert_eq!(published.get().1, 1.0);
-    // Loading also keeps the controls and their subtitle clearance engaged.
+    // Initial loading has no transport OSD or subtitle clearance.
     app.set_osd_visible(false);
     app.set_playback_started(false);
     advance(&app, 220);
-    assert_eq!(published.get().1, 1.0);
+    assert_eq!(published.get().1, 0.0);
 }
 
 #[test]

@@ -222,7 +222,7 @@ fn playback_speed_control_renders_and_reports_steps() {
                 // ---- The player's own settings panel ----
                 app.set_show_settings(false);
                 app.set_player_open(true);
-                app.set_playback_started(false);
+                app.set_playback_started(true);
                 let app4 = app.as_weak();
                 let failures4 = failures3.clone();
                 let default_steps4 = default_steps3.clone();

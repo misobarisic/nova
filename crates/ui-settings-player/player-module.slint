@@ -711,6 +711,25 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                SettingsRow {
+                    setting-key: "show_stream_loading_text";
+                    row-title: @tr("Show loading status text");
+                    row-desc: @tr("Show connection and buffering messages while a stream starts. Errors always remain visible.");
+                    ToggleSwitch {
+                        name: @tr("Show loading status text");
+                        checked <=> SettingsBridge.show_stream_loading_text;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_loading_text_row();
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_loading_text_row();
+                            SettingsContent.schedule_setting("show_stream_loading_text");
+                        }
+                    }
+                }
+            }
+
             if CastBridge.available: SettingsCard {
                 SettingsRow {
                     setting-key: "casting_remux_buffer";

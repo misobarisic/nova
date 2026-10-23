@@ -1,3 +1,4 @@
+import { PlayerLoadingArtwork } from "player-loading.slint";
 import { CastButton } from "casting.slint";
 import { CastBridge } from "@NovaUiShared";
 import { SleepTimerMenu } from "sleep-timer.slint";
@@ -329,6 +330,7 @@ component SettingsMenu inherits Rectangle {
             root.page_progress = 1;
         }
     }
+
 
     // Keyboard focus row on the current page (-1 = none / mouse mode).
     in property <int> focused_idx: -1;
@@ -1171,7 +1173,7 @@ export component PlayerOverlay {
         // key release must not undo a mouse scrub or another clicked action.
         if InterfaceStyle.tv { root.tv_cancel_seek(); }
         if (root.controls_active) {
-            return true;
+            return root.playback_started;
         }
         root.osd_mouse_moved();
         return false;
@@ -1179,6 +1181,10 @@ export component PlayerOverlay {
     // Episode (or show) poster shown behind the loading status until the
     // first video frame arrives.
     in-out property <image> player_poster;
+    in-out property <image> player_logo;
+    in-out property <bool> show_stream_loading_text: true;
+    in-out property <bool> player_status_is_error;
+    private property <bool> initial_recovery_available: !root.playback_started && root.player_status_is_error && root.automatic_stream_recovery_visible && root.try_another_stream_available;
 
     callback toggle_pause();
     callback seek(float);
@@ -1757,7 +1763,8 @@ export component PlayerOverlay {
     changed skip_segment_shown => { root.kb_clamp_focus(); }
     changed next_episode_shown => { root.kb_clamp_focus(); }
     changed playback_started => {
-        if !root.playback_started { root.tv_cancel_seek(); root.pointer_scrubbing = false; }
+        if !root.playback_started { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.open_popup = 0; root.kb_idx = 0; root.flash_show = false; }
+        else { root.kb_idx = 1; }
         if InterfaceStyle.tv { root.kb_clamp_focus(); }
     }
     changed duration => { if root.duration <= 0 { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.kb_clamp_focus(); } }
@@ -1818,7 +1825,7 @@ export component PlayerOverlay {
     // its measured top edge here rather than escaping that Slint scope.
     private property <length> next_episode_clearance;
     private property <length> skip_segment_clearance;
-    private property <float> subtitle_clearance_opacity: (root.next_episode_shown || root.skip_segment_shown) ? 1 : osd_current_opacity;
+    private property <float> subtitle_clearance_opacity: !root.playback_started ? 0 : (root.next_episode_shown || root.skip_segment_shown) ? 1 : osd_current_opacity;
     function publish_subtitle_clearance() {
         root.subtitle_clearance_changed(root.subtitle_clearance_fraction, root.subtitle_clearance_opacity);
     }
@@ -2029,7 +2036,18 @@ export component PlayerOverlay {
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
-                if root.media_key(e.text, e.repeat) {
+                if !root.playback_started {
+                    if (e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace) && !e.repeat { root.close_player(); }
+                    else if e.text == Key.Tab || e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                        root.kb_active = true;
+                        root.kb_idx = root.initial_recovery_available && (e.text == Key.DownArrow || (e.text == Key.Tab && root.kb_idx == 0)) ? 1 : 0;
+                    }
+                    else if e.text == Key.Return && root.kb_active && !e.repeat {
+                        if root.initial_recovery_available && root.kb_idx == 1 { root.try_another_stream(); }
+                        else { root.close_player(); }
+                    }
+                    accept
+                } else if root.media_key(e.text, e.repeat) {
                     accept
                 } else if InterfaceStyle.tv && root.open_popup == 0
                     && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta
@@ -2202,7 +2220,8 @@ export component PlayerOverlay {
                 }
             }
             key-released(e) => {
-                if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                if !root.playback_started { accept }
+                else if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                     root.tv_commit_seek(); accept
                 } else { reject }
             }
@@ -2372,24 +2391,38 @@ export component PlayerOverlay {
         }
         // Loading/error text paints above the shared dim layer so it stays
         // as readable as the controls over paused video.
-        if (!root.playback_started && root.player_status != "")
+        if !root.playback_started
             || (root.automatic_stream_recovery_visible && !root.is_paused && root.open_popup == 0): loading_status := VerticalLayout {
             y: root.safe-top + 56px;
-            width: 100%; height: Math.max(0px, player_header.y - root.safe-top - 56px); alignment: center;
+            width: 100%; height: Math.max(0px, (root.playback_started ? player_header.y : root.height - root.safe-bottom - 24px) - root.safe-top - 56px); alignment: center;
+            spacing: Math.min(64px, self.height * 0.1);
+            if !root.playback_started: HorizontalLayout {
+                alignment: center;
+                PlayerLoadingArtwork {
+                    width: Math.min(480px, Math.max(0px, root.width - root.safe-left - root.safe-right - 64px));
+                    height: Math.min(240px, loading_status.height * 0.48);
+                    logo: root.player_logo;
+                    title: root.player_show_title != "" ? root.player_show_title : root.player_title;
+                    pulsing: !root.player_status_is_error;
+                }
+            }
             HorizontalLayout {
                 width: 100%; alignment: center;
-                Text {
+                loading_status_text := Text {
+                    visible: root.playback_started || root.player_status_is_error || root.show_stream_loading_text;
+                    opacity: root.playback_started || root.player_status_is_error || root.show_stream_loading_text ? 1 : 0;
                     text: root.playback_started ? @tr("Playback is taking longer than expected.") : root.player_status; color: Theme.current.text_bright;
                     font-size: 18px; horizontal-alignment: center;
                     wrap: word-wrap; width: 80%;
                 }
             }
-            if root.automatic_stream_recovery_visible && root.try_another_stream_available && root.open_popup == 0: HorizontalLayout {
+            if (root.playback_started || root.player_status_is_error) && root.automatic_stream_recovery_visible && root.try_another_stream_available && root.open_popup == 0: HorizontalLayout {
                 alignment: center;
                 MenuRow {
                     width: Math.min(340px, root.width - root.safe-left - root.safe-right - 32px);
                     label: @tr("Try another stream");
                     value: @tr("Keep position and track preferences");
+                    focused: root.initial_recovery_available && root.kb_active && root.kb_idx == 1;
                     activate => { root.try_another_stream(); }
                 }
             }
@@ -2418,13 +2451,14 @@ export component PlayerOverlay {
         }
 
         player_header := VerticalLayout {
+            visible: root.playback_started;
             x: root.content_left;
             y: root.height - root.safe-bottom - root.rail_height - self.height - 8px;
             width: Math.max(0px, root.width - root.content_left - root.content_right
                 - (root.mobile_landscape ? root.utility_width + 24px : 0px));
             height: root.caption_height;
             spacing: 4px;
-            opacity: root.controls_active && !root.flash_show ? 1 : 0;
+            opacity: root.playback_started && root.controls_active && !root.flash_show ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
             show_heading := Text {
                 text: root.player_show_title != "" ? root.player_show_title : root.player_title;
@@ -2480,10 +2514,13 @@ export component PlayerOverlay {
         }
 
         // ---- Close button (top-left, below the status bar) ---------
-        Rectangle {
+        close_button := Rectangle {
+            accessible-role: button;
+            accessible-label: @tr("Back");
+            accessible-action-default => { if !root.playback_started || root.guard_osd_control() { root.close_player(); } }
             x: 16px + safe-left;
             y: 16px + safe-top;
-            visible: !InterfaceStyle.tv;
+            visible: !InterfaceStyle.tv || !root.playback_started;
             width: 40px;
             height: 40px;
             border-radius: 20px;
@@ -2511,7 +2548,7 @@ export component PlayerOverlay {
                 height: 100%;
                 mouse-cursor: pointer;
                 clicked => {
-                    if (!root.guard_osd_control()) { return; }
+                    if (root.playback_started && !root.guard_osd_control()) { return; }
                     root.kb_active = false; root.kb_idx = 0; root.close_player();
                 }
             }
@@ -2528,6 +2565,7 @@ export component PlayerOverlay {
         // keyboard indices (play 1, rewind 3, forward 4); on-screen they read
         // 3, 1, 4 left to right.
         if root.is_android && !InterfaceStyle.tv: center_transport := Rectangle {
+            visible: root.playback_started;
             width: root.center_transport_width;
             height: root.center_transport_height;
             x: root.center_transport_x;
@@ -2633,6 +2671,7 @@ export component PlayerOverlay {
         // The video dim layer lives above; this element only owns the bottom
         // controls and their hover/touch area.
         osd := Rectangle {
+            visible: root.playback_started;
             width: 100%;
             height: root.rail_height + root.safe-bottom;
             y: parent.height - self.height;
@@ -2640,8 +2679,7 @@ export component PlayerOverlay {
             // popup is open — the auto-hide countdown applies whether playing
             // or paused (with a longer grace while paused). Hover alone does
             // not paint the OSD: a touch can otherwise flash and release it.
-            opacity: (root.osd_visible || !root.playback_started
-                || root.open_popup != 0) ? 1.0 : 0.0;
+            opacity: root.playback_started && (root.osd_visible || root.open_popup != 0) ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fade; }
 
             // Hover zone covers only the controls and some headroom.
@@ -3305,7 +3343,7 @@ export component PlayerOverlay {
         // Stay visible with the OSD hidden, then clear the measured footer
         // when it wakes. Paint above the OSD so its transparent hover zone cannot
         // intercept offer taps, even while the controls are hidden.
-        if root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
+        if root.playback_started && root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
             property <length> subtitle_clearance: root.height - self.y + 8px;
             init => { root.next_episode_clearance = self.subtitle_clearance; }
             changed subtitle_clearance => { root.next_episode_clearance = self.subtitle_clearance; }
@@ -3379,7 +3417,7 @@ export component PlayerOverlay {
             }
         }
 
-        if PlayerOsdBridge.sleep_timer_active: Text {
+        if root.playback_started && PlayerOsdBridge.sleep_timer_active: Text {
             text: PlayerOsdBridge.sleep_timer_label;
             x: root.safe-left + 18px; y: Math.max(root.safe-top + 12px, parent.height - root.safe-bottom - 152px);
             width: Math.max(0px, parent.width - root.safe-left - root.safe-right - 36px);
@@ -3390,7 +3428,7 @@ export component PlayerOverlay {
         // Playback menu (gear button): subtitle + audio track pickers
         // on every platform, plus the Android/Windows/Linux decoder submenu. On narrow
         // layouts the track pickers live here instead of the control row.
-        if root.open_popup == 4: SettingsMenu {
+        if root.playback_started && root.open_popup == 4: SettingsMenu {
             reveal_direct_subtitle_tool: root.subtitle_tools_origin == 2;
             narrow: root.narrow;
             anchor_x: settings_gear.absolute-position.x - root.absolute-position.x + settings_gear.width;
@@ -3457,6 +3495,6 @@ export component PlayerOverlay {
             closed => { root.open_popup = 0; }
         }
     }
-    if root.controls_active && CastBridge.available: CastButton { focused: root.kb_active && root.kb_idx == 15 && root.open_popup == 0; x: Math.max(root.safe-left, root.width - root.safe-right - self.width - 16px); y: root.safe-top + 12px; }
+    if root.playback_started && root.controls_active && CastBridge.available: CastButton { focused: root.kb_active && root.kb_idx == 15 && root.open_popup == 0; x: Math.max(root.safe-left, root.width - root.safe-right - self.width - 16px); y: root.safe-top + 12px; }
 
 }

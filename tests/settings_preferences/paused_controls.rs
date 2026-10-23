@@ -109,10 +109,11 @@ fn paused_controls_toggle_translates_and_keeps_neighboring_keyboard_rows() {
                 key(&app, slint::platform::Key::Return);
                 assert!(app.get_show_chapters());
                 // Return to confidence, then pass the paused-controls row
-                // directly into stream rules; no hidden casting row intervenes.
+                // through the loading-text preference into stream rules.
                 for _ in 0..3 {
                     key(&app, slint::platform::Key::DownArrow);
                 }
+                key(&app, slint::platform::Key::DownArrow);
                 key(&app, slint::platform::Key::DownArrow);
                 key(&app, slint::platform::Key::DownArrow);
                 key(&app, slint::platform::Key::LeftArrow);

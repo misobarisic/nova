@@ -527,9 +527,12 @@ fn automatic_stream_recovery_is_separate_from_immediate_manual_settings_action()
             .is_none(),
         "initial loading must not immediately suggest recovery"
     );
-    // The setting stays usable before the automatic wait has elapsed.
+    // Transport/settings appear only after startup. Recovery can still offer
+    // another source while an already-started stream is buffering.
+    app.set_playback_started(true);
     open_page(&app, 6);
     assert_eq!(calls.get(), 1);
+    app.set_is_paused(false);
     app.set_automatic_stream_recovery_visible(true);
     settle(&app);
     button(&app, "Try another stream").mock_single_click(slint::platform::PointerEventButton::Left);

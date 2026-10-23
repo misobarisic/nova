@@ -53,3 +53,6 @@ mod tools;
 
 #[path = "player/paused_controls.rs"]
 mod paused_controls;
+
+#[path = "player/loading.rs"]
+mod loading;

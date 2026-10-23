@@ -77,6 +77,7 @@ fn playback_defaults_reset_and_player_settings_fit() {
     app.window().show().unwrap();
     app.set_show_home(false);
     app.set_player_open(true);
+    app.set_playback_started(true);
     app.set_audio_preference_saved(true);
     app.set_subtitle_preference_saved(true);
     app.set_speed_preference_saved(true);

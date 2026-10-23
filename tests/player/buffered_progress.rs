@@ -238,10 +238,19 @@ fn buffer_fits_the_unplayed_bar_and_hides_when_unavailable() {
                 app.set_duration(duration);
                 app.set_playback_started(started);
                 settle(&app);
-                assert_eq!(
-                    element(&app, "PlayerOverlay::buffered_track").size().width,
-                    0.0
-                );
+                if started {
+                    assert_eq!(
+                        element(&app, "PlayerOverlay::buffered_track").size().width,
+                        0.0
+                    );
+                } else {
+                    assert!(
+                        ElementHandle::find_by_element_id(&app, "PlayerOverlay::buffered_track")
+                            .next()
+                            .is_none(),
+                        "initial loading has no transport bar"
+                    );
+                }
             }
         }
     }

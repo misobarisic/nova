@@ -145,7 +145,7 @@ fn text_titles_fit_and_screenshot_is_guarded() {
                 element(&app, "PlayerOverlay::osd_scrim").computed_opacity(),
                 0.0
             );
-            app.set_playback_started(false);
+            app.set_playback_started(true);
             app.set_osd_visible(true);
             app.set_player_status("".into());
             settle(&app);
@@ -282,7 +282,12 @@ fn text_titles_fit_and_screenshot_is_guarded() {
     app.set_playback_started(false);
     app.set_is_android(false);
     settle(&app);
-    click(&app, &element(&app, "PlayerOverlay::screenshot_button"));
+    assert!(
+        ElementHandle::find_by_element_id(&app, "PlayerOverlay::screenshot_button")
+            .next()
+            .is_none(),
+        "loading cannot expose capture controls"
+    );
     assert_eq!(captures.get(), 0, "loading cannot capture");
     app.set_playback_started(true);
     app.set_screenshot_busy(true);
@@ -438,8 +443,16 @@ fn render_loading_dimmer_keeps_status_bright() {
                 pixel.r < 100 && pixel.g < 150 && pixel.b < 200,
                 "loading artwork must be dimmed: {pixel:?}"
             );
-            let bright_status_pixels = (height * 2 / 5..height * 3 / 5)
-                .flat_map(|y| (width / 4..width * 3 / 4).map(move |x| (x, y)))
+            let status = element(&app, "PlayerOverlay::loading_status_text");
+            let at = status.absolute_position();
+            let size = status.size();
+            let scale = app.window().scale_factor();
+            let left = (at.x * scale).max(0.0) as usize;
+            let top = (at.y * scale).max(0.0) as usize;
+            let right = (((at.x + size.width) * scale).max(0.0) as usize).min(width);
+            let bottom = (((at.y + size.height) * scale).max(0.0) as usize).min(height);
+            let bright_status_pixels = (top..bottom)
+                .flat_map(|y| (left..right).map(move |x| (x, y)))
                 .filter(|&(x, y)| {
                     let pixel = snapshot.as_slice()[y * width + x];
                     pixel.r > 240 && pixel.g > 240 && pixel.b > 240

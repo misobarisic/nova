@@ -98,6 +98,7 @@ fn room_actions_are_guarded_and_guests_have_no_shared_timeline_controls() {
     assert!(!app.get_party_page_open());
     assert!(app.get_party_active(), "Back keeps the party connected");
     app.set_player_open(true);
+    app.set_playback_started(true);
     app.set_party_is_host(false);
     settle();
     assert!(
@@ -305,6 +306,7 @@ fn connecting_badge_reopens_setup_and_cancel_always_dispatches_leave() {
     app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(360, 720));
     app.set_player_open(true);
+    app.set_playback_started(true);
     app.set_party_busy(true);
     app.set_party_can_host(false);
     let cancelled = Rc::new(std::cell::Cell::new(0));
@@ -623,6 +625,7 @@ fn player_only_exposes_party_access_when_connected_or_connecting() {
     app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(360, 720));
     app.set_player_open(true);
+    app.set_playback_started(true);
     app.set_party_can_host(true);
     app.window().show().unwrap();
     settle();

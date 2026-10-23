@@ -1,0 +1,41 @@
+import { Anim, Theme, InterfaceStyle } from "@NovaUiShared";
+
+// A fixed slot keeps status text steady as optional artwork arrives or pulses.
+export component PlayerLoadingArtwork inherits Rectangle {
+    in property <image> logo;
+    in property <string> title;
+    in property <bool> pulsing: true;
+    private property <bool> has-logo: root.logo.width > 0 && root.logo.height > 0;
+    private property <bool> motion: root.pulsing && root.has-logo && Anim.enabled && Anim.player;
+    private property <bool> expanded: false;
+    changed motion => { if !root.motion { root.expanded = false; } }
+    pulse := Timer {
+        interval: 1600ms;
+        running: root.motion;
+        triggered => { root.expanded = !root.expanded; }
+    }
+    if root.has-logo: loading_logo := Image {
+        private property <float> target-scale: root.motion && root.expanded ? 1.035 : 1;
+        private property <float> animated-scale: self.target-scale;
+        changed target-scale => { self.animated-scale = self.target-scale; }
+        animate animated-scale { duration: root.motion ? 1600ms : 0ms; easing: ease-in-out; }
+        // Read the motion switch directly so reduced motion snaps immediately.
+        private property <float> scale: root.motion ? self.animated-scale : 1;
+        width: root.width * 0.96 * self.scale;
+        height: root.height * 0.96 * self.scale;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        source: root.logo;
+        image-fit: contain;
+        accessible-label: root.title;
+    }
+    if !root.has-logo: loading_title := Text {
+        width: 100%; height: 100%;
+        text: root.title;
+        font-size: InterfaceStyle.tv ? 42px : root.width < 380px ? 30px : 42px;
+        font-weight: 800;
+        color: Theme.current.text_bright;
+        horizontal-alignment: center; vertical-alignment: center;
+        wrap: word-wrap; max-lines: 3; overflow: elide;
+    }
+}

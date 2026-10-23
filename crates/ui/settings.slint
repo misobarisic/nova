@@ -155,6 +155,7 @@ export component SettingsPage {
     in-out property <bool> android_auto_rotate: true;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> show_chapters: true;
+    in-out property <bool> show_stream_loading_text: true;
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
@@ -1513,6 +1514,9 @@ export component SettingsPage {
         } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() {
             root.keep_controls_visible_while_paused = d > 0;
             root.schedule_setting("keep_controls_visible_while_paused");
+        } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_loading_text_row() {
+            root.show_stream_loading_text = d > 0;
+            root.schedule_setting("show_stream_loading_text");
         } else if (root.kb_pr == 0) {
             root.player_backend_index = root.is_android ? Math.max(0, Math.min(1, root.player_backend_index + d)) : 0;
             root.kb_player_clamp();
@@ -1873,6 +1877,9 @@ export component SettingsPage {
             } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() {
                 root.keep_controls_visible_while_paused = !root.keep_controls_visible_while_paused;
                 root.schedule_setting("keep_controls_visible_while_paused");
+            } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_loading_text_row() {
+                root.show_stream_loading_text = !root.show_stream_loading_text;
+                root.schedule_setting("show_stream_loading_text");
             } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 4) {
                 root.android_pip_enabled = !root.android_pip_enabled;
                 root.schedule_setting("android_pip_enabled");

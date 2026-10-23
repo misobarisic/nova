@@ -122,6 +122,7 @@ fn android_back_clears_both_modes_and_desktop_keyboard_remains_available() {
     let weak = app.as_weak();
     app.on_close_player(move || weak.upgrade().unwrap().set_player_open(false));
     app.set_player_open(true);
+    app.set_playback_started(true);
     frame(&app);
     assert!(ElementHandle::find_by_element_type_name(&app, "PlayerOverlay").count() > 0);
     let gear = ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")

@@ -30,6 +30,8 @@ export global SettingsSearch {
                 let remux_buffer = self.candidate("casting_remux_buffer", @tr("Casting remux buffer"), "Casting remux buffer RAM memory media segments budget 32 64 128 256 MiB", 9, SettingsContent.kb_player_stream_filters_row() - 1);
                 if CastBridge.available && self.matches(remux_buffer) { return remux_buffer; }
                 if SettingsBridge.player_backend_index == 0 {
+                    let loading_text = self.candidate("show_stream_loading_text", @tr("Show loading status text"), "Loading stream text buffering connection logo", 9, SettingsContent.kb_player_loading_text_row());
+                    if self.matches(loading_text) { return loading_text; }
                     let folder = self.candidate("screenshot_show_folder", @tr("Screenshot folder"), @tr("Show folders") + " Screenshot folder Pictures Nova Show folders", 9, SettingsContent.kb_player_speed_row() + 3);
                     if self.matches(folder) { return folder; }
                     let format = self.candidate("screenshot_format", @tr("Screenshot format"), "Screenshot format PNG JPEG WebP lossless lossy capture", 9, SettingsContent.kb_player_speed_row() + 2);

@@ -2708,6 +2708,9 @@ impl Bridge {
         }
         let mut preview_work = None;
         if let Some(app) = self.app() {
+            // A previous playback reveal must not survive a new manual pick:
+            // cancelling this selector returns to the retained list offset.
+            app.set_detail_episode_reveal_request(0);
             app.set_modal_episodes(false);
             app.set_stream_selector_open(true);
             // A manual pick means the episode list was visited, so any
@@ -2878,7 +2881,6 @@ impl Bridge {
             app.set_detail_kb_zone(3);
             app.set_detail_kb_ci(2);
         }
-        self.reveal_last_watched_episode();
     }
 
     /// Restore the last observed episode, not the next unwatched candidate.
@@ -2929,6 +2931,7 @@ impl Bridge {
             && !app.get_episode_context().is_empty()
         {
             self.episodes_back();
+            self.reveal_last_watched_episode();
         }
     }
 
@@ -6503,14 +6506,16 @@ mod tests {
         {
             let mut state = bridge.shared.lock().unwrap();
             let modal = state.modal_item.as_mut().unwrap();
-            modal.seasons = vec![1, 2];
-            modal.videos.extend((1..=60).map(|episode| Video {
-                id: format!("series:2:{episode}"),
-                season: Some(2),
-                episode: Some(episode),
-                name: format!("Episode {episode}"),
-                ..Default::default()
-            }));
+            modal.seasons = vec![1, 2, 3];
+            for season in [2, 3] {
+                modal.videos.extend((1..=120).map(|episode| Video {
+                    id: format!("series:{season}:{episode}"),
+                    season: Some(season),
+                    episode: Some(episode),
+                    name: format!("Episode {episode}"),
+                    ..Default::default()
+                }));
+            }
             state.progress.insert(
                 progress_map_key("series", "series:2:57"),
                 EpisodeProgress {
@@ -6523,19 +6528,75 @@ mod tests {
             );
         }
         app.set_episode_filter("Pilot".into());
+        let prior_season = app.get_season_combo_idx();
+        let prior_page = app.get_episode_page();
         app.set_stream_selector_open(true);
         app.set_episode_context("Pilot".into());
         bridge.stream_selector_back();
+        assert_eq!(app.get_season_combo_idx(), prior_season);
+        assert_eq!(app.get_episode_page(), prior_page);
+        assert_eq!(app.get_episode_filter(), "Pilot");
+        assert_eq!(app.get_detail_episode_reveal_request(), 0);
+        app.set_stream_selector_open(true);
+        app.set_episode_context("Episode 57".into());
+        bridge.restore_detail_after_playback();
+        assert!(!app.get_stream_selector_open());
         assert_eq!(app.get_season_combo_idx(), 1);
         assert_eq!(app.get_episode_page(), 1);
         assert_eq!(app.get_detail_kb_ep(), 6);
         assert!(app.get_episode_filter().is_empty());
         assert!(app.get_detail_episode_reveal_request() > 0);
-        app.set_stream_selector_open(true);
-        app.set_episode_context("Episode 57".into());
-        bridge.restore_detail_after_playback();
-        assert!(!app.get_stream_selector_open());
-        assert_eq!(app.get_detail_kb_ep(), 6);
+
+        // Mount the real retained shell and exercise its Back callback, not
+        // just the backend flag setters. Manual selector cancellation keeps
+        // a different season, a filtered second page and its precise offset.
+        app.set_animations(false);
+        app.set_anim_transitions(false);
+        app.show().unwrap();
+        let back_bridge = bridge.clone();
+        app.on_stream_selector_back(move || back_bridge.stream_selector_back());
+        let content = (*app).global::<nova_ui_shared::DetailContent>();
+        let settle = || {
+            for _ in 0..10 {
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+            }
+        };
+        for size in [(820, 600), (390, 820)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(size.0, size.1));
+            bridge.season_picked(2);
+            bridge.episode_filter_changed("Episode".into());
+            bridge.episode_page_picked(1);
+            settle();
+            content.invoke_restore_scroll_y(-1300.0);
+            settle();
+            let offset = content.invoke_scroll_y();
+            assert!(offset < -1000.0, "fixture must scroll into the list");
+            let first_id = app.get_episode_rows().row_data(0).unwrap().id;
+            bridge.episode_picked(56);
+            settle();
+            assert!(app.get_stream_selector_open());
+            content.invoke_dispatch_back();
+            settle();
+            assert!(!app.get_stream_selector_open());
+            assert!(app.get_modal_visible());
+            assert!(app.get_modal_episodes());
+            assert_eq!(app.get_season_combo_idx(), 2);
+            assert_eq!(app.get_episode_page(), 1);
+            assert_eq!(app.get_episode_filter(), "Episode");
+            assert_eq!(app.get_episode_rows().row_data(0).unwrap().id, first_id);
+            assert_eq!(app.get_detail_kb_ep(), 6);
+            assert_eq!(app.get_detail_episode_reveal_request(), 0);
+            assert!(
+                (content.invoke_scroll_y() - offset).abs() < 1.0,
+                "selector Back moved the retained episode list from {offset} to {}",
+                content.invoke_scroll_y()
+            );
+        }
+
+        // Keep the following stream-preference fixture on its original season.
+        bridge.season_picked(1);
+        bridge.episode_filter_changed(SharedString::default());
 
         // Selection wiring remembers each show independently, then publishes
         // a recommendation for the next episode through the normal row model.

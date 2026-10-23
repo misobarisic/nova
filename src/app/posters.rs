@@ -1593,6 +1593,38 @@ impl Bridge {
         });
     }
 
+    /// The loading screen belongs to a playback request, not the current Detail
+    /// opening. A late response must never decorate its replacement stream.
+    pub(super) fn load_player_title_logo(
+        &self,
+        url: String,
+        request: Option<crate::torrent::PlaybackRequest>,
+    ) {
+        let Some(app) = self.app() else { return };
+        let cached = transparent_title_logo(decoded_cache_get(&image_cache_key(
+            &url,
+            ImageUse::Fixed(None),
+        )));
+        app.set_player_logo(cached.map(Image::from_rgba8).unwrap_or_default());
+        if url.is_empty() || app.get_player_logo().size().width > 0 {
+            return;
+        }
+        let Some(request) = request else { return };
+        let bridge = self.clone();
+        let revision = image_settings_revision();
+        net::fetch_image(url, ImageUse::Fixed(None), move |pixels| {
+            let pixels = transparent_title_logo(pixels);
+            let _ = profiles::invoke_from_event_loop(move || {
+                if bridge.playback_request_is_current(&request)
+                    && image_settings_revision() == revision
+                    && let Some(app) = bridge.app()
+                {
+                    app.set_player_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
+                }
+            });
+        });
+    }
+
     fn detail_image_request(&self, id: &str) -> Option<Arc<()>> {
         self.shared
             .lock()
@@ -2828,6 +2860,12 @@ pub(super) fn transparent_title_logo(
             .0
             .iter()
             .any(|pixel| pixel[3] < 255)
+            && pixels
+                .as_bytes()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0)
     })
 }
 
@@ -2843,5 +2881,6 @@ mod title_logo_tests {
         pixels.make_mut_bytes()[3] = 0;
         assert!(transparent_title_logo(Some(pixels)).is_some());
         assert!(transparent_title_logo(None).is_none());
+        assert!(transparent_title_logo(Some(SharedPixelBuffer::<Rgba8Pixel>::new(2, 2))).is_none());
     }
 }

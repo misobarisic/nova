@@ -403,6 +403,9 @@ export component AppWindow inherits Window {
         subtitle_addon_status <=> root.subtitle_addon_status;
         osd_visible <=> root.osd_visible;
         player_poster <=> root.player_poster;
+        player_logo <=> root.player_logo;
+        player_status_is_error <=> root.player_status_is_error;
+        show_stream_loading_text <=> root.show_stream_loading_text;
         kb_active <=> root.kb_active;
     }
     OnboardingBindings {
@@ -689,6 +692,7 @@ export component AppWindow inherits Window {
         android_auto_rotate <=> root.android_auto_rotate;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
         show_chapters <=> root.show_chapters;
+        show_stream_loading_text <=> root.show_stream_loading_text;
         keep_controls_visible_while_paused <=> root.keep_controls_visible_while_paused;
         casting_remux_buffer_index <=> root.casting_remux_buffer_index;
         auto_next_episode <=> root.auto_next_episode;
@@ -1558,6 +1562,7 @@ export component AppWindow inherits Window {
     in-out property <bool> android_auto_rotate: true;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <bool> show_chapters: true;
+    in-out property <bool> show_stream_loading_text: true;
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
@@ -2021,6 +2026,8 @@ export component AppWindow inherits Window {
     // frame rate only once the OSD has fully faded out; 0 when no overlay is up.
     in-out property <float> osd_opacity: 0.0;
     in-out property <image> player_poster;
+    in-out property <image> player_logo;
+    in-out property <bool> player_status_is_error;
 
     callback subtitle_clearance_changed(float, float);
     callback toggle_pause();
@@ -3011,7 +3018,7 @@ export component AppWindow inherits Window {
         safe_right: root.safe-area-insets.right;
         system_back_request: root.system_back_request;
     }
-    if (root.party_active || root.party_busy) && root.player_open && !root.party_page_open: PartyPlayerBadge {
+    if (root.party_active || root.party_busy) && root.player_open && root.playback_started && !root.party_page_open: PartyPlayerBadge {
         // Share the actual OSD fade, including loading and open player menus.
         opacity: root.osd_opacity;
         visible: self.opacity > 0;

@@ -1787,6 +1787,7 @@ impl Player {
                                         // in-app instead of forcing external playback.
                                         notifier_state.reported.store(true, Ordering::SeqCst);
                                         let _ = mpv.command("stop", &[]);
+                                        app.set_player_status_is_error(true);
                                         app.set_player_status(nova_ui::backend_text::tr(
                                             "Cannot play this stream (mpv could not start playback).",
                                         ).into());
@@ -2174,6 +2175,7 @@ impl Player {
         app.set_player_badges(Default::default());
         app.set_is_paused(true);
         app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
+        app.set_player_status_is_error(false);
         app.set_player_status(slint::SharedString::from("Loading stream…"));
         // Android: show the decoder that was just armed right away, so the
         // badge is populated before the first frame and never reads "unknown"
@@ -3292,6 +3294,7 @@ impl Player {
         }
         #[cfg(target_os = "linux")]
         converge_idle_inhibit(true);
+        app.set_player_status_is_error(false);
         app.set_player_status(nova_ui::backend_text::tr(status).into());
         app.set_osd_visible(true);
         app.set_player_open(true);
@@ -3311,6 +3314,7 @@ impl Player {
         }
         self.state.reported.store(true, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
+            app.set_player_status_is_error(true);
             app.set_player_status(nova_ui::backend_text::tr(status).into());
             app.set_osd_visible(true);
             app.window().request_redraw();
@@ -3464,6 +3468,7 @@ impl Player {
             app.set_buffered_until(0.0);
             app.set_is_paused(true);
             app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
+            app.set_player_status_is_error(false);
             app.set_player_status(slint::SharedString::default());
             app.set_decode_label(slint::SharedString::default());
             app.set_decoder_selected(-1);
@@ -3828,6 +3833,7 @@ impl Player {
             // Frames are progressing: reveal the video (transparent window
             // background) and drop the loading status.
             if !self.state.started.swap(true, Ordering::SeqCst) {
+                app.set_player_status_is_error(false);
                 app.set_player_status(slint::SharedString::default());
                 // Arm the OSD auto-hide countdown as playback begins, so
                 // the controls fade even if the mouse never moves.
@@ -3884,6 +3890,7 @@ impl Player {
                     return;
                 }
                 app.set_is_paused(true);
+                app.set_player_status_is_error(true);
                 app.set_player_status(slint::SharedString::from(
                     "Cannot play this stream (mpv could not start playback).",
                 ));
@@ -4626,13 +4633,20 @@ mod tests {
         player.tick();
         assert_eq!(app.get_player_status(), "Resolving stream…");
         assert!(!player.playback_failed());
+        app.set_show_stream_loading_text(false);
+        assert!(!app.get_player_status_is_error());
         player.source_failed("Could not resolve this stream.");
+        assert!(
+            app.get_player_status_is_error(),
+            "errors must survive hidden routine loading text"
+        );
         assert!(player.playback_failed());
         player.tick();
         assert_eq!(app.get_player_status(), "Could not resolve this stream.");
         assert!(!player.take_external_handoff());
         player.close();
         assert!(!player.playback_failed(), "Close clears the failed session");
+        assert!(!app.get_player_status_is_error());
         let before = player.screenshot_session();
         app.set_screenshot_busy(true);
         app.set_screenshot_notice("Previous capture failed".into());

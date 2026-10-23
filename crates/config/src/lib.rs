@@ -941,6 +941,9 @@ cache_settings_type! {
     /// existing Android (on) and desktop (off) behavior for older settings.
     #[serde(default = "default_keep_controls_visible_while_paused")]
     pub keep_controls_visible_while_paused: bool,
+    /// Show routine initial stream-loading messages. Errors remain visible.
+    #[serde(default = "default_true")]
+    pub show_stream_loading_text: bool,
     /// Retained casting remux media segments; processing uses additional RAM.
     #[serde(default)]
     pub casting_remux_buffer: CastingRemuxBuffer,
@@ -1142,6 +1145,7 @@ impl Default for CacheSettings {
             prefetch_next_episode_streams: true,
             show_chapters: true,
             keep_controls_visible_while_paused: default_keep_controls_visible_while_paused(),
+            show_stream_loading_text: true,
             casting_remux_buffer: CastingRemuxBuffer::default(),
             auto_next_episode: false,
             animations: true,
@@ -1886,6 +1890,22 @@ mod tests {
             let restored: CacheSettings =
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.keep_controls_visible_while_paused, enabled);
+        }
+    }
+
+    #[test]
+    fn loading_status_text_defaults_on_and_explicit_choices_round_trip() {
+        let legacy: CacheSettings =
+            serde_json::from_str(r#"{"enabled":false,"format":"webp","quality":85}"#).unwrap();
+        assert!(legacy.show_stream_loading_text);
+        for show in [false, true] {
+            let settings = CacheSettings {
+                show_stream_loading_text: show,
+                ..Default::default()
+            };
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.show_stream_loading_text, show);
         }
     }
 

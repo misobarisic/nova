@@ -1937,3 +1937,9 @@ msgstr "Casting remux buffer"
 
 msgid "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."
 msgstr "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."
+
+msgid "Show loading status text"
+msgstr "Show loading status text"
+
+msgid "Show connection and buffering messages while a stream starts. Errors always remain visible."
+msgstr "Show connection and buffering messages while a stream starts. Errors always remain visible."

@@ -15,6 +15,7 @@ struct PlaybackContext {
     media_summary: String,
     episode_number: String,
     use_modal_poster: bool,
+    logo_url: String,
     media_type: String,
     media_id: String,
     request_id: String,
@@ -467,6 +468,7 @@ impl Bridge {
                             osd_episode_title,
                             episode_number,
                             use_modal_poster: true,
+                            logo_url: modal.logo_url.clone(),
                             media_type: modal.type_.clone(),
                             media_id: modal.id.clone(),
                             request_id: modal.request_id.clone(),
@@ -1488,6 +1490,14 @@ impl Bridge {
     }
 
     fn publish_player_context(&self, context: &PlaybackContext) {
+        let request = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .map(|intent| intent.token.clone());
+        self.load_player_title_logo(context.logo_url.clone(), request);
         if let Some(app) = self.app() {
             app.set_player_episode_title(context.osd_episode_title.clone().into());
             app.set_player_show_title(context.title.clone().into());
@@ -1858,7 +1868,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        if !app.get_player_open() || app.get_playback_started() {
+        if !app.get_player_open() || app.get_playback_started() || self.player.playback_failed() {
             return;
         }
         let hash = match self.shared.lock().unwrap().active_torrent.clone() {

@@ -5568,3 +5568,9 @@ msgstr "Međuspremnik za remuksiranje pri emitiranju"
 
 msgid "Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session."
 msgstr "Najviše memorije za zadržane medijske segmente kada je za emitiranje potrebno remuksiranje. Obrada koristi dodatnu memoriju. Primjenjuje se na sljedeću sesiju emitiranja."
+
+msgid "Show loading status text"
+msgstr "Prikaži tekst statusa učitavanja"
+
+msgid "Show connection and buffering messages while a stream starts. Errors always remain visible."
+msgstr "Prikazuj poruke o povezivanju i učitavanju tijekom pokretanja izvora. Pogreške uvijek ostaju vidljive."

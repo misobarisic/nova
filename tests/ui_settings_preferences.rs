@@ -50,3 +50,6 @@ mod paused_controls;
 
 #[path = "settings_preferences/casting_remux_buffer.rs"]
 mod casting_remux_buffer;
+
+#[path = "settings_preferences/loading_text.rs"]
+mod loading_text;

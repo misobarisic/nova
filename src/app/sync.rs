@@ -4317,6 +4317,27 @@ mod tests {
     }
 
     #[test]
+    fn loading_status_text_syncs_and_respects_a_local_override() {
+        let local = CacheSettings::default();
+        assert!(setting_can_override("show_stream_loading_text"));
+        assert!(
+            settings_fields(&local)
+                .iter()
+                .any(|(key, value, _)| key == "show_stream_loading_text" && value == "true")
+        );
+        let incoming = vec![("show_stream_loading_text".into(), "false".into())];
+        assert!(!merge_settings_fields(&local, &incoming).show_stream_loading_text);
+        let local = CacheSettings {
+            sync_overrides: std::collections::BTreeMap::from([(
+                "show_stream_loading_text".into(),
+                serde_json::json!(true),
+            )]),
+            ..local
+        };
+        assert!(merge_settings_fields(&local, &incoming).show_stream_loading_text);
+    }
+
+    #[test]
     fn chapter_display_syncs_and_can_be_overridden() {
         let local = CacheSettings::default();
         assert!(local.show_chapters);

@@ -149,8 +149,9 @@ export component DetailEpisodesModule inherits Window {
 
         // Keep toolbar anchors and focus timers addressable across the body
         // and overlay. The shell mounts this leaf only for the Episodes tab.
+        // Retain its layout under the fullscreen selector. Collapsing the
+        // list on entry would clamp the outer scroller's saved offset.
         VerticalLayout {
-            visible: DetailBridge.modal_episodes;
             width: 100%;
             spacing: 8px;
             alignment: start;
@@ -499,7 +500,7 @@ export component DetailEpisodesModule inherits Window {
                         running: false;
                         triggered => {
                             self.stop();
-                            if (!DetailBridge.tracking_open && !DetailBridge.stream_selector_open && DetailBridge.modal_episodes && DetailBridge.detail_tab == 3 && i == DetailBridge.kb_ep) {
+                            if (ep_card.reveal_request > 0 && !DetailBridge.tracking_open && !DetailBridge.stream_selector_open && DetailBridge.modal_episodes && DetailBridge.detail_tab == 3 && i == DetailBridge.kb_ep) {
                                 DetailContent.scroll_list_to_top(ep_card.absolute-position.y - 12px);
                             }
                         }
@@ -814,7 +815,6 @@ export component DetailEpisodesModule inherits Window {
 
     }
     episode_toolbar := Rectangle {
-        visible: DetailBridge.modal_episodes;
         x: 0px;
         y: Math.max(episode_toolbar_slot.absolute-position.y, DetailContent.episodes_viewport_top) - root.absolute-position.y;
         width: 100%;
