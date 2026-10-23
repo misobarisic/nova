@@ -1,6 +1,6 @@
 # Content providers
 
-Nova runs locally installed JavaScript ZIP addons. AniKoto and Supernova source
+Nova runs locally installed JavaScript ZIP addons. AniKoto, Re:ANIME and Supernova source
 packages are maintained in the separate `nova-addons` repository. Import a ZIP
 in Settings → Addons to install it on this device. The `nova-provider://<id>`
 transport adapts normalized output to the existing Stremio parser, so library,
@@ -20,6 +20,40 @@ continues to use the addon’s own website and install URL.
 The Yuzono Android extensions contain Kotlin code for Aniyomi's APIs. Adding a
 source here means porting its requests and parsing to Nova's JavaScript API.
 This version loads bounded, explicitly imported ZIP packages.
+
+## Re:ANIME
+
+The ZIP in `../nova-addons/addons/reanime` independently ports Yuzono's ReAnime
+source: popular/latest/search JSON catalogs, details, available episodes, explicit
+MAL/AniList/IMDb IDs, sub/dub FlixCloud servers and deferred fresh-token resolution.
+It uses the generic Streams/Metadata switches, enrichment and conservative episode
+mapper. Native IDs use `reanime:<slug>` and `reanime:ep:<encoded slug/number>`;
+rotating embed/server IDs never become watched-history identities.
+
+FlixCloud extraction uses Yuzono's external `enc-dec.app` service for token,
+stream and master-playlist decoding. A package must declare
+`permissions.flixcloudPlayback: true` and its HTTPS domain permissions to return
+`hlsProxy: {mask: [16 bytes], wPayload: "..."}` from `resolveStream`. Ordinary
+stream validation runs before the host replaces the remote URL with a random
+loopback capability. Discovery cannot create relays. `hls_proxy.rs` rewrites
+playlists, keys and initialization maps; strips PNG/WebP wrappers and XOR-decodes
+segments; applies byte ranges after decoding; and pins public DNS on every
+outbound request/redirect. Decoder playlist links retain their original CDN base.
+Only registered resource indexes can be fetched. No arbitrary URL query API,
+filesystem access or site-script execution is exposed. Relays retain at most
+4096 resources, allow four sessions and four concurrent readers per session,
+cap bodies at 16 MiB, and expire after ten idle minutes or six hours. Selection
+cancellation revokes them. URLs/context/masks remain memory-only and resolved
+playback is marked private. Direct MKV preparation, fonts and chapter markers are
+not included. This ZIP needs a runtime with the relay support.
+
+Run source fixtures with `node --test ../nova-addons/addons/reanime/fixtures/provider.test.cjs`
+and relay tests with `cargo test -p nova-providers --lib hls_proxy`.
+The ignored live relay regression accepts a freshly resolved stream JSON path in
+`NOVA_REANIME_LIVE_INPUT` and the actual ZIP in `NOVA_REANIME_LIVE_PACKAGE`,
+so its network permissions match the delivered addon rather than a test allowlist.
+Set `NOVA_REANIME_MPV` to an mpv executable to also verify playback through the
+relay. Signed responses never enter the repository.
 
 ## Supernova
 

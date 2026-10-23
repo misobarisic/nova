@@ -5,6 +5,7 @@
 //! source's protocol bridge let the app reuse its catalog and library flows.
 
 pub mod catalog_grouping;
+mod hls_proxy;
 mod host;
 mod ids;
 mod matching;

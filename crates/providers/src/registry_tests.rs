@@ -2511,3 +2511,45 @@ fn stable_stream_keys_ignore_labels_reordering_and_forged_remote_provider_ids() 
         stable_stream_identity("https://remote.example", "tt123:1:1", &torrent)
     );
 }
+
+#[test]
+fn flixcloud_relay_requires_permission_valid_spec_and_public_upstream() {
+    let definition = &bundled_providers()[0];
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    let spec = json!({"mask":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"wPayload":"context"});
+    let make = |allowed: bool, url: &str, spec: Value| {
+        let mut manifest = manifest.clone();
+        manifest.permissions.flixcloud_playback = allowed;
+        let row = json!({"id":"fixture","title":"FlixCloud","url":url,"hlsProxy":spec});
+        JsProvider::new(
+            manifest,
+            addon.clone(),
+            &format!("globalThis.novaProvider={{handle(){{return {row};}}}}"),
+        )
+    };
+    let url = "https://flixcloud.cc/master.m3u8";
+    assert!(
+        make(false, url, spec.clone())
+            .resolve_stream(crate::MemoryProviderHost::new(), "token")
+            .is_err()
+    );
+    assert!(
+        make(true, "http://127.0.0.1:1234/forged", spec.clone())
+            .resolve_stream(crate::MemoryProviderHost::new(), "token")
+            .is_err()
+    );
+    assert!(
+        make(true, url, json!({"mask":[1,2],"wPayload":"context"}))
+            .resolve_stream(crate::MemoryProviderHost::new(), "token")
+            .is_err()
+    );
+    let result = make(true, url, spec.clone())
+        .resolve_stream(crate::MemoryProviderHost::new(), "token")
+        .unwrap();
+    assert_eq!(
+        result["url"], url,
+        "only the outer host resolver can mint a loopback URL"
+    );
+    assert_eq!(result["novaHlsProxy"], spec);
+}

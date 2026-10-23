@@ -274,7 +274,7 @@ impl ScopedHttpHost {
         Ok(())
     }
 
-    fn check_url(
+    pub(crate) fn check_url(
         &self,
         url: &Url,
         deadline: Instant,
@@ -572,7 +572,7 @@ pub(crate) fn sanitize_log(message: &str) -> String {
     regex.replace_all(&bounded, "[redacted]").into_owned()
 }
 
-fn domain_matches(host: &str, allowed: &str) -> bool {
+pub(crate) fn domain_matches(host: &str, allowed: &str) -> bool {
     // Only an explicit full wildcard opts out of domain scoping; transport
     // scheme, credentials, DNS pinning and public-IP checks still apply.
     if allowed == "*" {

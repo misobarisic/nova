@@ -126,6 +126,9 @@ pub struct PluginManifest {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PluginPermissions {
+    /// Permit a deferred resolver to request the bounded FlixCloud HLS relay.
+    #[serde(default, rename = "flixcloudPlayback")]
+    pub flixcloud_playback: bool,
     #[serde(default, rename = "addonMetadata")]
     pub addon_metadata: bool,
     #[serde(default)]
@@ -200,6 +203,9 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    pub(crate) fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
     pub fn new(manifest: PluginManifest, source: impl Into<String>) -> Self {
         Self {
             manifest,
@@ -1971,6 +1977,7 @@ mod tests {
             entry: "index.js".into(),
             capabilities: PluginCapabilities::default(),
             permissions: PluginPermissions {
+                flixcloud_playback: false,
                 addon_metadata: false,
                 http_post: false,
                 ephemeral_playback_credentials: Vec::new(),

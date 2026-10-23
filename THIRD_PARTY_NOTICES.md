@@ -56,6 +56,16 @@ Kotlin source. Production AniKoto packages are maintained in the separate `nova-
 repository and carry their own notices. See the retained test attribution in
 [`crates/providers/test-fixtures/addons/anikoto/NOTICE.md`](crates/providers/test-fixtures/addons/anikoto/NOTICE.md).
 
+## Re:ANIME / FlixCloud playback behavior
+
+The bounded HLS relay in `crates/providers/src/hls_proxy.rs` independently ports
+playlist rewriting and PNG/WebP-wrapped XOR segment decoding behavior from the
+[ReAnime extension in `yuzono/anime-extensions`](https://github.com/yuzono/anime-extensions/tree/master/src/en/reanime),
+licensed under Apache-2.0. No upstream Kotlin source is bundled. The production
+Re:ANIME JavaScript package lives in `nova-addons` and carries its own full
+license and attribution. Playback uses the upstream extension's external
+`enc-dec.app` token/playlist decoding service.
+
 The checked-in source inventory and hashes are maintained in
 [`assets/open_source_project_sources.tsv`](assets/open_source_project_sources.tsv),
 [`assets/open_source_vendors.txt`](assets/open_source_vendors.txt), and

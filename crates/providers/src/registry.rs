@@ -1008,6 +1008,14 @@ impl JsProvider {
             return Err(ProviderResolveError::generic());
         }
         let value = self.call(host, json!({"op":"resolveStream", "token":token}))?;
+        let hls_proxy = value.get("hlsProxy").cloned();
+        if let Some(spec) = &hls_proxy
+            && (!self.runtime.manifest().permissions.flixcloud_playback
+                || serde_json::from_value::<crate::hls_proxy::FlixcloudPlayback>(spec.clone())
+                    .is_err())
+        {
+            return Err(ProviderResolveError::generic());
+        }
         if let Some(error) = value.get("error") {
             let error: ProviderResolveError = serde_json::from_value(error.clone())
                 .map_err(|_| ProviderResolveError::generic())?;
@@ -1042,6 +1050,11 @@ impl JsProvider {
         }
         let mut response =
             stream_to_stremio(&stream, &self.descriptor.id).map_err(ProviderResolveError::from)?;
+        if let Some(spec) = hls_proxy {
+            // Keep the remote URL subject to ordinary stream validation. Only
+            // the host may replace it with a newly minted loopback capability.
+            response["novaHlsProxy"] = spec;
+        }
         if sensitive {
             response["novaSensitivePlayback"] = json!(true);
         }
@@ -1498,7 +1511,23 @@ fn resolve_owned_provider_stream(
     if cancelled() {
         return Err(ProviderResolveError::cancelled());
     }
-    let value = result?;
+    let mut value = result?;
+    if let Some(spec) = value.as_object_mut().and_then(|v| v.remove("novaHlsProxy")) {
+        let spec = serde_json::from_value(spec).map_err(|_| ProviderResolveError::generic())?;
+        let upstream = value
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(ProviderResolveError::generic)?;
+        let local = crate::hls_proxy::start(
+            upstream,
+            spec,
+            definition.plugin.permissions.domains.clone(),
+            cancelled,
+        )
+        .map_err(|_| ProviderResolveError::generic())?;
+        value["url"] = json!(local);
+        value["novaSensitivePlayback"] = json!(true);
+    }
     serde_json::from_value(value).map_err(|_| ProviderResolveError::generic())
 }
 
