@@ -8,6 +8,7 @@ export component PageHeader inherits Rectangle {
     in property <string> subtitle;
     in property <bool> narrow;
     in property <bool> show-back: root.narrow;
+    in property <bool> back-focused;
     callback back();
     vertical-stretch: 0;
     height: heading.height + (root.subtitle != "" ? 8px + description.preferred-height : 0px);
@@ -16,6 +17,7 @@ export component PageHeader inherits Rectangle {
         height: Math.max(44px, title_text.preferred-height);
         if root.show-back: SettingsBackButton {
             x: 0px; y: (heading.height - self.height) / 2;
+            focused: root.back-focused;
             clicked => { root.back(); }
         }
         title_text := Text {

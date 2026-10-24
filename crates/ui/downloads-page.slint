@@ -392,6 +392,7 @@ export component DownloadsPage inherits Rectangle {
         root.last-back = root.system_back_request;
         if root.delete-id != "" { root.finish-delete(false); }
         else if OfflineBridge.opened {OfflineBridge.closed();page_scope.focus();}
+        else if OfflineBridge.visual_retained { }
         else if InterfaceStyle.tv && download_search.has-focus {page_scope.focus();root.tv-zone=0;}
         else {root.back();}
     } }
@@ -405,6 +406,7 @@ export component DownloadsPage inherits Rectangle {
                 else { accept }
             }
             else if OfflineBridge.opened {reject}
+            else if OfflineBridge.visual_retained {accept}
             else
             if InterfaceStyle.tv && download_search.has-focus {
                 if e.text == Key.Back || e.text == Key.Escape || e.text == Key.DownArrow || e.text == Key.UpArrow {
@@ -542,5 +544,5 @@ export component DownloadsPage inherits Rectangle {
         clicked => { }
         scroll-event(event) => { accept }
     }
-    SmartDownloads {x:root.content_x;y:0px;width:root.width - root.content_x;height:root.height;safe_left:root.safe-left;safe_right:root.safe-right;safe_top:root.safe-top;safe_bottom:root.safe-bottom;}
+    SmartDownloads {active:root.active;x:root.content_x;y:0px;width:root.width - root.content_x;height:root.height;safe_left:root.safe-left;safe_right:root.safe-right;safe_top:root.safe-top;safe_bottom:root.safe-bottom;dismissed=>{if root.active {page_scope.focus();}}}
 }

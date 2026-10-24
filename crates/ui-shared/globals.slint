@@ -125,6 +125,7 @@ export struct SmartOfflineRow {
 export struct OfflineDeviceProfile {id:string,name:string,enabled:bool}
 export global OfflineBridge {
     in-out property <bool> opened;
+    in-out property <bool> visual_retained;
     in-out property <int> focused_index:-1;
     in-out property <string> focused_policy;
     in-out property <bool> detail_enabled;

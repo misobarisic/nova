@@ -1,4 +1,4 @@
-import { Theme, InterfaceStyle, OfflineBridge } from "@NovaUiShared";
+import { Theme, InterfaceStyle, OfflineBridge, Anim } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { PillButton } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
@@ -15,13 +15,49 @@ component OfflineButton inherits PillButton {
     clicked=>{root.picked();}
 }
 export component SmartDownloads inherits Rectangle {
+    in property <bool> active: true;
+    callback dismissed();
     in property <length> safe_left;
     in property <length> safe_right;
     in property <length> safe_top;
     in property <length> safe_bottom;
     private property <length> supporting_font_size: InterfaceStyle.tv ? 20px : 14px;
-    visible: OfflineBridge.opened;
-    background: Theme.current.artwork_canvas;
+    private property <bool> opened: root.active && OfflineBridge.opened;
+    private property <bool> retained;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <float> slide: 0.0;
+    private property <float> alpha: 0.0;
+    animate slide { duration: Anim.transition_slide; easing: ease-out; }
+    animate alpha { duration: Anim.transition_fade; }
+    visible: root.opened || root.retained;
+    clip: true;
+    changed opened => {
+        return_timer.stop();
+        root.slide = root.opened ? 1.0 : 0.0;
+        root.alpha = root.opened ? 1.0 : 0.0;
+        if root.opened {
+            root.retained = true;
+            OfflineBridge.refresh(); keys.focus();
+        } else if root.motion && root.active && root.retained {
+            return_timer.start();
+        } else { root.retained = false; }
+    }
+    changed motion => {
+        if !root.motion {
+            root.slide = root.opened ? 1.0 : 0.0;
+            root.alpha = root.opened ? 1.0 : 0.0;
+            if !root.opened { return_timer.stop(); root.retained = false; }
+        }
+    }
+    changed visible => {
+        OfflineBridge.visual_retained = root.visible;
+        if !root.visible { root.dismissed(); }
+    }
+    return_timer := Timer {
+        interval: Math.max(Anim.transition_slide, Anim.transition_fade);
+        running: false;
+        triggered => { self.stop(); root.retained = false; }
+    }
     // Cover inert page margins as well as controls and scrolling content.
     TouchArea {width:100%;height:100%;clicked=>{} scroll-event(event)=>{accept}}
     private property <int> selected_row <=> OfflineBridge.focused_index;
@@ -34,7 +70,6 @@ export component SmartDownloads inherits Rectangle {
         if top<0px {scroll.content-y=scroll.content-y - top;}
         else if top+h>scroll.visible-height {scroll.content-y=scroll.content-y - (top+h - scroll.visible-height);}
     }
-    changed visible => {if self.visible {OfflineBridge.refresh();keys.focus();}}
     function activate() {
         if root.selected_row<0 {
             if root.selected_action==0 {OfflineBridge.closed();}
@@ -56,7 +91,12 @@ export component SmartDownloads inherits Rectangle {
             else {OfflineBridge.action(row.id,8);}
         }
     }
-    keys := FocusScope { width:100%;height:100%;enabled:root.visible;
+    panel := Rectangle {
+    x: (1.0 - root.slide) * root.width * 0.1; y: 0px;
+    width: root.width; height: root.height;
+    opacity: root.alpha;
+    background: Theme.current.artwork_canvas;
+    keys := FocusScope { width:100%;height:100%;enabled:root.opened;
         capture-key-pressed(e)=>{
             if e.text==Key.Escape || e.text==Key.Back {if !e.repeat {OfflineBridge.closed();}accept}
             else if InterfaceStyle.tv && (e.text==Key.DownArrow || e.text==Key.UpArrow) {
@@ -66,9 +106,14 @@ export component SmartDownloads inherits Rectangle {
             } else if InterfaceStyle.tv && (e.text==Key.Return || e.text==" ") {if !e.repeat {root.activate();}accept}else{reject}
         }
         scroll := ScrollView {x:root.safe_left;y:root.safe_top;width:parent.width - root.safe_left - root.safe_right;height:parent.height - root.safe_top - root.safe_bottom;content-width:self.visible-width;
-            VerticalLayout {padding:20px;spacing:12px;
-                PageHeader {title:@tr("Smart downloads");show-back:false;narrow:!InterfaceStyle.tv && root.width<700px;}
-                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Back");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==0;picked=>{OfflineBridge.closed();}}
+            VerticalLayout {padding:18px;spacing:12px;
+                header := PageHeader {
+                    title:@tr("Smart downloads"); show-back:true;
+                    narrow:!InterfaceStyle.tv && root.width<700px;
+                    back-focused:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==0;
+                    changed back-focused => { if self.back-focused { root.reveal(self.absolute-position.y,self.height); } }
+                    back=>{OfflineBridge.closed();}
+                }
                 Text {font-size:root.supporting_font_size;text:@tr("Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet.");wrap:word-wrap;color:Theme.current.text_muted;}
                 Text {font-size:root.supporting_font_size;text:OfflineBridge.storage_summary;wrap:word-wrap;color:Theme.current.text_primary;}
                 OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.device_enabled ? @tr("Pause this profile on this device") : @tr("Enable this profile on this device");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==1;selected:OfflineBridge.device_enabled;picked=>{OfflineBridge.device_toggle();}}
@@ -108,4 +153,8 @@ export component SmartDownloads inherits Rectangle {
             }
         }
     }
+    }
+    // The outgoing panel remains painted but cannot edit rules or pass input
+    // through to the retained Downloads list before the return completes.
+    if !root.opened: TouchArea { width:100%; height:100%; clicked=>{} scroll-event(event)=>{accept} }
 }

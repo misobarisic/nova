@@ -16,6 +16,147 @@ fn settle(app: &nova::AppWindow) {
 }
 
 #[test]
+fn smart_downloads_animates_both_directions_with_header_back() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::smart_downloads_animates_both_directions_with_header_back"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    for (width, tv) in [(390., false), (1280., false), (1920., true)] {
+        for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
+            let app = nova::AppWindow::new().unwrap();
+            app.global::<nova::InterfaceStyle>().set_tv(tv);
+            let anim = app.global::<nova::Anim>();
+            anim.set_enabled(enabled);
+            anim.set_transitions(transitions);
+            app.set_show_home(false);
+            app.set_show_downloads(true);
+            app.window().set_size(slint::LogicalSize::new(width, 1080.));
+            app.show().unwrap();
+            settle(&app);
+            let offline = app.global::<nova::OfflineBridge>();
+            let weak = app.as_weak();
+            offline.on_closed(move || {
+                weak.upgrade()
+                    .unwrap()
+                    .global::<nova::OfflineBridge>()
+                    .set_opened(false);
+            });
+            offline.set_opened(true);
+            let panel = ElementHandle::find_by_element_id(&app, "SmartDownloads::panel")
+                .next()
+                .expect("retained Smart downloads content");
+            // Keep the handle so the final hidden frame remains measurable.
+            let sample = || (panel.absolute_position().x, panel.computed_opacity());
+            let advance = |millis| {
+                for _ in 0..millis {
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+                    let _ = sample();
+                }
+            };
+            let _ = sample();
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            let start = sample();
+            advance(90);
+            let middle = sample();
+            advance(220);
+            let end = sample();
+            if enabled && transitions {
+                assert!(start.0 > middle.0 && middle.0 > end.0, "entry slide");
+                assert!(start.1 < middle.1 && middle.1 < end.1, "entry fade");
+            } else {
+                assert!(
+                    (start.0 - end.0).abs() < 0.1 && start.1 > 0.99,
+                    "disabled entry: width={width}, enabled={enabled}, transitions={transitions}: {start:?} -> {end:?}"
+                );
+            }
+            let header = ElementHandle::find_by_element_id(&app, "SmartDownloads::header")
+                .next()
+                .unwrap();
+            let back = header
+                .query_descendants()
+                .match_type_name("SettingsBackButton")
+                .find_all()
+                .pop()
+                .expect("shared chevron button inside header");
+            let p = back.absolute_position();
+            let size = back.size();
+            assert_eq!(size.width, if tv { 56. } else { 44. });
+            assert!(p.y < header.absolute_position().y + header.size().height);
+            assert!(
+                header
+                    .query_descendants()
+                    .match_type_name("PillButton")
+                    .find_all()
+                    .is_empty(),
+                "Back is a header chevron, not a separate text pill"
+            );
+            let position = LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+            for event in [
+                slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+                slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+            ] {
+                app.window().dispatch_event(event);
+            }
+            assert!(!offline.get_opened(), "header Back closes the submenu");
+            let _ = sample();
+            if enabled && transitions {
+                assert!(offline.get_visual_retained(), "retain the return animation");
+                app.set_system_back_request(app.get_system_back_request() + 1);
+                assert!(app.get_show_downloads(), "repeated Back stays on Downloads");
+                advance(90);
+                let returning = sample();
+                assert!(returning.0 > end.0 && returning.1 < end.1);
+                // Reopening reverses the retained panel rather than resetting it.
+                offline.set_opened(true);
+                let reopened = sample();
+                assert!((reopened.0 - returning.0).abs() < 0.1);
+                advance(300);
+                app.set_system_back_request(app.get_system_back_request() + 1);
+                let _ = sample();
+                advance(300);
+                assert!(!offline.get_visual_retained(), "animated return completes");
+                offline.set_opened(true);
+                let _ = sample();
+                advance(100);
+                offline.set_opened(false);
+                let _ = sample();
+                advance(40);
+                anim.set_enabled(false);
+                let _ = sample();
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+                assert!(
+                    !offline.get_visual_retained(),
+                    "master-off ends the return immediately"
+                );
+            }
+            advance(300);
+            assert!(
+                !offline.get_visual_retained(),
+                "return releases the overlay"
+            );
+            assert!(app.get_show_downloads());
+            offline.set_opened(true);
+            let _ = sample();
+            app.set_show_downloads(false);
+            settle(&app);
+            assert!(
+                !offline.get_visual_retained(),
+                "navigation clears the Back guard"
+            );
+        }
+    }
+}
+
+#[test]
 fn smart_downloads_blocks_covered_actions_and_back_closes_only_one_layer() {
     if !crate::isolation::run(concat!(
         module_path!(),

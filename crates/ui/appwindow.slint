@@ -787,7 +787,11 @@ export component AppWindow inherits Window {
     private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
     changed about_page_mounted => { if root.about_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> downloads_page_mounted: root.show_downloads && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
-    changed downloads_page_mounted => { if root.downloads_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
+    changed downloads_page_mounted => {
+        if !root.downloads_page_mounted { OfflineBridge.visual_retained = false; }
+        if root.downloads_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); }
+        page_release_timer.start();
+    }
     changed onboarding_visible => {
         root.preserve_back_focus();
         page_release_timer.start();
@@ -1583,6 +1587,7 @@ export component AppWindow inherits Window {
         if MoreBridge.pin_open { MoreBridge.pin_cancel(); return; }
         if MoreBridge.policy_open { MoreBridge.management_closed(); return; }
         if OfflineBridge.opened {OfflineBridge.closed();return;}
+        if OfflineBridge.visual_retained {return;}
         if BackupBridge.open {
             if !BackupBridge.busy {
                 if BackupBridge.recovery_confirmation { BackupBridge.cancel_delete_recovery(); }
@@ -2472,6 +2477,7 @@ export component AppWindow inherits Window {
                 } else { reject }
             } else if OfflineBridge.opened && (e.text == Key.Back || e.text == Key.Escape) {
                 if !e.repeat {OfflineBridge.closed();root.preserve_back_focus();page_release_timer.start();}accept
+            } else if OfflineBridge.visual_retained && (e.text == Key.Back || e.text == Key.Escape) { accept
             } else if BackupBridge.open && !MoreBridge.pin_open && !MoreBridge.policy_open && (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
                 if !e.repeat && !BackupBridge.busy {
                     if BackupBridge.recovery_confirmation { BackupBridge.cancel_delete_recovery(); }
