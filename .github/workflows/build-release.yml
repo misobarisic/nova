@@ -65,6 +65,7 @@ permissions:
 
 env:
   NOVA_RELEASE_PROFILE: cd-release
+  CARGO_INCREMENTAL: "0"
 
 # Cancel stale pull-request and main-branch runs when newer commits arrive.
 concurrency:
@@ -90,6 +91,16 @@ jobs:
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ github.token }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: nova-ci-v1
+          key: nix-${{ hashFiles('flake.lock') }}
+          cmd-format: nix develop .#default --command {0}
+          cache-targets: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check Rust formatting
         run: nix develop .#default --command cargo fmt --all -- --check
@@ -137,6 +148,16 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: nova-ci-v1
+          key: nix-${{ hashFiles('flake.lock') }}
+          cmd-format: nix develop .#windows --command {0}
+          cache-targets: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check Windows GNU target
         run: >-
           nix develop .#windows --command cargo check --workspace --locked
@@ -164,6 +185,16 @@ jobs:
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ github.token }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: nova-ci-v1
+          key: nix-${{ hashFiles('flake.lock') }}
+          cmd-format: nix develop .#android --command {0}
+          cache-targets: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test read-only Android runtime packaging
         run: nix develop .#android --command python3 -B android/test_runtime_packaging.py
