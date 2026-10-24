@@ -365,7 +365,11 @@ fn player_submenu_teardown_preserves_native_back() {
     let (app, backgrounds) = setup();
     app.set_show_home(false);
     app.set_player_open(true);
-    app.set_playback_started(false);
+    // Playback settings belong to the playing state; initial loading exposes
+    // only Back. Exercise submenu teardown after the real controls are mounted.
+    app.set_playback_started(true);
+    app.set_osd_visible(true);
+    app.set_duration(100.0);
     idle();
     let gear = ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")
         .next()

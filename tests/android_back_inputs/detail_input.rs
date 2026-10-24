@@ -1,4 +1,4 @@
-//! Back must survive episode search disappearing on tab/stream navigation.
+//! Back must survive episode-search tab teardown and retained stream navigation.
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, VecModel};
@@ -79,6 +79,9 @@ async fn focus_episode_search(app: &nova::AppWindow, failures: &RefCell<Vec<Stri
 
 async fn back(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     let before = app.get_system_back_request();
+    // Fullscreen streams route directly to stream_selector_back; sending a
+    // detail request as well would pop the retained title behind the selector.
+    let detail_requests = i32::from(!app.get_stream_selector_open());
     for (event, message) in [
         (
             slint::platform::WindowEvent::KeyPressed {
@@ -112,8 +115,8 @@ async fn back(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     settle().await;
     check(
         failures,
-        app.get_system_back_request() == before + 1,
-        "one held Back must produce exactly one detail navigation request",
+        app.get_system_back_request() == before + detail_requests,
+        "one held Back must use only the active selector or detail navigation route",
     );
 }
 
@@ -161,13 +164,17 @@ fn back_survives_focused_episode_search_tab_and_stream_teardown() {
         app.set_episode_context("S1 E1".into());
         app.set_detail_deep_stream(false);
         app.set_modal_episodes(false);
+        app.set_stream_selector_open(true);
     });
     let episodes_backs = Rc::new(Cell::new(0usize));
     let recorded_episodes_backs = episodes_backs.clone();
     let weak = app.as_weak();
-    app.on_episodes_back(move || {
+    app.on_stream_selector_back(move || {
         recorded_episodes_backs.set(recorded_episodes_backs.get() + 1);
-        weak.upgrade().unwrap().set_modal_episodes(true);
+        let app = weak.upgrade().unwrap();
+        app.set_modal_episodes(true);
+        app.set_stream_selector_open(false);
+        app.set_episode_context(Default::default());
     });
     let detail_closes = Rc::new(Cell::new(0usize));
     let recorded_detail_closes = detail_closes.clone();
@@ -241,15 +248,35 @@ fn back_survives_focused_episode_search_tab_and_stream_teardown() {
             episode_picks.get() == 1
                 && !app.get_modal_episodes()
                 && app.get_modal_visible()
-                && ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::filter_line")
+                && app.get_stream_selector_open()
+                && ElementHandle::find_by_element_type_name(&app, "StreamSelector")
                     .next()
-                    .is_none(),
-            "tapping an episode must remove the focused search subtree and open its streams",
+                    .is_some()
+                && !(*app)
+                    .global::<nova_ui_shared::DetailContent>()
+                    .get_filter_focused(),
+            "tapping an episode must move focus from search to its fullscreen streams",
+        );
+        // The selector retains the episode tree and filter to preserve the
+        // reading position on return. Its covered editor must stop receiving
+        // text even though its element still exists in the retained subtree.
+        let retained_filter = app.get_episode_filter();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "z".into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "z".into() });
+        settle().await;
+        check(
+            failures,
+            app.get_episode_filter() == retained_filter,
+            "typing in streams must not edit the retained episode search",
         );
         back(&app, failures).await;
         check(
             failures,
             app.get_modal_episodes()
+                && !app.get_stream_selector_open()
+                && app.get_episode_filter() == retained_filter
                 && app.get_modal_visible()
                 && episodes_backs.get() == 1
                 && detail_closes.get() == 1
