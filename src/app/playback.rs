@@ -1488,7 +1488,7 @@ impl Bridge {
         &self,
         url: String,
         headers: Vec<(String, String)>,
-        subtitles: Vec<String>,
+        subtitles: Vec<crate::player::SourceSubtitle>,
     ) -> bool {
         let request = self.begin_playback_request();
         if !request.is_current() {
@@ -1635,7 +1635,7 @@ impl Bridge {
         request: crate::torrent::PlaybackRequest,
         url: String,
         headers: Vec<(String, String)>,
-        subtitles: Vec<String>,
+        subtitles: Vec<crate::player::SourceSubtitle>,
     ) -> bool {
         let path = std::path::Path::new(&url);
         if path.is_file()
@@ -1877,7 +1877,7 @@ impl Bridge {
         request: crate::torrent::PlaybackRequest,
         url: String,
         headers: Vec<(String, String)>,
-        subtitles: Vec<String>,
+        subtitles: Vec<crate::player::SourceSubtitle>,
     ) -> bool {
         if !self.playback_request_is_current(&request) {
             return false;
@@ -1924,7 +1924,7 @@ impl Bridge {
                 .retry_preferences
                 .clone()
                 .unwrap_or_else(|| self.prepare_playback_preferences());
-            let queued = self.player.play_with_preferences_and_load_policy(
+            let queued = self.player.play_with_source_subtitles_and_load_policy(
                 &url,
                 0.0,
                 &headers,
@@ -2122,7 +2122,7 @@ impl Bridge {
                 .as_ref()
                 .is_some_and(|intent| intent.private_playback);
         let guarded = context.recovery_timeline.is_some() && !party_active;
-        let queued = self.player.play_with_preferences_and_load_policy(
+        let queued = self.player.play_with_source_subtitles_and_load_policy(
             &url,
             start_at,
             &headers,
@@ -3091,7 +3091,15 @@ mod home_return_tests {
                 pending.headers,
                 [("Authorization".into(), "Bearer fixture".into())]
             );
-            assert_eq!(pending.subtitles, ["https://example.invalid/subtitle.srt"]);
+            assert_eq!(
+                pending
+                    .subtitles
+                    .iter()
+                    .map(|subtitle| subtitle.url.as_str())
+                    .collect::<Vec<_>>(),
+                ["https://example.invalid/subtitle.srt"]
+            );
+            assert_eq!(pending.subtitles[0].language.as_deref(), Some("en"));
         }
         bridge.cancel_resume_prompt();
         assert!(!ask.is_current());

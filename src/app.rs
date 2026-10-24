@@ -193,7 +193,7 @@ pub(crate) enum StreamSource {
     UrlWithOptions {
         url: String,
         headers: Vec<(String, String)>,
-        subtitles: Vec<String>,
+        subtitles: Vec<crate::player::SourceSubtitle>,
     },
     /// A torrent row (`infoHash` + optional `fileIdx`) that the embedded
     /// BitTorrent engine resolves to a loopback URL.
@@ -222,7 +222,7 @@ pub(crate) struct PendingStream {
     pub(crate) request: crate::torrent::PlaybackRequest,
     pub(crate) url: String,
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) subtitles: Vec<String>,
+    pub(crate) subtitles: Vec<crate::player::SourceSubtitle>,
 }
 
 /// One row shown in the modal's stream list.

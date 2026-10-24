@@ -18,7 +18,7 @@ pub(super) struct Source {
     descriptor: SourceDescriptor,
     url: String,
     headers: Vec<(String, String)>,
-    subtitles: Vec<String>,
+    subtitles: Vec<crate::player::SourceSubtitle>,
     request: crate::torrent::PlaybackRequest,
     title: String,
     _lease: Option<Arc<FileLease>>,
@@ -701,7 +701,7 @@ impl Bridge {
         request: &crate::torrent::PlaybackRequest,
         url: &str,
         headers: &[(String, String)],
-        subtitles: &[String],
+        subtitles: &[crate::player::SourceSubtitle],
         position: f64,
     ) -> bool {
         if !ENABLED {
@@ -913,13 +913,16 @@ impl Bridge {
                         let preferences = self.prepare_playback_preferences();
                         if self
                             .player
-                            .play_with_preferences_and_policy(
+                            .play_with_source_subtitles_and_load_policy(
                                 &source.url,
                                 position,
                                 &source.headers,
                                 &source.subtitles,
                                 preferences,
-                                false,
+                                crate::player::PlaybackLoadPolicy {
+                                    allow_external: false,
+                                    paused: false,
+                                },
                             )
                             .is_ok()
                         {
@@ -1093,9 +1096,9 @@ fn run_worker(
                         let index = source
                             .subtitles
                             .iter()
-                            .position(|s| s == &url)
+                            .position(|s| s.url == url)
                             .unwrap_or_else(|| {
-                                source.subtitles.push(url);
+                                source.subtitles.push(url.into());
                                 source.subtitles.len() - 1
                             });
                         source.selected_text = Some(index as i64 + 1);
@@ -1431,13 +1434,16 @@ fn run_worker(
                                     b.shared.lock().unwrap().casting.source = Some(source.clone());
                                     let preferences = b.prepare_playback_preferences();
                                     if b.player
-                                        .play_with_preferences_and_policy(
+                                        .play_with_source_subtitles_and_load_policy(
                                             &source.url,
                                             position,
                                             &source.headers,
                                             &source.subtitles,
                                             preferences,
-                                            false,
+                                            crate::player::PlaybackLoadPolicy {
+                                                allow_external: false,
+                                                paused: false,
+                                            },
                                         )
                                         .is_ok()
                                     {
@@ -1748,12 +1754,12 @@ fn load(
                 .iter()
                 .take(8)
                 .enumerate()
-                .map(|(index, url)| nova_cast_media::SourceTextTrack {
+                .map(|(index, subtitle)| nova_cast_media::SourceTextTrack {
                     id: index as i64 + 1,
                     name: format!("{} {}", text::tr("Subtitle"), index + 1),
-                    language: String::new(),
-                    url: url.clone(),
-                    headers: if same_origin(&source.url, url) {
+                    language: subtitle.language.clone().unwrap_or_default(),
+                    url: subtitle.url.clone(),
+                    headers: if same_origin(&source.url, &subtitle.url) {
                         source.headers.clone()
                     } else {
                         Vec::new()

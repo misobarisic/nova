@@ -1585,6 +1585,7 @@ mod stream_source_tests {
             addons::Subtitle {
                 id: "eng".into(),
                 url: "https://example.com/sub,one.vtt".into(),
+                lang: Some("eng".into()),
                 ..Default::default()
             },
             addons::Subtitle {
@@ -1605,7 +1606,14 @@ mod stream_source_tests {
             panic!("expected URL with subtitles")
         };
         assert!(headers.is_empty());
-        assert_eq!(subtitles, vec!["https://example.com/sub,one.vtt"]);
+        assert_eq!(
+            subtitles
+                .iter()
+                .map(|subtitle| subtitle.url.as_str())
+                .collect::<Vec<_>>(),
+            vec!["https://example.com/sub,one.vtt"]
+        );
+        assert_eq!(subtitles[0].language.as_deref(), Some("en"));
     }
 
     #[test]

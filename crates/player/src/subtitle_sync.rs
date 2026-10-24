@@ -1629,6 +1629,9 @@ impl super::Player {
             .is_some_and(|style| style.delay.is_some());
         drop(preferences);
         let mut sync = self.state.subtitle_sync.lock().unwrap();
+        if let Ok(raw) = self.state.track_inventory(mpv) {
+            sync.update_inventory(&raw);
+        }
         sync.poll(mpv, style.delay as f64, manual);
         style.delay = sync.delay(mpv, style.delay as f64) as f32;
         drop(sync);

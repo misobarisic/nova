@@ -154,6 +154,7 @@ pub fn tr(english: &str) -> &str {
             "Prije pridruživanja zajedničkom gledanju ili uparenoj Nova sesiji zaustavite emitiranje."
         }
         "Subtitle" => "Titl",
+        "Included with stream" => "Uključeno uz izvor",
         "Cast to a device" => "Emitiraj na uređaj",
         "Connecting to receiver" => "Povezivanje s prijamnikom",
         "Connected to {}" => "Povezano s {}",

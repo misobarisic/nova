@@ -161,6 +161,38 @@ fn add_local_subtitle(mpv: &Mpv, path: &str, title: &str, language: &str) -> Res
         .map_err(|error| error.to_string())
 }
 
+fn automatic_online_choice(
+    preferences: &SessionPreferences,
+    manual: bool,
+    raw: &str,
+    subtitles: &[OnlineSubtitle],
+) -> Option<i32> {
+    use nova_config::playback_preferences::{language_preferences, normalize_language};
+    if manual {
+        return None;
+    }
+    let wanted = match &preferences.title.subtitles {
+        Some(TrackChoice::Off) => return None,
+        Some(TrackChoice::Track(track)) => vec![track.language.clone()?],
+        None => language_preferences(&preferences.subtitle_language),
+    };
+    let tracks = track_preferences::parse_tracks(raw);
+    for language in wanted {
+        if tracks
+            .iter()
+            .any(|track| !track.audio && track.descriptor.language.as_deref() == Some(&language))
+        {
+            return None;
+        }
+        if let Some(index) = subtitles.iter().position(|subtitle| {
+            normalize_language(&subtitle.language).as_deref() == Some(&language)
+        }) {
+            return Some(-2 - index as i32);
+        }
+    }
+    None
+}
+
 impl Player {
     #[cfg(target_os = "android")]
     pub(super) fn arm_online_subtitle_restore(&self) {
@@ -219,37 +251,21 @@ impl Player {
         }
     }
 
-    /// Prefer an embedded track whenever it already satisfies the saved or
-    /// global language. A viewer's explicit track/Off choice always wins.
+    /// Keep a loaded track when its native or source-provided language already
+    /// satisfies the preference. A viewer's explicit track/Off choice wins.
     pub fn automatic_online_subtitle(&self) -> Option<i32> {
-        use nova_config::playback_preferences::{language_preferences, normalize_language};
         let preferences = self.state.preferences.lock().unwrap();
-        if preferences.manual_subtitles {
-            return None;
-        }
-        let wanted = match &preferences.preferences.title.subtitles {
-            Some(TrackChoice::Off) => return None,
-            Some(TrackChoice::Track(track)) => vec![track.language.clone()?],
-            None => language_preferences(&preferences.preferences.subtitle_language),
-        };
+        let manual = preferences.manual_subtitles;
+        let session = preferences.preferences.clone();
         drop(preferences);
         let mpv = self.state.mpv.lock().unwrap();
-        let raw = mpv.as_ref()?.get_property::<String>("track-list").ok()?;
-        let tracks = track_preferences::parse_tracks(&raw);
-        let subtitles = self.state.online_subtitles.lock().unwrap();
-        for language in wanted {
-            if tracks.iter().any(|track| {
-                !track.audio && track.descriptor.language.as_deref() == Some(&language)
-            }) {
-                return None;
-            }
-            if let Some(index) = subtitles.iter().position(|subtitle| {
-                normalize_language(&subtitle.language).as_deref() == Some(&language)
-            }) {
-                return Some(-2 - index as i32);
-            }
-        }
-        None
+        let raw = self.state.track_inventory(mpv.as_ref()?).ok()?;
+        automatic_online_choice(
+            &session,
+            manual,
+            &raw,
+            &self.state.online_subtitles.lock().unwrap(),
+        )
     }
 
     pub fn set_online_subtitles(&self, subtitles: Vec<OnlineSubtitle>) {
@@ -332,6 +348,77 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_caption_language_prevents_replacement_without_blocking_unknown_or_manual_choices() {
+        use nova_config::playback_preferences::{SessionPreferences, TitlePreferences};
+        let mut preferences = SessionPreferences::from_settings(
+            &nova_config::CacheSettings::default(),
+            TitlePreferences::default(),
+        );
+        preferences.subtitle_language = "en".into();
+        let choices = vec![
+            OnlineSubtitle {
+                url: "https://addon.invalid/en".into(),
+                language: "en".into(),
+                title: "Addon English".into(),
+            },
+            OnlineSubtitle {
+                url: "https://addon.invalid/hr".into(),
+                language: "hr".into(),
+                title: "Addon Croatian".into(),
+            },
+        ];
+        let raw = r#"[{"id":5,"type":"sub","external":true,"external-filename":"https://included.invalid/eng.vtt?cut=one"}]"#;
+        let mut metadata = source_subtitles::SourceSubtitles::default();
+        metadata.begin(
+            "video",
+            1,
+            vec![SourceSubtitle {
+                url: "https://included.invalid/eng.vtt?cut=one".into(),
+                language: Some("eng".into()),
+            }],
+        );
+        let included = metadata.enrich("video", 1, raw.into());
+        assert_eq!(
+            automatic_online_choice(&preferences, false, &included, &choices),
+            None
+        );
+        assert_eq!(
+            automatic_online_choice(&preferences, false, raw, &choices),
+            Some(-2),
+            "unknown attached captions still allow the preferred addon language"
+        );
+        assert_eq!(
+            automatic_online_choice(&preferences, true, raw, &choices),
+            None,
+            "viewer picks win"
+        );
+        preferences.title.subtitles = Some(TrackChoice::Off);
+        assert_eq!(
+            automatic_online_choice(&preferences, false, raw, &choices),
+            None
+        );
+        preferences.title.subtitles = None;
+        preferences.subtitle_language = "hr,en".into();
+        assert_eq!(
+            automatic_online_choice(&preferences, false, &included, &choices),
+            Some(-3),
+            "the first preferred language still wins over another included language"
+        );
+        metadata.begin("video", 2, Vec::new());
+        preferences.subtitle_language = "en".into();
+        assert_eq!(
+            automatic_online_choice(
+                &preferences,
+                false,
+                &metadata.enrich("video", 2, raw.into()),
+                &choices
+            ),
+            Some(-2),
+            "a new source cannot inherit old declarations"
+        );
+    }
 
     #[test]
     fn repeated_recovery_retains_a_secondary_only_addon() {

@@ -47,6 +47,9 @@ pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod gpu_screenshot;
 
+mod source_subtitles;
+pub use source_subtitles::SourceSubtitle;
+
 mod addon_subtitles;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod desktop_decoder;
@@ -1175,6 +1178,7 @@ struct State {
     pending_headers: Mutex<Vec<(String, String)>>,
     /// External subtitle files to load with the next stream.
     pending_subtitles: Mutex<Vec<String>>,
+    source_subtitles: Mutex<source_subtitles::SourceSubtitles>,
     online_subtitles: Mutex<Vec<OnlineSubtitle>>,
     subtitle_sync: Mutex<subtitle_sync::SubtitleSync>,
     #[cfg(target_os = "android")]
@@ -1271,6 +1275,24 @@ struct State {
 }
 
 impl State {
+    /// Read only the current accepted source. An external track receives
+    /// declared facts only through an exact URL + playback-session match.
+    fn track_inventory(&self, mpv: &Mpv) -> libmpv2::Result<String> {
+        if self.pending.lock().unwrap().is_some() {
+            return Err(libmpv2::Error::Raw(libmpv2::mpv_error::PropertyUnavailable));
+        }
+        let source = mpv.get_property::<String>("path")?;
+        if source != *self.preference_source.lock().unwrap() {
+            return Err(libmpv2::Error::Raw(libmpv2::mpv_error::PropertyUnavailable));
+        }
+        let raw = mpv.get_property::<String>("track-list")?;
+        Ok(self.source_subtitles.lock().unwrap().enrich(
+            &source,
+            self.screenshot_session.load(Ordering::SeqCst),
+            raw,
+        ))
+    }
+
     /// Used by the rendering callback immediately before submitting loadfile.
     fn take_load_pause(&self) -> bool {
         self.pending_paused.swap(false, Ordering::SeqCst)
@@ -1490,6 +1512,7 @@ impl Player {
             pending: Mutex::new(None),
             pending_headers: Mutex::new(Vec::new()),
             pending_subtitles: Mutex::new(Vec::new()),
+            source_subtitles: Mutex::new(Default::default()),
             online_subtitles: Mutex::new(Vec::new()),
             subtitle_sync: Mutex::new(subtitle_sync::SubtitleSync::default()),
             #[cfg(target_os = "android")]
@@ -2060,6 +2083,34 @@ impl Player {
         preferences: SessionPreferences,
         policy: PlaybackLoadPolicy,
     ) -> Result<(), String> {
+        let subtitles = subtitles
+            .iter()
+            .take(20)
+            .filter(|url| url.len() <= 4096)
+            .cloned()
+            .map(SourceSubtitle::from)
+            .collect::<Vec<_>>();
+        self.play_with_source_subtitles_and_load_policy(
+            url,
+            start_pos_secs,
+            headers,
+            &subtitles,
+            preferences,
+            policy,
+        )
+    }
+
+    /// Typed source captions retain declared facts through the ordinary async
+    /// sub-files loader. URL-only public entry points remain compatible.
+    pub fn play_with_source_subtitles_and_load_policy(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+        subtitles: &[SourceSubtitle],
+        preferences: SessionPreferences,
+        policy: PlaybackLoadPolicy,
+    ) -> Result<(), String> {
         self.state
             .start_pause_hold
             .store(policy.paused, Ordering::SeqCst);
@@ -2102,6 +2153,7 @@ impl Player {
         };
         *self.state.secondary_subtitles.lock().unwrap() = TrackChoice::Off;
         *self.state.preference_source.lock().unwrap() = url.to_owned();
+        self.state.source_subtitles.lock().unwrap().clear();
         self.state.online_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
         {
@@ -2118,18 +2170,15 @@ impl Player {
         self.state.source_waiting.store(false, Ordering::SeqCst);
         *self.state.pending.lock().unwrap() = Some(url.to_string());
         *self.state.pending_headers.lock().unwrap() = headers.to_vec();
-        let mut subtitle_bytes = 0usize;
+        let subtitles = source_subtitles::bounded(subtitles);
+        self.state.source_subtitles.lock().unwrap().begin(
+            url,
+            self.state.screenshot_session.load(Ordering::SeqCst),
+            subtitles.clone(),
+        );
         let subtitles = subtitles
-            .iter()
-            .take(20)
-            .filter(|url| {
-                subtitle_bytes += url.len();
-                subtitle_bytes <= 32 * 1024
-                    && url.len() <= 4096
-                    && (url.starts_with("https://") || url.starts_with("http://"))
-                    && !url.bytes().any(|byte| byte < b' ' || byte == 127)
-            })
-            .cloned()
+            .into_iter()
+            .map(|subtitle| subtitle.url)
             .collect::<Vec<_>>();
         *self.state.pending_subtitles.lock().unwrap() = subtitles.clone();
         #[cfg(target_os = "android")]
@@ -2710,7 +2759,7 @@ impl Player {
             let choice = if track_id < 0 {
                 TrackChoice::Off
             } else {
-                let raw = mpv.get_property::<String>("track-list").ok()?;
+                let raw = self.state.track_inventory(mpv).ok()?;
                 let track = track_preferences::parse_tracks(&raw)
                     .into_iter()
                     .find(|t| t.audio == audio && t.id == track_id)?;
@@ -2851,7 +2900,7 @@ impl Player {
         let mpv = self.state.mpv.lock().ok()?;
         let mpv = mpv.as_ref()?;
         let selected = mpv.get_property::<i64>("aid").ok()?;
-        let raw = mpv.get_property::<String>("track-list").ok()?;
+        let raw = self.state.track_inventory(mpv).ok()?;
         let tracks: serde_json::Value = serde_json::from_str(&raw).ok()?;
         tracks
             .as_array()?
@@ -2874,7 +2923,7 @@ impl Player {
         let mpv = self.state.mpv.lock().ok()?;
         let mpv = mpv.as_ref()?;
         let selected = mpv.get_property::<i64>("sid").ok()?;
-        let raw = mpv.get_property::<String>("track-list").ok()?;
+        let raw = self.state.track_inventory(mpv).ok()?;
         let tracks: serde_json::Value = serde_json::from_str(&raw).ok()?;
         let track = tracks.as_array()?.iter().find(|track| {
             track.get("type").and_then(|v| v.as_str()) == Some("sub")
@@ -3083,7 +3132,7 @@ impl Player {
         }
         #[cfg(target_os = "android")]
         self.restore_online_subtitle(mpv);
-        let Ok(raw) = mpv.get_property::<String>("track-list") else {
+        let Ok(raw) = self.state.track_inventory(mpv) else {
             return false;
         };
         let mut session = self.state.preferences.lock().unwrap();
@@ -3208,7 +3257,7 @@ impl Player {
             return;
         }
         // MPV_FORMAT_STRING on a node property returns its JSON form.
-        let raw: String = match mpv.get_property("track-list") {
+        let raw: String = match self.state.track_inventory(mpv) {
             Ok(s) => s,
             Err(_) => return, // no file loaded; keep whatever is shown
         };
@@ -3259,6 +3308,14 @@ impl Player {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                if t.get("nova-source-subtitle").and_then(|v| v.as_bool()) == Some(true) {
+                    let included = nova_ui::backend_text::tr("Included with stream");
+                    title = if title.is_empty() {
+                        included.into()
+                    } else {
+                        format!("{title} · {included}")
+                    };
+                }
                 let listed_selected = t.get("selected").and_then(|v| v.as_bool()).unwrap_or(false);
                 let selected = match type_ {
                     "audio" => aid.map_or(listed_selected, |a| a == id),
@@ -3532,6 +3589,7 @@ impl Player {
         }
         *self.state.pending.lock().unwrap() = None;
         self.state.preference_source.lock().unwrap().clear();
+        self.state.source_subtitles.lock().unwrap().clear();
         self.state.pending_headers.lock().unwrap().clear();
         self.state.pending_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]

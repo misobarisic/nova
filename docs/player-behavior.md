@@ -772,3 +772,29 @@ combinations for mono, stereo and 5.1. All four release targets passed their
 build and bundle checks. Linux uses the installed mpv/FFmpeg filters; runtime
 validation remains required on every platform. Cross-build checks do not
 establish physical-device audio quality or latency.
+
+## Source-provided caption metadata
+
+Captions attached to a stream retain their declared language through resolution,
+resume prompts, native playback and same-session Android recovery. Loading still
+uses mpv's asynchronous `sub-files` option; Nova does not fetch every caption or
+reload it with `sub-add` merely to assign a language.
+
+`SourceSubtitle` and the accepted source's caption inventory are runtime-only.
+The shared native inventory reader matches an external subtitle's complete
+`external-filename` to the exact supplied URL, including its query, and checks
+both the video source and playback session. It fills an unknown language from
+the declaration and marks the caption as Included with stream in track menus.
+An already known native language takes precedence. Unknown or conflicting
+language declarations remain unknown; filenames are never language evidence.
+
+Primary and secondary semantic selection, automatic addon fallback, retries
+and menus use the same enriched inventory. A provided English caption can
+therefore satisfy English without silently being replaced by another subtitle
+addon. A higher-priority language that is genuinely absent can still use an
+addon, and explicit viewer choices and Off remain authoritative. A new source
+or Close clears the inventory; renderer/decoder recovery of that session keeps
+it without persisting signed URLs, request headers or provenance in preferences.
+
+This corrects a demonstrated metadata-loss path. It does not establish the cause
+of any particular caption timing report or apply a numeric subtitle delay.

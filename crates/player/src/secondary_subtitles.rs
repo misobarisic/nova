@@ -30,7 +30,7 @@ impl Player {
             if mpv.get_property::<String>("sid").ok().as_deref() == Some(id.to_string().as_str()) {
                 return None;
             }
-            let raw = mpv.get_property::<String>("track-list").ok()?;
+            let raw = self.state.track_inventory(mpv).ok()?;
             TrackChoice::Track(
                 track_preferences::parse_tracks(&raw)
                     .into_iter()
@@ -82,7 +82,7 @@ impl Player {
         {
             return;
         }
-        if let Ok(raw) = mpv.get_property::<String>("track-list") {
+        if let Ok(raw) = self.state.track_inventory(mpv) {
             self.resolve_secondary_subtitle(mpv, &track_preferences::parse_tracks(&raw));
         }
     }
@@ -123,35 +123,20 @@ impl Player {
     }
 
     pub fn automatic_secondary_online_subtitle(&self) -> Option<i32> {
-        let TrackChoice::Track(choice) = self.secondary_subtitle_preference() else {
-            return None;
-        };
-        let language = choice.language.as_deref()?;
+        let choice = self.secondary_subtitle_preference();
         let engine = self.state.mpv.lock().unwrap();
         let mpv = engine.as_ref()?;
-        let tracks =
-            track_preferences::parse_tracks(&mpv.get_property::<String>("track-list").ok()?);
+        let raw = self.state.track_inventory(mpv).ok()?;
         let primary = mpv
             .get_property::<String>("sid")
             .ok()
             .and_then(|id| id.parse().ok());
-        if tracks.iter().any(|track| {
-            Some(track.id) == primary && track.descriptor.language.as_deref() == Some(language)
-        }) || secondary_track_id(&tracks, &TrackChoice::Track(choice.clone()), primary) >= 0
-        {
-            return None;
-        }
-        drop(engine);
-        self.state
-            .online_subtitles
-            .lock()
-            .unwrap()
-            .iter()
-            .position(|subtitle| {
-                nova_config::playback_preferences::normalize_language(&subtitle.language).as_deref()
-                    == Some(language)
-            })
-            .map(|index| -2 - index as i32)
+        automatic_secondary_online_choice(
+            &choice,
+            &raw,
+            primary,
+            &self.state.online_subtitles.lock().unwrap(),
+        )
     }
 
     pub fn add_online_secondary_subtitle(
@@ -171,7 +156,7 @@ impl Player {
             && let Some(mpv) = self.state.mpv.lock().unwrap().as_ref()
             && mpv.get_property::<String>("path").ok().as_deref()
                 == Some(self.state.preference_source.lock().unwrap().as_str())
-            && let Ok(raw) = mpv.get_property::<String>("track-list")
+            && let Ok(raw) = self.state.track_inventory(mpv)
         {
             let tracks = track_preferences::parse_tracks(&raw);
             for audio in [true, false] {
@@ -243,6 +228,32 @@ pub(super) fn apply_secondary_track(
     sync.secondary_selection_changed(mpv);
 }
 
+fn automatic_secondary_online_choice(
+    choice: &TrackChoice,
+    raw: &str,
+    primary: Option<i32>,
+    subtitles: &[OnlineSubtitle],
+) -> Option<i32> {
+    let TrackChoice::Track(choice) = choice else {
+        return None;
+    };
+    let language = choice.language.as_deref()?;
+    let tracks = track_preferences::parse_tracks(raw);
+    if tracks.iter().any(|track| {
+        Some(track.id) == primary && track.descriptor.language.as_deref() == Some(language)
+    }) || secondary_track_id(&tracks, &TrackChoice::Track(choice.clone()), primary) >= 0
+    {
+        return None;
+    }
+    subtitles
+        .iter()
+        .position(|subtitle| {
+            nova_config::playback_preferences::normalize_language(&subtitle.language).as_deref()
+                == Some(language)
+        })
+        .map(|index| -2 - index as i32)
+}
+
 fn secondary_track_id(
     tracks: &[nova_config::playback_preferences::SemanticTrack],
     choice: &TrackChoice,
@@ -259,6 +270,61 @@ fn secondary_track_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_caption_metadata_serves_primary_and_second_languages_without_duplicates() {
+        let mut metadata = source_subtitles::SourceSubtitles::default();
+        metadata.begin(
+            "video",
+            1,
+            vec![
+                SourceSubtitle {
+                    url: "https://included.invalid/en".into(),
+                    language: Some("eng".into()),
+                },
+                SourceSubtitle {
+                    url: "https://included.invalid/hr".into(),
+                    language: Some("hrv".into()),
+                },
+            ],
+        );
+        let raw = metadata.enrich(
+            "video",
+            1,
+            r#"[
+            {"id":5,"type":"sub","external":true,"external-filename":"https://included.invalid/en"},
+            {"id":9,"type":"sub","external":true,"external-filename":"https://included.invalid/hr"}
+        ]"#
+            .into(),
+        );
+        let tracks = track_preferences::parse_tracks(&raw);
+        let english = TrackChoice::Track(tracks[0].descriptor.clone());
+        let croatian = TrackChoice::Track(tracks[1].descriptor.clone());
+        let choices = vec![OnlineSubtitle {
+            url: "https://addon.invalid/hr".into(),
+            language: "hr".into(),
+            title: "Addon Croatian".into(),
+        }];
+        assert_eq!(secondary_track_id(&tracks, &croatian, Some(5)), 9);
+        assert_eq!(
+            automatic_secondary_online_choice(&croatian, &raw, Some(5), &choices),
+            None
+        );
+        assert_eq!(
+            automatic_secondary_online_choice(&english, &raw, Some(5), &choices),
+            None,
+            "a primary language must not be selected twice"
+        );
+        assert_eq!(
+            automatic_secondary_online_choice(&TrackChoice::Off, &raw, Some(5), &choices),
+            None
+        );
+        let unknown = r#"[{"id":9,"type":"sub","external":true,"external-filename":"https://other.invalid/eng.vtt"}]"#;
+        assert_eq!(
+            automatic_secondary_online_choice(&croatian, unknown, Some(5), &choices),
+            Some(-2)
+        );
+    }
+
     #[test]
     fn second_language_remaps_track_ids_and_never_duplicates_primary() {
         let original = track_preferences::parse_tracks(

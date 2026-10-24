@@ -494,7 +494,7 @@ pub(crate) fn provider_stream_warnings(bytes: &[u8], owner_url: &str) -> Vec<(St
         .collect()
 }
 
-fn stream_subtitle_files(stream: &addons::Stream) -> Vec<String> {
+fn stream_subtitle_files(stream: &addons::Stream) -> Vec<crate::player::SourceSubtitle> {
     let mut total_bytes = 0usize;
     stream
         .subtitles
@@ -509,7 +509,14 @@ fn stream_subtitle_files(stream: &addons::Stream) -> Vec<String> {
                 return None;
             }
             total_bytes += url.len();
-            (total_bytes <= 32 * 1024).then(|| url.clone())
+            (total_bytes <= 32 * 1024).then(|| crate::player::SourceSubtitle {
+                url: url.clone(),
+                language: subtitle
+                    .lang
+                    .as_deref()
+                    .filter(|language| language.len() <= 64)
+                    .and_then(nova_config::playback_preferences::normalize_language),
+            })
         })
         .collect()
 }
