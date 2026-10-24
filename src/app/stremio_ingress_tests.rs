@@ -2467,7 +2467,7 @@ fn ordered_external_writer_preserves_surrounding_local_saves_and_remote_origin()
                 updated_at_secs: 1,
                 ..Default::default()
             };
-            let receipt = persistence::try_external(persistence::ExternalPatch {
+            let patch = persistence::ExternalPatch {
                 library: Some(persistence::ExternalLibraryEdit {
                     id: imported.id.clone(),
                     media_type: imported.type_.clone(),
@@ -2478,8 +2478,21 @@ fn ordered_external_writer_preserves_surrounding_local_saves_and_remote_origin()
                     remote_progress.clone(),
                 )]
                 .into(),
-            })
-            .unwrap();
+            };
+            // Admission is deliberately nonblocking. The awakened writer may
+            // briefly hold queue bookkeeping even though its save is blocked
+            // by our owner lock. Retry without releasing that ordering guard.
+            let start = Instant::now();
+            let receipt = loop {
+                if let Some(receipt) = persistence::try_external(patch.clone()) {
+                    break receipt;
+                }
+                assert!(
+                    start.elapsed() < Duration::from_secs(2),
+                    "external patch was never admitted while the local save was pending"
+                );
+                thread::sleep(Duration::from_millis(1));
+            };
             drop(store);
             materialize::wait(receipt).unwrap();
             persistence::flush().unwrap();
