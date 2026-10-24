@@ -973,6 +973,26 @@ impl Bridge {
         self.refresh_release_reminders();
         self.reconcile_release_reminders();
     }
+    pub(super) fn refresh_detail_reminder_state(&self) {
+        let Some(app) = self.app() else { return };
+        let title = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|m| (m.type_.clone(), m.id.clone()));
+        let subs = subscriptions(&profiles::ProfileStore::capture()).unwrap_or_default();
+        let mode = title
+            .as_ref()
+            .and_then(|(type_, id)| subs.get(&title_key(type_, id)))
+            .map(|sub| sub.mode.ui())
+            .unwrap_or(0);
+        let ui = app.global::<crate::CalendarBridge>();
+        ui.set_detail_subscribed(mode != 0);
+        ui.set_detail_reminder_mode(mode);
+    }
+
     pub(super) fn refresh_release_reminders(&self) {
         if profile_policy::entry_blocked() {
             return;

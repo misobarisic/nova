@@ -1069,20 +1069,21 @@ impl Bridge {
     /// Cached artwork fills missing URLs; empty cache fields never erase
     /// usable preview data. Callers paint the result before mounting.
     pub(super) fn restore_modal_header_from_cache(&self, id: &str) -> bool {
-        let cached = {
+        let (type_, token) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
                 Some(m) if m.id == id => m,
                 _ => return false,
             };
-            read_meta_header_for(&m.type_, &m.id)
+            (m.type_.clone(), m.open_token.clone())
         };
+        let cached = read_meta_header_for(&type_, id);
         let Some(cached) = cached else {
             return false;
         };
         let mut state = self.shared.lock().unwrap();
         let m = match state.modal_item.as_mut() {
-            Some(m) if m.id == id => m,
+            Some(m) if m.id == id && m.type_ == type_ && Arc::ptr_eq(&m.open_token, &token) => m,
             _ => return false,
         };
         let mut touched = false;
@@ -1425,7 +1426,7 @@ impl Bridge {
                     .collect();
                 if !refresh && self.history_stream_selected() {
                     self.update_episode_videos(id, videos);
-                    self.refresh_library_progress_ui();
+                    self.request_progress_projection();
                     return;
                 }
                 if !refresh {
@@ -1441,7 +1442,7 @@ impl Bridge {
                     }
                     // Fresh episode list: library badges/checks and Home may
                     // depend on it (e.g. newly-appeared unaired episodes).
-                    self.refresh_library_progress_ui();
+                    self.request_progress_projection();
                     return;
                 }
                 let Some(app) = self.app() else {
@@ -1495,7 +1496,7 @@ impl Bridge {
                 }
                 // Same library/Home refresh as first population: the fresh
                 // list may carry new (possibly unaired) episodes.
-                self.refresh_library_progress_ui();
+                self.request_progress_projection();
             }
             None => {
                 // No addon can list episodes right now: keep showing a cached
@@ -2281,13 +2282,13 @@ impl Bridge {
             let previous_season = m.seasons.get(m.season_index).copied();
             m.videos = videos;
             m.seasons = seasons;
+            if first_population {
+                state.detail_opening_season = Some(m.open_token.clone());
+            }
             (first_population, previous_season)
         };
-        // Resolve proven native/canonical history before choosing an opening
-        // season, just as episode rows and the primary action do.
-        if self.sync_reconcile_progress_aliases() {
-            self.refresh_library_progress_ui();
-        }
+        // History aliases are reconciled when metadata/history changes, by
+        // the guarded progress worker. A cached opening only reads this title.
         let (season_names, season_idx) = {
             let mut state = self.shared.lock().unwrap();
             let m = state.modal_item.as_ref().unwrap();
@@ -2332,6 +2333,36 @@ impl Bridge {
         self.refresh_episode_rows();
         // Cached metadata can satisfy Watch Now before the refresh answers.
         self.resolve_watch_now();
+    }
+
+    /// Reapply an opening's history anchor only while navigation is untouched.
+    pub(super) fn restore_opening_season_after_projection(&self) {
+        let index = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(token) = state.detail_opening_season.take() else {
+                return;
+            };
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            if !Arc::ptr_eq(&token, &modal.open_token) || state.catalog_detail.active() {
+                return;
+            }
+            let season = last_watched_episode(&state, modal).and_then(|video| video.season);
+            let index = season.and_then(|season| modal.seasons.iter().position(|s| *s == season));
+            let Some(index) = index.filter(|index| *index != modal.season_index) else {
+                return;
+            };
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.season_index = index;
+            modal.episode_page = 0;
+            index
+        };
+        if let Some(app) = self.app() {
+            app.set_season_combo_idx(index as i32);
+            app.set_detail_kb_ep(0);
+        }
+        self.refresh_episode_rows();
     }
 
     /// Main thread: switch the episode list to another season.
@@ -2476,6 +2507,7 @@ impl Bridge {
         let mut watched_ids: Vec<String> = Vec::new();
         {
             let mut state = self.shared.lock().unwrap();
+            state.detail_opening_season = None;
             match action {
                 1 => {
                     Self::set_episode_watched_locked(
@@ -2978,8 +3010,10 @@ impl Bridge {
     /// independent of the selected season, text filter or episode page.
     pub(super) fn refresh_watch_action(&self) {
         self.publish_catalog_detail_scope();
-        self.refresh_watch_queue();
-        self.refresh_release_reminders();
+        // Opening a title only needs its own flags, not offscreen queue rows
+        // or the complete Calendar subscription/schedule projection.
+        self.refresh_detail_queue_state();
+        self.refresh_detail_reminder_state();
         self.refresh_watch_action_label();
     }
 
@@ -3025,6 +3059,7 @@ impl Bridge {
         }
         let direct_streams = {
             let mut state = self.shared.lock().unwrap();
+            state.detail_opening_season = None;
             let scoped = state.catalog_detail.active();
             let Some(modal) = state.modal_item.as_mut() else {
                 return;
@@ -3087,7 +3122,9 @@ impl Bridge {
     }
 
     fn cancel_watch_now(&self) {
-        if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
+        let mut state = self.shared.lock().unwrap();
+        state.detail_opening_season = None;
+        if let Some(modal) = state.modal_item.as_mut() {
             modal.pending_watch_now = None;
         }
     }
@@ -5232,7 +5269,25 @@ pub(crate) fn episodes_key(type_: &str, id: &str) -> String {
     format!("episodes:{type_}\u{1}{id}")
 }
 pub(crate) fn read_episodes_cache_for(type_: &str, id: &str) -> Option<Vec<Video>> {
+    #[cfg(test)]
+    EPISODE_READ_TRACE.with(|trace| {
+        if let Some(reads) = trace.borrow_mut().as_mut() {
+            reads.push((type_.to_owned(), id.to_owned()));
+        }
+    });
     read_json::<Vec<Video>>(&episodes_key(type_, id))
+}
+
+#[cfg(test)]
+thread_local! {
+    static EPISODE_READ_TRACE: std::cell::RefCell<Option<Vec<(String, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn trace_episode_reads(action: impl FnOnce()) -> Vec<(String, String)> {
+    EPISODE_READ_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+    action();
+    EPISODE_READ_TRACE.with(|trace| trace.borrow_mut().take().unwrap())
 }
 fn retain_episode_artwork(videos: &mut [Video], cached: &[Video]) {
     let cached = cached
@@ -5292,6 +5347,7 @@ pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) 
         retain_episode_artwork(&mut videos, &cached);
     }
     write_json(&episodes_key(type_, id), &videos);
+    progress_projection::metadata_changed();
     smart_offline::trigger();
     videos
 }

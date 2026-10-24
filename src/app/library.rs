@@ -183,6 +183,9 @@ impl Bridge {
                     .map(|item| (item.type_.clone(), item.id.clone())),
             )
         };
+        // Saved titles already contribute their inventory. Opening one adds
+        // no new proof and must not invalidate the warm Library grouping.
+        let modal = modal.filter(|key| !identities.iter().any(|(saved, _)| saved == key));
         let context = profiles::capture();
         let profile = (context.id.clone(), context.epoch);
         let revision = display_proof_stamp();
@@ -238,6 +241,7 @@ impl Bridge {
                     == modal
         };
         if matches && profiles::is_current(&context) && display_proof_stamp() == stamp {
+            let modal = modal.filter(|key| !identities.iter().any(|(saved, _)| saved == key));
             DISPLAY_GROUPS.with(|cache| {
                 *cache.borrow_mut() = Some((
                     (context.id, context.epoch),
@@ -250,6 +254,45 @@ impl Bridge {
         }
     }
 
+    fn cached_library_display_groups(&self) -> Arc<LibraryDisplayGroups> {
+        if profile_policy::restricted() {
+            return Arc::new(LibraryDisplayGroups::default());
+        }
+        let context = profiles::capture();
+        let stamp = display_proof_stamp();
+        let state = self.shared.lock().unwrap();
+        let modal = state.modal_item.as_ref().filter(|modal| {
+            !state
+                .entries
+                .iter()
+                .any(|entry| entry.type_ == modal.type_ && entry.id == modal.id)
+        });
+        DISPLAY_GROUPS.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .filter(|(owner, version, keys, proof, _)| {
+                    owner == &(context.id, context.epoch)
+                        && *version == stamp
+                        && keys.len() == state.entries.len()
+                        && keys
+                            .iter()
+                            .zip(&state.entries)
+                            .all(|((key, added), entry)| {
+                                key.0 == entry.type_
+                                    && key.1 == entry.id
+                                    && *added == entry.added_at_secs
+                            })
+                        && proof
+                            .as_ref()
+                            .map(|(type_, id)| (type_.as_str(), id.as_str()))
+                            == modal.map(|m| (m.type_.as_str(), m.id.as_str()))
+                })
+                .map(|(_, _, _, _, groups)| groups.clone())
+                .unwrap_or_default()
+        })
+    }
+
     pub(super) fn library_contains(&self, type_: &str, id: &str) -> bool {
         self.shared
             .lock()
@@ -260,16 +303,21 @@ impl Bridge {
     }
 
     fn current_library_entry(&self, index: usize) -> Option<LibraryEntry> {
-        let candidates = self.current_library_candidates();
-        let candidate = candidates.get(index)?;
-        // Cached metadata can change a smart collection between painting and
-        // activation. An old row index must never open/remove its new neighbour.
         let displayed = self.app()?.get_library().row_data(index)?;
-        if candidate.id != displayed.id.as_str() {
-            return None;
-        }
-        let state = self.shared.lock().unwrap();
-        selected_library_entry(&state.entries, candidate)
+        let entry = {
+            let state = self.shared.lock().unwrap();
+            let (type_, id) = state.library_displayed.get(index)?;
+            if id != displayed.id.as_str() {
+                return None;
+            }
+            state
+                .entries
+                .iter()
+                .find(|e| e.id == *id && e.type_ == *type_)?
+                .clone()
+        };
+        profile_policy::allows_title(&profiles::ProfileStore::capture(), &entry.type_, &entry.id)
+            .then_some(entry)
     }
 
     /// Keep only the fields needed to filter and order outside the shared
@@ -393,6 +441,7 @@ impl Bridge {
         self.refresh_smart_collections();
         self.migrate_viewing_activity();
         let card_snapshots = self.library_card_snapshots();
+        self.remember_library_cards(&card_snapshots);
         let poster_requests: Vec<LibraryPosterRequest> = card_snapshots
             .iter()
             .map(|snapshot| LibraryPosterRequest {
@@ -490,6 +539,7 @@ impl Bridge {
             self.apply_library_to_ui();
             return;
         }
+        self.remember_library_cards(&cards);
         for (index, snapshot) in cards.into_iter().enumerate() {
             let Some(mut card) = model.row_data(index) else {
                 continue;
@@ -1025,10 +1075,14 @@ impl Bridge {
     pub(super) fn open_library_item(&self, index: usize) {
         let entry = self.current_library_entry(index);
         let Some(e) = entry else { return };
-        self.open_library_entry(e);
+        self.open_library_entry_at(e, Some(index));
     }
 
     pub(super) fn open_library_entry(&self, e: LibraryEntry) {
+        self.open_library_entry_at(e, None);
+    }
+
+    fn open_library_entry_at(&self, e: LibraryEntry, return_index: Option<usize>) {
         if profile_policy::entry_blocked() {
             return;
         }
@@ -1042,11 +1096,6 @@ impl Bridge {
             content.set_hero_expanded(false);
             content.set_trailers_expanded(false);
         }
-        let index = self
-            .current_library_candidates()
-            .iter()
-            .position(|entry| entry.id == e.id && entry.type_ == e.type_)
-            .unwrap_or(0);
         let app = match self.app() {
             Some(a) => a,
             None => return,
@@ -1161,20 +1210,13 @@ impl Bridge {
         // detail page shows the image instantly instead of a blank flash
         // while the background decode finishes.
         let mut poster_shown = false;
-        if !e.poster_url.is_empty() {
-            let model = app.get_library();
-            let count = model.row_count();
-            for i in 0..count {
-                let Some(card) = model.row_data(i) else {
-                    continue;
-                };
-                let card: MediaCard = card;
-                if card.id == e.id.as_str() && card.is_loaded {
-                    app.set_selected_poster(card.poster);
-                    poster_shown = true;
-                    break;
-                }
-            }
+        if !e.poster_url.is_empty()
+            && let Some(card) = return_index.and_then(|index| app.get_library().row_data(index))
+            && card.id == e.id.as_str()
+            && card.is_loaded
+        {
+            app.set_selected_poster(card.poster);
+            poster_shown = true;
         }
 
         // Fallback: poster loads off the UI thread (cached bytes decode
@@ -1186,8 +1228,10 @@ impl Bridge {
         // Grid return target: backing out re-focuses the opened card (the
         // lifted kb props survive the grid page's recreation). `index` is
         // into the filtered view, which persists via the filter property.
-        app.set_library_kb_zone(2);
-        app.set_library_kb_idx(index as i32);
+        if let Some(index) = return_index {
+            app.set_library_kb_zone(2);
+            app.set_library_kb_idx(index as i32);
+        }
         // Same-entry reopen restores content choices before mounting.
         self.restore_detail_snapshot(&e.id);
 
@@ -1292,7 +1336,9 @@ impl Bridge {
                 state.cache_settings.categories.clone(),
             )
         };
-        let groups = self.library_display_groups();
+        // Painting an opening must not rebuild proof for every saved show.
+        // A metadata-change projection refreshes these flags with new proof.
+        let groups = self.cached_library_display_groups();
         let members = groups
             .members(&key.0, &key.1)
             .into_iter()
@@ -1683,10 +1729,19 @@ pub(super) fn prepare_progress_cards(
 }
 
 impl Bridge {
+    /// Keep backend action identities aligned with the model being painted.
+    fn remember_library_cards(&self, cards: &[LibraryCardSnapshot]) {
+        self.shared.lock().unwrap().library_displayed = cards
+            .iter()
+            .map(|card| (card.type_.clone(), card.id.clone()))
+            .collect();
+    }
+
     /// Publish prepared values in place whenever the visible identities remain
     /// the same. A newly matching automatic filter retains artwork by URL.
     pub(super) fn publish_progress_cards(&self, cards: Vec<LibraryCardSnapshot>) {
         let Some(app) = self.app() else { return };
+        self.remember_library_cards(&cards);
         let model = app.get_library();
         if model.row_count() == cards.len()
             && cards.iter().enumerate().all(|(index, snapshot)| {

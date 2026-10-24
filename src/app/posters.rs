@@ -1141,8 +1141,7 @@ impl Bridge {
                     if saved && bridge.cache_background_meta(&type_, &id, item) > 0 {
                         let bridge = bridge.clone();
                         let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                            bridge.sync_reconcile_progress_aliases();
-                            bridge.refresh_library_progress_ui()
+                            bridge.request_progress_projection()
                         });
                     }
                     let mapped = mapped_poster_endpoints(

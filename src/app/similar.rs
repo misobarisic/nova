@@ -396,76 +396,113 @@ impl Bridge {
         let authority = inventory_key(&self.shared.lock().unwrap().installed, &tmdb);
         let settings = nova_providers::plugin_settings::capture_settings_capability();
         let generation = settings.with(nova_providers::plugin_settings::settings_generation);
-        let cached_rows = {
-            let (installed, cache) = {
-                let state = self.shared.lock().unwrap();
-                (state.installed.clone(), state.similar_cache.clone())
-            };
-            let memory = cache
-                .lock()
-                .unwrap()
-                .get(
-                    &memory_key(&authority, generation, &type_, &id),
-                    Instant::now(),
-                )
-                .filter(|rows| !rows.is_empty());
-            memory.or_else(|| read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows))
-        };
-        if let Some(rows) = &cached_rows {
-            if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut()
-                && Arc::ptr_eq(&modal.open_token, &token)
-            {
-                modal.details.related = rows.clone();
-            }
-            self.publish_detail_extras();
-        }
+        // Saved recommendation lists can be large. Keep their decoding and
+        // provider snapshot capture out of the title-opening callback.
         let bridge = self.clone();
-        self.fetch_similar(&type_.clone(), &id.clone(), move |rows| {
-            let _ = profiles::invoke_from_event_loop(move || {
-                if !settings.is_current()
-                    || settings.with(nova_providers::plugin_settings::settings_generation)
-                        != generation
-                {
-                    return;
-                }
-                let changed = {
-                    let mut state = bridge.shared.lock().unwrap();
-                    if inventory_key(
-                        &state.installed,
-                        &tmdb::Settings::from_settings(&state.cache_settings),
-                    ) != authority
+        profiles::thread::spawn(move || {
+            let cached_rows = {
+                let (installed, cache) = {
+                    let state = bridge.shared.lock().unwrap();
+                    (state.installed.clone(), state.similar_cache.clone())
+                };
+                let memory = cache
+                    .lock()
+                    .unwrap()
+                    .get(
+                        &memory_key(&authority, generation, &type_, &id),
+                        Instant::now(),
+                    )
+                    .filter(|rows| !rows.is_empty());
+                memory
+                    .or_else(|| read_saved(&installed, &type_, &id, &tmdb).map(|saved| saved.rows))
+            };
+            if let Some(rows) = &cached_rows {
+                let cached_bridge = bridge.clone();
+                let token = token.clone();
+                let settings = settings.clone();
+                let authority = authority.clone();
+                let rows = rows.clone();
+                let original_rows = original_rows.clone();
+                let _ = profiles::invoke_from_event_loop(move || {
+                    if !settings.is_current()
+                        || settings.with(nova_providers::plugin_settings::settings_generation)
+                            != generation
                     {
                         return;
                     }
-                    if let Some(modal) = state.modal_item.as_mut()
-                        && modal.type_ == type_
-                        && modal.id == id
-                        && Arc::ptr_eq(&modal.open_token, &token)
-                        && (modal.details.related.is_empty()
-                            || modal.details.related == original_rows
-                            || (prefer_tmdb
-                                && !modal.details.related.iter().any(|row| {
-                                    row.extra
-                                        .get("novaRecommendationSource")
-                                        .and_then(serde_json::Value::as_str)
-                                        == Some("tmdb")
-                                }))
-                            || cached_rows.as_ref() == Some(&modal.details.related))
-                        && !rows.is_empty()
+                    let accepted = {
+                        let mut state = cached_bridge.shared.lock().unwrap();
+                        if inventory_key(
+                            &state.installed,
+                            &tmdb::Settings::from_settings(&state.cache_settings),
+                        ) != authority
+                        {
+                            return;
+                        }
+                        if let Some(modal) = state.modal_item.as_mut()
+                            && Arc::ptr_eq(&modal.open_token, &token)
+                            && (modal.details.related.is_empty()
+                                || modal.details.related == original_rows)
+                        {
+                            modal.details.related = rows;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if accepted {
+                        cached_bridge.publish_detail_extras();
+                    }
+                });
+            }
+            let fetch_bridge = bridge.clone();
+            fetch_bridge.fetch_similar(&type_.clone(), &id.clone(), move |rows| {
+                let _ = profiles::invoke_from_event_loop(move || {
+                    if !settings.is_current()
+                        || settings.with(nova_providers::plugin_settings::settings_generation)
+                            != generation
                     {
-                        let reveal = modal.details.related.is_empty() && cached_rows.is_none();
-                        modal.details.related = rows;
-                        Some(reveal)
-                    } else {
-                        None
+                        return;
                     }
-                };
-                if let Some(reveal) = changed {
-                    bridge.publish_detail_extras();
-                    if reveal {
-                        bridge.reveal_detail_similar();
+                    let changed = {
+                        let mut state = bridge.shared.lock().unwrap();
+                        if inventory_key(
+                            &state.installed,
+                            &tmdb::Settings::from_settings(&state.cache_settings),
+                        ) != authority
+                        {
+                            return;
+                        }
+                        if let Some(modal) = state.modal_item.as_mut()
+                            && modal.type_ == type_
+                            && modal.id == id
+                            && Arc::ptr_eq(&modal.open_token, &token)
+                            && (modal.details.related.is_empty()
+                                || modal.details.related == original_rows
+                                || (prefer_tmdb
+                                    && !modal.details.related.iter().any(|row| {
+                                        row.extra
+                                            .get("novaRecommendationSource")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some("tmdb")
+                                    }))
+                                || cached_rows.as_ref() == Some(&modal.details.related))
+                            && !rows.is_empty()
+                        {
+                            let reveal = modal.details.related.is_empty() && cached_rows.is_none();
+                            modal.details.related = rows;
+                            Some(reveal)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(reveal) = changed {
+                        bridge.publish_detail_extras();
+                        if reveal {
+                            bridge.reveal_detail_similar();
+                        }
                     }
-                }
+                });
             });
         });
     }
@@ -1216,9 +1253,9 @@ mod tests {
         storage::try_set_str("plugin_settings", r#"{"source":{"filter":"different"}}"#).unwrap();
         assert!(read_saved(&[], "series", "tt100", &tmdb::Settings::default()).is_none());
 
-        // Library and related-card entry points must hydrate their Overview
-        // before returning, without requiring a tab click or a worker reply.
-        i_slint_backend_testing::init_integration_test_with_mock_time();
+        // Library and related-card entry points hydrate automatically after
+        // worker cache decoding, without requiring a tab click.
+        i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
         let downloads = DownloadCoordinator::new(root.join("downloads"));
@@ -1272,6 +1309,34 @@ mod tests {
             },
         );
         bridge.open_library_entry(entry.clone());
+        let wait_cached = |title: &str| {
+            let start = Instant::now();
+            let title = title.to_owned();
+            let weak = app.as_weak();
+            let timer = slint::Timer::default();
+            timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_millis(5),
+                move || {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "cached recommendations were not published: {title}"
+                    );
+                    if weak
+                        .upgrade()
+                        .unwrap()
+                        .get_selected_details()
+                        .related
+                        .row_data(0)
+                        .is_some_and(|row| row.title == title)
+                    {
+                        slint::quit_event_loop().unwrap();
+                    }
+                },
+            );
+            slint::run_event_loop().unwrap();
+        };
+        wait_cached("Cached tt1");
         assert_eq!(app.get_detail_tab(), 0);
         assert_eq!(
             app.get_selected_details()
@@ -1285,7 +1350,7 @@ mod tests {
         assert_eq!(
             content.get_similar_reveal_request(),
             0,
-            "cached entry is immediate"
+            "cached entries do not replay a fresh-result entrance"
         );
 
         bridge.shared.lock().unwrap().detail_snapshots.insert(
@@ -1297,6 +1362,7 @@ mod tests {
             },
         );
         bridge.detail_extra_picked(2, &serde_json::to_string(&("series", "tt1")).unwrap());
+        wait_cached("Cached tt2");
         assert_eq!(app.get_detail_tab(), 0);
         assert_eq!(
             app.get_selected_details()
@@ -1317,7 +1383,7 @@ mod tests {
             "Cached tt1"
         );
 
-        // A memory-only hit has the same synchronous publication contract.
+        // A memory-only hit uses the same automatic publication path.
         bridge.modal_closed();
         app.set_modal_visible(false);
         let capability = nova_providers::plugin_settings::capture_settings_capability();
@@ -1355,6 +1421,7 @@ mod tests {
             id: "tt200".into(),
             ..entry
         });
+        wait_cached("Memory only");
         assert_eq!(
             app.get_detail_tab(),
             3,

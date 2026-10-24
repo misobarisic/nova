@@ -117,6 +117,96 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     bridge.persist_library();
     write_progress_map(&bridge.shared.lock().unwrap().progress.clone());
     persistence::flush().unwrap();
+    bridge.apply_library_to_ui();
+    let painted = app.get_library().row_data(0).unwrap().id.to_string();
+    // The current filter can change before its next publication. Activation
+    // still targets the painted native identity, not a rederived neighbour.
+    app.set_library_query("not in the painted view".into());
+    let reads = detail::trace_episode_reads(|| bridge.open_library_item(0));
+    assert!(!reads.is_empty());
+    assert!(
+        reads.iter().all(|(_, id)| *id == painted),
+        "opening one card must not read other episode caches: {reads:?}"
+    );
+    assert_eq!(
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .id,
+        painted
+    );
+    assert_eq!(app.get_library_kb_idx(), 0);
+    let entry = bridge
+        .shared
+        .lock()
+        .unwrap()
+        .entries
+        .iter()
+        .find(|entry| entry.id == painted)
+        .unwrap()
+        .clone();
+    app.set_library_kb_idx(7);
+    let reads = detail::trace_episode_reads(|| bridge.open_library_entry(entry.clone()));
+    assert!(reads.iter().all(|(_, id)| *id == painted));
+    assert_eq!(
+        app.get_library_kb_idx(),
+        7,
+        "Home openings leave the Library return target alone"
+    );
+    let saved = bridge.shared.lock().unwrap().entries.clone();
+    {
+        let mut state = bridge.shared.lock().unwrap();
+        state.entries.retain(|entry| entry.id != painted);
+        state.modal_item = None;
+    }
+    bridge.open_library_item(0);
+    assert!(
+        bridge.shared.lock().unwrap().modal_item.is_none(),
+        "removed painted titles cannot redirect to another row"
+    );
+    bridge.shared.lock().unwrap().entries = saved;
+    app.set_library_query("".into());
+    // Metadata may prove an alias after the title was painted. The worker
+    // restores the opening season once, but never overwrites a manual choice.
+    let mut late = videos();
+    late[1].season = Some(2);
+    super::bridge::install_global_bridge(&bridge);
+    let before = progress_projection::publication_count();
+    for id in [ORIGINAL, CANONICAL] {
+        write_episodes_cache_for("series", id, &late);
+    }
+    bridge.open_library_entry(entry.clone());
+    assert_eq!(app.get_season_combo_idx(), 0);
+    settled(before);
+    assert_eq!(
+        app.get_season_combo_idx(),
+        1,
+        "late proven history restores the latest watched season"
+    );
+    assert!(bridge.shared.lock().unwrap().progress[&progress_map_key(ORIGINAL, SECOND)].watched);
+    bridge.open_library_entry(entry);
+    bridge.season_picked(0);
+    bridge
+        .shared
+        .lock()
+        .unwrap()
+        .progress
+        .remove(&progress_map_key(ORIGINAL, SECOND));
+    let before = progress_projection::publication_count();
+    bridge.request_progress_projection();
+    settled(before);
+    assert_eq!(
+        app.get_season_combo_idx(),
+        0,
+        "background aliases cannot undo explicit season navigation"
+    );
+    for id in [ORIGINAL, CANONICAL] {
+        write_episodes_cache_for("series", id, &videos());
+    }
     select(&bridge, ORIGINAL);
     let owner = nova_sync::local_store().unwrap();
     let domain = sync::profile_domain(sync::DOMAIN_PROGRESS);

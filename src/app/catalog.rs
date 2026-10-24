@@ -1162,8 +1162,7 @@ impl Bridge {
                 eprintln!("prefetch: {msg}");
                 let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     // Newly cached episode lists feed badges/checks/Home.
-                    bridge.sync_reconcile_progress_aliases();
-                    bridge.refresh_library_progress_ui();
+                    bridge.request_progress_projection();
                     if nova_providers::metadata_revision() != revision
                         && bridge.app().is_some_and(|app| app.get_show_library())
                     {
@@ -1466,7 +1465,6 @@ impl Bridge {
                     .is_some_and(|item| bridge.cache_background_meta(&job.type_, &job.id, item) > 0)
                 {
                     bridge.finish_saved_episode_refresh(&job, true);
-                    bridge.sync_reconcile_progress_aliases();
                     bridge.request_progress_projection();
                 } else {
                     // A failed/empty source must not replace the known episode

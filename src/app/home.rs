@@ -2691,7 +2691,7 @@ impl Bridge {
                 Some(m) if m.id == c.series_id && !m.seasons.is_empty() => m,
                 _ => return,
             };
-            let videos = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
+            let videos = &m.videos;
             let v = match videos.iter().find(|v| v.id == c.episode_id) {
                 Some(v) => v,
                 None => return,
@@ -2700,7 +2700,7 @@ impl Bridge {
             if !m.seasons.contains(&season) {
                 return;
             }
-            match Self::filtered_row_index(&videos, season, "", &c.episode_id) {
+            match Self::filtered_row_index(videos, season, "", &c.episode_id) {
                 Some(i) => (season, i),
                 None => return,
             }

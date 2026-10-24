@@ -346,6 +346,9 @@ struct Shared {
     saved_episode_refresh_next: Option<(u64, std::time::Instant)>,
     /// Saved library items (My Library), order = insertion order.
     entries: Vec<LibraryEntry>,
+    /// Typed identities in the painted Library order; actions never rederive
+    /// smart filters or sorting just to resolve an already displayed card.
+    library_displayed: Vec<media_identity::TitleKey>,
     /// Current image-cache settings (mirrored from the KV store).
     cache_settings: CacheSettings,
     playback_preference_edits:
@@ -361,6 +364,9 @@ struct Shared {
     release_reminders: release_reminders::State,
     /// Modal target, if open.
     modal_item: Option<ModalItem>,
+    /// An untouched opening may restore its season after background alias
+    /// reconciliation. Explicit navigation cancels this one-opening intent.
+    detail_opening_season: Option<Arc<()>>,
     /// Streams currently displayed (already narrowed by `stream_filter`).
     streams: Vec<StreamUi>,
     /// Every stream returned for the current request, before filtering.

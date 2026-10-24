@@ -28,6 +28,14 @@ pub(super) fn revision() -> u64 {
     REVISION.load(Ordering::Acquire)
 }
 
+/// Metadata writers may run on network workers. Queue the already coalesced
+/// projection in the captured profile, never reconcile all titles on a click.
+pub(super) fn metadata_changed() {
+    if let Some(bridge) = super::bridge::with_global_bridge(Clone::clone) {
+        let _ = profiles::invoke_from_event_loop(move || bridge.request_progress_projection());
+    }
+}
+
 pub(super) fn invalidation_key(key: &str) -> bool {
     matches!(
         key,
@@ -569,18 +577,25 @@ impl Bridge {
             prepared.proof_identities,
             prepared.proof_modal,
         );
-        let action = {
+        self.sync_modal_category_flags();
+        let (action, opening_aliases) = {
             let mut state = self.shared.lock().unwrap();
             if state.restoring_models {
                 return;
             }
+            let opening_aliases = state.modal_item.as_ref().is_some_and(|modal| {
+                prepared
+                    .aliases
+                    .values()
+                    .any(|row| row.series_id == modal.id)
+            });
             state.progress.extend(prepared.aliases);
             state.continue_list = prepared.continuing;
             state.new_episodes_list = prepared.new;
             state.upcoming_list = prepared.upcoming;
             state.home_history_list = prepared.history;
             state.home_history_archive = prepared.archive;
-            state
+            let action = state
                 .modal_item
                 .as_ref()
                 .and_then(|item| {
@@ -589,8 +604,12 @@ impl Bridge {
                         .get(&(item.type_.clone(), item.id.clone()))
                         .copied()
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            (action, opening_aliases)
         };
+        if opening_aliases {
+            self.restore_opening_season_after_projection();
+        }
         self.refresh_detail_progress_ui();
         self.refresh_watch_queue_progress();
         if let Some(app) = self.app() {

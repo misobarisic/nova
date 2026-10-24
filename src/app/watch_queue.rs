@@ -1163,6 +1163,27 @@ impl Bridge {
         self.queue_entry(entry);
     }
 
+    pub(super) fn refresh_detail_queue_state(&self) {
+        let Some(app) = self.app() else { return };
+        let loaded = self.load_watch_queue();
+        let queued =
+            {
+                let state = self.shared.lock().unwrap();
+                loaded
+                    && state
+                        .modal_item
+                        .as_ref()
+                        .filter(|m| m.type_ == "movie")
+                        .is_some_and(|m| {
+                            let key = Self::entry_from_modal(m, None).key();
+                            state.watch_queue.entries.as_ref().is_some_and(|entries| {
+                                entries.iter().any(|entry| entry.key() == key)
+                            })
+                        })
+            };
+        app.global::<QueueBridge>().set_detail_queued(queued);
+    }
+
     pub(super) fn refresh_watch_queue(&self) {
         if profile_policy::entry_blocked() {
             return;
