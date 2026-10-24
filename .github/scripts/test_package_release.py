@@ -86,6 +86,14 @@ class ReleaseValidationTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             validation.validate("v1.2.3", self.commit)
 
+    def test_tracked_source_edits_are_rejected_but_artifacts_are_allowed(self):
+        (self.source / "dist").mkdir()
+        (self.source / "dist/fixture.apk").write_bytes(b"artifact")
+        validation.validate("v1.2.3", self.commit, check_head=True)
+        (self.source / "Cargo.toml").write_text('[package]\nversion = "9.9.9"\n')
+        with self.assertRaises(subprocess.CalledProcessError):
+            validation.validate("v1.2.3", self.commit, check_head=True)
+
     def test_moved_annotated_tag_is_rejected_even_at_the_same_commit(self):
         self.git("tag", "-d", "v1.2.3")
         self.git("-c", "tag.gpgsign=false", "tag", "-a", "v1.2.3", "-m", "first object")

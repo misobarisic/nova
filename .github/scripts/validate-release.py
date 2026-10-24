@@ -37,6 +37,10 @@ def validate(tag, commit, *, tag_object=None, version=None, check_head=False):
     git("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main")
     if check_head and git("rev-parse", "HEAD") != commit:
         raise ValueError("checkout is not the validated release commit")
+    if check_head:
+        # Build tools may write outputs, but must not rewrite the tagged source
+        # or lockfile. Untracked artifact/control directories remain allowed.
+        git("diff", "--quiet", "HEAD", "--")
     # Historical sources predate NOVA_RELEASE_TAG handling; do not silently
     # package them as 'main' through this new workflow.
     try:
