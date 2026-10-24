@@ -21,6 +21,15 @@ fn main() {
     }
     // Shared bridge declarations contain experimental ComponentFactory types.
     println!("cargo:rustc-env=SLINT_ENABLE_EXPERIMENTAL_FEATURES=1");
+    // Inline Slint fixtures use the proc macro rather than the UI build script.
+    // Give their ElementHandle queries the same inspection metadata as the
+    // compiled debug UI, while retaining explicit overrides and lean releases.
+    println!("cargo:rerun-if-env-changed=SLINT_EMIT_DEBUG_INFO");
+    if env::var_os("SLINT_EMIT_DEBUG_INFO").is_none()
+        && env::var("PROFILE").as_deref() == Ok("debug")
+    {
+        println!("cargo:rustc-env=SLINT_EMIT_DEBUG_INFO=1");
+    }
     // The Slint UI is compiled by the `nova-ui` crate's build script. This
     // root script generates the About catalog and emits native link directives.
 
