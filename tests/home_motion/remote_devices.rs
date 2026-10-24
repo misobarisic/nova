@@ -107,6 +107,10 @@ fn home_devices_scroll_horizontally_and_toggle_without_clearing_devices() {
         });
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
     assert!(choices.absolute_position().x < before - 1.0);
+    for _ in 0..30 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
+    let saved_x = choices.absolute_position().x;
     app.set_home_devices_enabled(false);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
     assert!(
@@ -116,12 +120,40 @@ fn home_devices_scroll_horizontally_and_toggle_without_clearing_devices() {
     );
     assert_eq!(app.get_remote_devices().row_count(), 6);
     app.set_home_devices_enabled(true);
-    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    for _ in 0..10 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
     assert!(
         element(&app, "RemotePlayingSection::device_rail")
             .size()
             .width
             > 0.0
+    );
+    assert!(
+        (element(&app, "RemotePlayingSection::device_choices")
+            .absolute_position()
+            .x
+            - saved_x)
+            .abs()
+            < 1.0,
+        "device row lost its position when toggled"
+    );
+    app.set_show_settings(true);
+    app.set_show_home(false);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(500));
+    app.set_show_settings(false);
+    app.set_show_home(true);
+    for _ in 0..10 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
+    assert!(
+        (element(&app, "RemotePlayingSection::device_choices")
+            .absolute_position()
+            .x
+            - saved_x)
+            .abs()
+            < 1.0,
+        "device row lost its position when Home was recreated"
     );
     // Native Tab focus must reveal off-screen pills and Return must open that receiver.
     let opened = Rc::new(std::cell::RefCell::new(String::new()));

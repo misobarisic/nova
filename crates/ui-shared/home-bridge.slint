@@ -12,6 +12,9 @@ export global HomeBridge {
     in-out property <[ContinueRow]> new_episode_rows;
     in-out property <[UpcomingRow]> upcoming_rows;
     in-out property <[HomeCatalogSection]> catalog_sections;
+    in-out property <[string]> catalog_scroll_keys;
+    callback catalog_scroll_offset(string) -> length;
+    callback catalog_scrolled(string, length);
     in-out property <[int]> catalog_order;
     in-out property <[int]> catalog_positions;
     in-out property <[HomeCatalogCard]> catalog_cards;

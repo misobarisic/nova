@@ -43,6 +43,7 @@ export component DiscoverBindings {
 }
 
 export component HomeBindings {
+    in-out property <[string]> catalog_scroll_keys <=> HomeBridge.catalog_scroll_keys;
     in-out property <[ContinueRow]> continue_rows <=> HomeBridge.continue_rows;
     in-out property <[ContinueRow]> new_episode_rows <=> HomeBridge.new_episode_rows;
     in-out property <[UpcomingRow]> upcoming_rows <=> HomeBridge.upcoming_rows;

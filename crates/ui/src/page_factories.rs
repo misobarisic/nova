@@ -136,6 +136,22 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     });
     {
         let bridge = app.global::<HomeBridge>();
+        // Scroll positions are window-local UI state, not profile data to save
+        // or sync. Keys supplied by the app include the profile and row source,
+        // so late events from a retired page cannot overwrite another row.
+        let offsets = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+            String,
+            f32,
+        >::new()));
+        let read = offsets.clone();
+        bridge.on_catalog_scroll_offset(move |key| {
+            read.borrow().get(key.as_str()).copied().unwrap_or_default()
+        });
+        bridge.on_catalog_scrolled(move |key, x| {
+            if !key.is_empty() && x.is_finite() {
+                offsets.borrow_mut().insert(key.to_string(), x.min(0.0));
+            }
+        });
         crate::forward_app_callbacks!(app, &bridge;
             on_home_picked => invoke_home_bridge_home_picked(),
             on_discover_picked => invoke_home_bridge_discover_picked(),

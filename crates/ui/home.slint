@@ -1405,6 +1405,9 @@ export component HomePage {
     in property <[int]> catalog_order: [-1, -3, -2];
     // Positions indexed by Continue, Upcoming, catalog sections, then New episodes.
     in property <[int]> catalog_positions: [0, 2, 1];
+    in property <[string]> catalog_scroll_keys;
+    callback catalog_scroll_offset(string) -> length;
+    callback catalog_scrolled(string, length);
     in property <[HomeCatalogCard]> catalog_cards: [];
     in property <[HomeCatalogCard]> history_archive_cards: [];
     callback catalog_card_picked(int);
@@ -2573,6 +2576,28 @@ export component HomePage {
                                         visible: root.catalog_position(s) >= 0;
                                         height: self.visible ? catalog_content.preferred-height : 0px;
                                         width: 100%;
+                                        property <string> scroll_key: s < root.catalog_scroll_keys.length ? root.catalog_scroll_keys[s] : "";
+                                        property <string> restored_scroll_key;
+                                        property <bool> restoring_scroll: true;
+                                        changed scroll_key => {
+                                            self.restoring_scroll = true;
+                                            restore_scroll.stop(); restore_scroll.start();
+                                        }
+                                        restore_scroll := Timer {
+                                            interval: 16ms;
+                                            running: true;
+                                            triggered => {
+                                                self.stop();
+                                                let saved = root.catalog_scroll_offset(catalog_section.scroll_key);
+                                                let restored = Math.max(-Math.max(0px, catalog_rail.content-width - catalog_rail.width), Math.min(0px, saved));
+                                                catalog_rail.content-x = catalog_section.focused_card >= 0
+                                                    ? root.rail_show(restored, catalog_items.padding-left + catalog_section.focused_card * (catalog_section.card_width + root.item-gap), catalog_section.card_width, catalog_rail.width, catalog_rail.content-width)
+                                                    : restored;
+                                                catalog_section.restored_scroll_key = catalog_section.scroll_key;
+                                                catalog_rail.had_scroll_range = catalog_rail.content-width > catalog_rail.width;
+                                                catalog_section.restoring_scroll = false;
+                                            }
+                                        }
                                         property <length> card_width: root.rail_item_width;
                                         property <length> rail_height: self.card_width * 3 / 2 + (InterfaceStyle.tv ? 88px : 54px);
                                         property <int> focused_card: root.view == 0 && root.kb_active && root.kb_zone == 3
@@ -2600,6 +2625,27 @@ export component HomePage {
                                                 width: 100%;
                                                 height: catalog_section.rail_height + 8px;
                                                 catalog_rail := Flickable {
+                                                    property <bool> had_scroll_range: false;
+                                                    function update_scroll_range() {
+                                                        if (self.content-width <= self.width) {
+                                                            self.had_scroll_range = false;
+                                                            catalog_section.restoring_scroll = true;
+                                                            restore_scroll.stop();
+                                                        } else if (!self.had_scroll_range) {
+                                                            catalog_section.restoring_scroll = true;
+                                                            restore_scroll.stop(); restore_scroll.start();
+                                                        }
+                                                    }
+                                                    changed content-width => { self.update_scroll_range(); }
+                                                    changed width => { self.update_scroll_range(); }
+                                                    flicked => {
+                                                        // Fresh input wins over a pending layout restore.
+                                                        restore_scroll.stop();
+                                                        self.had_scroll_range = self.content-width > self.width;
+                                                        catalog_section.restored_scroll_key = catalog_section.scroll_key;
+                                                        catalog_section.restoring_scroll = false;
+                                                        if (self.had_scroll_range) { root.catalog_scrolled(catalog_section.scroll_key, self.content-x); }
+                                                    }
                                                     x: -18px - (root.narrow ? root.safe-left : 0px);
                                                     width: content_host.width;
                                                     height: 100%;
@@ -2608,6 +2654,13 @@ export component HomePage {
                                                     content-width: catalog_items.width;
                                                     content-height: self.height;
                                                     changed content-x => {
+                                                        // Loading/retiring rails can momentarily have no scroll
+                                                        // range. Do not overwrite their remembered position.
+                                                        if (!catalog_section.restoring_scroll
+                                                            && catalog_section.restored_scroll_key == catalog_section.scroll_key
+                                                            && self.content-width > self.width) {
+                                                            root.catalog_scrolled(catalog_section.scroll_key, self.content-x);
+                                                        }
                                                         if (!root.kb_active && root.view == 0) { root.rail_panned(); }
                                                     }
 

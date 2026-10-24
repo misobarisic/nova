@@ -4,7 +4,235 @@ use slint::{ComponentHandle, VecModel};
 use std::{rc::Rc, time::Duration};
 
 fn settle() {
-    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    for _ in 0..30 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
+}
+
+#[test]
+fn home_rows_retain_independent_offsets_across_recreation_and_reordering() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::home_rows_retain_independent_offsets_across_recreation_and_reordering"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(true);
+    app.set_kb_active(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 2600));
+    let episodes = (0..8)
+        .map(|i| nova::ContinueRow {
+            id: format!("e{i}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let upcoming = (0..8)
+        .map(|i| nova::UpcomingRow {
+            id: format!("u{i}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let populate = |order: &[usize], profile: &str| {
+        app.set_home_continue(Rc::new(VecModel::from(episodes.clone())).into());
+        app.set_home_new_episodes(Rc::new(VecModel::from(episodes.clone())).into());
+        app.set_home_upcoming(Rc::new(VecModel::from(upcoming.clone())).into());
+        app.set_home_catalog_scroll_keys(
+            Rc::new(VecModel::from(
+                order
+                    .iter()
+                    .map(|id| format!("{profile}/row-{id}").into())
+                    .collect::<Vec<slint::SharedString>>(),
+            ))
+            .into(),
+        );
+        app.set_home_catalog_sections(
+            Rc::new(VecModel::from(
+                order
+                    .iter()
+                    .map(|id| nova::HomeCatalogSection {
+                        // Deliberately equal labels: source identity owns the position.
+                        title: "Watch history".into(),
+                        first_card: (*id * 8) as i32,
+                        card_count: 8,
+                        is_history: *id == 0,
+                        tmdb_attribution: false,
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        app.set_home_catalog_cards(
+            Rc::new(VecModel::from(
+                (0..24)
+                    .map(|i| nova::HomeCatalogCard {
+                        id: format!("c{i}").into(),
+                        section_index: i / 8,
+                        flat_index: i,
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        app.set_home_catalog_order(Rc::new(VecModel::from(vec![-1, -3, -2, 0, 1, 2])).into());
+        app.set_home_catalog_positions(Rc::new(VecModel::from(vec![1, 2, 0, 3, 4, 5])).into());
+    };
+    let rails = || {
+        let mut result = [
+            "HomePage::rail_continue",
+            "HomePage::rail_new_episodes",
+            "HomePage::rail_upcoming",
+        ]
+        .iter()
+        .map(|id| ElementHandle::find_by_element_id(&app, id).next().unwrap())
+        .collect::<Vec<_>>();
+        result.extend(ElementHandle::find_by_element_id(
+            &app,
+            "HomePage::catalog_rail",
+        ));
+        assert_eq!(result.len(), 6);
+        result
+    };
+    let position = |rail: &ElementHandle, index: usize| {
+        let kind = if index == 2 {
+            "UpcomingCard"
+        } else if index < 3 {
+            "ContinueCard"
+        } else {
+            "HomeCatalogPosterCard"
+        };
+        let card = rail
+            .query_descendants()
+            .match_type_name(kind)
+            .find_first()
+            .unwrap();
+        card.absolute_position().x - rail.absolute_position().x
+    };
+    populate(&[0, 1, 2], "profile-a");
+    app.show().unwrap();
+    settle();
+    let initial = rails()
+        .iter()
+        .enumerate()
+        .map(|(i, rail)| position(rail, i))
+        .collect::<Vec<_>>();
+    settle();
+    for (i, rail) in rails().iter().enumerate() {
+        rail.scroll(-60.0 - i as f32 * 35.0, 0.0);
+        settle();
+    }
+    let before = rails()
+        .iter()
+        .enumerate()
+        .map(|(i, rail)| position(rail, i))
+        .collect::<Vec<_>>();
+    assert!(
+        before
+            .iter()
+            .zip(&initial)
+            .all(|(x, start)| *x < *start - 1.0),
+        "every rail must have scrolled: {initial:?} -> {before:?}"
+    );
+    let saved = (0..3)
+        .map(|i| {
+            app.global::<nova_ui_shared::HomeBridge>()
+                .invoke_catalog_scroll_offset(format!("profile-a/row-{i}").into())
+        })
+        .collect::<Vec<_>>();
+    for i in 0..3 {
+        assert!(
+            saved[i] < -1.0,
+            "row {i} failed to save its position: {saved:?}, {initial:?} -> {before:?}"
+        );
+    }
+    // Release the actual Home page, then republish rows as a background Home
+    // refresh would do when returning from Detail or another root page.
+    app.set_show_settings(true);
+    app.set_show_home(false);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1000));
+    assert!(
+        ElementHandle::find_by_element_id(&app, "HomePage::rail_continue")
+            .next()
+            .is_none()
+    );
+    for (i, x) in saved.iter().enumerate() {
+        assert_eq!(
+            app.global::<nova_ui_shared::HomeBridge>()
+                .invoke_catalog_scroll_offset(format!("profile-a/row-{i}").into()),
+            *x,
+            "releasing Home overwrote row {i}'s position"
+        );
+    }
+    populate(&[0, 1, 2], "profile-a");
+    app.set_show_settings(false);
+    app.set_show_home(true);
+    settle();
+    for (i, rail) in rails().iter().enumerate() {
+        assert!(
+            (position(rail, i) - before[i]).abs() < 1.0,
+            "row {i} lost its offset on remount: {} -> {}, saved={saved:?}, initial={initial:?}",
+            before[i],
+            position(rail, i)
+        );
+    }
+    populate(&[2, 0, 1], "profile-a");
+    settle();
+    for (i, old) in [5, 3, 4].into_iter().enumerate() {
+        assert!(
+            (position(&rails()[i + 3], i + 3) - before[old]).abs() < 1.0,
+            "catalog reorder retargeted offset {i}"
+        );
+    }
+    // A temporary empty catalog model must not overwrite saved positions.
+    app.set_home_catalog_sections(
+        Rc::new(VecModel::from(Vec::<nova::HomeCatalogSection>::new())).into(),
+    );
+    settle();
+    populate(&[0, 1, 2], "profile-a");
+    settle();
+    for i in 3..6 {
+        assert!((position(&rails()[i], i) - before[i]).abs() < 1.0);
+    }
+    app.set_home_catalog_sections(
+        Rc::new(VecModel::from(
+            (0..3)
+                .map(|i| nova::HomeCatalogSection {
+                    title: "Loading".into(),
+                    first_card: i * 8,
+                    card_count: 1,
+                    is_history: i == 0,
+                    tmdb_attribution: false,
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    settle();
+    populate(&[0, 1, 2], "profile-a");
+    settle();
+    for i in 3..6 {
+        assert!(
+            (position(&rails()[i], i) - before[i]).abs() < 1.0,
+            "row {i} forgot its offset while loading"
+        );
+    }
+    populate(&[0, 1, 2], "profile-b");
+    settle();
+    for i in 3..6 {
+        assert!(
+            (position(&rails()[i], i) - initial[i]).abs() < 1.0,
+            "another profile inherited row {i}'s offset"
+        );
+    }
+    populate(&[0, 1, 2], "profile-a");
+    settle();
+    for i in 3..6 {
+        assert!((position(&rails()[i], i) - before[i]).abs() < 1.0);
+    }
 }
 
 #[test]

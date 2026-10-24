@@ -979,6 +979,7 @@ impl Bridge {
             })
             .collect();
         let mut sections = Vec::new();
+        let mut scroll_keys = Vec::new();
         let mut cards = Vec::new();
         let mut items = Vec::new();
         let groups = groups
@@ -986,6 +987,7 @@ impl Bridge {
             .filter(|group| !group.previews.is_empty())
             .collect::<Vec<_>>();
         for group in &groups {
+            scroll_keys.push(home_catalog_scroll_key(&group.source));
             let section_index = sections.len() as i32;
             sections.push(HomeCatalogSection {
                 title: SharedString::from(&group.title),
@@ -1036,6 +1038,7 @@ impl Bridge {
         }
         let history = self.shared.lock().unwrap().home_history_list.clone();
         if !history.is_empty() {
+            scroll_keys.push(home_catalog_scroll_key(&HomeRowSource::WatchHistory));
             let section_index = sections.len() as i32;
             sections.push(HomeCatalogSection {
                 title: text::tr("Watch history").into(),
@@ -1098,6 +1101,7 @@ impl Bridge {
             state.home_catalog_row_groups = groups;
             state.home_catalog_row_items = items;
         }
+        app.set_home_catalog_scroll_keys(Rc::new(VecModel::from(scroll_keys)).into());
         app.set_home_catalog_sections(Rc::new(VecModel::from(sections)).into());
         app.set_home_catalog_cards(Rc::new(VecModel::from(cards)).into());
         let archive = self.shared.lock().unwrap().home_history_archive.clone();
@@ -3184,6 +3188,12 @@ fn episode_home_action_entry(
                     .is_some_and(|p| p.watched)
         })
         .cloned()
+}
+
+fn home_catalog_scroll_key(source: &HomeRowSource) -> SharedString {
+    serde_json::to_string(&(profiles::current_id(), source))
+        .expect("Home row scroll identity")
+        .into()
 }
 
 struct HomeEpisodeProofs {

@@ -16,6 +16,9 @@ export component HomeModule inherits Window {
         new_episode_rows <=> HomeBridge.new_episode_rows;
         upcoming_rows <=> HomeBridge.upcoming_rows;
         catalog_sections <=> HomeBridge.catalog_sections;
+        catalog_scroll_keys <=> HomeBridge.catalog_scroll_keys;
+        catalog_scroll_offset(key) => { return HomeBridge.catalog_scroll_offset(key); }
+        catalog_scrolled(key, x) => { HomeBridge.catalog_scrolled(key, x); }
         catalog_order <=> HomeBridge.catalog_order;
         catalog_positions <=> HomeBridge.catalog_positions;
         catalog_cards <=> HomeBridge.catalog_cards;

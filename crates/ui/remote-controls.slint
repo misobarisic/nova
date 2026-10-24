@@ -1,5 +1,5 @@
 import { SleepTimerMenu } from "sleep-timer.slint";
-import { PlayerOsdBridge, RemoteBridge, Theme, SettingsStyle, InterfaceStyle, SubtitleStyle } from "@NovaUiShared";
+import { HomeBridge, PlayerOsdBridge, RemoteBridge, Theme, SettingsStyle, InterfaceStyle, SubtitleStyle } from "@NovaUiShared";
 import { PillButton, MiniSlider } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
@@ -940,6 +940,36 @@ export component RemotePlayingSection inherits VerticalLayout {
     // Keep the rail's intrinsic width out of the Home page's layout minimum.
     Text { text: @tr("Playing on your devices"); min-width: 0px; overflow: elide; color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
     device_rail := Flickable {
+        property <bool> offset_ready: false;
+        function restore_when_scrollable() {
+            if self.content-width <= self.width {
+                self.offset_ready = false;
+                restore_offset.stop();
+            } else if !self.offset_ready {
+                restore_offset.stop(); restore_offset.start();
+            }
+        }
+        changed content-width => { self.restore_when_scrollable(); }
+        changed width => { self.restore_when_scrollable(); }
+        changed content-x => {
+            if self.offset_ready && self.content-width > self.width {
+                HomeBridge.catalog_scrolled("home-playing-devices", self.content-x);
+            }
+        }
+        flicked => {
+            restore_offset.stop();
+            self.offset_ready = true;
+            HomeBridge.catalog_scrolled("home-playing-devices", self.content-x);
+        }
+        restore_offset := Timer {
+            interval: 16ms; running: true;
+            triggered => {
+                self.stop();
+                device_rail.content-x = Math.max(-Math.max(0px, device_rail.content-width - device_rail.width),
+                    Math.min(0px, HomeBridge.catalog_scroll_offset("home-playing-devices")));
+                device_rail.offset_ready = true;
+            }
+        }
         min-width: 0px;
         height: InterfaceStyle.tv ? 56px : 44px;
         vertical-stretch: 0;
