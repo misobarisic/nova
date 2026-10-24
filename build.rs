@@ -120,9 +120,9 @@ fn generate_build_version() {
             "release tag must reference HEAD"
         );
     }
-    let tag = release_tag.map(str::to_owned).or_else(|| {
-        version::git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"])
-    });
+    let tag = release_tag
+        .map(str::to_owned)
+        .or_else(|| version::git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]));
     let commit = version::git(&["rev-parse", "--short=8", "HEAD"]);
     let exact = (env::var("PROFILE").as_deref() == Ok("release"))
         .then(|| {

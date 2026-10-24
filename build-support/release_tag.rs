@@ -5,11 +5,13 @@ pub fn select<'a>(
     ref_type: Option<&str>,
     ref_name: Option<&'a str>,
 ) -> Result<Option<&'a str>, String> {
-    let tag = explicit.filter(|tag| !tag.is_empty()).or(if ref_type == Some("tag") {
-        ref_name
-    } else {
-        None
-    });
+    let tag = explicit
+        .filter(|tag| !tag.is_empty())
+        .or(if ref_type == Some("tag") {
+            ref_name
+        } else {
+            None
+        });
     if ref_type == Some("tag") && tag.is_none() {
         return Err("missing release tag".into());
     }
