@@ -11,7 +11,7 @@ import { MenuSheet } from "menusheet.slint";
 import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 
-import { IcChevronLeft, IcChevronRight, IcPlay, IcStarBorder, IcSchedule, IcDisplay } from "icons.slint";
+import { IcChevronLeft, IcChevronRight, IcPlay, IcStarBorder, IcSchedule, IcDisplay, IcSearch } from "icons.slint";
 
 // Small "Next up" pill pinned to a Continue card's poster top-right. Shown
 // only when the card offers the next episode of a series still being
@@ -1545,6 +1545,7 @@ export component HomePage {
 
     callback home_picked();
     callback discover_picked();
+    callback search_picked();
     callback library_picked();
     callback settings_picked();
     callback about_picked();
@@ -1759,7 +1760,8 @@ export component HomePage {
 
     private property <int> tv_featured_control: 0;
     function kb_up() {
-        if CastBridge.available && root.view == 0 && root.kb_zone == 0 { root.kb_zone = 7; return; }
+        if root.view == 0 && root.kb_zone == 0 { root.kb_zone = 8; return; }
+        if root.kb_zone == 8 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.kb_zone = 0; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week back.
@@ -1774,6 +1776,7 @@ export component HomePage {
     }
 
     function kb_down() {
+        if root.kb_zone == 8 { root.kb_zone = 0; return; }
         if root.kb_zone == 7 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 0 && root.featured_count > 0) { root.kb_zone = 6; land_scroll.content-y = 0px; return; }
         if (root.view == 2 && root.cal_open) {
@@ -1830,6 +1833,7 @@ export component HomePage {
     }
 
     function kb_left() {
+        if root.kb_zone == 8 { root.kb_zone = CastBridge.available ? 7 : 0; return; }
         if root.kb_zone == 7 { root.kb_zone = 0; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.max(0, root.tv_featured_control - 1); return; }
         if (root.view == 2 && root.cal_open) {
@@ -1858,7 +1862,8 @@ export component HomePage {
     }
 
     function kb_right() {
-        if root.kb_zone == 7 { root.kb_zone = 0; return; }
+        if root.kb_zone == 8 { root.kb_zone = 0; return; }
+        if root.kb_zone == 7 { root.kb_zone = 8; return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.min(root.featured_count > 1 ? 3 : 1, root.tv_featured_control + 1); return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: the next day.
@@ -1886,6 +1891,7 @@ export component HomePage {
     }
 
     function kb_enter() {
+        if root.kb_zone == 8 { root.search_picked(); return; }
         if root.kb_zone == 7 { CastBridge.show(); return; }
         if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) {
             if (root.tv_featured_control == 0) { root.featured_watch_now(); }
@@ -2320,7 +2326,9 @@ export component HomePage {
                                 padding-left: 18px + (root.narrow ? root.safe-left : 0px);
                                 padding-right: 18px + root.safe-right;
                                 padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
-                                padding-top: root.featured_count == 0 ? 18px + root.safe-top : 0px;
+                                // The floating search/cast controls still need
+                                // a clear top row when the showcase is absent.
+                                padding-top: root.featured_count == 0 ? 64px + root.safe-top : 0px;
                                 if root.continue_rows.length == 0
                                     && root.new_episode_rows.length == 0
                                     && root.upcoming_rows.length == 0
@@ -3262,6 +3270,15 @@ export component HomePage {
             closed => { root.close_menu(); }
         }
     }
-    if CastBridge.available: CastButton { focused: root.kb_active && root.kb_zone == 7; x: Math.max(0px, parent.width - self.width - 16px - root.safe-right); y: root.safe-top + 12px; }
+    if root.view == 0: PillButton {
+        width: 44px; height: 44px; label: "";
+        x: Math.max(0px, parent.width - self.width - 16px - root.safe-right);
+        y: root.safe-top + 12px;
+        focused: root.kb_active && root.kb_zone == 8;
+        accessible-label: @tr("Search Nova");
+        clicked => { root.search_picked(); }
+        IcSearch { x: 10px; y: 10px; width: 24px; height: 24px; fill: Theme.current.text_primary; }
+    }
+    if CastBridge.available: CastButton { focused: root.kb_active && root.kb_zone == 7; x: Math.max(0px, parent.width - self.width - (root.view == 0 ? 68px : 16px) - root.safe-right); y: root.safe-top + 12px; }
 
 }

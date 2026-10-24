@@ -1991,3 +1991,15 @@ msgstr ""
 
 msgid "Reveal episode spoilers"
 msgstr ""
+
+msgid "Search Nova…"
+msgstr "Search Nova…"
+
+msgid "Search Nova"
+msgstr "Search Nova"
+
+msgid "Search scope"
+msgstr "Search scope"
+
+msgid "Episodes"
+msgstr "Episodes"

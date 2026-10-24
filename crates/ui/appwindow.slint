@@ -493,6 +493,7 @@ export component AppWindow inherits Window {
         genre_combo_idx <=> root.genre_combo_idx;
         search_text <=> root.search_text;
         search_results <=> root.search_results;
+        search_scope <=> root.search_scope;
         search_results_open <=> root.discover_search_open;
         search_focused <=> root.discover_search_focused;
         search_addon_combo_idx <=> root.search_addon_combo_idx;
@@ -1075,6 +1076,7 @@ export component AppWindow inherits Window {
 
     in-out property <[MediaCard]> catalog: [];
     in-out property <[MediaCard]> search_results: [];
+    in-out property <int> search_scope: 0;
     in-out property <[string]> discover_search_history: [];
     in-out property <[string]> discover_search_history_contexts: [];
     in-out property <[string]> addon_names: [];
@@ -1147,8 +1149,7 @@ export component AppWindow inherits Window {
     in-out property <bool> search_loading_more: false;
     in-out property <bool> search_can_load_more: false;
     in-out property <string> search_empty_hint: @tr("No results for this search.");
-    // False when no enabled catalog declares search: the global search
-    // field is disabled instead of silently changing browse data.
+    // Local search remains available without searchable addon catalogs.
     in-out property <bool> searchable: true;
     // Minimum grid columns (Settings → Display), applied live on autosave.
     in-out property <int> discover_min_cols: 2;
@@ -1888,6 +1889,8 @@ export component AppWindow inherits Window {
     callback catalog_picked(string);
     callback genre_picked(string);
     callback search_activated();
+    callback search_scope_picked(int);
+    callback home_search_picked();
     callback search_filter_picked(int, int);
     callback search_edited(string);
     callback search_submitted(string);
@@ -2275,6 +2278,7 @@ export component AppWindow inherits Window {
     public function downloads_bridge_more_picked() { root.open_more(); }
 
     public function home_bridge_home_picked() { root.navigate_section(0); }
+    public function home_bridge_search_picked() { root.home_search_picked(); }
     public function home_bridge_discover_picked() { root.navigate_section(1); }
     public function home_bridge_library_picked() { root.navigate_section(2); }
     public function home_bridge_settings_picked() { root.navigate_section(6); }
@@ -2303,6 +2307,7 @@ export component AppWindow inherits Window {
     public function discover_bridge_type_picked(v: string) { root.type_picked(v); }
     public function discover_bridge_catalog_picked(v: string) { root.catalog_picked(v); }
     public function discover_bridge_genre_picked(v: string) { root.genre_picked(v); }
+    public function discover_bridge_search_scope_picked(scope:int) { root.search_scope_picked(scope); }
     public function discover_bridge_search_activated() { root.search_activated(); }
     public function discover_bridge_search_filter_picked(kind: int, index: int) { root.search_filter_picked(kind, index); }
     public function discover_bridge_search_edited(v: string) { root.search_edited(v); }

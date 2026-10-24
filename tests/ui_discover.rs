@@ -20,3 +20,6 @@ mod search_ui;
 
 #[path = "discover/styling.rs"]
 mod styling;
+
+#[path = "discover/unified_search.rs"]
+mod unified_search;

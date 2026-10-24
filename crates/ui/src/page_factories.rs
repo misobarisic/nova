@@ -154,6 +154,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         });
         crate::forward_app_callbacks!(app, &bridge;
             on_home_picked => invoke_home_bridge_home_picked(),
+            on_search_picked => invoke_home_bridge_search_picked(),
             on_discover_picked => invoke_home_bridge_discover_picked(),
             on_library_picked => invoke_home_bridge_library_picked(),
             on_settings_picked => invoke_home_bridge_settings_picked(),
@@ -210,6 +211,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_catalog_picked => invoke_discover_bridge_catalog_picked(arg0),
             on_genre_picked => invoke_discover_bridge_genre_picked(arg0),
             on_search_activated => invoke_discover_bridge_search_activated(),
+            on_search_scope_picked => invoke_discover_bridge_search_scope_picked(arg0),
             on_search_filter_picked => invoke_discover_bridge_search_filter_picked(arg0, arg1),
             on_search_edited => invoke_discover_bridge_search_edited(arg0),
             on_search_submitted => invoke_discover_bridge_search_submitted(arg0),

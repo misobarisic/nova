@@ -1844,6 +1844,7 @@ impl Bridge {
         let generation = {
             let mut state = self.shared.lock().unwrap();
             state.search_generation = state.search_generation.wrapping_add(1);
+            state.search = text.trim().to_owned();
             state.search_targets.clear();
             state.search_previews.clear();
             state.search_poster_inflight.clear();
@@ -1873,6 +1874,8 @@ impl Bridge {
             // below the minimum; Back is the explicit way out of search.
             app.set_discover_search_open(keep_results_open);
         }
+
+        self.refresh_local_search(text);
 
         if has_query {
             let query = text.to_string();
@@ -1949,6 +1952,13 @@ impl Bridge {
             app.set_search_loading_more(false);
             app.set_search_can_load_more(false);
             app.set_search_empty_hint(SharedString::from(text::tr("No results for this search.")));
+        }
+
+        self.refresh_local_search(&trimmed);
+        if target_count == 0
+            || profile_policy::restricted() && !profile_policy::management_browsing()
+        {
+            self.remember_search(&trimmed);
         }
 
         if profile_policy::restricted() && !profile_policy::management_browsing() {
@@ -2028,6 +2038,11 @@ impl Bridge {
         }
     }
 
+    pub(super) fn repaint_search(&self) {
+        let generation = self.shared.lock().unwrap().search_generation;
+        self.apply_search_results(generation, Vec::new(), false);
+    }
+
     /// Apply each completed source page immediately, preserving deterministic
     /// source ordering and independent cursors for catalogs that support skip.
     fn apply_search_results(
@@ -2037,6 +2052,7 @@ impl Bridge {
         append: bool,
     ) {
         let Some(app) = self.app() else { return };
+        let delivered = !pages.is_empty();
         let (old_previews, ranked_metas, new_count, can_load_more, pending) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.search_generation {
@@ -2044,6 +2060,7 @@ impl Bridge {
             }
             let old_previews = state.search_previews.clone();
 
+            let deliveries = pages.len();
             for (index, metas) in pages {
                 record_search_page_outcome(&mut state.search_targets, index, metas);
             }
@@ -2057,17 +2074,19 @@ impl Bridge {
                     &m.id,
                 )
             });
-            let old_keys: HashSet<(String, String)> = old_previews
+            let merged = unified_search::merge(&state, merged);
+            let old_keys: HashSet<_> = old_previews
                 .iter()
-                .map(|meta| (meta.type_.clone(), meta.id.clone()))
+                .map(unified_search::result_key)
                 .collect();
             let new_count = merged
                 .iter()
-                .filter(|meta| !old_keys.contains(&(meta.type_.clone(), meta.id.clone())))
+                .filter(|meta| !old_keys.contains(&unified_search::result_key(meta)))
                 .count();
             state.search_previews = merged;
             let ranked_metas = state.search_previews.clone();
-            state.search_pending_requests = state.search_pending_requests.saturating_sub(1);
+            state.search_pending_requests =
+                state.search_pending_requests.saturating_sub(deliveries);
             let pending = state.search_pending_requests;
             if pending == 0 {
                 state.search_loading_more = false;
@@ -2090,14 +2109,14 @@ impl Bridge {
         let mut old_cards = HashMap::new();
         for (index, meta) in old_previews.iter().enumerate() {
             if let Some(card) = old_model.row_data(index) {
-                old_cards.insert((meta.type_.clone(), meta.id.clone()), card);
+                old_cards.insert(unified_search::result_key(meta), card);
             }
         }
 
         let mut cards = Vec::with_capacity(ranked_metas.len());
         let mut poster_jobs = Vec::new();
         for meta in &ranked_metas {
-            let key = (meta.type_.clone(), meta.id.clone());
+            let key = unified_search::result_key(meta);
             let mut known = meta.clone();
             reuse_discover_poster(
                 &mut known,
@@ -2120,15 +2139,22 @@ impl Bridge {
             }
             cards.push(card);
         }
+        let focused_index = (app.get_kb_active() && app.get_discover_kb_zone() == 3)
+            .then(|| app.get_discover_kb_idx() as usize)
+            .and_then(|index| unified_search::restored_focus(&old_previews, &ranked_metas, index));
         update_search_result_model(&app, &old_previews, &ranked_metas, cards);
+        if let Some(index) = focused_index {
+            app.set_discover_kb_idx(index as i32);
+        }
 
         for (type_, id, poster) in poster_jobs {
             self.fetch_search_card_poster(type_, id, poster, generation);
         }
-        app.set_search_loading(pending > 0 && !append);
-        app.set_search_loading_more(pending > 0 && append);
-        app.set_search_can_load_more(can_load_more);
-        if !append && pending == 0 {
+        let catalogs_visible = app.get_search_scope() <= 1;
+        app.set_search_loading(pending > 0 && !append && catalogs_visible);
+        app.set_search_loading_more(pending > 0 && append && catalogs_visible);
+        app.set_search_can_load_more(can_load_more && catalogs_visible);
+        if !append && pending == 0 && delivered {
             let query = self.shared.lock().unwrap().search.clone();
             self.remember_search(&query);
         }
@@ -2165,6 +2191,7 @@ impl Bridge {
     pub(super) fn close_search_results(&self) {
         {
             let mut state = self.shared.lock().unwrap();
+            state.unified_search.clear_scope();
             state.search_generation = state.search_generation.wrapping_add(1);
             state.search.clear();
             state.search_filters = SearchFilters::default();
@@ -2174,6 +2201,7 @@ impl Bridge {
             state.search_loading_more = false;
         }
         if let Some(app) = self.app() {
+            app.set_search_scope(0);
             app.set_search_text(SharedString::default());
             app.set_search_loading(false);
             app.set_search_loading_more(false);
@@ -2182,6 +2210,7 @@ impl Bridge {
             app.set_discover_search_focused(false);
             app.set_discover_search_filters_open(false);
         }
+        self.refresh_local_search("");
         self.apply_search_filters_to_ui();
     }
 
@@ -2276,7 +2305,7 @@ impl Bridge {
             Some(a) => a,
             None => return,
         };
-        let (type_idx, catalog_idx, catalog_names, hint, searchable, has_grid, supports_skip) = {
+        let (type_idx, catalog_idx, catalog_names, hint, _searchable, has_grid, supports_skip) = {
             let state = self.shared.lock().unwrap();
             let type_idx = state.chosen_type;
             let catalog_idx = state.chosen_catalog.min(
@@ -2302,7 +2331,7 @@ impl Bridge {
             let hint = if supports_search {
                 text::tr("Search movies, shows…").to_string()
             } else {
-                text::tr("No enabled catalogs support search.").to_string()
+                text::tr("Search your library, episodes and bookmarks.").to_string()
             };
             let supports_skip = state
                 .type_defs
@@ -2327,13 +2356,13 @@ impl Bridge {
         self.apply_genre_selection_to_ui();
         if has_grid {
             app.set_searchable_hint(SharedString::from(hint));
-            app.set_searchable(searchable);
+            app.set_searchable(true);
             // can_load_more is set after fetch completes; for now only mark
             // it available when the catalog supports skip.
             app.set_can_load_more(supports_skip);
         } else {
             app.set_searchable_hint(SharedString::from(""));
-            app.set_searchable(false);
+            app.set_searchable(true);
             app.set_can_load_more(false);
         }
     }
@@ -2409,18 +2438,18 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        let (hint, searchable) = {
+        let (hint, _searchable) = {
             let state = self.shared.lock().unwrap();
             let searchable = !build_search_targets(&state.installed).is_empty();
             let hint = if searchable {
                 text::tr("Search movies, shows…").to_string()
             } else {
-                text::tr("No enabled catalogs support search.").to_string()
+                text::tr("Search your library, episodes and bookmarks.").to_string()
             };
             (hint, searchable)
         };
         app.set_searchable_hint(SharedString::from(hint));
-        app.set_searchable(searchable);
+        app.set_searchable(true);
     }
 
     /// Rebuild localized Discover labels without changing the active catalog,
@@ -2821,7 +2850,7 @@ fn unique_search_results(targets: &[SearchTarget]) -> Vec<MetaPreview> {
     targets
         .iter()
         .flat_map(|target| &target.results)
-        .filter(|meta| !meta.id.is_empty() && seen.insert((meta.type_.clone(), meta.id.clone())))
+        .filter(|meta| !meta.id.is_empty() && seen.insert(unified_search::result_key(meta)))
         .cloned()
         .collect()
 }
@@ -2842,12 +2871,12 @@ fn update_search_result_model(
         return;
     }
 
-    let mut current_keys: Vec<(String, String)> = old_previews
+    let mut current_keys: Vec<_> = old_previews
         .iter()
-        .map(|meta| (meta.type_.clone(), meta.id.clone()))
+        .map(unified_search::result_key)
         .collect();
     for (index, (meta, card)) in new_previews.iter().zip(cards).enumerate() {
-        let key = (meta.type_.clone(), meta.id.clone());
+        let key = unified_search::result_key(meta);
         if current_keys.get(index) != Some(&key) {
             if let Some(previous_index) = current_keys
                 .iter()
@@ -2882,10 +2911,17 @@ fn record_search_page_outcome(
     }
 }
 
-fn record_search_source_page(targets: &mut [SearchTarget], index: usize, metas: Vec<MetaPreview>) {
+fn record_search_source_page(
+    targets: &mut [SearchTarget],
+    index: usize,
+    mut metas: Vec<MetaPreview>,
+) {
     let Some(target) = targets.get_mut(index) else {
         return;
     };
+    for meta in &mut metas {
+        unified_search::tag_catalog(meta, &target.addon_url);
+    }
     if metas.is_empty() || !target.supports_skip {
         target.exhausted = true;
     } else {
@@ -3137,14 +3173,15 @@ fn reuse_discover_poster(
 }
 
 fn search_media_card(meta: &MetaPreview) -> MediaCard {
+    let (label, context) = unified_search::card_text(meta);
     MediaCard {
         id: SharedString::from(&meta.id),
         title: SharedString::from(meta.title()),
-        year: SharedString::from(meta.year_str().unwrap_or_default()),
+        year: context.into(),
         poster_path: SharedString::from(meta.poster.clone().unwrap_or_default()),
         poster: Image::default(),
         is_loaded: false,
-        badge: SharedString::default(),
+        badge: label.into(),
         watched: false,
         ..Default::default()
     }
@@ -4570,7 +4607,7 @@ mod tests {
             &mut targets,
             1,
             vec![
-                search_meta("shared", "Common duplicate"),
+                search_meta("tt1234567", "Common duplicate"),
                 search_meta("second", "Common"),
             ],
         );
@@ -4580,7 +4617,7 @@ mod tests {
                 .iter()
                 .map(|meta| meta.id.as_str())
                 .collect::<Vec<_>>(),
-            ["shared", "second"]
+            ["tt1234567", "second"]
         );
 
         // The preferred source arrives later. Its metadata wins the duplicate,
@@ -4589,7 +4626,7 @@ mod tests {
             &mut targets,
             0,
             vec![
-                search_meta("shared", "Common"),
+                search_meta("tt1234567", "Common"),
                 search_meta("first", "Common"),
             ],
         );
@@ -4599,7 +4636,7 @@ mod tests {
                 .iter()
                 .map(|meta| meta.id.as_str())
                 .collect::<Vec<_>>(),
-            ["shared", "first", "second"]
+            ["tt1234567", "first", "second"]
         );
         let unique = unique_search_results(&targets);
         assert_eq!(unique.len(), 3);

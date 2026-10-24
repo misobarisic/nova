@@ -428,7 +428,7 @@ impl Bridge {
         true
     }
 
-    fn play_saved_scene(&self, id: &str) {
+    pub(super) fn play_saved_scene(&self, id: &str) {
         if profile_policy::entry_blocked() {
             return;
         }

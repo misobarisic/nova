@@ -471,15 +471,20 @@ impl Bridge {
         generation: u64,
     ) {
         if url.is_empty() {
-            self.recover_missing_artwork(&type_, &id, "");
+            if !id.starts_with("local:") {
+                self.recover_missing_artwork(&type_, &id, "");
+            }
             return;
         }
+        let inflight_id = format!("{id}\u{1}{url}");
         {
             let mut state = self.shared.lock().unwrap();
             if state.search_generation != generation
-                || !state
-                    .search_poster_inflight
-                    .insert((generation, type_.clone(), id.clone()))
+                || !state.search_poster_inflight.insert((
+                    generation,
+                    type_.clone(),
+                    inflight_id.clone(),
+                ))
             {
                 return;
             }
@@ -493,14 +498,26 @@ impl Bridge {
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let index = {
                     let mut state = bridge.shared.lock().unwrap();
-                    state
-                        .search_poster_inflight
-                        .remove(&(generation, type_.clone(), id.clone()));
+                    state.search_poster_inflight.remove(&(
+                        generation,
+                        type_.clone(),
+                        inflight_id.clone(),
+                    ));
                     if state.search_generation == generation {
                         state
                             .search_previews
                             .iter()
-                            .position(|meta| meta.type_ == type_ && meta.id == id)
+                            .enumerate()
+                            .find_map(|(index, meta)| {
+                                (meta.type_ == type_
+                                    && meta.id == id
+                                    && app_weak.upgrade().is_some_and(|app| {
+                                        app.get_search_results().row_data(index).is_some_and(
+                                            |row| row.poster_path.as_str() == requested_url,
+                                        )
+                                    }))
+                                .then_some(index)
+                            })
                     } else {
                         None
                     }
@@ -522,8 +539,16 @@ impl Bridge {
                     })
                 {
                     if let Some(pixels) = pixels {
-                        app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
-                    } else {
+                        let model = app.get_search_results();
+                        for (row_index, row) in model.iter().enumerate() {
+                            if row.id.as_str() == id && row.poster_path.as_str() == requested_url {
+                                app.invoke_set_search_card_poster(
+                                    row_index as i32,
+                                    Image::from_rgba8(pixels.clone()),
+                                );
+                            }
+                        }
+                    } else if !id.starts_with("local:") {
                         bridge.recover_missing_artwork(&type_, &id, &requested_url);
                     }
                 }

@@ -151,6 +151,7 @@ impl Bridge {
         self.refresh_downloads_page();
         self.downloads_list_to_ui();
         self.refresh_download_background_status();
+        self.refresh_unified_search_presentation();
         if let Some(app) = self.app() {
             if let Some(video) = selected {
                 self.apply_stream_episode_context(&app, Some(&video));

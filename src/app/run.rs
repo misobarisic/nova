@@ -644,6 +644,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_search_activated(move || b.activate_search_filters());
 
     let b = bridge.clone();
+    app.on_search_scope_picked(move |scope| b.pick_search_scope(scope));
+
+    let b = bridge.clone();
+    app.on_home_search_picked(move || {
+        if !note_nav_switch(&b, 1) {
+            return;
+        }
+        b.show_discover_page();
+        b.activate_search_filters();
+        if let Some(app) = b.app() {
+            app.set_discover_search_focused(true);
+            app.set_discover_kb_zone(2);
+            app.set_discover_kb_ctl(3);
+            app.global::<crate::DiscoverBridge>().invoke_focus_shell();
+        }
+    });
+
+    let b = bridge.clone();
     app.on_search_filter_picked(move |kind, index| b.pick_search_filter(kind, index));
 
     let b = bridge.clone();

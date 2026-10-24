@@ -24,6 +24,8 @@ export component DiscoverModule inherits Window {
         genre_combo_idx <=> DiscoverBridge.genre_combo_idx;
         search_text <=> DiscoverBridge.search_text;
         search_results <=> DiscoverBridge.search_results;
+        search_scope <=> DiscoverBridge.search_scope;
+        search_scope_picked(scope) => { DiscoverBridge.search_scope_picked(scope); }
         search_history <=> DiscoverBridge.search_history;
         search_history_contexts <=> DiscoverBridge.search_history_contexts;
         search_results_open <=> DiscoverBridge.search_results_open;

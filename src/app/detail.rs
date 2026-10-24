@@ -170,6 +170,9 @@ impl Bridge {
             None => return,
         };
 
+        if searching && self.open_search_result(&preview, generation, index) {
+            return;
+        }
         self.open_preview(preview, generation, searching, Some(index), false);
     }
 

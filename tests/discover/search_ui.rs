@@ -97,13 +97,15 @@ fn search_results_back_restores_discover_filters_and_browse_model() {
         let failures2 = failures1.clone();
         after(200, move || {
             let app = app2.upgrade().unwrap();
-            if ElementHandle::find_by_element_type_name(&app, "Dropdown")
-                .next()
-                .is_some()
+            if ElementHandle::find_by_element_type_name(&app, "Dropdown").count() != 1
+                || ElementHandle::find_by_accessible_label(&app, "Search scope")
+                    .next()
+                    .is_none()
             {
-                failures2
-                    .borrow_mut()
-                    .push("browse filters should be hidden in search results".into());
+                failures2.borrow_mut().push(
+                    "only the unified scope selector should remain when catalog filters are closed"
+                        .into(),
+                );
             }
             if ElementHandle::find_by_element_type_name(&app, "Button")
                 .next()

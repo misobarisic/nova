@@ -5622,3 +5622,12 @@ msgstr "Sakrij naslove, opise i slike neodgledanih epizoda na ovom profilu. Otkr
 
 msgid "Reveal episode spoilers"
 msgstr "Otkrij spojlere epizode"
+
+msgid "Search Nova…"
+msgstr "Pretražite Novu…"
+
+msgid "Search Nova"
+msgstr "Pretraži Novu"
+
+msgid "Search scope"
+msgstr "Opseg pretraživanja"

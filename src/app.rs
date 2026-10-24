@@ -330,6 +330,7 @@ struct Shared {
     /// Search result set, kept separate so returning from Search restores the
     /// selected browse catalog without another request.
     search_previews: Vec<MetaPreview>,
+    unified_search: unified_search::State,
     search_filters: SearchFilters,
     search_targets: Vec<SearchTarget>,
     search_generation: u64,
@@ -878,6 +879,7 @@ mod stream_preferences;
 mod stream_prefetch;
 mod subtitles;
 mod sync_inspector;
+mod unified_search;
 #[cfg(feature = "update-check")]
 mod updates;
 mod viewing_journal;
