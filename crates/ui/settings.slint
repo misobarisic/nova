@@ -1508,7 +1508,9 @@ export component SettingsPage {
 
     function kb_player_step(d: int) {
         if root.kb_pr >= root.kb_player_existing_n() { root.kb_stream_filter_step(d, false); }
-        else if CastBridge.available && root.kb_pr == root.kb_player_existing_n() - 1 {
+        else if root.player_backend_index == 0 && root.kb_pr >= SettingsContent.kb_player_listening_row() && root.kb_pr < SettingsContent.kb_player_listening_row() + 3 {
+            SettingsBridge.listening_set(root.kb_pr - SettingsContent.kb_player_listening_row(), d > 0);
+        } else if CastBridge.available && root.kb_pr == root.kb_player_existing_n() - 1 {
             root.casting_remux_buffer_index = Math.clamp(root.casting_remux_buffer_index + d, 0, 3);
             root.schedule_setting("casting_remux_buffer");
         } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() {
@@ -1871,7 +1873,10 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 9) {
             if root.kb_pr >= root.kb_player_existing_n() { root.kb_stream_filter_step(1, true); }
-            else if CastBridge.available && root.kb_pr == root.kb_player_existing_n() - 1 {
+            else if root.player_backend_index == 0 && root.kb_pr >= SettingsContent.kb_player_listening_row() && root.kb_pr < SettingsContent.kb_player_listening_row() + 3 {
+                let effect = root.kb_pr - SettingsContent.kb_player_listening_row();
+                SettingsBridge.listening_set(effect, !SettingsBridge.listening_enabled(effect));
+            } else if CastBridge.available && root.kb_pr == root.kb_player_existing_n() - 1 {
                 root.casting_remux_buffer_index = Math.mod(root.casting_remux_buffer_index + 1, 4);
                 root.schedule_setting("casting_remux_buffer");
             } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() {

@@ -31,6 +31,27 @@ component StreamRuleToggle inherits SettingsRow {
     }
 }
 
+// Keep a true two-way link so OSD and keyboard edits update a switch even
+// after its own pointer handler has assigned checked.
+component ListeningToggle inherits SettingsRow {
+    in property <int> effect;
+    in-out property <bool> checked;
+    setting-key: SettingsBridge.listening_key(root.effect);
+    row-title: SettingsBridge.listening_label(root.effect);
+    row-desc: SettingsBridge.listening_description(root.effect);
+    ToggleSwitch {
+        name: root.row-title;
+        checked <=> root.checked;
+        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_listening_row() + root.effect;
+        toggled => {
+            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+            SettingsBridge.kb_zone = 9;
+            SettingsContent.kb_pr = SettingsContent.kb_player_listening_row() + root.effect;
+            SettingsBridge.listening_set(root.effect, self.checked);
+        }
+    }
+}
+
 component StreamRuleHeading inherits SettingsRow {
     in property <string> title;
     in property <string> description;
@@ -727,6 +748,24 @@ export component SettingsPlayerModule inherits Window {
                             SettingsContent.schedule_setting("show_stream_loading_text");
                         }
                     }
+                }
+            }
+
+            if SettingsBridge.player_backend_index == 0: VerticalLayout {
+                spacing: 16px;
+                SectionHeader { label: @tr("Night listening and dialogue"); }
+                Text {
+                    text: @tr("Saved on this device. Applies to built-in playback; external players and casting use their own audio settings.");
+                    wrap: word-wrap; color: Theme.current.text_secondary; font-size: 13px;
+                }
+                SettingsCard {
+                    ListeningToggle { effect: 0; checked <=> SettingsBridge.dialogue_boost; }
+                    ListeningToggle { effect: 1; checked <=> SettingsBridge.loudness_normalization; }
+                    ListeningToggle { effect: 2; checked <=> SettingsBridge.night_mode; }
+                }
+                Text {
+                    text: SettingsBridge.audio_processing_status;
+                    wrap: word-wrap; color: Theme.current.text_secondary; font-size: 13px;
                 }
             }
 

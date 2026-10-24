@@ -712,3 +712,38 @@ The next stream starts from the saved Settings preference. The selected row
 tracks mpv's actual decoder, so a fallback is shown as HW or SW rather than
 continuing to claim HW+. Windows and Linux change the decoder within the
 existing source through mpv; Android retains its existing reload/fallback behavior.
+
+## Device listening effects
+
+Settings → Player → Night listening and dialogue and the same in-player
+settings submenu share three saved, default-off device preferences:
+`dialogue_boost` (a 4 dB speech-range EQ lift), `loudness_normalization`
+(real-time dynamic leveling) and `night_mode` (dynamic range compression).
+These fields stay in local settings JSON and are excluded from settings sync;
+they do not alter per-title audio-track preferences or the wire protocol.
+External players and casting receivers use their own processing.
+
+Dialogue boost changes the whole mix; it is not voice isolation. Leveling uses
+FFmpeg `dynaudnorm` in real time, rather than an offline measurement of a whole
+program's integrated LUFS. Night mode uses `acompressor`. All enabled
+combinations begin with 6 dB headroom and finish with `alimiter` (0.89 ceiling,
+automatic makeup disabled). The DSP can introduce audio buffering; mpv owns
+A/V synchronization. Nova does not change the user's volume or audio track.
+
+`crates/player/src/audio_processing.rs` owns only `@nova-listening` in mpv's
+`af` list. Edits replace that label immediately on decoded audio, without
+reloading the source; turning everything off removes it. Other filters remain.
+New sources and renderer reloads re-arm validation, and audio-format changes
+recheck the graph. Idle mpv accepts even unavailable FFmpeg filters, so Nova
+waits for real `audio-params` before installing and claiming success. Native
+errors or a disabled/missing labeled filter remove the effect and show an
+unavailable status in both menus. A failed attempt is retried only after a
+preference, source or audio-format change.
+
+The Android/Windows native media bundles pinned at vendor v0.1.2 enable
+`equalizer`, `dynaudnorm`, `acompressor` and `alimiter`; their bundle inspector
+rejects missing listening filters. The native smoke probe configures all seven
+combinations for mono, stereo and 5.1. All four release targets passed their
+build and bundle checks. Linux uses the installed mpv/FFmpeg filters; runtime
+validation remains required on every platform. Cross-build checks do not
+establish physical-device audio quality or latency.

@@ -139,6 +139,17 @@ pub fn tr(english: &str) -> &str {
         "Cast to a device" => "Emitiraj na uređaj",
         "Connecting to receiver" => "Povezivanje s prijamnikom",
         "Connected to {}" => "Povezano s {}",
+        "Audio processing is off." => "Obrada zvuka je isključena.",
+        "Audio processing will apply when built-in playback has audio." => {
+            "Obrada zvuka primijenit će se kada ugrađeni player reproducira zvuk."
+        }
+        "Audio processing is active on this device." => "Obrada zvuka aktivna je na ovom uređaju.",
+        "Audio processing is unavailable with this player's audio filters. Effects are disabled." => {
+            "Obrada zvuka nije dostupna s filtrima ovog playera. Efekti su isključeni."
+        }
+        "Audio processing could not be disabled. Stop playback and try again." => {
+            "Obrada zvuka nije isključena. Zaustavite reprodukciju i pokušajte ponovno."
+        }
         "This device" => "Ovaj uređaj",
         "Play on this device" => "Reproduciraj na ovom uređaju",
         "Audio-only receiver" => "Prijamnik podržava samo zvuk",

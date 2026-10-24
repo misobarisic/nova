@@ -1,3 +1,4 @@
+import { SettingsBridge } from "@NovaUiShared";
 import { PlayerLoadingArtwork } from "player-loading.slint";
 import { CastButton } from "casting.slint";
 import { CastBridge } from "@NovaUiShared";
@@ -425,6 +426,7 @@ component SettingsMenu inherits Rectangle {
         if root.page == 8 { return @tr("Second subtitles"); }
         if root.page == 9 { return @tr("Scene bookmarks"); }
         if root.page == 10 { return @tr("Sleep timer"); }
+        if root.page == 11 { return @tr("Night listening and dialogue"); }
         return @tr("Playback");
     }
 
@@ -648,6 +650,44 @@ component SettingsMenu inherits Rectangle {
                             focused: root.focused_idx == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0);
                             reveal(y,h) => { root.reveal_row(y,h); }
                             activate => { root.page = 10; }
+                        }
+                        MenuRow {
+                            label: @tr("Night listening and dialogue"); submenu: true;
+                            value: @tr("This device");
+                            icon: @image-url("../../assets/icons/player/eighth-note.svg");
+                            focused: root.focused_idx == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0);
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                            activate => { root.page = 11; }
+                        }
+                    }
+
+                    if root.page == 11: VerticalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: @tr("Saved on this device. Applies to built-in playback; external players and casting use their own audio settings.");
+                            wrap: word-wrap; color: Theme.current.text_player_muted;
+                            font-size: InterfaceStyle.tv ? 20px : 13px;
+                        }
+                        for effect in [0, 1, 2]: VerticalLayout {
+                            spacing: 4px;
+                            MenuRow {
+                                reveal(y, h) => { root.reveal_row(y, h); }
+                                label: SettingsBridge.listening_label(effect);
+                                value: SettingsBridge.listening_enabled(effect) ? @tr("On") : @tr("Off");
+                                selected: SettingsBridge.listening_enabled(effect);
+                                focused: root.focused_idx == effect;
+                                activate => { SettingsBridge.listening_set(effect, !SettingsBridge.listening_enabled(effect)); }
+                            }
+                            Text {
+                                text: SettingsBridge.listening_description(effect);
+                                wrap: word-wrap; color: Theme.current.text_player_muted;
+                                font-size: InterfaceStyle.tv ? 20px : 13px;
+                            }
+                        }
+                        Text {
+                            text: SettingsBridge.audio_processing_status;
+                            wrap: word-wrap; color: Theme.current.text_player_secondary;
+                            font-size: InterfaceStyle.tv ? 20px : 13px;
                         }
                     }
 
@@ -1412,7 +1452,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0);
+                return (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1429,6 +1469,7 @@ export component PlayerOverlay {
             if root.settings_page == 8 { return root.secondary_sub_tracks.length + 4; }
             if root.settings_page == 9 { return root.scene_bookmarks.length * 4 + 2; }
             if root.settings_page == 10 { return 15; }
+            if root.settings_page == 11 { return 3; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1454,10 +1495,12 @@ export component PlayerOverlay {
             root.kb_menu = focused;
         } else if (root.settings_page != 0) {
             let return_to_timer = root.settings_page == 10;
+            let return_to_listening = root.settings_page == 11;
             root.subtitle_tools_origin = 0;
             root.settings_page = 0;
             // Return to the invoking row, including its scroll position.
-            root.kb_menu = return_to_timer ? (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) : 0;
+            root.kb_menu = return_to_listening ? (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0)
+                : return_to_timer ? (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) : 0;
         } else {
             root.open_popup = 0;
         }
@@ -1649,10 +1692,14 @@ export component PlayerOverlay {
                     root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) {
                     root.settings_page = 10; root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.settings_page = 11; root.kb_menu = 0;
                 } else if !(PartyBridge.active || PartyBridge.busy) {
                     root.settings_page = 4;
                     root.kb_menu = 0;
                 }
+            } else if root.settings_page == 11 {
+                SettingsBridge.listening_set(root.kb_menu, !SettingsBridge.listening_enabled(root.kb_menu));
             } else if root.settings_page == 10 {
                 PlayerOsdBridge.sleep_timer_pick(root.kb_menu, false);
             } else if (root.settings_page == 1) {

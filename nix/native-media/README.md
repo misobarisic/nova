@@ -27,6 +27,10 @@ is added. See [casting behavior](../../docs/casting.md).
 
 The profile includes MKV, HEVC, AV1/dav1d, common playback codecs and subtitles,
 MediaCodec on Android, D3D11 copy-back on Windows, and packet-copy remuxing.
+Version 0.1.2 adds `equalizer`, `dynaudnorm`, `acompressor` and `alimiter` for the
+built-in player's device-local listening controls. Bundle validation rejects
+missing listening filters; the native smoke probe configures all seven effect
+combinations for mono, stereo and 5.1 audio.
 Android mpv links static NDK libc++/libc++abi explicitly through its C linker.
 Bundle validation rejects strong runtime imports without a packaged or API-26
 system provider; checking library filenames alone cannot establish loadability.

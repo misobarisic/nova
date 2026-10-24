@@ -333,6 +333,9 @@ impl Bridge {
                     .values()
                     .to_vec(),
             )));
+            app.set_dialogue_boost(settings.dialogue_boost);
+            app.set_loudness_normalization(settings.loudness_normalization);
+            app.set_night_mode(settings.night_mode);
             app.set_screenshot_format_index(settings.screenshot_format.index());
             app.set_screenshot_jpeg_quality(settings.screenshot_jpeg_quality.clamp(1, 100) as f32);
             app.set_screenshot_webp_quality(settings.screenshot_webp_quality.clamp(1, 100) as f32);
@@ -387,6 +390,7 @@ impl Bridge {
                 Rc::new(VecModel::<SharedString>::from(language_labels())).into(),
             );
         }
+        self.player.update_audio_processing(&settings);
         self.download_settings_to_ui();
         self.apply_theme(&settings);
         self.apply_animations(&settings);
@@ -611,6 +615,9 @@ impl Bridge {
                 // Subtitle callbacks edit the typed backend value. Copying its
                 // UI readouts would persist native defaults as explicit edits.
                 subtitle_style: state.cache_settings.subtitle_style,
+                dialogue_boost: app.get_dialogue_boost(),
+                loudness_normalization: app.get_loudness_normalization(),
+                night_mode: app.get_night_mode(),
                 screenshot_format: nova_config::ScreenshotFormat::from_index(
                     app.get_screenshot_format_index(),
                 ),
@@ -694,6 +701,7 @@ impl Bridge {
         }
         self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         set_active_cache_settings(settings.clone());
+        self.player.update_audio_processing(&settings);
         if self.refresh_stream_preferences_policy() {
             self.refresh_stream_filter_settings();
         }
@@ -1658,6 +1666,31 @@ mod tests {
                 .as_deref(),
             Some("false")
         );
+        // Both playing OSD and Settings use this permanent shared callback.
+        // It must save locally even when no Settings component initiated it.
+        let listening = app.global::<nova_ui::SettingsBridge>();
+        for index in 0..3 {
+            listening.invoke_listening_set(index, true);
+        }
+        bridge.persist_settings();
+        let saved = read_settings();
+        assert!(saved.dialogue_boost && saved.loudness_normalization && saved.night_mode);
+        app.set_dialogue_boost(false);
+        app.set_loudness_normalization(false);
+        app.set_night_mode(false);
+        bridge.settings_to_ui();
+        assert!(
+            app.get_dialogue_boost() && app.get_loudness_normalization() && app.get_night_mode()
+        );
+        for field in ["dialogue_boost", "loudness_normalization", "night_mode"] {
+            assert!(
+                owner
+                    .lock()
+                    .unwrap()
+                    .record(DOMAIN_SETTINGS, field)
+                    .is_none()
+            );
+        }
         app.set_tmdb_api_key(" 0123456789abcdef0123456789abcdef ".into());
         app.invoke_settings_edited("tmdb_api_key".into());
         bridge.persist_settings();

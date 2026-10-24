@@ -30,6 +30,12 @@ export global SettingsSearch {
                 let remux_buffer = self.candidate("casting_remux_buffer", @tr("Casting remux buffer"), "Casting remux buffer RAM memory media segments budget 32 64 128 256 MiB", 9, SettingsContent.kb_player_stream_filters_row() - 1);
                 if CastBridge.available && self.matches(remux_buffer) { return remux_buffer; }
                 if SettingsBridge.player_backend_index == 0 {
+                    let dialogue = self.candidate("dialogue_boost", SettingsBridge.listening_label(0), "Dialogue boost speech voices equalizer night listening", 9, SettingsContent.kb_player_listening_row());
+                    if self.matches(dialogue) { return dialogue; }
+                    let normalization = self.candidate("loudness_normalization", SettingsBridge.listening_label(1), "Loudness normalization normalize volume leveling night listening", 9, SettingsContent.kb_player_listening_row() + 1);
+                    if self.matches(normalization) { return normalization; }
+                    let night = self.candidate("night_mode", SettingsBridge.listening_label(2), "Night mode loud effects dynamic range compression audio listening", 9, SettingsContent.kb_player_listening_row() + 2);
+                    if self.matches(night) { return night; }
                     let loading_text = self.candidate("show_stream_loading_text", @tr("Show loading status text"), "Loading stream text buffering connection logo", 9, SettingsContent.kb_player_loading_text_row());
                     if self.matches(loading_text) { return loading_text; }
                     let folder = self.candidate("screenshot_show_folder", @tr("Screenshot folder"), @tr("Show folders") + " Screenshot folder Pictures Nova Show folders", 9, SettingsContent.kb_player_speed_row() + 3);

@@ -697,6 +697,10 @@ export component AppWindow inherits Window {
         keep_controls_visible_while_paused <=> root.keep_controls_visible_while_paused;
         casting_remux_buffer_index <=> root.casting_remux_buffer_index;
         auto_next_episode <=> root.auto_next_episode;
+        dialogue_boost <=> root.dialogue_boost;
+        loudness_normalization <=> root.loudness_normalization;
+        night_mode <=> root.night_mode;
+        audio_processing_status <=> root.audio_processing_status;
         screenshot_format_index <=> root.screenshot_format_index;
         screenshot_jpeg_quality <=> root.screenshot_jpeg_quality;
         screenshot_webp_quality <=> root.screenshot_webp_quality;
@@ -1572,6 +1576,10 @@ export component AppWindow inherits Window {
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
+    in-out property <bool> dialogue_boost: false;
+    in-out property <bool> loudness_normalization: false;
+    in-out property <bool> night_mode: false;
+    in-out property <string> audio_processing_status;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;
     in-out property <float> screenshot_webp_quality: 85;

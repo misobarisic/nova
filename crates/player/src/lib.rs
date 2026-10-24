@@ -33,6 +33,7 @@ pub use android_pip::note_android_pip_event;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod audio_processing;
 mod chapters;
 mod media_badges;
 mod media_probe;
@@ -1150,6 +1151,7 @@ struct State {
     /// Retain real cache starvation through a transient unavailable property.
     buffering: AtomicBool,
     preference_source: Mutex<String>,
+    audio_processing: Mutex<audio_processing::AudioProcessing>,
     mpv: Mutex<Option<Mpv>>,
     /// Invalidates queued captures when a stream is replaced or closed.
     screenshot_session: AtomicU64,
@@ -1459,6 +1461,7 @@ impl Player {
             secondary_subtitle_position: Mutex::new(Default::default()),
             party_playback_rate: Mutex::new(None),
             buffering: AtomicBool::new(false),
+            audio_processing: Mutex::new(Default::default()),
             mpv: Mutex::new(mpv.ok()),
             screenshot_session: AtomicU64::new(0),
             #[cfg(target_os = "android")]
@@ -1751,6 +1754,7 @@ impl Player {
                                         notifier_state.subtitle_position.lock().unwrap().set_base(mpv, session.preferences.subtitle_style().position as f64);
                                         apply_preference_options(mpv, &session.preferences, &notifier_state.native_subtitle_defaults);
                                     }
+                                    notifier_state.audio_processing.lock().unwrap().reset();
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
                                     apply_load_playback_options(mpv, paused, *notifier_state.party_playback_rate.lock().unwrap())?;
@@ -2828,6 +2832,19 @@ impl Player {
         ))
     }
 
+    /// Device preferences apply to active audio without a loadfile/seek.
+    pub fn update_audio_processing(&self, settings: &nova_config::CacheSettings) {
+        let mpv = self.state.mpv.lock().unwrap();
+        let mut processing = self.state.audio_processing.lock().unwrap();
+        processing.configure(settings);
+        if let Some(mpv) = mpv.as_ref() {
+            processing.poll(mpv);
+        }
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_audio_processing_status(processing.status.clone().into());
+        }
+    }
+
     pub fn effective_playback_speed(&self) -> f32 {
         let base = self.state.preferences.lock().unwrap().preferences.speed();
         self.state
@@ -3452,7 +3469,13 @@ impl Player {
         *self.state.seek_buffer.lock().unwrap() = None;
         self.state.reported.store(false, Ordering::SeqCst);
 
+        let processing_status = {
+            let mut processing = self.state.audio_processing.lock().unwrap();
+            processing.reset();
+            processing.status.clone()
+        };
         if let Some(app) = self.state.app.upgrade() {
+            app.set_audio_processing_status(processing_status.into());
             app.set_player_open(false);
             app.set_player_chapters(Default::default());
             app.set_screenshot_busy(false);
@@ -3601,6 +3624,11 @@ impl Player {
                 return;
             };
 
+            if !pending_load {
+                let mut processing = self.state.audio_processing.lock().unwrap();
+                processing.poll(mpv);
+                app.set_audio_processing_status(processing.status.clone().into());
+            }
             let live_pos: Option<f64> = mpv.get_property("time-pos").ok();
             let live_paused: Option<bool> = mpv.get_property("pause").ok();
             let pos = live_pos.unwrap_or(0.0);

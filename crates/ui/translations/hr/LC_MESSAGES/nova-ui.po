@@ -5574,3 +5574,27 @@ msgstr "Prikaži tekst statusa učitavanja"
 
 msgid "Show connection and buffering messages while a stream starts. Errors always remain visible."
 msgstr "Prikazuj poruke o povezivanju i učitavanju tijekom pokretanja izvora. Pogreške uvijek ostaju vidljive."
+
+msgid "Night listening and dialogue"
+msgstr "Noćno slušanje i dijalozi"
+
+msgid "Dialogue boost"
+msgstr "Pojačaj dijaloge"
+
+msgid "Loudness normalization"
+msgstr "Normalizacija glasnoće"
+
+msgid "Night mode"
+msgstr "Noćni način rada"
+
+msgid "Boost speech frequencies in the full mix. This does not isolate voices."
+msgstr "Pojačaj govorne frekvencije u cijelom zvuku. Ovo ne izdvaja glasove."
+
+msgid "Keep volume more consistent during playback."
+msgstr "Održavaj ujednačeniju glasnoću tijekom reprodukcije."
+
+msgid "Compress loud effects and narrow the gap between quiet and loud sounds."
+msgstr "Stisni glasne efekte i smanji razliku između tihih i glasnih zvukova."
+
+msgid "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."
+msgstr "Spremljeno na ovom uređaju. Primjenjuje se na ugrađenu reprodukciju; vanjski playeri i emitiranje koriste vlastite postavke zvuka."

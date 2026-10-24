@@ -898,6 +898,13 @@ cache_settings_type! {
     /// never synced.
     #[serde(default)]
     pub desktop_external_app: DesktopExternalApp,
+    /// Built-in player listening effects; device-local, never synced.
+    #[serde(default)]
+    pub dialogue_boost: bool,
+    #[serde(default)]
+    pub loudness_normalization: bool,
+    #[serde(default)]
+    pub night_mode: bool,
     /// Synced global playback defaults: comma-separated languages in priority order.
     /// Existing single-language values remain valid. Empty means Automatic;
     /// subtitle language "off" disables subtitles. OSD edits override per title.
@@ -1130,6 +1137,9 @@ impl Default for CacheSettings {
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
             subtitle_style: Default::default(),
+            dialogue_boost: false,
+            loudness_normalization: false,
+            night_mode: false,
             screenshot_format: ScreenshotFormat::Png,
             screenshot_jpeg_quality: default_screenshot_quality(),
             screenshot_webp_quality: default_screenshot_quality(),
@@ -2251,6 +2261,29 @@ mod image_resolution_tests {
                 value[field] = invalid;
                 assert!(serde_json::from_value::<CacheSettings>(value).is_err());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod listening_tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_keep_listening_effects_off_and_each_combination_roundtrips() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let old: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(!old.dialogue_boost && !old.loudness_normalization && !old.night_mode);
+        for bits in 0..8 {
+            let settings = CacheSettings {
+                dialogue_boost: bits & 1 != 0,
+                loudness_normalization: bits & 2 != 0,
+                night_mode: bits & 4 != 0,
+                ..CacheSettings::default()
+            };
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
         }
     }
 }

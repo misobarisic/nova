@@ -1943,3 +1943,27 @@ msgstr "Show loading status text"
 
 msgid "Show connection and buffering messages while a stream starts. Errors always remain visible."
 msgstr "Show connection and buffering messages while a stream starts. Errors always remain visible."
+
+msgid "Night listening and dialogue"
+msgstr "Night listening and dialogue"
+
+msgid "Dialogue boost"
+msgstr "Dialogue boost"
+
+msgid "Loudness normalization"
+msgstr "Loudness normalization"
+
+msgid "Night mode"
+msgstr "Night mode"
+
+msgid "Boost speech frequencies in the full mix. This does not isolate voices."
+msgstr "Boost speech frequencies in the full mix. This does not isolate voices."
+
+msgid "Keep volume more consistent during playback."
+msgstr "Keep volume more consistent during playback."
+
+msgid "Compress loud effects and narrow the gap between quiet and loud sounds."
+msgstr "Compress loud effects and narrow the gap between quiet and loud sounds."
+
+msgid "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."
+msgstr "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."

@@ -147,6 +147,31 @@ export global SettingsBridge {
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
+    // Listening preferences are device-local and shared with the playing OSD.
+    in-out property <bool> dialogue_boost: false;
+    in-out property <bool> loudness_normalization: false;
+    in-out property <bool> night_mode: false;
+    in-out property <string> audio_processing_status;
+    public pure function listening_key(index: int) -> string {
+        return index == 0 ? "dialogue_boost" : index == 1 ? "loudness_normalization" : "night_mode";
+    }
+    public pure function listening_label(index: int) -> string {
+        return index == 0 ? @tr("Dialogue boost") : index == 1 ? @tr("Loudness normalization") : @tr("Night mode");
+    }
+    public pure function listening_description(index: int) -> string {
+        return index == 0 ? @tr("Boost speech frequencies in the full mix. This does not isolate voices.")
+            : index == 1 ? @tr("Keep volume more consistent during playback.")
+            : @tr("Compress loud effects and narrow the gap between quiet and loud sounds.");
+    }
+    public pure function listening_enabled(index: int) -> bool {
+        return index == 0 ? self.dialogue_boost : index == 1 ? self.loudness_normalization : self.night_mode;
+    }
+    public function listening_set(index: int, enabled: bool) {
+        if index == 0 { self.dialogue_boost = enabled; }
+        else if index == 1 { self.loudness_normalization = enabled; }
+        else { self.night_mode = enabled; }
+        self.settings_edited(self.listening_key(index));
+    }
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;
     in-out property <float> screenshot_webp_quality: 85;

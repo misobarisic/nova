@@ -757,6 +757,9 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
     "desktop_hwdec",
+    "dialogue_boost",
+    "loudness_normalization",
+    "night_mode",
     "player_external",
     "remote_control_enabled",
     "desktop_external_app",
@@ -4130,6 +4133,30 @@ mod tests {
                 "Sinkronizacija dodataka… (preostalo: 2)"
             );
         });
+    }
+
+    #[test]
+    fn listening_effects_stay_device_local_on_publish_and_receive() {
+        let local = CacheSettings {
+            dialogue_boost: true,
+            loudness_normalization: false,
+            night_mode: true,
+            ..CacheSettings::default()
+        };
+        let fields = ["dialogue_boost", "loudness_normalization", "night_mode"];
+        let published = settings_fields(&local);
+        for field in fields {
+            assert!(!setting_can_override(field));
+            assert!(!published.iter().any(|(key, _, _)| key == field));
+        }
+        let remote = vec![
+            ("dialogue_boost".into(), "false".into()),
+            ("loudness_normalization".into(), "true".into()),
+            ("night_mode".into(), "false".into()),
+        ];
+        let merged = merge_settings_fields(&local, &remote);
+        assert!(merged.dialogue_boost && merged.night_mode);
+        assert!(!merged.loudness_normalization);
     }
 
     #[test]
