@@ -4,15 +4,7 @@ set -euo pipefail
 : "${MPV_SOURCE:?run through nix develop .#windows}"
 : "${MINGW_CC:?run through nix develop .#windows}"
 
-source "$(dirname "${BASH_SOURCE[0]}")/package-version.sh"
-# Only explicit release identities need manifest validation; the legacy local
-# filename fallback remains usable without invoking Cargo or entering Nix.
-cargo_version=""
-if [[ -n "${NOVA_RELEASE_TAG:-}" ]]; then
-  cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
-fi
-tag="$(nova_package_tag "$cargo_version")"
-tag="${tag#v}"
+tag="${GITHUB_REF_NAME#v}"
 tag="${tag//\//-}"
 bundle="target/windows-package"
 dist="dist"

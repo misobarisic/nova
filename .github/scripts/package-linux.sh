@@ -12,8 +12,25 @@ if [[ ! -x "$binary" ]]; then
 fi
 
 cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "nova"))')"
-source .github/scripts/package-version.sh
-nova_linux_versions "$cargo_version"
+event_name="${GITHUB_EVENT_NAME:-local}"
+if [[ "$event_name" == "pull_request" ]]; then
+  artifact_tag="pr-${GITHUB_EVENT_NUMBER:-0}"
+  debian_version="${cargo_version}~pr${GITHUB_EVENT_NUMBER:-0}"
+else
+  raw_tag="${GITHUB_REF_NAME:-local}"
+  artifact_version="${raw_tag#v}"
+  artifact_tag="$(printf '%s' "$artifact_version" | sed -E 's/[^A-Za-z0-9._+-]+/-/g')"
+  upstream_version="${raw_tag#v}"
+  upstream_version="$(printf '%s' "$upstream_version" | sed -E 's/-/~/g; s/[^A-Za-z0-9.+~]/./g')"
+  if [[ "$upstream_version" =~ ^[0-9] ]]; then
+    debian_version="$upstream_version"
+  else
+    debian_version="${cargo_version}+${upstream_version}"
+  fi
+fi
+if [[ -z "$artifact_tag" ]]; then
+  artifact_tag="local"
+fi
 dpkg --validate-version "$debian_version"
 
 work="target/linux-package"

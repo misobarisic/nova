@@ -1,12 +1,10 @@
 """Exercise release ABI splits without needing the Android signing tools."""
 import importlib.util
-import os
 import tempfile
 import struct
 import tomllib
 import unittest
 import warnings
-from unittest.mock import patch
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -61,16 +59,6 @@ def binary_manifest(*, utf8=True, enabled=False, resource_id=0x010104EA, duplica
 
 
 class AndroidPackagingTests(unittest.TestCase):
-    def test_dispatched_tag_overrides_main_and_must_match_the_apk_version(self):
-        with patch.dict(os.environ, {"GITHUB_REF_NAME": "main", "NOVA_RELEASE_TAG": "v1.2.3"}, clear=True):
-            self.assertEqual(packaging.release_version("1.2.3"), "1.2.3")
-            with self.assertRaisesRegex(RuntimeError, "match Cargo.toml"):
-                packaging.release_version("1.2.4")
-        with patch.dict(os.environ, {"GITHUB_REF_NAME": "v1.2.3"}, clear=True):
-            self.assertEqual(packaging.release_version("1.2.3"), "1.2.3")
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(packaging.release_version("1.2.3"), "local")
-
     def test_native_manifest_requires_explicit_direct_loading(self):
         manifest = Path(__file__).resolve().parents[2] / "Cargo.toml"
         with manifest.open("rb") as handle:

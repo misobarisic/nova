@@ -374,13 +374,6 @@ def signer_certificates(apksigner, apk):
     return sorted(value.lower() for value in fingerprints)
 
 
-def release_version(version):
-    tag = os.environ.get("NOVA_RELEASE_TAG")
-    if tag and tag != f"v{version}":
-        raise RuntimeError("NOVA_RELEASE_TAG must match Cargo.toml")
-    return (tag or os.environ.get("GITHUB_REF_NAME", "local")).removeprefix("v").replace("/", "-")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--abi-apk", action="append", default=[], metavar="ABI=PATH",
@@ -396,7 +389,6 @@ def main():
     zipalign, apksigner = tools / "zipalign", tools / "apksigner"
     with Path("Cargo.toml").open("rb") as handle:
         version = tomllib.load(handle)["package"]["version"]
-    tag = release_version(version)
     original_signers = None
     for apk in inputs:
         if not apk.is_file():
@@ -412,6 +404,7 @@ def main():
     if not keystore.is_file():
         raise RuntimeError("Configured Android release keystore does not exist")
     env = dict(os.environ, NOVA_APK_KEYSTORE_PASSWORD=password)
+    tag = os.environ["GITHUB_REF_NAME"].removeprefix("v").replace("/", "-")
     dist = Path("dist")
     dist.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nova-apk-") as temporary:
