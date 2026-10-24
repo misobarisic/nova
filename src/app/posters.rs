@@ -2210,12 +2210,14 @@ mod discover_artwork_tests {
                         addon.available = false;
                     }
                 }
-                // The saved URL stays unchanged. Clearing the image cache
-                // exposes that it has expired, which must trigger mapping.
+                // Keep the exact prepared identity/title/URL so the async
+                // Library projection takes its in-place update path. Clearing
+                // the image cache exposes an expired URL that must still retry.
                 decoded_cache_clear();
                 app.set_library(
                     Rc::new(VecModel::from(vec![MediaCard {
                         id: "saved".into(),
+                        title: "Saved".into(),
                         poster_path: old.clone().into(),
                         ..Default::default()
                     }]))
@@ -2223,10 +2225,9 @@ mod discover_artwork_tests {
                 );
                 bridge.show_library_page();
                 bridge.show_library_page();
-                assert_eq!(
-                    bridge.shared.lock().unwrap().library_poster_inflight.len(),
-                    1
-                );
+                // Dispatch happens after the coalesced worker publishes. The
+                // assertions after the event loop verify exactly one expired
+                // image request and metadata recovery across both visits.
             }
         } else {
             if pending_failure {

@@ -1754,13 +1754,24 @@ impl Bridge {
                 })
             })
         {
+            let mut requests = Vec::new();
             for (index, snapshot) in cards.into_iter().enumerate() {
-                if let Some(mut card) = model.row_data(index)
-                    && update_library_card_progress(&mut card, &snapshot)
-                {
-                    model.set_row_data(index, card);
+                if let Some(mut card) = model.row_data(index) {
+                    if !card.is_loaded {
+                        requests.push(LibraryPosterRequest {
+                            id: snapshot.id.clone(),
+                            type_: snapshot.type_.clone(),
+                            poster_url: snapshot.poster_url.clone(),
+                        });
+                    }
+                    if update_library_card_progress(&mut card, &snapshot) {
+                        model.set_row_data(index, card);
+                    }
                 }
             }
+            // Retained identities can still have failed artwork. Revisiting
+            // Library must retry those rows even when no model rebuild is needed.
+            self.dispatch_library_posters(&requests);
             return;
         }
         let artwork: HashMap<_, _> = model
