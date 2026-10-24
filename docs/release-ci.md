@@ -102,7 +102,7 @@ Historical uncached v0.0.43 release baseline:
 
 | Release target | Total job | Cargo cd-release time |
 | --- | ---: | ---: |
-| Linux Ubuntu 22.04 | 43m49s | not extracted |
+| Linux Ubuntu 22.04 | 43m49s | 38m45s |
 | Windows GNU | 35m05s | 33m29s |
 | Android ARM64 | 21m07s | 15m44s |
 | Android ARMv7 | 30m35s | 25m14s |
