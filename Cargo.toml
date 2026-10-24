@@ -87,7 +87,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.41"
+version = "0.0.42"
 edition = "2024"
 license.workspace = true
 
