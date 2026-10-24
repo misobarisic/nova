@@ -103,12 +103,23 @@ impl Alignment {
     }
 
     fn estimate(&self, now: f64) -> Option<f64> {
-        self.text_offset().or_else(|| {
-            self.timing_offset(
-                self.since.unwrap_or(now).max(now - HISTORY) + RANGE as f64 * STEP,
-                now - RANGE as f64 * STEP,
-            )
-        })
+        let text = self.text_alignment();
+        let timing = self.timing_offset(
+            self.since.unwrap_or(now).max(now - HISTORY) + RANGE as f64 * STEP,
+            now - RANGE as f64 * STEP,
+        );
+        match (text, timing) {
+            // Shared signs or lyrics can agree on an offset that contradicts
+            // the dialogue. Neither signal gets to overrule that disagreement.
+            (Some((text, _)), Some(timing)) => {
+                ((text - timing).abs() <= 3.0 * STEP).then_some(text)
+            }
+            // Before activity matching has enough evidence, text must describe
+            // most of both tracks, not a few shared lines in a translation.
+            (Some((text, true)), None) => Some(text),
+            (None, timing) => timing,
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -118,7 +129,12 @@ impl Alignment {
             .flatten()
     }
 
+    #[cfg(test)]
     fn text_offset(&self) -> Option<f64> {
+        self.text_alignment().map(|(offset, _)| offset)
+    }
+
+    fn text_alignment(&self) -> Option<(f64, bool)> {
         let mut matches = Vec::new();
         for reference in &self.embedded {
             // Short repeated responses ("yes", "thank you") are weak anchors.
@@ -159,7 +175,39 @@ impl Alignment {
         }
         let first = matches.iter().map(|m| m.0).fold(f64::INFINITY, f64::min);
         let last = matches.iter().map(|m| m.0).fold(0.0, f64::max);
-        (last - first >= 20.0).then_some((median / STEP).round() * STEP)
+        if last - first < 20.0 {
+            return None;
+        }
+        // Check all overlapping evidence, not just the anchors' scene: a shared
+        // song may occupy one dense stretch between translated dialogue. The
+        // intersection excludes reference-cache history the addon never saw.
+        let bounds = |cues: &[Cue], offset: f64| {
+            (
+                cues.iter()
+                    .map(|cue| cue.start + offset)
+                    .fold(f64::INFINITY, f64::min),
+                cues.iter()
+                    .map(|cue| cue.end + offset)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            )
+        };
+        let reference = bounds(&self.embedded, 0.0);
+        let input = bounds(&self.downloaded, median);
+        let from = reference.0.max(input.0);
+        let to = reference.1.min(input.1);
+        let dense = [(&self.embedded, 0.0), (&self.downloaded, median)]
+            .into_iter()
+            .all(|(cues, offset)| {
+                let count = cues
+                    .iter()
+                    .filter(|cue| {
+                        let start = cue.start + offset;
+                        start >= from - 0.25 && start <= to + 0.25
+                    })
+                    .count();
+                matches.len() * 3 >= count * 2
+            });
+        Some(((median / STEP).round() * STEP, dense))
     }
 
     fn timing_offset(&self, from: f64, to: f64) -> Option<f64> {
@@ -1098,6 +1146,178 @@ mod tests {
     }
 
     #[test]
+    fn sparse_shared_text_cannot_override_aligned_dialogue_activity() {
+        let mut embedded = cues(7, 0.0, true);
+        let mut downloaded = cues(7, 0.0, false);
+        let candidates: Vec<_> = (0..embedded.len() - 1)
+            .filter(|&index| {
+                embedded[index + 1].start - embedded[index].start >= 4.1
+                    && (20.0..=150.0).contains(&embedded[index].start)
+            })
+            .collect();
+        for index in [0, 2, 4, 6, 8].map(|index| candidates[index]) {
+            // Shared signs/lyrics have a different offset, while the translated
+            // dialogue already follows the embedded track's timing.
+            embedded[index].end = embedded[index].start + 1.0;
+            downloaded[index].end = downloaded[index].start + 1.0;
+            downloaded[index].text = embedded[index].text.clone();
+            downloaded[index].start += 3.0;
+            downloaded[index].end += 3.0;
+        }
+        let alignment = Alignment {
+            since: Some(0.0),
+            embedded: embedded.clone(),
+            downloaded: downloaded.clone(),
+            ..Default::default()
+        };
+        assert_eq!(alignment.text_offset(), Some(-3.0));
+        assert_eq!(alignment.timing_offset(15.0, 160.0), Some(0.0));
+        assert_eq!(alignment.estimate(175.0), None);
+
+        // Exercise the real 250 ms observation cadence as well: a full-history
+        // rejection alone would miss an erroneous earlier text-only correction.
+        let mut live = Alignment::default();
+        let mut disagreement = false;
+        for tick in 0..720 {
+            let now = tick as f64 / 4.0;
+            let current = |cues: &[Cue]| {
+                cues.iter()
+                    .find(|cue| cue.start <= now && cue.end > now)
+                    .cloned()
+            };
+            if let Some(offset) = live.observe(now, current(&downloaded), current(&embedded)) {
+                assert!(offset.abs() < 0.11, "false correction {offset} at {now}");
+            }
+            disagreement |= live.text_offset() == Some(-3.0)
+                && live.timing_offset(15.0, now - 15.0) == Some(0.0);
+        }
+        assert!(
+            disagreement,
+            "live observations reach the conflicting evidence"
+        );
+    }
+
+    #[test]
+    fn text_only_alignment_requires_dense_support_until_timing_can_corroborate() {
+        let embedded = cues(7, 0.0, true);
+        let mut downloaded = cues(7, 3.2, false);
+        for index in [1, 4, 7, 10, 13] {
+            downloaded[index].text = embedded[index].text.clone();
+        }
+        let full = Alignment {
+            since: Some(0.0),
+            embedded,
+            downloaded,
+            ..Default::default()
+        };
+        let mut alignment = full.clone();
+        alignment.embedded.retain(|cue| cue.end <= 80.0);
+        alignment.downloaded.retain(|cue| cue.end <= 80.0);
+        assert_eq!(alignment.text_offset(), Some(-3.2));
+        assert!(alignment.timing_offset(15.0, 65.0).is_none());
+        assert_eq!(alignment.estimate(80.0), None);
+        assert!(
+            full.estimate(175.0)
+                .is_some_and(|offset| (offset + 3.2).abs() < 0.11)
+        );
+
+        // Sufficient same-language evidence remains usable before the 90-second
+        // activity window, with either offset sign and a zero-offset match.
+        for offset in [-4.3, 3.2, 0.0] {
+            alignment.downloaded = cues(7, offset, true);
+            alignment.downloaded.retain(|cue| cue.end <= 80.0);
+            assert!(
+                alignment
+                    .estimate(80.0)
+                    .is_some_and(|result| (result + offset).abs() < 0.001)
+            );
+        }
+        alignment.downloaded.truncate(4);
+        assert_eq!(alignment.estimate(80.0), None);
+    }
+
+    #[test]
+    fn dense_distinct_text_can_resolve_periodic_activity_without_a_timing_winner() {
+        let periodic = |offset| {
+            (0..40)
+                .map(|index| Cue {
+                    start: index as f64 * 4.0 + offset,
+                    end: index as f64 * 4.0 + offset + 2.0,
+                    text: format!("distinctdialogueline{index}"),
+                })
+                .collect()
+        };
+        let alignment = Alignment {
+            since: Some(0.0),
+            embedded: periodic(0.0),
+            downloaded: periodic(2.0),
+            ..Default::default()
+        };
+        assert_eq!(alignment.timing_offset(15.0, 160.0), None);
+        assert_eq!(alignment.estimate(175.0), Some(-2.0));
+        let mut cached = alignment.clone();
+        cached.downloaded = cached.downloaded[10..20].to_vec();
+        assert_eq!(
+            cached.estimate(175.0),
+            Some(-2.0),
+            "unavailable addon history must not count against dense overlapping text"
+        );
+    }
+
+    #[test]
+    fn a_shared_text_scene_does_not_hide_other_observed_translated_dialogue() {
+        let embedded: Vec<_> = (0..16)
+            .map(|index| Cue {
+                start: index as f64 * 5.0,
+                end: index as f64 * 5.0 + 1.5,
+                text: format!("referencedialogueline{index}"),
+            })
+            .collect();
+        let mut downloaded = embedded.clone();
+        for (index, cue) in downloaded.iter_mut().enumerate() {
+            if (5..=9).contains(&index) {
+                cue.start += 3.0;
+                cue.end += 3.0;
+            } else {
+                cue.text = format!("translateddialogueline{index}");
+            }
+        }
+        let alignment = Alignment {
+            since: Some(0.0),
+            embedded,
+            downloaded,
+            ..Default::default()
+        };
+        assert_eq!(alignment.text_offset(), Some(-3.0));
+        assert_eq!(alignment.timing_offset(15.0, 65.0), None);
+        assert_eq!(alignment.estimate(80.0), None);
+        let mut live = Alignment::default();
+        let mut shared = false;
+        for tick in 0..320 {
+            let now = tick as f64 / 4.0;
+            let current = |cues: &[Cue]| {
+                cues.iter()
+                    .find(|cue| cue.start <= now && cue.end > now)
+                    .cloned()
+            };
+            assert_eq!(
+                live.observe(
+                    now,
+                    current(&alignment.downloaded),
+                    current(&alignment.embedded)
+                ),
+                None,
+                "shared scene must not trigger a correction at {now}"
+            );
+            shared |= live.text_offset() == Some(-3.0);
+        }
+        assert!(
+            shared,
+            "live observations include all five shared scene cues"
+        );
+    }
+
+    #[test]
     fn subtitle_sync_rejects_wrong_edits_drift_and_sparse_or_ambiguous_evidence() {
         let reference = cues(7, 0.0, true);
         let mut different_edit = cues(7, 3.0, true);
@@ -1128,12 +1348,14 @@ mod tests {
         ];
         for (embedded, downloaded) in cases {
             let alignment = Alignment {
+                since: Some(0.0),
                 embedded,
                 downloaded,
                 ..Default::default()
             };
             assert!(alignment.text_offset().is_none());
             assert!(alignment.timing_offset(20.0, 160.0).is_none());
+            assert!(alignment.estimate(175.0).is_none());
         }
         assert_eq!(correlation(&[true; 20], &[true; 20]), -1.0);
         assert_eq!(correlation(&[false; 20], &[false; 20]), -1.0);
