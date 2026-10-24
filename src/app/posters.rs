@@ -1,6 +1,8 @@
 //! Poster / backdrop / episode-thumbnail image pipeline.
 use super::*;
 
+const ARTWORK_RECOVERY_COOLDOWN: Duration = Duration::from_secs(60);
+
 /// Future episode thumbnails can be declared before their image exists.
 /// Keep the library poster as a fallback instead of a permanent placeholder.
 fn fetch_home_card_art(
@@ -257,12 +259,33 @@ fn grid_artwork_recovery_target_for_owner(
     if state
         .artwork_recovery
         .get(&key)
-        .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(60))
+        .is_some_and(|last| now.duration_since(*last) < ARTWORK_RECOVERY_COOLDOWN)
     {
         return None;
     }
     state.artwork_recovery.insert(key, now);
     Some(target)
+}
+
+// A metadata repair can publish progress before its replacement image arrives.
+// Keep that unloaded row from refetching the URL whose failure started repair.
+fn library_poster_request_ready(state: &Shared, entry: &LibraryPosterRequest) -> bool {
+    if !state.entries.iter().any(|saved| {
+        saved.type_ == entry.type_ && saved.id == entry.id && saved.poster_url == entry.poster_url
+    }) {
+        return false;
+    }
+    let key = (
+        entry.type_.clone(),
+        entry.id.clone(),
+        entry.poster_url.clone(),
+        String::new(),
+    );
+    !state.pending_artwork_recovery.contains_key(&key)
+        && !state
+            .artwork_recovery
+            .get(&key)
+            .is_some_and(|last| last.elapsed() < ARTWORK_RECOVERY_COOLDOWN)
 }
 
 /// Only the broker's current, conflict-free connection can cross native IDs.
@@ -943,13 +966,12 @@ impl Bridge {
             let url = entry.poster_url.clone();
             let id = entry.id.clone();
             let key = (entry.type_.clone(), id.clone(), url.clone());
-            if !self
-                .shared
-                .lock()
-                .unwrap()
-                .library_poster_inflight
-                .insert(key.clone())
-            {
+            let queued = {
+                let mut state = self.shared.lock().unwrap();
+                library_poster_request_ready(&state, entry)
+                    && state.library_poster_inflight.insert(key.clone())
+            };
+            if !queued {
                 continue;
             }
             let bridge = self.clone();
@@ -2190,9 +2212,8 @@ mod discover_artwork_tests {
                         ..current
                     });
                 }
-                // A healthy movie still rechecks metadata when explicitly
-                // opened, while Library itself stays on its cached content.
-                bridge.open_library_item(0);
+                // The timer opens Detail after the async Library publication
+                // has installed the row's typed action identity.
             } else {
                 if cached_alternative {
                     write_meta_header_for(
@@ -2250,6 +2271,7 @@ mod discover_artwork_tests {
         let started = std::time::Instant::now();
         let expected_poster = good.clone();
         let retry_bridge = bridge.clone();
+        let mut detail_opened = !detail;
         let timer = slint::Timer::default();
         timer.start(
             slint::TimerMode::Repeated,
@@ -2273,6 +2295,26 @@ mod discover_artwork_tests {
                     }
                 }
                 let app = weak.upgrade().unwrap();
+                if !detail_opened {
+                    let published = retry_bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .library_displayed
+                        .first()
+                        .is_some_and(|(type_, id)| type_ == media_type && id == "saved");
+                    if published {
+                        // A healthy movie still refreshes metadata when the
+                        // user opens its published Library card. A later stale
+                        // projection must not close this newly opened Detail.
+                        retry_bridge.open_library_item(0);
+                        assert!(
+                            app.get_modal_visible(),
+                            "published Library card opens Detail"
+                        );
+                        detail_opened = true;
+                    }
+                }
                 // Detail and grids now publish separate image-use requests.
                 // A metadata URL update alone does not finish the grid decode.
                 if [
@@ -2586,9 +2628,31 @@ mod discover_artwork_tests {
             added_at_secs: 0,
         });
         let old = state.entries[0].poster_url.clone();
+        let mut request = LibraryPosterRequest {
+            type_: "series".into(),
+            id: "native:old-show".into(),
+            poster_url: old.clone(),
+        };
+        assert!(library_poster_request_ready(&state, &request));
+        let pending = (
+            request.type_.clone(),
+            request.id.clone(),
+            old.clone(),
+            String::new(),
+        );
+        state
+            .pending_artwork_recovery
+            .insert(pending.clone(), vec![]);
+        assert!(!library_poster_request_ready(&state, &request));
+        state.pending_artwork_recovery.remove(&pending);
+        assert!(library_poster_request_ready(&state, &request));
         assert_eq!(
             grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old),
             Some(("series".into(), "native:old-show".into()))
+        );
+        assert!(
+            !library_poster_request_ready(&state, &request),
+            "progress publication must wait for replacement artwork"
         );
         // Library and Home can fail together; share one metadata request.
         assert!(
@@ -2598,10 +2662,22 @@ mod discover_artwork_tests {
         state.artwork_recovery.values_mut().for_each(|last| {
             *last -= Duration::from_secs(61);
         });
+        assert!(library_poster_request_ready(&state, &request));
         assert!(
             grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_some()
         );
         state.entries[0].poster_url = "https://new.example/poster.jpg".into();
+        assert!(!library_poster_request_ready(&state, &request), "stale URL");
+        request.poster_url = state.entries[0].poster_url.clone();
+        assert!(
+            library_poster_request_ready(&state, &request),
+            "new URL bypasses old repair"
+        );
+        request.type_ = "movie".into();
+        assert!(
+            !library_poster_request_ready(&state, &request),
+            "type remains scoped"
+        );
         assert!(
             grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_none()
         );
