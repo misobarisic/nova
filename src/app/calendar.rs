@@ -266,7 +266,7 @@ impl Bridge {
             items
                 .into_iter()
                 .filter_map(|item| {
-                    let row = upcoming_row(&entries, item, 0, false, true)?;
+                    let row = upcoming_row(&entries, item, 0, false, false)?;
                     let group = if previous == Some(item.air_days) {
                         String::new()
                     } else {

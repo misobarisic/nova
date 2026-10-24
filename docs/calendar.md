@@ -33,6 +33,8 @@ to read them. Today resets to the current date, and search/scope/view changes
 reset the loaded window. These transient limits are not persisted. Artwork
 remains viewport-driven. Month and Week retain their Previous/Next controls.
 Next episode retains Home's future-only, caught-up semantics.
+Release cards always use show posters in Home's 2:3 proportions rather than
+episode thumbnails, independently of Home's episode artwork setting.
 
 Each release carries its media type, series ID, and
 episode ID; opening a card revalidates those identifiers and opens real series
