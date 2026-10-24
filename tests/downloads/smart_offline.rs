@@ -44,12 +44,24 @@ fn smart_downloads_animates_both_directions_with_header_back() {
                     .global::<nova::OfflineBridge>()
                     .set_opened(false);
             });
+            let underlay =
+                ElementHandle::find_by_element_id(&app, "DownloadsPage::downloads_layer")
+                    .next()
+                    .expect("retained Downloads list");
+            let underlay_origin = underlay.absolute_position().x;
             offline.set_opened(true);
             let panel = ElementHandle::find_by_element_id(&app, "SmartDownloads::panel")
                 .next()
                 .expect("retained Smart downloads content");
-            // Keep the handle so the final hidden frame remains measurable.
-            let sample = || (panel.absolute_position().x, panel.computed_opacity());
+            // Keep the handles so the final hidden frame remains measurable.
+            let sample = || {
+                (
+                    panel.absolute_position().x,
+                    panel.computed_opacity(),
+                    underlay.absolute_position().x,
+                    underlay.computed_opacity(),
+                )
+            };
             let advance = |millis| {
                 for _ in 0..millis {
                     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
@@ -66,6 +78,22 @@ fn smart_downloads_animates_both_directions_with_header_back() {
             if enabled && transitions {
                 assert!(start.0 > middle.0 && middle.0 > end.0, "entry slide");
                 assert!(start.1 < middle.1 && middle.1 < end.1, "entry fade");
+                assert!(
+                    start.0 - end.0 > panel.size().width * 0.8,
+                    "the submenu enters from a full screen width"
+                );
+                assert!(
+                    start.2 > middle.2 && middle.2 > end.2,
+                    "Downloads pushes left"
+                );
+                assert!(
+                    start.3 > middle.3 && middle.3 > end.3,
+                    "Downloads fades out"
+                );
+                assert!(
+                    (end.2 - underlay_origin + panel.size().width * 0.28).abs() < 0.5,
+                    "Downloads uses the standard 28% push distance"
+                );
             } else {
                 assert!(
                     (start.0 - end.0).abs() < 0.1 && start.1 > 0.99,
@@ -115,6 +143,10 @@ fn smart_downloads_animates_both_directions_with_header_back() {
                 advance(90);
                 let returning = sample();
                 assert!(returning.0 > end.0 && returning.1 < end.1);
+                assert!(
+                    returning.2 > end.2 && returning.3 > end.3,
+                    "Downloads returns with the submenu"
+                );
                 // Reopening reverses the retained panel rather than resetting it.
                 offline.set_opened(true);
                 let reopened = sample();
@@ -273,5 +305,96 @@ fn smart_downloads_blocks_covered_actions_and_back_closes_only_one_layer() {
             status.size().height >= if tv { 20. } else { 14. },
             "supporting status uses readable phone/TV typography"
         );
+    }
+}
+
+#[test]
+fn smart_downloads_keeps_short_content_compact_at_phone_and_tv_sizes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::smart_downloads_keeps_short_content_compact_at_phone_and_tv_sizes"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_downloads(true);
+    let offline = app.global::<nova::OfflineBridge>();
+    offline.set_storage_summary(
+        "Automatic storage: 0.00 / 5 GiB · Reserved: 0.00 GiB · Manually kept: 0.00 GiB".into(),
+    );
+    offline.set_profiles(
+        Rc::new(VecModel::from(vec![nova_ui_shared::OfflineDeviceProfile {
+            id: "default".into(),
+            name: "Default".into(),
+            enabled: false,
+        }]))
+        .into(),
+    );
+    offline.set_opened(true);
+    app.window().set_size(slint::LogicalSize::new(390., 1080.));
+    app.show().unwrap();
+    settle(&app);
+    let item = |id: &str| {
+        ElementHandle::find_by_element_id(&app, &format!("SmartDownloads::{id}"))
+            .next()
+            .unwrap_or_else(|| panic!("missing {id}"))
+    };
+    // Keep the handles across resizes so short landscape viewports can still
+    // measure rows below the clip without requiring them to be visible.
+    let intro = item("introduction");
+    let storage = item("storage");
+    let device =
+        ElementHandle::find_by_accessible_label(&app, "Enable this profile on this device")
+            .next()
+            .unwrap();
+    let profile_heading = item("profile_heading");
+    let profile =
+        ElementHandle::find_by_accessible_label(&app, "Default · Disabled on this device")
+            .next()
+            .unwrap();
+    let empty = item("empty_notice");
+    let mut phone_content_bottom: Option<f32> = None;
+    for (width, height, tv) in [
+        (360., 800., false),
+        (390., 800., false),
+        (390., 1080., false),
+        (800., 390., false),
+        (1280., 1080., false),
+        (1920., 1080., true),
+    ] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::LogicalSize::new(width, height));
+        settle(&app);
+        for (above, below) in [
+            (&intro, &storage),
+            (&storage, &device),
+            (&profile_heading, &profile),
+            (&profile, &empty),
+        ] {
+            let gap =
+                below.absolute_position().y - above.absolute_position().y - above.size().height;
+            assert!(
+                (gap - 12.).abs() < 0.5,
+                "rows retain their 12px gap at {width}x{height}, tv={tv}: {gap}"
+            );
+        }
+        assert!(
+            intro.size().height < if tv { 90. } else { 80. },
+            "wrapped supporting text keeps its natural height at {width}x{height}"
+        );
+        if width == 390. {
+            let bottom = empty.absolute_position().y + empty.size().height;
+            if let Some(previous) = phone_content_bottom {
+                assert!(
+                    (bottom - previous).abs() < 0.5,
+                    "a taller phone must not stretch the short content: {previous} -> {bottom}"
+                );
+            }
+            phone_content_bottom = Some(bottom);
+        }
     }
 }

@@ -17,6 +17,10 @@ component OfflineButton inherits PillButton {
 export component SmartDownloads inherits Rectangle {
     in property <bool> active: true;
     callback dismissed();
+    public function focus_shell() { if root.opened { keys.focus(); } }
+    // Downloads shares these animated values so both surfaces push/pop together.
+    out property <float> push_progress: root.motion ? root.slide : (root.opened ? 1.0 : 0.0);
+    out property <float> fade_progress: root.motion ? root.alpha : (root.opened ? 1.0 : 0.0);
     in property <length> safe_left;
     in property <length> safe_right;
     in property <length> safe_top;
@@ -27,8 +31,8 @@ export component SmartDownloads inherits Rectangle {
     private property <bool> motion: Anim.enabled && Anim.transitions;
     private property <float> slide: 0.0;
     private property <float> alpha: 0.0;
-    animate slide { duration: Anim.transition_slide; easing: ease-out; }
-    animate alpha { duration: Anim.transition_fade; }
+    animate slide { duration: root.motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    animate alpha { duration: root.motion ? Anim.transition_fade : 0ms; }
     visible: root.opened || root.retained;
     clip: true;
     changed opened => {
@@ -92,9 +96,9 @@ export component SmartDownloads inherits Rectangle {
         }
     }
     panel := Rectangle {
-    x: (1.0 - root.slide) * root.width * 0.1; y: 0px;
+    x: (1.0 - root.push_progress) * root.width; y: 0px;
     width: root.width; height: root.height;
-    opacity: root.alpha;
+    opacity: root.motion ? root.alpha : 1.0;
     background: Theme.current.artwork_canvas;
     keys := FocusScope { width:100%;height:100%;enabled:root.opened;
         capture-key-pressed(e)=>{
@@ -106,7 +110,9 @@ export component SmartDownloads inherits Rectangle {
             } else if InterfaceStyle.tv && (e.text==Key.Return || e.text==" ") {if !e.repeat {root.activate();}accept}else{reject}
         }
         scroll := ScrollView {x:root.safe_left;y:root.safe_top;width:parent.width - root.safe_left - root.safe_right;height:parent.height - root.safe_top - root.safe_bottom;content-width:self.visible-width;
-            VerticalLayout {padding:18px;spacing:12px;
+            // Natural content height leaves spare space below the last row, rather
+            // than distributing it among the wrapped supporting text rows.
+            VerticalLayout {x:0px;y:0px;width:100%;height:self.preferred-height;alignment:start;padding:18px;spacing:12px;
                 header := PageHeader {
                     title:@tr("Smart downloads"); show-back:true;
                     narrow:!InterfaceStyle.tv && root.width<700px;
@@ -114,19 +120,19 @@ export component SmartDownloads inherits Rectangle {
                     changed back-focused => { if self.back-focused { root.reveal(self.absolute-position.y,self.height); } }
                     back=>{OfflineBridge.closed();}
                 }
-                Text {font-size:root.supporting_font_size;text:@tr("Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet.");wrap:word-wrap;color:Theme.current.text_muted;}
-                Text {font-size:root.supporting_font_size;text:OfflineBridge.storage_summary;wrap:word-wrap;color:Theme.current.text_primary;}
-                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.device_enabled ? @tr("Pause this profile on this device") : @tr("Enable this profile on this device");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==1;selected:OfflineBridge.device_enabled;picked=>{OfflineBridge.device_toggle();}}
+                introduction := Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:@tr("Rules sync between profiles. Downloads run only for profiles enabled on this device, on unmetered Wi-Fi or Ethernet.");wrap:word-wrap;color:Theme.current.text_muted;}
+                storage := Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:OfflineBridge.storage_summary;wrap:word-wrap;color:Theme.current.text_primary;}
+                OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.device_enabled ? @tr("Pause this profile on this device") : @tr("Enable this profile on this device");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==1;selected:OfflineBridge.device_enabled;picked=>{OfflineBridge.device_toggle();}}
                 HorizontalLayout {spacing:8px;
-                    OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==2;picked=>{OfflineBridge.budget(-1);}}
-                    Text {font-size:root.supporting_font_size;text:@tr("Automatic allowance: {} GiB",OfflineBridge.budget_gib);vertical-alignment:center;color:Theme.current.text_primary;wrap:word-wrap;}
-                    OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==3;picked=>{OfflineBridge.budget(1);}}
+                    OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==2;picked=>{OfflineBridge.budget(-1);}}
+                    Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:@tr("Automatic allowance: {} GiB",OfflineBridge.budget_gib);vertical-alignment:center;color:Theme.current.text_primary;wrap:word-wrap;}
+                    OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==3;picked=>{OfflineBridge.budget(1);}}
                 }
-                OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.charging_only ? @tr("Charging required") : @tr("Charging optional");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==4;selected:OfflineBridge.charging_only;picked=>{OfflineBridge.charging_toggle();}}
-                Text {font-size:root.supporting_font_size;text:@tr("Profiles enabled on this device");color:Theme.current.text_primary;}
-                for profile[index] in OfflineBridge.profiles: OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:profile.name + " · " + (profile.enabled ? @tr("Enabled on this device") : @tr("Disabled on this device"));selected:profile.enabled;highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==5 + index;picked=>{OfflineBridge.profile_toggle(profile.id);}}
-                if OfflineBridge.notice!="": Text {font-size:root.supporting_font_size;text:OfflineBridge.notice;wrap:word-wrap;color:Theme.current.text_primary;}
-                if OfflineBridge.rows.length==0: Text {font-size:root.supporting_font_size;text:@tr("Open a show and choose Keep offline to add a rule.");wrap:word-wrap;color:Theme.current.text_muted;}
+                OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:OfflineBridge.charging_only ? @tr("Charging required") : @tr("Charging optional");highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==4;selected:OfflineBridge.charging_only;picked=>{OfflineBridge.charging_toggle();}}
+                profile_heading := Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:@tr("Profiles enabled on this device");color:Theme.current.text_primary;}
+                for profile[index] in OfflineBridge.profiles: OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:profile.name + " · " + (profile.enabled ? @tr("Enabled on this device") : @tr("Disabled on this device"));selected:profile.enabled;highlighted:InterfaceStyle.tv && root.selected_row<0 && root.selected_action==5 + index;picked=>{OfflineBridge.profile_toggle(profile.id);}}
+                if OfflineBridge.notice!="": Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:OfflineBridge.notice;wrap:word-wrap;color:Theme.current.text_primary;}
+                if OfflineBridge.rows.length==0: empty_notice := Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:@tr("Open a show and choose Keep offline to add a rule.");wrap:word-wrap;color:Theme.current.text_muted;}
                 for row[index] in OfflineBridge.rows: rule_card := Rectangle {
                     border-radius:10px;background:Theme.current.control;
                     private property <bool> active_row:InterfaceStyle.tv && root.selected_row==index;
@@ -134,19 +140,19 @@ export component SmartDownloads inherits Rectangle {
                     height: card.preferred-height + 24px;
                     card := VerticalLayout {x:12px;y:12px;width:parent.width - 24px;height:self.preferred-height;spacing:8px;
                         Text {text:row.title;font-size:InterfaceStyle.tv ? 23px : 18px;color:Theme.current.text_primary;wrap:word-wrap;}
-                        rule_status := Text {font-size:root.supporting_font_size;text:row.status;color:Theme.current.text_muted;wrap:word-wrap;}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.enabled ? @tr("Pause rule") : @tr("Resume rule");highlighted:root.selected_row==index && root.selected_action==0;selected:row.enabled;picked=>{OfflineBridge.action(row.id,0);}}
+                        rule_status := Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:row.status;color:Theme.current.text_muted;wrap:word-wrap;}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.enabled ? @tr("Pause rule") : @tr("Resume rule");highlighted:root.selected_row==index && root.selected_action==0;selected:row.enabled;picked=>{OfflineBridge.action(row.id,0);}}
                         HorizontalLayout {spacing:8px;
-                            OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:root.selected_row==index && root.selected_action==1;picked=>{OfflineBridge.action(row.id,2);}}
-                            Text {font-size:root.supporting_font_size;text:@tr("Keep next {}",row.keep_count);vertical-alignment:center;color:Theme.current.text_primary;}
-                            OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:root.selected_row==index && root.selected_action==2;picked=>{OfflineBridge.action(row.id,1);}}
+                            OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:"−";highlighted:root.selected_row==index && root.selected_action==1;picked=>{OfflineBridge.action(row.id,2);}}
+                            Text {vertical-stretch:0;min-width:0px;font-size:root.supporting_font_size;text:@tr("Keep next {}",row.keep_count);vertical-alignment:center;color:Theme.current.text_primary;}
+                            OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:"+";highlighted:root.selected_row==index && root.selected_action==2;picked=>{OfflineBridge.action(row.id,1);}}
                         }
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.source_ready ? @tr("Choose another source") : @tr("Choose source");highlighted:root.selected_row==index && root.selected_action==3;picked=>{OfflineBridge.action(row.id,3);}}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Retry / Restore offline");highlighted:root.selected_row==index && root.selected_action==4;picked=>{OfflineBridge.action(row.id,4);}}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.include_specials ? @tr("Specials included") : @tr("Specials excluded");highlighted:root.selected_row==index && root.selected_action==5;selected:row.include_specials;picked=>{OfflineBridge.action(row.id,6);}}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:row.cleanup ? @tr("Remove unneeded automatic files") : @tr("Keep watched automatic files");highlighted:root.selected_row==index && root.selected_action==6;selected:row.cleanup;picked=>{OfflineBridge.action(row.id,7);}}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule, keep files");highlighted:root.selected_row==index && root.selected_action==7;picked=>{OfflineBridge.action(row.id,5);}}
-                        OfflineButton {reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule and unneeded files");highlighted:root.selected_row==index && root.selected_action==8;picked=>{OfflineBridge.action(row.id,8);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.source_ready ? @tr("Choose another source") : @tr("Choose source");highlighted:root.selected_row==index && root.selected_action==3;picked=>{OfflineBridge.action(row.id,3);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:@tr("Retry / Restore offline");highlighted:root.selected_row==index && root.selected_action==4;picked=>{OfflineBridge.action(row.id,4);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.include_specials ? @tr("Specials included") : @tr("Specials excluded");highlighted:root.selected_row==index && root.selected_action==5;selected:row.include_specials;picked=>{OfflineBridge.action(row.id,6);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.cleanup ? @tr("Remove unneeded automatic files") : @tr("Keep watched automatic files");highlighted:root.selected_row==index && root.selected_action==6;selected:row.cleanup;picked=>{OfflineBridge.action(row.id,7);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule, keep files");highlighted:root.selected_row==index && root.selected_action==7;picked=>{OfflineBridge.action(row.id,5);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule and unneeded files");highlighted:root.selected_row==index && root.selected_action==8;picked=>{OfflineBridge.action(row.id,8);}}
                     }
                 }
                 Rectangle {height:24px;}

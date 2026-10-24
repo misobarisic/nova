@@ -218,7 +218,7 @@ component DownloadDeleteDialog inherits Rectangle {
 
 export component DownloadsPage inherits Rectangle {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { if root.active { page_scope.focus(); } }
+    public function focus_shell() { if root.active { if OfflineBridge.opened { smart_downloads.focus_shell(); } else if !OfflineBridge.visual_retained { page_scope.focus(); } } }
 
     // Capture identity and title once. Refreshes, sorting and model replacement
     // must never retarget a pending destructive action to another row.
@@ -391,7 +391,7 @@ export component DownloadsPage inherits Rectangle {
     changed system_back_request => { if (root.active && root.last-back != root.system_back_request) {
         root.last-back = root.system_back_request;
         if root.delete-id != "" { root.finish-delete(false); }
-        else if OfflineBridge.opened {OfflineBridge.closed();page_scope.focus();}
+        else if OfflineBridge.opened {OfflineBridge.closed();}
         else if OfflineBridge.visual_retained { }
         else if InterfaceStyle.tv && download_search.has-focus {page_scope.focus();root.tv-zone=0;}
         else {root.back();}
@@ -432,6 +432,14 @@ export component DownloadsPage inherits Rectangle {
         viewport-width: root.nav-viewport-width; active: 5; kb_zone: InterfaceStyle.tv ? (root.tv-zone == -1 ? 0 : -1) : 0; kb_nav: root.tv-nav; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
         home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
     }
+    // Keep the list painted during the submenu return, using the same push
+    // distance and fade as Settings and More. Its scroll/focus state survives.
+    downloads_clip := Rectangle {
+    x: root.content_x; width: root.width - self.x; height: 100%; clip: true;
+    downloads_layer := Rectangle {
+    x: -root.content_x - 0.28 * (root.width - root.content_x) * smart_downloads.push_progress;
+    opacity: 1.0 - smart_downloads.fade_progress;
+    width: root.width; height: 100%;
     // Portrait and desktop retain a pinned heading. Touch landscape expands
     // this same viewport so the measured heading slot scrolls with the cards.
     groups-scroll := ScrollView {
@@ -539,10 +547,12 @@ export component DownloadsPage inherits Rectangle {
         finished(confirmed) => { root.finish-delete(confirmed); }
     }
     }
+    }
+    }
     if !root.active: TouchArea {
         width: 100%; height: 100%;
         clicked => { }
         scroll-event(event) => { accept }
     }
-    SmartDownloads {active:root.active;x:root.content_x;y:0px;width:root.width - root.content_x;height:root.height;safe_left:root.safe-left;safe_right:root.safe-right;safe_top:root.safe-top;safe_bottom:root.safe-bottom;dismissed=>{if root.active {page_scope.focus();}}}
+    smart_downloads := SmartDownloads {active:root.active;x:root.content_x;y:0px;width:root.width - root.content_x;height:root.height;safe_left:root.safe-left;safe_right:root.safe-right;safe_top:root.safe-top;safe_bottom:root.safe-bottom;dismissed=>{if root.active {page_scope.focus();}}}
 }
