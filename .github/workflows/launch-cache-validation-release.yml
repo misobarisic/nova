@@ -1,5 +1,5 @@
 name: Launch requested cache validation releases
-run-name: Launch v0.0.44 for sequential release-cache validation
+run-name: Launch v0.0.45 for sequential release-cache validation
 
 on:
   push:
@@ -23,9 +23,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: v0.0.44
-      RELEASE_VERSION: 0.0.44
-      RELEASE_SHA: 40b62ca019f69e09588d944dbfa2bf90f4c86b26
+      RELEASE_TAG: v0.0.45
+      RELEASE_VERSION: 0.0.45
+      RELEASE_SHA: 02a692dd66a4f7c77ea768102803c7f91d952ca6
     steps:
       - name: Checkout the exact requested release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
