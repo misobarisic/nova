@@ -59,3 +59,6 @@ mod loading_text;
 
 #[path = "settings_preferences/listening.rs"]
 mod listening;
+
+#[path = "settings_preferences/source_recovery.rs"]
+mod source_recovery;

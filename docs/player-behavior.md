@@ -155,8 +155,33 @@ still require device validation.
 The automatic Try another stream prompt waits for 30 continuous foreground
 seconds of startup/loading or stalled playback. Actual progress, a pause, EOF,
 source replacement or a background gap resets the wait. The manual action in
-player settings remains available immediately and retains position and semantic
-track preferences when changing source.
+player settings remains available immediately and retains semantic track preferences.
+Settings → Player → **Automatically try another source** is off by default and
+saved only on this device. When enabled, a stalled local playback run can try at
+most two distinct alternatives, excluding its original source. Pause, background
+suspension, navigation or cancellation stops that automatic run. Watch parties,
+paired receivers and casting keep their existing coordinators. Automatic attempts
+never overwrite Last used or the explicit per-show source preference; manual
+source selection and recovery stay available after the automatic budget ends.
+
+Nova separately remembers sources that produced 30 continuous seconds of real
+foreground playback progress on this device. Seeks, pauses, buffering and long
+tick gaps cannot establish success. The device cache holds at most 128 source
+fingerprints for 30 days, without URLs, tokens or release descriptions, and never
+syncs. Verified sources break internal recovery ties after the user's filters
+and complete sort rules. The source picker keeps its existing presentation,
+labels and ordering; no success indicator is shown.
+
+A replacement source loads at zero, held paused before its first frame while its
+own native duration is checked. Ordinary play and seek controls cannot release
+that hold; only an accepted timeline or explicit resume/start-over decision can.
+An exact source identity or identical torrent hash and explicit file index,
+together with corresponding duration, can retain the previous absolute time.
+Otherwise playback pauses and asks whether to resume at the previous time or
+start over. Equal durations alone do not establish the same cut; Nova never
+converts the old playhead to a percentage. Resume stays disabled when the old
+position is outside the replacement's known runtime (or no usable runtime is
+available); Start over and cancellation remain available. Cancel closes that replacement.
 
 Playback → Scene bookmarks lists the current episode's saved scenes.
 Each row keeps its note and timestamp on the left and Lucide edit, clear-note

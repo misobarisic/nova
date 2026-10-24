@@ -1967,3 +1967,18 @@ msgstr "Compress loud effects and narrow the gap between quiet and loud sounds."
 
 msgid "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."
 msgstr "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."
+
+msgid "Automatically try another source"
+msgstr ""
+
+msgid "After 30 seconds without progress, try up to two different sources. Saved on this device. Pause or cancel to stop automatic retries."
+msgstr ""
+
+msgid "Check resume position"
+msgstr ""
+
+msgid "This source may use a different cut. Resume at {}, or start over."
+msgstr ""
+
+msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
+msgstr ""

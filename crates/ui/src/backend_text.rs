@@ -85,6 +85,7 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Check resume position" => "Provjeri položaj nastavka",
         "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here." => {
             "Emitiranje je dosegnulo ograničenje međuspremnika. Povećajte Međuspremnik za remuksiranje pri emitiranju u postavkama reproduktora, odaberite drugi izvor ili reproducirajte ovdje."
         }

@@ -19,6 +19,8 @@ pub(super) struct PlaybackToolsState {
     pub(super) bookmark_resume: Option<playback::BookmarkResume>,
     pub(super) pending_stream_selection: Option<playback::SelectedStream>,
     pub(super) recovery_prompt: RecoveryPrompt,
+    pub(super) success_progress: source_recovery::ProgressEvidence,
+    pub(super) guarded_resume: Option<f64>,
 }
 
 /// Only a continuous foreground wait may suggest switching sources. Normal
@@ -122,14 +124,91 @@ impl Bridge {
             ended: readiness.ended,
             position: app.get_position() as f64,
         };
+        let paused = observation.paused;
+        let now = Instant::now();
+        let local_foreground = remote_playback::is_foreground()
+            && !self.party_active()
+            && !self.remote_receiver_playback();
+        let confirmation_hold = self.player.awaiting_start_confirmation();
+        let automatic_allowed =
+            local_foreground && !app.get_resume_prompt_visible() && !confirmation_hold;
+        let playing = app.get_player_open()
+            && app.get_playback_started()
+            && !paused
+            && !readiness.buffering
+            && !readiness.ended
+            && remote_playback::is_foreground();
+        let success = {
+            let mut state = self.shared.lock().unwrap();
+            let identity = state
+                .playback_intent
+                .as_ref()
+                .filter(|intent| intent.active_local())
+                .and_then(|intent| intent.context.selected_stream.as_ref())
+                .and_then(|selected| selected.choice.clone());
+            state
+                .playback_tools
+                .success_progress
+                .observe(now, app.get_position() as f64, playing)
+                .then_some(identity)
+                .flatten()
+        };
+        if let Some(identity) = success {
+            source_recovery::remember(&identity);
+        }
         let visible = self
             .shared
             .lock()
             .unwrap()
             .playback_tools
             .recovery_prompt
-            .observe(Instant::now(), observation);
+            .observe(now, observation);
         app.set_automatic_stream_recovery_visible(available && visible);
+        let automatic = {
+            let mut state = self.shared.lock().unwrap();
+            let enabled = state.cache_settings.auto_retry_streams
+                && !state.cache_settings.uses_external_player()
+                && !state.casting.active
+                && !state.casting.loading;
+            let context = if let Some(intent) = state.playback_intent.as_mut() {
+                Some(&mut intent.context)
+            } else {
+                state
+                    .playback_tools
+                    .failed_retry
+                    .as_mut()
+                    .map(|retry| &mut retry.context)
+            };
+            if let Some(context) = context {
+                let gap = context
+                    .retry_budget
+                    .last_tick
+                    .replace(now)
+                    .is_some_and(|previous| {
+                        now.saturating_duration_since(previous) > Duration::from_secs(2)
+                    });
+                // A normal resume question blocks action without cancelling
+                // the not-yet-started run. Explicit pause callbacks revoke it
+                // immediately, including pauses shorter than one UI tick.
+                if (paused && !app.get_resume_prompt_visible() && !confirmation_hold)
+                    || !local_foreground
+                    || gap
+                    || (!enabled && context.automatic_source_selection)
+                {
+                    context.retry_budget.cancelled = true;
+                }
+                enabled
+                    && automatic_allowed
+                    && !context.retry_budget.cancelled
+                    && available
+                    && visible
+            } else {
+                false
+            }
+        };
+        if automatic {
+            self.retry_another_stream(true);
+        }
     }
 
     pub(super) fn reload_scene_bookmarks(&self) {

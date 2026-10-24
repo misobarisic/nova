@@ -148,6 +148,7 @@ export global SettingsBridge {
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
     // Listening preferences are device-local and shared with the playing OSD.
+    in-out property <bool> auto_retry_streams: false;
     in-out property <bool> dialogue_boost: false;
     in-out property <bool> loudness_normalization: false;
     in-out property <bool> night_mode: false;

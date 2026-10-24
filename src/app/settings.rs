@@ -333,6 +333,7 @@ impl Bridge {
                     .values()
                     .to_vec(),
             )));
+            app.set_auto_retry_streams(settings.auto_retry_streams);
             app.set_dialogue_boost(settings.dialogue_boost);
             app.set_loudness_normalization(settings.loudness_normalization);
             app.set_night_mode(settings.night_mode);
@@ -615,6 +616,7 @@ impl Bridge {
                 // Subtitle callbacks edit the typed backend value. Copying its
                 // UI readouts would persist native defaults as explicit edits.
                 subtitle_style: state.cache_settings.subtitle_style,
+                auto_retry_streams: app.get_auto_retry_streams(),
                 dialogue_boost: app.get_dialogue_boost(),
                 loudness_normalization: app.get_loudness_normalization(),
                 night_mode: app.get_night_mode(),
@@ -1691,6 +1693,20 @@ mod tests {
                     .is_none()
             );
         }
+        app.set_auto_retry_streams(true);
+        app.invoke_settings_edited("auto_retry_streams".into());
+        bridge.persist_settings();
+        assert!(read_settings().auto_retry_streams);
+        app.set_auto_retry_streams(false);
+        bridge.settings_to_ui();
+        assert!(app.get_auto_retry_streams());
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "auto_retry_streams")
+                .is_none()
+        );
         app.set_tmdb_api_key(" 0123456789abcdef0123456789abcdef ".into());
         app.invoke_settings_edited("tmdb_api_key".into());
         bridge.persist_settings();

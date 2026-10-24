@@ -769,6 +769,25 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                SettingsRow {
+                    setting-key: "auto_retry_streams";
+                    row-title: @tr("Automatically try another source");
+                    row-desc: @tr("After 30 seconds without progress, try up to two different sources. Saved on this device. Pause or cancel to stop automatic retries.");
+                    ToggleSwitch {
+                        name: @tr("Automatically try another source");
+                        checked <=> SettingsBridge.auto_retry_streams;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_recovery_row();
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_recovery_row();
+                            SettingsContent.schedule_setting("auto_retry_streams");
+                        }
+                    }
+                }
+            }
+
             if CastBridge.available: SettingsCard {
                 SettingsRow {
                     setting-key: "casting_remux_buffer";

@@ -53,6 +53,19 @@ impl Bridge {
         {
             return Err("No active playback".into());
         }
+        if self.player.awaiting_start_confirmation()
+            && matches!(
+                action,
+                PlaybackAction::TogglePause
+                    | PlaybackAction::SetPaused(false)
+                    | PlaybackAction::SeekRelative(_)
+                    | PlaybackAction::SeekAbsolute(_)
+                    | PlaybackAction::SeekChapter { .. }
+                    | PlaybackAction::SeekBookmark { .. }
+            )
+        {
+            return Err(text::tr("Check resume position").into());
+        }
         match action {
             PlaybackAction::SetSleepTimer(mode) => self.set_sleep_timer(mode)?,
             PlaybackAction::ExtendSleepTimer => self.extend_sleep_timer()?,
@@ -70,6 +83,12 @@ impl Bridge {
                 self.clear_playback_end_menu();
                 self.sleep_timer_note_seek(app.get_position() as f64 + delta);
                 self.note_intro_seek(app.get_position() as f64, app.get_position() as f64 + delta);
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .playback_tools
+                    .success_progress
+                    .interrupt();
                 self.player.seek_relative(delta);
                 self.refresh_next_episode_prompt();
             }
@@ -84,6 +103,12 @@ impl Bridge {
                 };
                 self.sleep_timer_note_seek(position);
                 self.note_intro_seek(app.get_position() as f64, position);
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .playback_tools
+                    .success_progress
+                    .interrupt();
                 self.player.seek(position.min(f32::MAX as f64) as f32);
                 self.refresh_next_episode_prompt();
             }
@@ -280,6 +305,10 @@ impl Bridge {
             // Revoke before asynchronous publication can renew prefetch leases.
             let mut state = self.shared.lock().unwrap();
             state.stream_prefetch_live_session = None;
+            state.playback_tools.success_progress.interrupt();
+            if let Some(intent) = state.playback_intent.as_mut() {
+                intent.context.retry_budget.cancelled = true;
+            }
             if let Some(playing) = state.playback.as_mut() {
                 playing.next_episode_prefetched = None;
             }

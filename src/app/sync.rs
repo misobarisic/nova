@@ -757,6 +757,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
     "desktop_hwdec",
+    "auto_retry_streams",
     "dialogue_boost",
     "loudness_normalization",
     "night_mode",
@@ -4133,6 +4134,28 @@ mod tests {
                 "Sinkronizacija dodataka… (preostalo: 2)"
             );
         });
+    }
+
+    #[test]
+    fn automatic_source_retry_is_device_local_and_rejects_remote_changes() {
+        let local = CacheSettings {
+            auto_retry_streams: true,
+            ..Default::default()
+        };
+        assert!(!setting_can_override("auto_retry_streams"));
+        assert!(
+            !settings_fields(&local)
+                .iter()
+                .any(|(key, _, _)| key == "auto_retry_streams")
+        );
+        let merged =
+            merge_settings_fields(&local, &[("auto_retry_streams".into(), "false".into())]);
+        assert!(merged.auto_retry_streams);
+        let older: CacheSettings = serde_json::from_value(
+            serde_json::json!({"enabled": false,"format":"webp","quality":85,"downscale":true}),
+        )
+        .unwrap();
+        assert!(!older.auto_retry_streams);
     }
 
     #[test]

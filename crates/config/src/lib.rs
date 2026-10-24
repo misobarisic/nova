@@ -898,6 +898,9 @@ cache_settings_type! {
     /// never synced.
     #[serde(default)]
     pub desktop_external_app: DesktopExternalApp,
+    /// Automatically try at most two distinct alternative sources. Device-local.
+    #[serde(default)]
+    pub auto_retry_streams: bool,
     /// Built-in player listening effects; device-local, never synced.
     #[serde(default)]
     pub dialogue_boost: bool,
@@ -1137,6 +1140,7 @@ impl Default for CacheSettings {
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
             subtitle_style: Default::default(),
+            auto_retry_streams: false,
             dialogue_boost: false,
             loudness_normalization: false,
             night_mode: false,

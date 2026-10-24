@@ -5598,3 +5598,18 @@ msgstr "Stisni glasne efekte i smanji razliku između tihih i glasnih zvukova."
 
 msgid "Saved on this device. Applies to built-in playback; external players and casting use their own audio settings."
 msgstr "Spremljeno na ovom uređaju. Primjenjuje se na ugrađenu reprodukciju; vanjski playeri i emitiranje koriste vlastite postavke zvuka."
+
+msgid "Automatically try another source"
+msgstr "Automatski pokušaj drugi izvor"
+
+msgid "After 30 seconds without progress, try up to two different sources. Saved on this device. Pause or cancel to stop automatic retries."
+msgstr "Nakon 30 sekundi bez napretka pokušaj do dva različita izvora. Sprema se na ovom uređaju. Pauzirajte ili odustanite za prekid automatskih pokušaja."
+
+msgid "Check resume position"
+msgstr "Provjeri položaj nastavka"
+
+msgid "This source may use a different cut. Resume at {}, or start over."
+msgstr "Ovaj izvor možda koristi drukčiju verziju. Nastavite na {} ili počnite ispočetka."
+
+msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
+msgstr "Ovaj izvor ne može nastaviti na prethodnom položaju. Počnite ispočetka ili odustanite i odaberite drugi izvor."

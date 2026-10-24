@@ -30,6 +30,8 @@ export global SettingsSearch {
                 let remux_buffer = self.candidate("casting_remux_buffer", @tr("Casting remux buffer"), "Casting remux buffer RAM memory media segments budget 32 64 128 256 MiB", 9, SettingsContent.kb_player_stream_filters_row() - 1);
                 if CastBridge.available && self.matches(remux_buffer) { return remux_buffer; }
                 if SettingsBridge.player_backend_index == 0 {
+                    let recovery = self.candidate("auto_retry_streams", @tr("Automatically try another source"), "Automatically try another source retry recovery buffering stalled", 9, SettingsContent.kb_player_recovery_row());
+                    if self.matches(recovery) { return recovery; }
                     let dialogue = self.candidate("dialogue_boost", SettingsBridge.listening_label(0), "Dialogue boost speech voices equalizer night listening", 9, SettingsContent.kb_player_listening_row());
                     if self.matches(dialogue) { return dialogue; }
                     let normalization = self.candidate("loudness_normalization", SettingsBridge.listening_label(1), "Loudness normalization normalize volume leveling night listening", 9, SettingsContent.kb_player_listening_row() + 1);

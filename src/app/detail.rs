@@ -3854,7 +3854,18 @@ impl Bridge {
             }
             _ => true,
         };
-        if usable && let Some(identity) = &stream.choice_id {
+        let recovering = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .pending_retry
+            .as_ref()
+            .is_some_and(|retry| retry.context.automatic_source_selection);
+        if usable
+            && !recovering
+            && let Some(identity) = &stream.choice_id
+        {
             self.last_stream
                 .remember(identity.clone(), nova_config::now_secs());
             if stream.download.is_none() {
@@ -3887,11 +3898,14 @@ impl Bridge {
             StreamSource::Url(url) => {
                 // Android can hand the URL to another video app; desktop
                 // always uses the built-in player, including saved preferences.
-                if nova_config::active_cache_settings().uses_external_player() {
+                if nova_config::active_cache_settings().uses_external_player()
+                    && !self.recovery_source_selected()
+                {
                     self.begin_playback_request();
                     let _ = crate::player::open_external(&url);
                 } else if !self.open_player(url.clone())
-                    && crate::player::open_external(&url).is_err()
+                    && (self.recovery_source_selected()
+                        || crate::player::open_external(&url).is_err())
                 {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This stream requires the in-app player, which is unavailable.",

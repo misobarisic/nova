@@ -2,12 +2,15 @@
 use super::*;
 
 #[derive(Clone, Default)]
-struct PlaybackContext {
+pub(super) struct PlaybackContext {
     policy_revision: String,
+    recovery_timeline: Option<source_recovery::Timeline>,
+    pub(super) automatic_source_selection: bool,
+    pub(super) retry_budget: source_recovery::RetryBudget,
     intro_download: Option<crate::download::DownloadJob>,
     retry_preferences: Option<nova_config::playback_preferences::SessionPreferences>,
     bookmark_resume: bool,
-    selected_stream: Option<SelectedStream>,
+    pub(super) selected_stream: Option<SelectedStream>,
     subtitle_hints: Vec<(String, String)>,
     title: String,
     episode_label: String,
@@ -49,15 +52,16 @@ pub(super) struct PlaybackIntent {
     // Credential-bearing resolver links stay inside the in-app player, including
     // a delayed resume prompt. Never pass them through OS process arguments.
     private_playback: bool,
-    context: PlaybackContext,
+    pub(super) context: PlaybackContext,
     detached: bool,
 }
 
 #[derive(Clone)]
 pub(super) struct SelectedStream {
-    choice: Option<String>,
+    pub(super) choice: Option<String>,
     row: String,
     owner: String,
+    continuity: Option<String>,
 }
 impl SelectedStream {
     fn from_row(row: &StreamUi) -> Self {
@@ -65,7 +69,38 @@ impl SelectedStream {
             choice: row.choice_id.clone(),
             row: row.id.clone(),
             owner: row.owner_url.clone(),
+            // An explicitly selected torrent file is byte-identical across
+            // addon mirrors. A pack without fileIdx does not prove the cut.
+            continuity: match &row.source {
+                StreamSource::Torrent {
+                    info_hash,
+                    file_idx: Some(index),
+                } if info_hash.len() == 40
+                    && info_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+                {
+                    Some(preference_hash(
+                        "torrent-file",
+                        &format!("{}:{index}", info_hash.to_ascii_lowercase()),
+                    ))
+                }
+                StreamSource::Url(url) => Some(preference_hash(
+                    "exact-url-headers",
+                    &serde_json::to_string(&(url, Vec::<(String, String)>::new()))
+                        .expect("source headers serialize"),
+                )),
+                StreamSource::UrlWithOptions { url, headers, .. } => Some(preference_hash(
+                    "exact-url-headers",
+                    &serde_json::to_string(&(url, headers)).expect("source headers serialize"),
+                )),
+                _ => row.choice_id.clone(),
+            },
         }
+    }
+    fn retry_identity(&self) -> &str {
+        self.continuity
+            .as_deref()
+            .or(self.choice.as_deref())
+            .unwrap_or(&self.row)
     }
     fn matches(&self, row: &StreamUi) -> bool {
         self.choice.as_ref().map_or_else(
@@ -94,11 +129,54 @@ fn alternate_stream_index(rows: &[StreamUi], selected: &SelectedStream) -> Optio
         })
 }
 
+fn ranked_recovery_index(
+    rows: &[StreamUi],
+    selected: &SelectedStream,
+    rules: &nova_config::StreamFilterRules,
+    budget: Option<&source_recovery::RetryBudget>,
+    start: usize,
+) -> Option<usize> {
+    let torrents_enabled = active_torrent_settings().enabled;
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            !selected.matches(row)
+                && (!matches!(row.source, StreamSource::Torrent { .. }) || torrents_enabled)
+                && rules.accepts(&row.card.filter_facts)
+                && budget.is_none_or(|budget| {
+                    budget.accepts(SelectedStream::from_row(row).retry_identity())
+                })
+                && matches!(
+                    row.source,
+                    StreamSource::Url(_)
+                        | StreamSource::UrlWithOptions { .. }
+                        | StreamSource::Resolver { .. }
+                        | StreamSource::Torrent { .. }
+                )
+        })
+        .min_by(|(a_index, a), (b_index, b)| {
+            (if rules.enabled {
+                rules.compare(&a.card.filter_facts, &b.card.filter_facts)
+            } else {
+                std::cmp::Ordering::Equal
+            })
+            .then_with(|| {
+                source_recovery::verified(b.choice_id.as_deref())
+                    .cmp(&source_recovery::verified(a.choice_id.as_deref()))
+            })
+            .then_with(|| {
+                ((a_index + rows.len() - start) % rows.len())
+                    .cmp(&((b_index + rows.len() - start) % rows.len()))
+            })
+        })
+        .map(|(index, _)| index)
+}
+
 // A failed resolver has no worker authority. Keep only a display/source-selection
 // snapshot, scoped to the exact detail opening that supplied its stream list.
 #[derive(Clone)]
 pub(super) struct RetryContext {
-    context: PlaybackContext,
+    pub(super) context: PlaybackContext,
     modal_token: Arc<()>,
 }
 /// Receiver-owned replacement context; never serialized or sent to a controller.
@@ -146,6 +224,9 @@ impl RetryContext {
 }
 
 impl PlaybackIntent {
+    pub(super) fn active_local(&self) -> bool {
+        self.in_app && self.token.is_current()
+    }
     fn accepts(&self, token: &crate::torrent::PlaybackRequest, modal: Option<&ModalItem>) -> bool {
         self.token.same_request(token)
             && token.is_current()
@@ -173,6 +254,7 @@ pub(crate) fn note_android_pause_checkpoint() {
         bridge.party_suspend();
         bridge.remote_suspend();
         bridge.refresh_playback_end_menu();
+        bridge.cancel_automatic_source_retry();
         bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
         bridge.persist_playback_checkpoint(false);
@@ -356,6 +438,8 @@ impl Bridge {
                     None,
                 )
             } else {
+                let explicit_selection = state.playback_tools.pending_retry.is_none()
+                    && state.playback_tools.pending_stream_selection.is_some();
                 let retry = state
                     .playback_tools
                     .pending_retry
@@ -380,7 +464,16 @@ impl Bridge {
                             .as_ref()
                             .is_some_and(|modal| retry.matches(modal))
                     })
-                    .map(|retry| retry.context);
+                    .map(|retry| {
+                        let mut context = retry.context;
+                        if explicit_selection {
+                            // A new deliberate source choice starts a new run;
+                            // a failed automatic attempt cannot spend its budget.
+                            context.retry_budget = Default::default();
+                            context.automatic_source_selection = false;
+                        }
+                        context
+                    });
                 let bookmark = state
                     .playback_tools
                     .bookmark_resume
@@ -589,6 +682,9 @@ impl Bridge {
         }
         context.selected_stream = selected_stream;
         context.policy_revision = profile_policy::revision(&profiles::ProfileStore::capture());
+        if context.recovery_timeline.is_some() {
+            state.playback_intent.as_mut().unwrap().private_playback = true;
+        }
 
         state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
@@ -647,7 +743,17 @@ impl Bridge {
     }
 
     pub(super) fn note_selected_playback_stream(&self, stream: &StreamUi) {
-        self.queue_note_selected_stream(stream);
+        let automatic = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .pending_retry
+            .as_ref()
+            .is_some_and(|retry| retry.context.automatic_source_selection);
+        if !automatic {
+            self.queue_note_selected_stream(stream);
+        }
         self.party_remember_source(stream);
         self.shared
             .lock()
@@ -661,6 +767,7 @@ impl Bridge {
         if !app.get_player_open() || self.remote_receiver_playback() {
             return None;
         }
+        let rules = self.effective_stream_filter_rules();
         let state = self.shared.lock().unwrap();
         if !state.remote_playback.can_play_locally() {
             return None;
@@ -696,11 +803,16 @@ impl Bridge {
                     .as_ref()
                     .and_then(|retry| retry.context.selected_stream.as_ref())
             })?;
-        alternate_stream_index(&state.streams, selected)
+        let fallback = alternate_stream_index(&state.streams, selected)?;
+        ranked_recovery_index(&state.streams, selected, &rules, None, fallback)
     }
 
     pub(super) fn try_another_stream(&self) {
-        let Some(index) = self.alternate_stream_index() else {
+        self.retry_another_stream(false);
+    }
+
+    pub(super) fn retry_another_stream(&self, automatic: bool) {
+        let Some(mut index) = self.alternate_stream_index() else {
             return;
         };
         let Some(app) = self.app() else {
@@ -711,6 +823,8 @@ impl Bridge {
         } else {
             self.prepare_playback_preferences()
         };
+        let party_active = self.party_active();
+        let rules = self.effective_stream_filter_rules();
         let mut state = self.shared.lock().unwrap();
         let context = state
             .playback_intent
@@ -726,6 +840,37 @@ impl Bridge {
         let Some(mut context) = context else {
             return;
         };
+        context.automatic_source_selection = automatic;
+        if automatic {
+            if let Some(selected) = &context.selected_stream {
+                context
+                    .retry_budget
+                    .exclude_original(selected.retry_identity());
+            }
+            index = match context.selected_stream.as_ref().and_then(|selected| {
+                ranked_recovery_index(
+                    &state.streams,
+                    selected,
+                    &rules,
+                    Some(&context.retry_budget),
+                    index,
+                )
+            }) {
+                Some(index) => index,
+                None => return,
+            };
+            let row = &state.streams[index];
+            if !context
+                .retry_budget
+                .attempt(SelectedStream::from_row(row).retry_identity())
+            {
+                return;
+            }
+        } else {
+            // Manual recovery is always available, including after the bounded
+            // automatic run was cancelled or exhausted.
+            context.retry_budget.cancelled = true;
+        }
         let Some(modal) = state.modal_item.as_ref() else {
             return;
         };
@@ -738,6 +883,20 @@ impl Bridge {
                 .or_else(|| state.playback.as_ref().and_then(|target| target.resume_pos))
                 .unwrap_or(0.0)
         };
+        if (app.get_playback_started() || context.recovery_timeline.is_none())
+            && position.is_finite()
+            && position > 0.0
+            && !party_active
+        {
+            context.recovery_timeline = Some(source_recovery::Timeline {
+                position,
+                duration: app.get_duration() as f64,
+                source: context
+                    .selected_stream
+                    .as_ref()
+                    .and_then(|selected| selected.continuity.clone()),
+            });
+        }
         context.history_resume = Some(if position.is_finite() {
             position.max(0.0)
         } else {
@@ -766,6 +925,21 @@ impl Bridge {
             return false;
         }
         let state = self.shared.lock().unwrap();
+        if state.playback_intent.as_ref().is_some_and(|intent| {
+            intent.pending
+                && intent.context.automatic_source_selection
+                && (!remote_playback::is_foreground()
+                    || intent.context.retry_budget.cancelled
+                    || !state.cache_settings.auto_retry_streams
+                    || state.cache_settings.uses_external_player()
+                    || state.casting.active
+                    || state.casting.loading
+                    || state.party.active()
+                    || !state.remote_playback.can_play_locally())
+        }) {
+            token.cancel();
+            return false;
+        }
         let owner = profiles::ProfileStore::capture();
         if state.playback_intent.as_ref().is_some_and(|i| {
             i.context.policy_revision != profile_policy::revision(&owner)
@@ -797,6 +971,8 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.playback_tools.recovery_prompt = Default::default();
+            state.playback_tools.success_progress = Default::default();
+            state.playback_tools.guarded_resume = None;
             state.playback_tools.failed_retry = None;
             state.playback_tools.pending_retry = None;
             state.playback_tools.bookmark_resume = None;
@@ -811,6 +987,7 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
+            app.set_resume_source_changed(false);
             app.set_automatic_stream_recovery_visible(false);
         }
         if let Some(engine) = crate::torrent::engine() {
@@ -820,8 +997,19 @@ impl Bridge {
 
     /// Host browsing must not cancel a receiver-owned loading request.
     pub(super) fn cancel_pending_for_navigation(&self) {
+        self.cancel_automatic_source_retry();
         if !self.remote_receiver_playback() {
             self.cancel_pending_playback();
+        }
+    }
+
+    fn cancel_automatic_source_retry(&self) {
+        let mut state = self.shared.lock().unwrap();
+        if let Some(intent) = state.playback_intent.as_mut() {
+            intent.context.retry_budget.cancelled = true;
+        }
+        if let Some(retry) = state.playback_tools.failed_retry.as_mut() {
+            retry.context.retry_budget.cancelled = true;
         }
     }
 
@@ -1079,10 +1267,24 @@ impl Bridge {
             .is_some_and(|i| i.detached)
     }
 
+    pub(super) fn recovery_source_selected(&self) -> bool {
+        let state = self.shared.lock().unwrap();
+        state
+            .playback_tools
+            .pending_retry
+            .as_ref()
+            .is_some_and(|retry| retry.context.recovery_timeline.is_some())
+            || state
+                .playback_intent
+                .as_ref()
+                .is_some_and(|intent| intent.context.recovery_timeline.is_some())
+    }
+
     fn external_playback_allowed(&self) -> bool {
         nova_config::active_cache_settings().uses_external_player()
             && !self.remote_receiver_playback()
             && !self.party_active()
+            && !self.recovery_source_selected()
             && !self.shared.lock().unwrap().casting.selected
     }
 
@@ -1178,6 +1380,7 @@ impl Bridge {
             app.set_player_status(text::tr("Loading stream…").into());
         }
         let private_playback = self.remote_receiver_playback()
+            || self.recovery_source_selected()
             || self.party_active()
             || result.as_ref().is_ok_and(|stream| {
                 stream
@@ -1406,6 +1609,7 @@ impl Bridge {
                             bridge.mark_playback_opened(false);
                             if !bridge.remote_receiver_playback()
                                 && !bridge.party_active()
+                                && !bridge.recovery_source_selected()
                                 && crate::player::open_external(&url).is_err()
                             {
                                 bridge.set_stream_hint(Some(StreamHint::Fixed(
@@ -1742,6 +1946,13 @@ impl Bridge {
         } else {
             self.shared.lock().unwrap().playback = None;
         }
+        if context.recovery_timeline.is_some()
+            && !party_active
+            && let Some(target) = self.shared.lock().unwrap().playback.as_mut()
+        {
+            target.resume_pos = None;
+            target.resume_done = true;
+        }
         // Arming playback re-surfaces the item in Continue Watching right away:
         // drop any "removed" stamp now instead of waiting for the first
         // progress tick to outdate it (the `hidden_at >= updated_at` rule in
@@ -1794,13 +2005,17 @@ impl Bridge {
                 .playback_intent
                 .as_ref()
                 .is_some_and(|intent| intent.private_playback);
-        let queued = self.player.play_with_preferences_and_policy(
+        let guarded = context.recovery_timeline.is_some() && !party_active;
+        let queued = self.player.play_with_preferences_and_load_policy(
             &url,
             start_at,
             &headers,
             &subtitles,
             preferences,
-            allow_external,
+            crate::player::PlaybackLoadPolicy {
+                allow_external: allow_external && !guarded,
+                paused: guarded,
+            },
         );
         self.complete_player_queue(&context, queued)
     }
@@ -1826,7 +2041,100 @@ impl Bridge {
         }
     }
 
+    /// A replacement loads at zero before consulting its own native duration.
+    /// Exact file evidence plus corresponding duration can retain the timeline;
+    /// equal durations by themselves never identify a cut.
+    fn check_recovery_timeline(&self) -> bool {
+        if self.party_active() || self.remote_receiver_playback() {
+            return false;
+        }
+        let Some(app) = self.app() else {
+            return false;
+        };
+        let mut state = self.shared.lock().unwrap();
+        if let Some(position) = state.playback_tools.guarded_resume {
+            drop(state);
+            self.player.set_paused(true);
+            app.set_resume_source_can_resume(source_recovery::resume_in_bounds(
+                position,
+                app.get_duration() as f64,
+            ));
+            return true;
+        }
+        let Some(intent) = state.playback_intent.as_mut() else {
+            return false;
+        };
+        if intent.context.recovery_timeline.is_none() {
+            return false;
+        }
+        if !app.get_playback_started() {
+            return true;
+        }
+        let timeline = intent.context.recovery_timeline.take().unwrap();
+        let same_timeline = timeline.can_resume_without_question(
+            intent
+                .context
+                .selected_stream
+                .as_ref()
+                .and_then(|selected| selected.continuity.as_deref()),
+            app.get_duration() as f64,
+        );
+        if same_timeline {
+            drop(state);
+            self.player.release_start_pause();
+            self.player.seek(timeline.position as f32);
+            app.set_position(timeline.position as f32);
+            self.player.set_paused(false);
+        } else {
+            state.playback_tools.guarded_resume = Some(timeline.position);
+            drop(state);
+            self.player.set_paused(true);
+            app.set_resume_source_position(timeline.position as f32);
+            app.set_resume_source_can_resume(source_recovery::resume_in_bounds(
+                timeline.position,
+                app.get_duration() as f64,
+            ));
+            app.set_resume_source_changed(true);
+            app.set_resume_prompt_visible(true);
+        }
+        true
+    }
+
     pub(super) fn resume_prompt_choice(&self, resume: bool) {
+        let guarded_position = self.shared.lock().unwrap().playback_tools.guarded_resume;
+        if resume
+            && let Some(position) = guarded_position
+            && self.app().is_none_or(|app| {
+                !source_recovery::resume_in_bounds(position, app.get_duration() as f64)
+            })
+        {
+            self.player.set_paused(true);
+            if let Some(app) = self.app() {
+                app.set_resume_source_can_resume(false);
+            }
+            return;
+        }
+        let guarded = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .guarded_resume
+            .take();
+        if let Some(position) = guarded {
+            if let Some(app) = self.app() {
+                app.set_resume_prompt_visible(false);
+                app.set_resume_source_changed(false);
+                if app.get_player_open() {
+                    let position = if resume { position } else { 0.0 };
+                    self.player.release_start_pause();
+                    self.player.seek(position as f32);
+                    app.set_position(position as f32);
+                    self.player.set_paused(false);
+                }
+            }
+            return;
+        }
         let pending_stream = {
             let mut state = self.shared.lock().unwrap();
             state.pending_resume_stream.take()
@@ -1848,6 +2156,18 @@ impl Bridge {
     }
 
     pub(super) fn cancel_resume_prompt(&self) {
+        if self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_tools
+            .guarded_resume
+            .take()
+            .is_some()
+        {
+            self.finish_playback_request();
+            self.player.close();
+        }
         self.cancel_sleep_timer();
         self.cancel_pending_playback();
         self.shared.lock().unwrap().pending_resume_stream = None;
@@ -1997,6 +2317,9 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        if self.check_recovery_timeline() {
+            return;
+        }
         if app.get_player_open()
             && app.get_playback_started()
             && let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut()
@@ -3686,6 +4009,59 @@ mod retry_regressions {
     }
 
     #[test]
+    fn recovery_deduplicates_exact_files_across_addon_rows() {
+        let first = row("first");
+        let mut mirror = first.clone();
+        mirror.id = "mirror".into();
+        mirror.owner_url = "other-owner".into();
+        mirror.choice_id = row("mirror").choice_id;
+        let selected = SelectedStream::from_row(&first);
+        let mut budget = source_recovery::RetryBudget::default();
+        budget.exclude_original(selected.retry_identity());
+        let rows = vec![first, mirror, row("different")];
+        assert_eq!(
+            ranked_recovery_index(&rows, &selected, &Default::default(), Some(&budget), 1),
+            Some(2)
+        );
+        assert!(!budget.accepts(SelectedStream::from_row(&rows[1]).retry_identity()));
+    }
+
+    #[test]
+    fn recovery_honors_filters_and_sort_without_mutating_picker_order() {
+        let mut rows = vec![row("current"), row("low"), row("best"), row("excluded")];
+        for (row, height) in rows.iter_mut().zip([1080, 480, 720, 2160]) {
+            row.card.filter_facts.height = Some(height);
+        }
+        let selected = SelectedStream::from_row(&rows[0]);
+        let rules = nova_config::StreamFilterRules {
+            enabled: true,
+            max_height: Some(1080),
+            ..Default::default()
+        };
+        let before = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+        let mut budget = source_recovery::RetryBudget::default();
+        budget.exclude_original(selected.retry_identity());
+        assert_eq!(
+            ranked_recovery_index(&rows, &selected, &rules, Some(&budget), 1),
+            Some(2)
+        );
+        assert!(budget.attempt(SelectedStream::from_row(&rows[2]).retry_identity()));
+        assert_eq!(
+            ranked_recovery_index(&rows, &selected, &rules, Some(&budget), 1),
+            Some(1)
+        );
+        assert!(budget.attempt(SelectedStream::from_row(&rows[1]).retry_identity()));
+        assert_eq!(
+            ranked_recovery_index(&rows, &selected, &rules, Some(&budget), 1),
+            None
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
     fn pointer_selected_second_offer_and_semantic_retry_survive_promotion_and_failed_startup() {
         const ROOT: &str = "NOVA_RETRY_SOURCE_TEST_ROOT";
         let Some(root) = std::env::var_os(ROOT) else {
@@ -3844,6 +4220,220 @@ mod retry_regressions {
             .unwrap_or_default()
             .is_empty()
         );
+        // A replacement with an uncertain cut must never apply the old raw
+        // playhead before the user sees its own duration and confirms.
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_duration(1200.0);
+        app.set_position(0.25);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state
+                .playback_intent
+                .as_mut()
+                .unwrap()
+                .context
+                .recovery_timeline = Some(source_recovery::Timeline {
+                position: 123.75,
+                duration: 1400.0,
+                source: Some("different-cut".into()),
+            });
+        }
+        assert!(bridge.check_recovery_timeline());
+        assert!(app.get_resume_prompt_visible() && app.get_resume_source_changed());
+        assert_eq!(app.get_position(), 0.25);
+        app.set_duration(60.0); // The old 123.75 checkpoint does not fit this cut.
+        bridge.resume_prompt_choice(true);
+        assert!(app.get_resume_prompt_visible());
+        assert!(!app.get_resume_source_can_resume());
+        assert_eq!(app.get_position(), 0.25);
+        assert_eq!(
+            bridge.shared.lock().unwrap().playback_tools.guarded_resume,
+            Some(123.75)
+        );
+        bridge.resume_prompt_choice(false);
+        assert!(!app.get_resume_prompt_visible());
+        assert_eq!(app.get_position(), 0.0);
+        app.set_playback_started(false);
+        let saved_choice = bridge.last_stream.identity(nova_config::now_secs());
+        let automatic_context = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .unwrap()
+            .context
+            .clone();
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.stream_all = vec![row("automatic-other"), row("automatic-alternative")];
+            state.streams = state.stream_all.clone();
+            let mut context = automatic_context;
+            context.automatic_source_selection = true;
+            context.retry_budget = Default::default();
+            state.cache_settings.auto_retry_streams = true;
+            state.playback_tools.pending_retry = Some(RetryContext {
+                context,
+                modal_token: state.modal_item.as_ref().unwrap().open_token.clone(),
+            });
+        }
+        bridge.stream_picked(1);
+        // As with B above, this headless backend cannot install mpv's render
+        // notifier. Model native queue acceptance before testing recovery of
+        // that opening; a rejected/unowned start intentionally cannot retry.
+        let accepted_context = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .unwrap()
+            .context
+            .clone();
+        assert!(bridge.player.wait_for_source("Loading stream…"));
+        assert!(bridge.complete_player_queue(&accepted_context, Ok(())));
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .streams
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["automatic-other", "automatic-alternative"],
+            "automatic choice must not reorder the picker"
+        );
+        assert_eq!(
+            bridge.last_stream.identity(nova_config::now_secs()),
+            saved_choice,
+            "automatic retry must not replace an explicit source preference"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let context = &mut state.playback_intent.as_mut().unwrap().context;
+            context.retry_budget = Default::default();
+            context
+                .retry_budget
+                .exclude_original(SelectedStream::from_row(&row("C")).retry_identity());
+            assert!(
+                context.retry_budget.attempt(
+                    SelectedStream::from_row(&row("automatic-alternative")).retry_identity()
+                )
+            );
+        }
+        // A paused load is an internal hold, not an explicit user pause.
+        let _ = bridge.player.play_with_preferences_and_load_policy(
+            "https://example.invalid/held",
+            0.0,
+            &[],
+            &[],
+            prefs.clone(),
+            crate::player::PlaybackLoadPolicy {
+                allow_external: false,
+                paused: true,
+            },
+        );
+        app.set_player_open(true);
+        app.set_playback_started(false);
+        app.set_resume_prompt_visible(false);
+        bridge.refresh_playback_tools();
+        let preserved_budget = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .unwrap()
+            .context
+            .retry_budget
+            .clone();
+        assert!(
+            !preserved_budget.cancelled,
+            "a held replacement must retain its second attempt"
+        );
+        bridge
+            .execute_playback_action(nova_playback_api::PlaybackAction::SetPaused(true))
+            .unwrap();
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .unwrap()
+                .context
+                .retry_budget
+                .cancelled,
+            "an explicit Pause must cancel even while internally held"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_mut()
+            .unwrap()
+            .context
+            .retry_budget = preserved_budget;
+        assert!(bridge.player.wait_for_source("Loading stream…")); // A terminal failed candidate is stopped.
+        bridge
+            .player
+            .source_failed("Could not resolve this stream.");
+        assert!(!bridge.player.awaiting_start_confirmation());
+        bridge.refresh_playback_tools();
+        {
+            let state = bridge.shared.lock().unwrap();
+            let context = &state.playback_intent.as_ref().unwrap().context;
+            assert!(!context.retry_budget.cancelled);
+            assert!(
+                context
+                    .retry_budget
+                    .accepts(SelectedStream::from_row(&row("automatic-other")).retry_identity())
+            );
+        }
+        assert_eq!(
+            bridge.alternate_stream_index(),
+            Some(0),
+            "the accepted failed source keeps recovery authority"
+        );
+        bridge.retry_another_stream(true);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .unwrap()
+                .context
+                .selected_stream
+                .as_ref()
+                .unwrap()
+                .row,
+            "automatic-other",
+            "the failed held alternative still permits the second distinct source"
+        );
+        let automatic_request = {
+            let mut state = bridge.shared.lock().unwrap();
+            let intent = state.playback_intent.as_mut().unwrap();
+            intent.pending = true; // Resolver/native start has not committed.
+            intent.token.clone()
+        };
+        assert!(bridge.playback_request_is_current(&automatic_request));
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .auto_retry_streams = false;
+        assert!(
+            !bridge.playback_request_is_current(&automatic_request),
+            "turning automatic recovery off revokes its pending result"
+        );
+        assert!(!automatic_request.is_current());
         let local_context = bridge
             .shared
             .lock()

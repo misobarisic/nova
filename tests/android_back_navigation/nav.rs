@@ -134,6 +134,9 @@ fn system_back_pops_one_layer_at_a_time() {
     app.set_modal_visible(true);
     app.set_modal_episodes(false);
     app.set_episode_context(SharedString::from("S1 E1"));
+    // This case exercises synchronous navigation. The recovery prompt timing
+    // regression covers retained exit shielding with transitions enabled.
+    app.global::<nova::Anim>().set_transitions(false);
     app.set_resume_prompt_visible(true);
 
     let app1 = app.as_weak();
@@ -152,6 +155,13 @@ fn system_back_pops_one_layer_at_a_time() {
             !app.get_modal_episodes(),
             "dismissing the resume prompt must keep detail on streams",
         );
+        // Flush the hidden prompt before restoring motion for Settings below.
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Resume playback?")
+                .next()
+                .is_none()
+        );
+        app.global::<nova::Anim>().set_transitions(true);
         back(&app);
         fail(
             &failures1,

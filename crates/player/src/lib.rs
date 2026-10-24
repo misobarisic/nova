@@ -372,7 +372,7 @@ fn resume_android_playback(auto_continue: bool) {
         );
         alog(&format!("lifecycle resume: {recovery:?}"));
         drop(recovery);
-        if play {
+        if play && !state.start_pause_hold.load(Ordering::SeqCst) {
             state.pending_paused.store(false, Ordering::SeqCst);
             if let Ok(mpv) = state.mpv.lock()
                 && let Some(mpv) = mpv.as_ref()
@@ -385,7 +385,7 @@ fn resume_android_playback(auto_continue: bool) {
         if let Some(app) = state.app.upgrade()
             && app.get_player_open()
         {
-            if play {
+            if play && !state.start_pause_hold.load(Ordering::SeqCst) {
                 app.set_is_paused(false);
             }
             // Re-arm activity rather than only setting visibility: an old
@@ -1187,6 +1187,8 @@ struct State {
     external_handoff: AtomicBool,
     /// Sensitive resolved URLs must never leave through OS arguments/intents.
     allow_external: AtomicBool,
+    /// A source/timeline confirmation must precede every unpause or seek.
+    start_pause_hold: AtomicBool,
     /// The OSD thumb (or a programmatic seek) moved ahead of mpv and a seek is
     /// in flight. The `tick` scrub guard only engages while this is set, so an
     /// initial resume (opened at the saved position via the load-time `start`
@@ -1217,9 +1219,7 @@ struct State {
     /// and activity resume jointly make it eligible for one reload.
     #[cfg(target_os = "android")]
     recovery: Mutex<android_recovery::Recovery>,
-    /// Android: pause state for the queued load. Set before loadfile so a
-    /// restored paused frame never briefly starts playing.
-    #[cfg(target_os = "android")]
+    /// Pause state carried across the queued load/render boundary on every platform.
     pending_paused: AtomicBool,
     /// Android: the active hardware decoder was already checked this session.
     #[cfg(target_os = "android")]
@@ -1271,6 +1271,12 @@ struct State {
 }
 
 impl State {
+    /// Used by the rendering callback immediately before submitting loadfile.
+    fn take_load_pause(&self) -> bool {
+        self.pending_paused.swap(false, Ordering::SeqCst)
+            || self.start_pause_hold.load(Ordering::SeqCst)
+    }
+
     fn apply_subtitle_style(
         &self,
         mpv: &Mpv,
@@ -1340,6 +1346,13 @@ fn register_java_vm() -> bool {
     }
     alog("JavaVM registered with FFmpeg (direct mediacodec possible)");
     true
+}
+
+/// Per-load behavior; a paused load stays held until the app confirms its timeline.
+#[derive(Clone, Copy, Debug)]
+pub struct PlaybackLoadPolicy {
+    pub allow_external: bool,
+    pub paused: bool,
 }
 
 /// The in-app player. Cheap to clone (shares [`Arc`]); clone into the UI
@@ -1493,6 +1506,7 @@ impl Player {
             transition_window_held: AtomicBool::new(false),
             external_handoff: AtomicBool::new(false),
             allow_external: AtomicBool::new(true),
+            start_pause_hold: AtomicBool::new(false),
             seek_pending: AtomicBool::new(false),
             seek_buffer: Mutex::new(None),
             reported: AtomicBool::new(false),
@@ -1510,7 +1524,6 @@ impl Player {
             recovery: Mutex::new(android_recovery::Recovery::new(
                 ANDROID_FOREGROUND.load(Ordering::SeqCst),
             )),
-            #[cfg(target_os = "android")]
             pending_paused: AtomicBool::new(false),
             #[cfg(target_os = "android")]
             hwdec_checked: AtomicBool::new(false),
@@ -1721,7 +1734,10 @@ impl Player {
                         }
 
                         // Start playback of a freshly picked stream.
-                        if let Some(url) = notifier_state.pending.lock().unwrap().take() {
+                        // Drain before entering the load body: an if-let temporary would keep
+                        // pending locked while taking mpv; inventory readers take mpv first.
+                        let pending_url = notifier_state.pending.lock().unwrap().take();
+                        if let Some(url) = pending_url {
                             let headers = notifier_state
                                 .pending_headers
                                 .lock()
@@ -1739,10 +1755,7 @@ impl Player {
                             if let Ok(mpv) = notifier_state.mpv.lock()
                                 && let Some(mpv) = mpv.as_ref()
                             {
-                                #[cfg(target_os = "android")]
-                                let paused = notifier_state.pending_paused.swap(false, Ordering::SeqCst);
-                                #[cfg(not(target_os = "android"))]
-                                let paused = false;
+                                let paused = notifier_state.take_load_pause();
                                 // Set pause once, before loadfile: restoring a
                                 // paused frame must not briefly start playback.
                                 let result = (|| -> libmpv2::Result<()> {
@@ -1791,6 +1804,9 @@ impl Player {
                                         // in-app instead of forcing external playback.
                                         notifier_state.reported.store(true, Ordering::SeqCst);
                                         let _ = mpv.command("stop", &[]);
+                                        notifier_state.source_waiting.store(true, Ordering::SeqCst);
+                                        notifier_state.pending_paused.store(false, Ordering::SeqCst);
+                                        notifier_state.start_pause_hold.store(false, Ordering::SeqCst);
                                         app.set_player_status_is_error(true);
                                         app.set_player_status(nova_ui::backend_text::tr(
                                             "Cannot play this stream (mpv could not start playback).",
@@ -2021,6 +2037,33 @@ impl Player {
         preferences: SessionPreferences,
         allow_external: bool,
     ) -> Result<(), String> {
+        self.play_with_preferences_and_load_policy(
+            url,
+            start_pos_secs,
+            headers,
+            subtitles,
+            preferences,
+            PlaybackLoadPolicy {
+                allow_external,
+                paused: false,
+            },
+        )
+    }
+
+    /// Queue a source held paused before loadfile/first frame when confirmation is required.
+    pub fn play_with_preferences_and_load_policy(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+        subtitles: &[String],
+        preferences: SessionPreferences,
+        policy: PlaybackLoadPolicy,
+    ) -> Result<(), String> {
+        self.state
+            .start_pause_hold
+            .store(policy.paused, Ordering::SeqCst);
+        let allow_external = policy.allow_external && !policy.paused;
         #[cfg(target_os = "android")]
         external::update_picture_in_picture(false, true, 16, 9);
         {
@@ -2090,9 +2133,12 @@ impl Player {
             .collect::<Vec<_>>();
         *self.state.pending_subtitles.lock().unwrap() = subtitles.clone();
         #[cfg(target_os = "android")]
-        let start_paused = !ANDROID_FOREGROUND.load(Ordering::SeqCst);
+        let start_paused = policy.paused || !ANDROID_FOREGROUND.load(Ordering::SeqCst);
         #[cfg(not(target_os = "android"))]
-        let start_paused = false;
+        let start_paused = policy.paused;
+        self.state
+            .pending_paused
+            .store(start_paused, Ordering::SeqCst);
         #[cfg(target_os = "android")]
         {
             // Keep the URL for a decoder fallback reload; then arm the chain
@@ -2100,9 +2146,6 @@ impl Player {
             // any runtime override the previous stream picked.
             self.state.recovery.lock().unwrap().begin(start_pos_secs);
             *self.state.pending_start.lock().unwrap() = Some(start_pos_secs.max(0.0));
-            self.state
-                .pending_paused
-                .store(start_paused, Ordering::SeqCst);
             *self.state.last_url.lock().unwrap() = Some(url.to_string());
             *self.state.last_headers.lock().unwrap() = headers.to_vec();
             *self.state.last_subtitles.lock().unwrap() = subtitles;
@@ -2241,6 +2284,9 @@ impl Player {
 
     /// Query the receiver rather than a delayed UI mirror when toggling remotely.
     pub fn is_paused(&self) -> bool {
+        if self.state.start_pause_hold.load(Ordering::SeqCst) {
+            return true;
+        }
         self.state
             .mpv
             .lock()
@@ -2252,6 +2298,9 @@ impl Player {
     /// Recovery timing needs user intent before the first frame: the loading
     /// overlay's paused=true placeholder and an idle old mpv file are unrelated.
     pub fn playback_pause_requested(&self) -> bool {
+        if self.state.start_pause_hold.load(Ordering::SeqCst) {
+            return true;
+        }
         #[cfg(target_os = "android")]
         if !ANDROID_FOREGROUND.load(Ordering::SeqCst) {
             return true;
@@ -2259,7 +2308,6 @@ impl Player {
         if self.state.source_waiting.load(Ordering::SeqCst) || self.playback_failed() {
             return false;
         }
-        #[cfg(target_os = "android")]
         if self.state.pending.lock().unwrap().is_some() {
             return self.state.pending_paused.load(Ordering::SeqCst);
         }
@@ -2271,8 +2319,20 @@ impl Player {
             .unwrap_or(false)
     }
 
+    pub fn awaiting_start_confirmation(&self) -> bool {
+        self.state.start_pause_hold.load(Ordering::SeqCst)
+    }
+
+    /// Release only after the app accepted the replacement's timeline decision.
+    pub fn release_start_pause(&self) {
+        self.state.start_pause_hold.store(false, Ordering::SeqCst);
+    }
+
     /// Apply an explicit pause state using the same platform side effects as Play.
     pub fn set_paused(&self, new_paused: bool) {
+        if !new_paused && self.state.start_pause_hold.load(Ordering::SeqCst) {
+            return;
+        }
         if self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
@@ -2283,7 +2343,6 @@ impl Player {
             return;
         };
         let _ = mpv.set_property("pause", new_paused);
-        #[cfg(target_os = "android")]
         if self.state.pending.lock().unwrap().is_some() {
             self.state
                 .pending_paused
@@ -2308,6 +2367,9 @@ impl Player {
 
     /// Seek to `pos` seconds (OSD slider).
     pub fn seek(&self, pos: f32) {
+        if self.state.start_pause_hold.load(Ordering::SeqCst) {
+            return;
+        }
         let app = self.state.app.upgrade();
         let pending = self.state.pending.lock().unwrap().is_some();
         let source = self.state.preference_source.lock().unwrap().clone();
@@ -3319,6 +3381,22 @@ impl Player {
         true
     }
 
+    /// Abandon a failed held load without releasing any media into playback.
+    fn abandon_failed_start_pause(&self) {
+        if !self.state.start_pause_hold.load(Ordering::SeqCst) {
+            return;
+        }
+        *self.state.pending.lock().unwrap() = None;
+        if let Ok(guard) = self.state.mpv.lock()
+            && let Some(mpv) = guard.as_ref()
+        {
+            let _ = mpv.command("stop", &[]);
+        }
+        self.state.source_waiting.store(true, Ordering::SeqCst);
+        self.state.pending_paused.store(false, Ordering::SeqCst);
+        self.state.start_pause_hold.store(false, Ordering::SeqCst);
+    }
+
     /// Resolver and decoder startup failures remain actionable until Close.
     pub fn playback_failed(&self) -> bool {
         self.state.reported.load(Ordering::SeqCst) && !self.state.started.load(Ordering::SeqCst)
@@ -3329,6 +3407,7 @@ impl Player {
         if !self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
+        self.abandon_failed_start_pause();
         self.state.reported.store(true, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
             app.set_player_status_is_error(true);
@@ -3434,6 +3513,8 @@ impl Player {
                 self.state.catalog_maximized.load(Ordering::SeqCst)
             });
         self.state.source_waiting.store(false, Ordering::SeqCst);
+        self.state.start_pause_hold.store(false, Ordering::SeqCst);
+        self.state.pending_paused.store(false, Ordering::SeqCst);
         #[cfg(target_os = "android")]
         self.state.loaded_online_subtitles.lock().unwrap().clear();
         {
@@ -3917,6 +3998,7 @@ impl Player {
                 if self.hand_off_to_external_player() {
                     return;
                 }
+                self.abandon_failed_start_pause();
                 app.set_is_paused(true);
                 app.set_player_status_is_error(true);
                 app.set_player_status(slint::SharedString::from(
@@ -4455,6 +4537,195 @@ mod tests {
         assert_eq!(normalized_party_rate(Some(f64::NAN)), None);
         assert_eq!(normalized_party_rate(Some(f64::INFINITY)), None);
         assert_eq!(normalized_party_rate(None), None);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn confirmation_load_stays_paused_across_queue_and_controls_until_released() {
+        const CHILD: &str = "NOVA_CONFIRMATION_HOLD_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, "1")
+                .args(["--exact", "tests::confirmation_load_stays_paused_across_queue_and_controls_until_released", "--nocapture"])
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = Player::setup(&app);
+        let directory =
+            std::env::temp_dir().join(format!("nova-confirmation-hold-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(directory.clone());
+        let source = directory.join("video.y4m");
+        let mut video = b"YUV4MPEG2 W32 H18 F30:1 Ip A1:1 C420jpeg\n".to_vec();
+        for _ in 0..300 {
+            video.extend(b"FRAME\n");
+            video.extend([128u8; 32 * 18 * 3 / 2]);
+        }
+        std::fs::write(&source, video).unwrap();
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        *player.state.mpv.lock().unwrap() = Some(mpv);
+        *player.state.mpv_error.lock().unwrap() = None;
+        player
+            .play_with_preferences_and_load_policy(
+                source.to_str().unwrap(),
+                0.0,
+                &[],
+                &[],
+                SessionPreferences::from_settings(
+                    &nova_config::CacheSettings::default(),
+                    TitlePreferences::default(),
+                ),
+                PlaybackLoadPolicy {
+                    allow_external: false,
+                    paused: true,
+                },
+            )
+            .unwrap();
+        assert!(player.awaiting_start_confirmation());
+        // Consume the exact pause state used at the renderer/loadfile boundary.
+        let paused = player.state.take_load_pause();
+        assert!(
+            paused,
+            "desktop must not replace the requested pause with false"
+        );
+        let queued = player.state.pending.lock().unwrap().take().unwrap();
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            apply_load_playback_options(mpv, paused, None).unwrap();
+            mpv.command("loadfile", &[queued.as_str()]).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let ready = player
+                .state
+                .mpv
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_property::<f64>("duration")
+                .unwrap_or(0.0)
+                > 0.0;
+            if ready {
+                break;
+            }
+            assert!(Instant::now() < deadline, "held source did not load");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for _ in 0..20 {
+            player.set_paused(false);
+            player.toggle();
+            player.seek(3.0);
+            player.seek_relative(4.0);
+            player.tick();
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            assert!(mpv.get_property::<bool>("pause").unwrap());
+            assert!(
+                mpv.get_property::<f64>("time-pos").unwrap_or(0.0).abs() < 0.05,
+                "confirmation controls must not move or start the native playhead"
+            );
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        player.release_start_pause();
+        player.seek(2.0);
+        player.set_paused(false);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let position = player
+                .state
+                .mpv
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_property::<f64>("time-pos")
+                .unwrap_or(0.0);
+            if position > 2.05 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "explicit confirmation did not resume playback"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Terminal startup failure abandons the hold and deferred load, while
+        // keeping the failed source stopped. A second alternative may load.
+        let missing = directory.join("missing.y4m");
+        player
+            .play_with_preferences_and_load_policy(
+                missing.to_str().unwrap(),
+                0.0,
+                &[],
+                &[],
+                SessionPreferences::from_settings(
+                    &nova_config::CacheSettings::default(),
+                    TitlePreferences::default(),
+                ),
+                PlaybackLoadPolicy {
+                    allow_external: false,
+                    paused: true,
+                },
+            )
+            .unwrap();
+        let queued = player.state.pending.lock().unwrap().take().unwrap();
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            apply_load_playback_options(mpv, player.state.take_load_pause(), None).unwrap();
+            mpv.command("loadfile", &[queued.as_str()]).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        *player.state.opened_at.lock().unwrap() = Instant::now() - Duration::from_secs(21);
+        player.tick();
+        assert!(player.playback_failed());
+        assert!(!player.awaiting_start_confirmation());
+        assert!(player.state.pending.lock().unwrap().is_none());
+        assert!(player.state.source_waiting.load(Ordering::SeqCst));
+        player.set_paused(false); // Error controls cannot play an abandoned file.
+        player
+            .play_with_preferences_and_load_policy(
+                source.to_str().unwrap(),
+                0.0,
+                &[],
+                &[],
+                SessionPreferences::from_settings(
+                    &nova_config::CacheSettings::default(),
+                    TitlePreferences::default(),
+                ),
+                PlaybackLoadPolicy {
+                    allow_external: false,
+                    paused: true,
+                },
+            )
+            .unwrap();
+        assert!(player.awaiting_start_confirmation());
+        assert!(player.state.take_load_pause());
+        assert!(player.state.pending.lock().unwrap().is_some());
+        player.close();
+        assert!(!player.awaiting_start_confirmation());
     }
 
     #[test]

@@ -871,6 +871,7 @@ mod smart_collections;
 mod smart_offline;
 #[cfg(target_os = "android")]
 mod smart_offline_android;
+mod source_recovery;
 mod stream_filters;
 mod stream_preferences;
 mod stream_prefetch;
