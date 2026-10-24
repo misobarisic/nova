@@ -1,0 +1,169 @@
+import { LastTimeBridge, Theme, Anim, InterfaceStyle } from "@NovaUiShared";
+import { ScrollView } from "scrollview.slint";
+import { PillButton } from "settings-controls.slint";
+
+// One retained reading surface: model changes after Close cannot replace the
+// painted reminder during its exit. Owner invalidation bypasses retention.
+export component LastTimeSheet inherits Rectangle {
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    in property <bool> owner-valid: true;
+    private property <bool> retained;
+    private property <bool> revealed;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <bool> animate-step;
+    private property <float> progress: 0;
+    private property <float> fade: 0;
+    animate progress { duration: root.animate-step && root.motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    animate fade { duration: root.animate-step && root.motion ? Anim.transition_fade : 0ms; easing: ease-out; }
+    private property <string> painted-title;
+    private property <string> painted-date;
+    private property <string> painted-episode;
+    private property <string> painted-synopsis;
+    private property <string> painted-partial;
+    private property <bool> painted-confirmation;
+    private property <bool> painted-can-replay;
+    visible: root.owner-valid && (LastTimeBridge.open || root.retained);
+    width: 100%; height: 100%; clip: true;
+    function snapshot() {
+        if LastTimeBridge.open && root.owner-valid {
+            root.painted-title = LastTimeBridge.title;
+            root.painted-date = LastTimeBridge.date;
+            root.painted-episode = LastTimeBridge.episode;
+            root.painted-synopsis = LastTimeBridge.synopsis;
+            root.painted-partial = LastTimeBridge.partial;
+            root.painted-confirmation = LastTimeBridge.confirmation;
+            root.painted-can-replay = LastTimeBridge.can-replay;
+        }
+    }
+    function clear_snapshot() {
+        root.painted-title = ""; root.painted-date = ""; root.painted-episode = "";
+        root.painted-synopsis = ""; root.painted-partial = "";
+        root.painted-confirmation = false; root.painted-can-replay = false;
+    }
+    function finish_exit(restore-focus: bool) {
+        let was-retained = root.retained;
+        root.retained = false;
+        LastTimeBridge.visual-retained = false;
+        root.clear_snapshot();
+        if was-retained && restore-focus && !LastTimeBridge.open { LastTimeBridge.visual_closed(); }
+    }
+    function invalidate() {
+        enter.stop(); exit.stop();
+        root.animate-step = false; root.revealed = false; root.progress = 0; root.fade = 0;
+        LastTimeBridge.open = false;
+        root.finish_exit(false);
+    }
+    function update() {
+        enter.stop(); exit.stop();
+        if !root.owner-valid { root.invalidate(); return; }
+        if LastTimeBridge.open {
+            if !root.retained {
+                root.animate-step = false; root.revealed = false; root.progress = 0; root.fade = 0;
+                reading.content-y = 0px;
+            }
+            root.snapshot(); root.action-index = 1;
+            root.retained = true; LastTimeBridge.visual-retained = true;
+            sheet_focus.focus();
+            if root.motion { enter.start(); }
+            else { root.animate-step = false; root.revealed = true; root.progress = 1; root.fade = 1; }
+        } else if root.retained {
+            root.animate-step = root.motion;
+            root.revealed = false; root.progress = 0; root.fade = 0;
+            // Keep native focus and the input shield until the last painted frame.
+            sheet_focus.focus();
+            if root.motion { exit.start(); } else { root.finish_exit(true); }
+        }
+    }
+    init => { root.update(); }
+    private property <int> action-index: 1;
+    property <bool> opened: LastTimeBridge.open;
+    changed opened => { root.update(); }
+    property <int> dismiss-generation: LastTimeBridge.dismiss-generation;
+    changed dismiss-generation => { root.invalidate(); }
+    changed owner-valid => {
+        if !root.owner-valid && (LastTimeBridge.open || root.retained) {
+            if LastTimeBridge.open { LastTimeBridge.closed(); }
+            root.invalidate();
+        }
+    }
+    // Updates while open are expected when cached history arrives. Closed
+    // snapshots are immutable, including confirmation mode and panel height.
+    property <string> live-title: LastTimeBridge.title;
+    property <string> live-date: LastTimeBridge.date;
+    property <string> live-episode: LastTimeBridge.episode;
+    property <string> live-synopsis: LastTimeBridge.synopsis;
+    property <string> live-partial: LastTimeBridge.partial;
+    property <bool> live-confirmation: LastTimeBridge.confirmation;
+    property <bool> live-can-replay: LastTimeBridge.can-replay;
+    changed live-title => { root.snapshot(); }
+    changed live-date => { root.snapshot(); }
+    changed live-episode => { root.snapshot(); }
+    changed live-synopsis => { root.snapshot(); }
+    changed live-partial => { root.snapshot(); }
+    changed live-confirmation => { root.snapshot(); }
+    changed live-can-replay => { root.snapshot(); }
+    changed motion => {
+        if !root.motion {
+            enter.stop(); exit.stop(); root.animate-step = false;
+            root.revealed = LastTimeBridge.open;
+            root.progress = root.revealed ? 1 : 0; root.fade = root.revealed ? 1 : 0;
+            if !LastTimeBridge.open { root.finish_exit(true); }
+        }
+    }
+    enter := Timer { running: false; interval: 1ms; triggered => { self.stop(); if LastTimeBridge.open && root.owner-valid { root.animate-step = true; root.revealed = true; root.progress = 1; root.fade = 1; } } }
+    exit := Timer { running: false; interval: Anim.transition_slide; triggered => { self.stop(); if !LastTimeBridge.open { root.finish_exit(true); } } }
+    scrim := Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_shadow; opacity: root.motion ? root.fade : (LastTimeBridge.open ? 1 : 0); }
+    TouchArea { width: 100%; height: 100%; scroll-event => { accept } clicked => { if LastTimeBridge.open { LastTimeBridge.closed(); } } }
+    sheet_focus := FocusScope {
+        enabled: LastTimeBridge.open || root.retained;
+        key-pressed(e) => {
+            if !LastTimeBridge.open { accept }
+            else if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { LastTimeBridge.closed(); } accept
+            } else if e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow || e.text == Key.Tab {
+                root.action-index = LastTimeBridge.can-replay || LastTimeBridge.confirmation ? (e.text == Key.UpArrow || e.text == Key.LeftArrow || (e.text == Key.Tab && e.modifiers.shift) ? 0 : 1) : 1;
+                accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat {
+                    if root.action-index == 1 { LastTimeBridge.closed(); }
+                    else if LastTimeBridge.confirmation { LastTimeBridge.confirm(); }
+                    else if LastTimeBridge.can-replay { LastTimeBridge.replay(); }
+                }
+                accept
+            } else if e.text == Key.PageUp || e.text == Key.PageDown {
+                let step = e.text == Key.PageUp || e.text == Key.PageDown ? reading.visible-height * 0.8 : 56px;
+                reading.content-y = Math.clamp(reading.content-y + (e.text == Key.UpArrow || e.text == Key.PageUp ? step : -step), Math.min(0px, reading.visible-height - reading.content-height), 0px); accept
+            } else { reject }
+        }
+    }
+    panel := Rectangle {
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 820px : 620px, parent.width - root.safe-left - root.safe-right - 24px));
+        x: root.safe-left + (parent.width - root.safe-left - root.safe-right - self.width) / 2;
+        height: Math.min(parent.height * 0.85, content.preferred-height + 40px + root.safe-bottom);
+        y: parent.height - self.height * (root.motion ? root.progress : (LastTimeBridge.open ? 1 : 0));
+        background: Theme.current.popup; border-radius: Theme.card_corner_radius;
+        TouchArea { width: 100%; height: 100%; }
+        reading := ScrollView {
+            x: 20px; y: 20px; width: parent.width - 40px; height: Math.max(0px,parent.height - 40px - root.safe-bottom);
+            content := VerticalLayout {
+                spacing: 16px; alignment: start;
+                Text { text: root.painted-confirmation ? @tr("Replay this version’s ending?") : @tr("Last time…"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 30px : 24px; font-weight: 700; wrap: word-wrap; }
+                Text { text: root.painted-title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; wrap: word-wrap; }
+                if root.painted-date != "": Text { text: root.painted-confirmation ? root.painted-date : @tr("Last watched: {}", root.painted-date); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
+                if !root.painted-confirmation && root.painted-episode != "": Text { text: @tr("Last completed: {}", root.painted-episode); color: Theme.current.accent; font-size: InterfaceStyle.tv ? 22px : 16px; wrap: word-wrap; }
+                Text { text: root.painted-confirmation ? @tr("This source may be a different version. Replay its final four minutes? Your Continue Watching position and watched status will stay as they are.") : root.painted-synopsis; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 23px : 16px; wrap: word-wrap; }
+                if !root.painted-confirmation && root.painted-partial != "": Text { text: root.painted-partial; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 21px : 14px; wrap: word-wrap; }
+                if !root.painted-confirmation: Text { text: @tr("Completed means playback reached at least 90%. It does not confirm every scene was watched."); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; }
+                if root.painted-can-replay || root.painted-confirmation: PillButton { enabled: LastTimeBridge.open; focused: sheet_focus.has-focus && root.action-index == 0; label: root.painted-confirmation ? @tr("Replay final four minutes") : @tr("Replay ending…"); primary: true; wrap_label: true; clicked => { if root.painted-confirmation { LastTimeBridge.confirm(); } else { LastTimeBridge.replay(); } } }
+                PillButton { enabled: LastTimeBridge.open; focused: sheet_focus.has-focus && root.action-index == 1; label: root.painted-confirmation ? @tr("Cancel") : @tr("Close"); clicked => { LastTimeBridge.closed(); } }
+            }
+        }
+    }
+    // Controls in an outgoing snapshot must swallow pointer/wheel events too.
+    if root.retained && !LastTimeBridge.open: TouchArea {
+        width: 100%; height: 100%; scroll-event => { accept }
+    }
+
+}

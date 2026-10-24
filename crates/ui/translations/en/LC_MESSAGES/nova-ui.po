@@ -1980,9 +1980,6 @@ msgstr ""
 msgid "This source may use a different cut. Resume at {}, or start over."
 msgstr ""
 
-msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
-msgstr ""
-
 msgid "Spoiler protection"
 msgstr ""
 
@@ -2003,3 +2000,38 @@ msgstr "Search scope"
 
 msgid "Episodes"
 msgstr "Episodes"
+
+
+msgid "Last time…"
+msgstr "Last time…"
+
+
+msgid "Replay this version’s ending?"
+msgstr "Replay this version’s ending?"
+
+
+msgid "Last watched: {}"
+msgstr "Last watched: {}"
+
+
+msgid "Last completed: {}"
+msgstr "Last completed: {}"
+
+
+msgid "This source may be a different version. Replay its final four minutes? Your Continue Watching position and watched status will stay as they are."
+msgstr "This source may be a different version. Replay its final four minutes? Your Continue Watching position and watched status will stay as they are."
+
+
+msgid "Completed means playback reached at least 90%. It does not confirm every scene was watched."
+msgstr "Completed means playback reached at least 90%. It does not confirm every scene was watched."
+
+
+msgid "Replay final four minutes"
+msgstr "Replay final four minutes"
+
+
+msgid "Replay ending…"
+msgstr "Replay ending…"
+
+msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
+msgstr ""

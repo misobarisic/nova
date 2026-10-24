@@ -88,6 +88,7 @@ forward_globals!(
     StreamFiltersBridge,
     BookmarksBridge,
     JournalBridge,
+    LastTimeBridge,
     QueueBridge,
     InterfaceStyle,
     CompletionBridge,

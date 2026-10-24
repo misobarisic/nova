@@ -48,6 +48,10 @@ pub(super) struct ViewingSession {
     #[serde(default)]
     title_completed_at: Option<u64>,
     rewatch: bool,
+    #[serde(default)]
+    replay: Option<previously_watched::ReplayEvidence>,
+    #[serde(default)]
+    viewing_run_start: bool,
 }
 
 impl ViewingSession {
@@ -155,6 +159,80 @@ fn load(owner: &profiles::ProfileStore) -> Result<(BTreeMap<String, ViewingSessi
     Ok((result, unreadable))
 }
 
+/// Read only actual playback sessions; progress flags are never history evidence.
+pub(super) fn last_time(
+    owner: &profiles::ProfileStore,
+    type_: &str,
+    id: &str,
+) -> previously_watched::Facts {
+    let Ok((rows, unreadable)) = load(owner) else {
+        return previously_watched::Facts::default();
+    };
+    let matching: Vec<_> = rows
+        .values()
+        .filter(|r| r.media_type == type_ && r.title_id == id && r.watched_seconds > 0.0)
+        .collect();
+    let now = now_secs();
+    let last_at = matching
+        .iter()
+        .filter_map(|r| last_playback_date(r, now))
+        .max();
+    // A restart of an already completed episode establishes a new viewing run.
+    // Never pull a completion from before that restart into its recap.
+    project_last_time(matching, unreadable, last_at)
+}
+
+/// Old versions stamped Stop into updated_at, including after an overnight
+/// pause. Positive UTC allocations remain actual playback evidence. The sheet
+/// shows a date only, so return the corresponding midnight, never the Stop time.
+fn last_playback_date(row: &ViewingSession, now: u64) -> Option<u64> {
+    let first_day = row.started_at / 86400;
+    let last_day = (row.updated_at / 86400).min(now / 86400);
+    row.days
+        .iter()
+        .filter(|(day, seconds)| {
+            **day >= first_day && **day <= last_day && seconds.is_finite() && **seconds > 0.0
+        })
+        .map(|(day, _)| *day)
+        .max()
+        .or_else(|| {
+            row.completed_at
+                .filter(|at| *at >= row.started_at && *at <= now)
+                .map(|at| at / 86400)
+        })
+        .and_then(|day| day.checked_mul(86400))
+}
+
+fn project_last_time(
+    matching: Vec<&ViewingSession>,
+    unreadable: bool,
+    last_at: Option<u64>,
+) -> previously_watched::Facts {
+    let run_start = matching
+        .iter()
+        .filter(|r| r.viewing_run_start)
+        .map(|r| r.started_at)
+        .max();
+    let unknown_rewatch = matching.iter().any(|r| r.rewatch) && run_start.is_none();
+    let latest = matching
+        .iter()
+        .filter(|r| {
+            r.completed_at
+                .is_some_and(|at| run_start.is_none_or(|start| at >= start))
+        })
+        .max_by_key(|r| (r.completed_at, r.updated_at, &r.id));
+    previously_watched::Facts {
+        last_at,
+        completed: (!unreadable && !unknown_rewatch)
+            .then_some(latest)
+            .flatten()
+            .map(|r| previously_watched::Completed {
+                episode_id: r.episode_id.clone(),
+                replay: r.replay.clone(),
+            }),
+    }
+}
+
 pub(super) fn validate_session(key: &str, raw: &str) -> nova_sync::Result<String> {
     let row: ViewingSession = serde_json::from_str(raw)?;
     if key.strip_prefix(PREFIX) != Some(row.id.as_str())
@@ -162,6 +240,7 @@ pub(super) fn validate_session(key: &str, raw: &str) -> nova_sync::Result<String
         || row.id.len() > 256
         || !row.watched_seconds.is_finite()
         || row.watched_seconds < 0.0
+        || row.replay.as_ref().is_some_and(|e| !e.stored_valid())
         || row
             .months
             .values()
@@ -184,7 +263,8 @@ pub(super) fn session_can_replace(old: &str, new: &str) -> nova_sync::Result<boo
 }
 
 fn session_can_replace_rows(old: &ViewingSession, new: &ViewingSession) -> bool {
-    !(old.watched_seconds > new.watched_seconds
+    !((old.viewing_run_start && !new.viewing_run_start)
+        || old.watched_seconds > new.watched_seconds
         || (old.title_completed_at.is_some() && new.title_completed_at.is_none())
         || (old.watched_seconds == new.watched_seconds
             && old.ended_at.is_some()
@@ -212,7 +292,8 @@ fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
         }
     };
     if prior.as_ref().is_some_and(|old| {
-        (old.title_completed_at.is_some() && row.title_completed_at.is_none())
+        (old.viewing_run_start && !row.viewing_run_start)
+            || (old.title_completed_at.is_some() && row.title_completed_at.is_none())
             || old.watched_seconds > row.watched_seconds
             || (old.watched_seconds == row.watched_seconds
                 && old.ended_at.is_some()
@@ -252,6 +333,30 @@ fn rewatch_state<'a>(
         .any(|row| row.rewatch && row.completed_at.is_none() && row.started_at >= completed_at);
     let rewatch = resumed_rewatch || (media_duration > 0.0 && position <= media_duration * 0.2);
     (rewatch, rewatch)
+}
+
+/// A rewatched successor belongs to the same run; another completion of an
+/// episode already replayed in that run establishes a later restart.
+fn starts_viewing_run<'a>(
+    rows: impl Iterator<Item = &'a ViewingSession>,
+    media: &nova_playback_api::MediaIdentity,
+) -> bool {
+    let matching: Vec<_> = rows
+        .filter(|r| r.media_type == media.media_type && r.title_id == media.title_id)
+        .collect();
+    let last_start = matching
+        .iter()
+        .filter(|r| r.viewing_run_start)
+        .map(|r| r.started_at)
+        .max();
+    match last_start {
+        None => true,
+        Some(start) => matching.iter().any(|r| {
+            r.episode_id == media.episode_id
+                && r.rewatch
+                && r.completed_at.is_some_and(|at| at >= start)
+        }),
+    }
 }
 
 impl JournalTracker {
@@ -328,8 +433,14 @@ impl JournalTracker {
             active.started_position,
             active.media_duration,
         );
+        let viewing_run_start = rewatch
+            && starts_viewing_run(
+                self.rows.values().filter(|row| row.id != active.row.id),
+                &media,
+            );
         let active = self.active.as_mut().unwrap();
         active.row.rewatch = rewatch;
+        active.row.viewing_run_start |= viewing_run_start;
         active.completion_eligible = eligible;
         active.history_known = true;
         if active.row.watched_seconds > 0.0 {
@@ -342,7 +453,8 @@ impl JournalTracker {
             && active.row.watched_seconds > 0.0
         {
             active.row.ended_at = Some(at);
-            active.row.updated_at = at;
+            // Finalization is not another playback observation. Preserve the
+            // actual last-watched date even after a long pause.
             self.rows.insert(active.row.id.clone(), active.row.clone());
             // Finalization is durable before Stop, profile switch or process
             // shutdown returns; background checkpoints cannot overwrite it.
@@ -375,6 +487,8 @@ impl JournalTracker {
             }
             let (rewatch, completion_eligible) =
                 rewatch_state(self.rows.values(), &media, position, media_duration);
+            let viewing_run_start =
+                rewatch && self.loaded && starts_viewing_run(self.rows.values(), &media);
             self.active = Some(ActiveSession {
                 row: ViewingSession {
                     id: unique_id(),
@@ -392,6 +506,8 @@ impl JournalTracker {
                     completed_at: None,
                     title_completed_at: None,
                     rewatch,
+                    replay: None,
+                    viewing_run_start,
                 },
                 owner,
                 last_tick: tick,
@@ -409,6 +525,27 @@ impl JournalTracker {
             self.active.as_mut().unwrap().media_duration = media_duration;
         }
         self.reconcile_active_history();
+        let restart_boundary = self
+            .active
+            .as_ref()
+            .filter(|active| {
+                active.history_known
+                    && !active.completion_eligible
+                    && media_duration > 0.0
+                    && (position <= media_duration * 0.2
+                        || active.started_position <= media_duration * 0.2)
+            })
+            .is_some_and(|active| {
+                starts_viewing_run(
+                    self.rows.values().filter(|row| row.id != active.row.id),
+                    &nova_playback_api::MediaIdentity {
+                        media_type: active.row.media_type.clone(),
+                        title_id: active.row.title_id.clone(),
+                        episode_id: active.row.episode_id.clone(),
+                        ..Default::default()
+                    },
+                )
+            });
         let active = self.active.as_mut().unwrap();
         let watched = watched_interval(
             tick.duration_since(active.last_tick).as_secs_f64(),
@@ -426,6 +563,7 @@ impl JournalTracker {
             && (position <= media_duration * 0.2 || active.started_position <= media_duration * 0.2)
         {
             active.row.rewatch = true;
+            active.row.viewing_run_start |= restart_boundary;
             active.completion_eligible = true;
         }
         if watched <= 0.0 {
@@ -586,6 +724,10 @@ impl Bridge {
         playing: bool,
         speed: f64,
     ) {
+        if self.last_time_replay_active() {
+            return;
+        }
+        let replay = self.last_time_playback_evidence(duration);
         let new_completion = self.shared.lock().unwrap().viewing_journal.observe(
             media.clone(),
             profiles::ProfileStore::capture(),
@@ -594,6 +736,12 @@ impl Bridge {
             playing,
             speed,
         );
+        if let Some(replay) = replay {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(active) = state.viewing_journal.active.as_mut() {
+                active.row.replay = Some(replay);
+            }
+        }
         if new_completion {
             // Metadata I/O stays outside Shared's lock. The ordinary progress
             // tick runs after this observer, so project only this newly observed
@@ -907,7 +1055,154 @@ mod tests {
             completed_at: completed.then_some(at),
             title_completed_at: completed.then_some(at),
             rewatch,
+            replay: None,
+            viewing_run_start: false,
         }
+    }
+
+    #[test]
+    fn last_time_late_open_then_restart_or_recovered_history_cannot_leak_a_prior_run() {
+        let media = nova_playback_api::MediaIdentity {
+            media_type: "series".into(),
+            title_id: "Show".into(),
+            episode_id: "show:1:1".into(),
+            ..Default::default()
+        };
+        for recovered in [false, true] {
+            let mut first = session("prior-first", "Show", 20, 600.0, true, true);
+            first.episode_id = "show:1:1".into();
+            first.viewing_run_start = true;
+            let mut later = session("prior-later", "Show", 30, 600.0, true, true);
+            later.episode_id = "show:1:9".into();
+            let mut tracker = JournalTracker {
+                loaded: true,
+                rows: BTreeMap::from([(first.id.clone(), first), (later.id.clone(), later)]),
+                ..Default::default()
+            };
+            tracker.observe(
+                media.clone(),
+                profiles::ProfileStore::capture(),
+                590.0,
+                600.0,
+                true,
+                1.0,
+            );
+            assert!(!tracker.active.as_ref().unwrap().row.rewatch);
+            if recovered {
+                let active = tracker.active.as_mut().unwrap();
+                active.history_known = false;
+                active.started_position = 0.0;
+                tracker.reconcile_active_history();
+            } else {
+                tracker.observe(
+                    media.clone(),
+                    profiles::ProfileStore::capture(),
+                    0.0,
+                    600.0,
+                    true,
+                    1.0,
+                );
+            }
+            let active = tracker.active.as_mut().unwrap();
+            assert!(active.row.rewatch);
+            assert!(active.row.viewing_run_start);
+            active.last_position = 0.0;
+            active.last_tick = Instant::now() - Duration::from_secs(1);
+            active.was_playing = true;
+            active.saved_seconds = 0.0;
+            tracker.observe(
+                media.clone(),
+                profiles::ProfileStore::capture(),
+                1.0,
+                600.0,
+                true,
+                1.0,
+            );
+            let facts = project_last_time(tracker.rows.values().collect(), false, Some(now_secs()));
+            assert!(
+                facts.completed.is_none(),
+                "a partial restarted run must not disclose an old later episode; recovered={recovered}"
+            );
+        }
+    }
+
+    #[test]
+    fn last_time_date_uses_playback_days_instead_of_later_stop_or_invalid_allocations() {
+        let mut row = session("paused", "Show", 100 * 86400 + 100, 30.0, false, false);
+        row.updated_at = 102 * 86400;
+        assert_eq!(last_playback_date(&row, 102 * 86400), Some(100 * 86400));
+        row.days.insert(101, 20.0);
+        row.days.insert(102, f64::NAN);
+        row.days.insert(103, 10.0);
+        row.days.insert(99, 40.0);
+        assert_eq!(last_playback_date(&row, 102 * 86400), Some(101 * 86400));
+        row.days.clear();
+        assert_eq!(
+            last_playback_date(&row, 102 * 86400),
+            None,
+            "a Stop timestamp cannot invent a playback date"
+        );
+        row.completed_at = Some(101 * 86400 + 200);
+        assert_eq!(last_playback_date(&row, 102 * 86400), Some(101 * 86400));
+        row.completed_at = Some(103 * 86400);
+        assert_eq!(last_playback_date(&row, 102 * 86400), None);
+    }
+
+    #[test]
+    fn last_time_uses_latest_completion_chronology_and_excludes_unknown_rewatch_runs() {
+        let mut higher = session("higher", "Show", 10, 600.0, true, false);
+        higher.episode_id = "show:1:9".into();
+        let mut later = session("later", "Show", 20, 600.0, true, false);
+        later.episode_id = "show:1:2".into();
+        let mut partial = session("partial", "Show", 30, 100.0, false, false);
+        partial.episode_id = "show:1:3".into();
+        let facts = project_last_time(vec![&higher, &partial, &later], false, Some(30));
+        assert_eq!(facts.last_at, Some(30));
+        assert_eq!(facts.completed.unwrap().episode_id, "show:1:2");
+        partial.rewatch = true;
+        assert!(
+            project_last_time(vec![&higher, &later, &partial], false, Some(30))
+                .completed
+                .is_none(),
+            "unknown historical rewatch must not leak an old run's synopsis"
+        );
+        partial.viewing_run_start = true;
+        assert!(
+            project_last_time(vec![&higher, &later, &partial], false, Some(30))
+                .completed
+                .is_none()
+        );
+        let mut new_run = session("new-run", "Show", 40, 600.0, true, true);
+        new_run.episode_id = "show:1:1".into();
+        let facts = project_last_time(vec![&higher, &later, &partial, &new_run], false, Some(40));
+        assert_eq!(facts.completed.unwrap().episode_id, "show:1:1");
+        assert!(
+            project_last_time(vec![&new_run], true, Some(40))
+                .completed
+                .is_none(),
+            "unreadable rows may hide a later run"
+        );
+    }
+
+    #[test]
+    fn last_time_rewatch_successors_share_a_run_but_a_second_restart_starts_another() {
+        let mut first = session("first", "Show", 20, 600.0, true, true);
+        first.episode_id = "show:1:1".into();
+        first.viewing_run_start = true;
+        let mut media = nova_playback_api::MediaIdentity {
+            media_type: "series".into(),
+            title_id: "Show".into(),
+            episode_id: "show:1:2".into(),
+            ..Default::default()
+        };
+        assert!(!starts_viewing_run([&first].into_iter(), &media));
+        media.episode_id = first.episode_id.clone();
+        assert!(starts_viewing_run([&first].into_iter(), &media));
+        first.completed_at = None;
+        assert!(
+            !starts_viewing_run([&first].into_iter(), &media),
+            "resuming an unfinished episode is the same run"
+        );
     }
 
     #[test]

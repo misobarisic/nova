@@ -421,6 +421,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.wire_completion_prompts();
     backup::install(&app);
     bridge.setup_viewing_journal();
+    bridge.setup_last_time();
     bridge.setup_watch_queue();
     bridge.setup_smart_offline();
     bridge.setup_release_reminders();

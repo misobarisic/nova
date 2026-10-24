@@ -5611,9 +5611,6 @@ msgstr "Provjeri položaj nastavka"
 msgid "This source may use a different cut. Resume at {}, or start over."
 msgstr "Ovaj izvor možda koristi drukčiju verziju. Nastavite na {} ili počnite ispočetka."
 
-msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
-msgstr "Ovaj izvor ne može nastaviti na prethodnom položaju. Počnite ispočetka ili odustanite i odaberite drugi izvor."
-
 msgid "Spoiler protection"
 msgstr "Zaštita od spojlera"
 
@@ -5631,3 +5628,38 @@ msgstr "Pretraži Novu"
 
 msgid "Search scope"
 msgstr "Opseg pretraživanja"
+
+
+msgid "Last time…"
+msgstr "Prošli put…"
+
+
+msgid "Replay this version’s ending?"
+msgstr "Ponovno pogledati završetak ove verzije?"
+
+
+msgid "Last watched: {}"
+msgstr "Posljednje gledanje: {}"
+
+
+msgid "Last completed: {}"
+msgstr "Posljednje dovršeno: {}"
+
+
+msgid "This source may be a different version. Replay its final four minutes? Your Continue Watching position and watched status will stay as they are."
+msgstr "Ovaj izvor može biti druga verzija. Ponovno pogledati posljednje četiri minute? Položaj u Nastavi gledati i status gledanja ostat će isti."
+
+
+msgid "Completed means playback reached at least 90%. It does not confirm every scene was watched."
+msgstr "Dovršeno znači da je reprodukcija dosegla najmanje 90%. To ne potvrđuje da je pogledana svaka scena."
+
+
+msgid "Replay final four minutes"
+msgstr "Ponovno pogledaj posljednje četiri minute"
+
+
+msgid "Replay ending…"
+msgstr "Ponovno pogledaj završetak…"
+
+msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
+msgstr "Ovaj izvor ne može nastaviti na prethodnom položaju. Počnite ispočetka ili odustanite i odaberite drugi izvor."

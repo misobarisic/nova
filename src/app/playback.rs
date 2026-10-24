@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Default)]
 pub(super) struct PlaybackContext {
     policy_revision: String,
+    pub(super) ending_replay: Option<previously_watched::Replay>,
     recovery_timeline: Option<source_recovery::Timeline>,
     pub(super) automatic_source_selection: bool,
     pub(super) retry_budget: source_recovery::RetryBudget,
@@ -19,14 +20,34 @@ pub(super) struct PlaybackContext {
     episode_number: String,
     use_modal_poster: bool,
     logo_url: String,
-    media_type: String,
-    media_id: String,
-    request_id: String,
+    pub(super) media_type: String,
+    pub(super) media_id: String,
+    pub(super) request_id: String,
     is_episode: bool,
     is_movie: bool,
     history: Option<PlaybackHistory>,
     /// Explicit History action: includes zero for Play again.
     history_resume: Option<f64>,
+}
+
+pub(super) fn replay_source(context: &PlaybackContext) -> Option<String> {
+    context
+        .intro_download
+        .as_ref()
+        .and_then(|job| {
+            let path = job.artifact_path.as_ref()?;
+            let bytes = std::fs::metadata(path).ok()?.len();
+            Some(preference_hash(
+                "ending-download",
+                &format!("{}:{bytes}", job.id),
+            ))
+        })
+        .or_else(|| {
+            context
+                .selected_stream
+                .as_ref()
+                .and_then(|s| s.continuity.clone())
+        })
 }
 
 /// Numbering is supplied separately by the selector; punctuation in titles is opaque.
@@ -686,9 +707,17 @@ impl Bridge {
             state.playback_intent.as_mut().unwrap().private_playback = true;
         }
 
-        state.playback_intent.as_mut().unwrap().context = context.clone();
+        if context.ending_replay.is_none() && !detached {
+            context.ending_replay = previously_watched::take_replay(&state, &context);
+        }
+        let ending_replay = context.ending_replay.is_some();
+        let intent = state.playback_intent.as_mut().unwrap();
+        intent.private_playback |= ending_replay;
+        intent.context = context.clone();
         drop(state);
-        self.queue_note_playback_start();
+        if !ending_replay {
+            self.queue_note_playback_start();
+        }
         self.sleep_timer_start(&nova_playback_api::MediaIdentity {
             media_type: context.media_type.clone(),
             title_id: context.media_id.clone(),
@@ -751,7 +780,7 @@ impl Bridge {
             .pending_retry
             .as_ref()
             .is_some_and(|retry| retry.context.automatic_source_selection);
-        if !automatic {
+        if !automatic && !self.last_time_replay_selected() {
             self.queue_note_selected_stream(stream);
         }
         self.party_remember_source(stream);
@@ -989,6 +1018,11 @@ impl Bridge {
             app.set_resume_prompt_visible(false);
             app.set_resume_source_changed(false);
             app.set_automatic_stream_recovery_visible(false);
+            let sheet = app.global::<nova_ui_shared::LastTimeBridge>();
+            if sheet.get_confirmation() {
+                sheet.set_open(false);
+                sheet.set_confirmation(false);
+            }
         }
         if let Some(engine) = crate::torrent::engine() {
             engine.on_playback_stopped(&active_torrent_settings());
@@ -1237,6 +1271,8 @@ impl Bridge {
                     self.mark_playback_opened(false);
                     if !self.remote_receiver_playback()
                         && !self.party_active()
+                        && !self.last_time_replay_selected()
+                        && !self.last_time_replay_active()
                         && crate::player::open_external(&ready.url).is_err()
                     {
                         self.set_stream_hint(Some(StreamHint::Fixed(
@@ -1284,6 +1320,8 @@ impl Bridge {
         nova_config::active_cache_settings().uses_external_player()
             && !self.remote_receiver_playback()
             && !self.party_active()
+            && !self.last_time_replay_selected()
+            && !self.last_time_replay_active()
             && !self.recovery_source_selected()
             && !self.shared.lock().unwrap().casting.selected
     }
@@ -1390,7 +1428,7 @@ impl Bridge {
                     == Some(true)
             });
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
-            intent.private_playback = private_playback;
+            intent.private_playback |= private_playback;
         }
         match result.map(|stream| stream_source(&stream)) {
             Ok(StreamSource::Url(url)) => {
@@ -1407,6 +1445,7 @@ impl Bridge {
                 ) {
                     if private_playback
                         || self.remote_receiver_playback()
+                        || self.last_time_replay_selected()
                         || !cfg!(target_os = "android")
                     {
                         self.provider_resolution_failed(
@@ -1476,6 +1515,17 @@ impl Bridge {
         else {
             return;
         };
+        if !previously_watched::download_allowed(
+            &self.shared.lock().unwrap(),
+            &job.media_type,
+            &job.media_id,
+            &job.request_id,
+        ) {
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "This download does not match the episode selected for replay.",
+            )));
+            return;
+        }
         let Some(path) = job.artifact_path.as_ref().filter(|path| path.is_file()) else {
             return;
         };
@@ -1519,6 +1569,7 @@ impl Bridge {
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
                 policy_revision: profile_policy::revision(&profiles::ProfileStore::capture()),
+                ending_replay: explicit_context.ending_replay,
                 intro_download: Some(job.clone()),
                 history_resume: explicit_context
                     .history_resume
@@ -1609,6 +1660,8 @@ impl Bridge {
                             bridge.mark_playback_opened(false);
                             if !bridge.remote_receiver_playback()
                                 && !bridge.party_active()
+                                && !bridge.last_time_replay_selected()
+                                && !bridge.last_time_replay_active()
                                 && !bridge.recovery_source_selected()
                                 && crate::player::open_external(&url).is_err()
                             {
@@ -1646,6 +1699,9 @@ impl Bridge {
     // Android suspension also checkpoints the active player. PiP keeps that
     // session playing, so persistence alone must never emit a terminal scrobble.
     pub(super) fn persist_playback_checkpoint(&self, stopped: bool) {
+        if self.last_time_replay_active() {
+            return;
+        }
         persistence::flush_report();
         self.flush_playback_preferences(true);
         let outgoing = self.shared.lock().unwrap().playback.clone();
@@ -1844,6 +1900,44 @@ impl Bridge {
             context.is_episode,
             context.is_movie,
         );
+        if context.ending_replay.is_some() {
+            // Replays are transient: no progress row, play count, Continue
+            // dismissal, scrobble or successor target may be armed here.
+            let disallowed = {
+                let mut state = self.shared.lock().unwrap();
+                state.playback = None;
+                if let Some(replay) = state
+                    .playback_intent
+                    .as_mut()
+                    .and_then(|i| i.context.ending_replay.as_mut())
+                {
+                    replay.prepare_source();
+                }
+                state.party.active() || state.casting.selected
+            };
+            if disallowed {
+                self.finish_playback_request();
+                return false;
+            }
+            self.publish_player_context(&context);
+            let preferences = context
+                .retry_preferences
+                .clone()
+                .unwrap_or_else(|| self.prepare_playback_preferences());
+            let queued = self.player.play_with_preferences_and_load_policy(
+                &url,
+                0.0,
+                &headers,
+                &subtitles,
+                preferences,
+                crate::player::PlaybackLoadPolicy {
+                    allow_external: false,
+                    paused: true,
+                },
+            );
+            let opened = self.complete_player_queue(&context, queued);
+            return opened;
+        }
         // A party owns the timeline even while its snapshot is unavailable or
         // this source has not yet passed compatibility/readiness checks. Never
         // block its coordinator behind a local history prompt or resume seek.
@@ -2339,6 +2433,9 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        if self.note_last_time_replay() {
+            return;
+        }
         if self.check_recovery_timeline() {
             return;
         }

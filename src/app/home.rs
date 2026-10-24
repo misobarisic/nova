@@ -2336,6 +2336,12 @@ impl Bridge {
             .map(|d| {
                 let (poster, is_loaded) = home_card_image(&d.art_url, &d.poster_url);
                 ContinueRow {
+                    last_time: previously_watched::due(
+                        &self.shared.lock().unwrap().progress,
+                        &d.type_,
+                        &d.id,
+                        now_secs(),
+                    ),
                     media_type: d.type_.into(),
                     episode_id: d.episode_id.into(),
                     id: d.id.into(),
@@ -2840,6 +2846,7 @@ impl Bridge {
         };
         let Some(entry) = entry else { return };
         match action {
+            4 => self.open_last_time(&entry.type_, &entry.series_id, &entry.episode_id),
             3 => {
                 spoiler::reveal(&entry.type_, &entry.series_id, &entry.episode_id);
                 self.refresh_spoiler_presentation();
@@ -6508,6 +6515,12 @@ impl Bridge {
                         .map(|row| (row.poster, true))
                         .unwrap_or_else(|| home_card_image(&d.art_url, &d.poster_url));
                     ContinueRow {
+                        last_time: previously_watched::due(
+                            &self.shared.lock().unwrap().progress,
+                            &d.type_,
+                            &d.id,
+                            now_secs(),
+                        ),
                         media_type: d.type_.into(),
                         episode_id: d.episode_id.into(),
                         id: d.id.into(),

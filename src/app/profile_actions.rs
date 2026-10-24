@@ -478,6 +478,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.global::<crate::SettingsSync>().set_open(false);
             app.global::<crate::JournalBridge>().set_open(false);
+            self.invalidate_last_time();
             app.global::<crate::QueueBridge>().set_open(false);
             let bookmarks = app.global::<crate::BookmarksBridge>();
             bookmarks.set_open(false);

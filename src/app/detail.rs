@@ -3848,6 +3848,12 @@ impl Bridge {
             })
         };
         if let Some(url) = browser_url {
+            if self.last_time_replay_selected() {
+                self.set_stream_hint(Some(StreamHint::Fixed(
+                    "Ending replays require an in-app source.",
+                )));
+                return;
+            }
             if self.shared.lock().unwrap().casting.selected {
                 self.set_stream_hint(Some(StreamHint::Fixed(
                     "Browser links cannot be cast. Choose a direct media source.",
@@ -3862,7 +3868,7 @@ impl Bridge {
             }
             return;
         }
-        if self.remote_stream_selected(index) {
+        if !self.last_time_replay_selected() && self.remote_stream_selected(index) {
             return;
         }
         let stream = {
@@ -3959,12 +3965,14 @@ impl Bridge {
                 // always uses the built-in player, including saved preferences.
                 if nova_config::active_cache_settings().uses_external_player()
                     && !self.recovery_source_selected()
+                    && !self.last_time_replay_selected()
                 {
                     self.begin_playback_request();
                     let _ = crate::player::open_external(&url);
                 } else if !self.open_player(url.clone())
                     && (self.recovery_source_selected()
-                        || crate::player::open_external(&url).is_err())
+                        || (!self.last_time_replay_selected()
+                            && crate::player::open_external(&url).is_err()))
                 {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This stream requires the in-app player, which is unavailable.",

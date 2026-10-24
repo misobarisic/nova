@@ -27,6 +27,9 @@ impl Bridge {
     }
 
     pub(super) fn execute_playback_action(&self, action: PlaybackAction) -> Result<(), String> {
+        if !self.last_time_action_allowed(&action) {
+            return Err("Confirm the selected version before replaying its ending".into());
+        }
         if let Some(result) = self.cast_dispatch_action(&action) {
             return result;
         }

@@ -1,4 +1,5 @@
 import { ResumePrompt } from "resume-prompt.slint";
+import { LastTimeSheet } from "last-time.slint";
 import { CastButton, CastingPanel } from "casting.slint";
 import { CastBridge } from "@NovaUiShared";
 export { CastBridge }
@@ -13,11 +14,11 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { CatalogGroupingBridge, CatalogGroupingRow, CatalogGroupMemberRow, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CatalogGroupingBridge, CatalogGroupingRow, CatalogGroupMemberRow, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, LastTimeBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { CatalogGroupingBridge, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { CatalogGroupingBridge, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, LastTimeBridge, JournalBridge, QueueBridge, CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -904,6 +905,7 @@ export component AppWindow inherits Window {
     // keyboard navigation after publication only while the persistent scope
     // still owns focus, so a pointer-focused editor is never interrupted.
     public function focus_mounted_page() {
+        if LastTimeBridge.open || LastTimeBridge.visual-retained { return; }
         if root.resume_prompt_visible || resume_prompt.visual-retained { resume_prompt.focus_shell(); return; }
         if MoreBridge.pin_open { root.profile_pin_focus_request += 1; return; }
         if MoreBridge.policy_open { if system_back_scope.has-focus { root.profile_policy_focus_request += 1; } return; }
@@ -935,6 +937,7 @@ export component AppWindow inherits Window {
         }
     }
     public function preserve_back_focus() {
+        if LastTimeBridge.open || LastTimeBridge.visual-retained { return; }
         if root.resume_prompt_visible || resume_prompt.visual-retained { resume_prompt.focus_shell(); return; }
         if MoreBridge.pin_open { root.profile_pin_focus_request += 1; return; }
         if MoreBridge.policy_open { root.profile_policy_focus_request += 1; return; }
@@ -1609,6 +1612,8 @@ export component AppWindow inherits Window {
     in-out property <int> system_back_request: 0;
     private property <int> page_back_request: 0;
     changed system_back_request => {
+        if LastTimeBridge.open { LastTimeBridge.closed(); return; }
+        if LastTimeBridge.visual-retained { return; }
         if root.resume_prompt_visible { root.resume_cancel(); return; }
         if resume_prompt.visual-retained { return; }
         if MoreBridge.pin_open { MoreBridge.pin_cancel(); return; }
@@ -3128,5 +3133,7 @@ export component AppWindow inherits Window {
     }
 
     if CastBridge.available && (CastBridge.open || root.casting_visual_retained): casting_panel := CastingPanel { width: 100%; height: 100%; safe_bottom: root.safe-area-insets.bottom; safe_top: root.safe-area-insets.top; safe_left: root.safe-area-insets.left; safe_right: root.safe-area-insets.right; touch: root.is_android; visual_closed => { if !CastBridge.open { root.casting_visual_retained = false; root.preserve_back_focus(); root.restart_osd_hide(); CastBridge.restore_focus += 1; } } }
+
+    LastTimeSheet { owner-valid: !root.profiles_open && !root.profiles_require_selection && !MoreBridge.pin_open && !MoreBridge.policy_open && !OfflineBridge.opened && !BackupBridge.open && !CastBridge.open && (!LastTimeBridge.open || (LastTimeBridge.confirmation ? root.player_open : root.home_page_mounted)); width: 100%; height: 100%; safe-bottom: root.safe-area-insets.bottom; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; }
 
 }

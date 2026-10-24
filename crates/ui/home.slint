@@ -117,7 +117,7 @@ component ContinueCard inherits Rectangle {
     width: card-width;
     // True 2:3 posters reserve a taller caption in TV mode for readable labels.
     // The progress rail keeps its own space so cards never clip.
-    height: card-width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
+    height: card-width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px) + (root.entry.last_time && !root.new_episode ? (InterfaceStyle.tv ? 64px : 48px) : 0px);
 
     // Each card owns its native desktop popup (landing rail and subpage).
     // On touch the same press/hold opens the page-level sheet instead.
@@ -137,6 +137,11 @@ component ContinueCard inherits Rectangle {
             MenuItem {
                 title: @tr("Reveal episode spoilers");
                 activated => { root.action_requested(root.popup_new, root.popup_entry, 3); }
+            }
+            MenuItem {
+                title: @tr("Last time…");
+                enabled: !root.popup_new && root.popup_entry.media_type != "movie";
+                activated => { root.action_requested(root.popup_new, root.popup_entry, 4); }
             }
             MenuSeparator {}
             MenuItem {
@@ -298,6 +303,11 @@ component ContinueCard inherits Rectangle {
                         available-width: Math.max(0px, parent.width - 12px);
                         x: parent.width - self.width - 6px; y: 6px;
                     }
+                }
+                if root.entry.last_time && !root.new_episode: PillButton {
+                    label: @tr("Last time…");
+                    height: InterfaceStyle.tv ? 64px : 48px;
+                    clicked => { root.action_requested(root.new_episode, root.entry, 4); }
                 }
                 continue_footer := Rectangle {
                     height: InterfaceStyle.tv ? 108px : 76px;
@@ -2373,7 +2383,7 @@ export component HomePage {
                                             continue_rail_host := Rectangle {
                                                 visible: root.continue_rows.length > 0;
                                                 width: 100%;
-                                                height: root.rail_h + 8px;
+                                                height: c_row.preferred-height + 8px;
 
                                                 rail_continue := Flickable {
                                                     // Bleed the scroll clip to the screen edges while
@@ -2393,7 +2403,7 @@ export component HomePage {
 
                                                     c_row := HorizontalLayout {
                                                         y: 8px;
-                                                        height: root.rail_h;
+                                                        height: self.preferred-height;
                                                         width: self.preferred-width;
                                                         padding-left: 18px + (root.narrow ? root.safe-left : 0px);
                                                         padding-right: 18px + root.safe-right;
@@ -3254,18 +3264,29 @@ export component HomePage {
                 { label: @tr("Enter series"), enabled: true },
                 { label: root.menu_history ? @tr("Remove from watch history") : root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
                 { label: @tr("Reveal episode spoilers"), enabled: !root.menu_history },
+                { label: @tr("Last time…"), enabled: !root.menu_history && !root.menu_new && root.menu_episode.media_type != "movie" },
             ];
             picked(a) => {
-                if (root.menu_history) {
-                    root.history_action(root.menu_history_type, root.menu_history_id, root.menu_recommendation ? (a == 0 ? 1 : 3) : a);
-                } else if (root.menu_upcoming) {
+                // Closing can synchronously restore focus or rebuild rows.
+                // Capture every target before the next layer is allowed to open.
+                let history = root.menu_history;
+                let history-type = root.menu_history_type;
+                let history-id = root.menu_history_id;
+                let recommendation = root.menu_recommendation;
+                let upcoming = root.menu_upcoming;
+                let index = root.menu_idx;
+                let new-row = root.menu_new;
+                let episode = root.menu_episode;
+                root.close_menu();
+                if (history) {
+                    root.history_action(history-type, history-id, recommendation ? (a == 0 ? 1 : 3) : a);
+                } else if (upcoming) {
                     root.kb_active = false;
-                    root.upcoming_picked(root.menu_idx);
+                    root.upcoming_picked(index);
                 } else {
                     root.kb_active = false;
-                    root.home_episode_action(root.menu_new, root.menu_episode.media_type, root.menu_episode.id, root.menu_episode.episode_id, a);
+                    root.home_episode_action(new-row, episode.media_type, episode.id, episode.episode_id, a);
                 }
-                root.close_menu();
             }
             closed => { root.close_menu(); }
         }

@@ -26,3 +26,6 @@ mod new_episodes;
 
 #[path = "home_cards/upcoming_calendar.rs"]
 mod upcoming_calendar;
+
+#[path = "home_cards/last_time.rs"]
+mod last_time;

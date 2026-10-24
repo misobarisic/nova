@@ -86,6 +86,23 @@ pub fn tr(english: &str) -> &str {
     }
     match english {
         "Check resume position" => "Provjeri položaj nastavka",
+        "Loading playback history…" => "Učitavanje povijesti gledanja…",
+        "No recorded playback date" => "Nema zabilježenog datuma gledanja",
+        "No synopsis is available for the last completed episode." => {
+            "Sažetak posljednje dovršene epizode nije dostupan."
+        }
+        "A completed episode could not be confirmed from playback history." => {
+            "Iz povijesti reprodukcije nije moguće potvrditi dovršenu epizodu."
+        }
+        "This version is too short to replay an ending safely." => {
+            "Ova verzija je prekratka za sigurno ponovno gledanje završetka."
+        }
+        "This download does not match the episode selected for replay." => {
+            "Ovo preuzimanje ne odgovara epizodi odabranoj za ponovno gledanje."
+        }
+        "Ending replays require an in-app source." => {
+            "Za ponovno gledanje završetka potreban je izvor unutar aplikacije."
+        }
         "Casting reached its buffer limit. Increase Casting remux buffer in Player settings, choose another source or play here." => {
             "Emitiranje je dosegnulo ograničenje međuspremnika. Povećajte Međuspremnik za remuksiranje pri emitiranju u postavkama reproduktora, odaberite drugi izvor ili reproducirajte ovdje."
         }
@@ -3904,4 +3921,14 @@ pub fn release_reminder_status(
         "{base}{refresh}{}",
         error.map(|e| format!(" · {e}")).unwrap_or_default()
     )
+}
+
+/// An unfinished resume point is intentionally numbering/progress only.
+pub fn last_time_partial(episode: &str, fraction: f32) -> String {
+    let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u32;
+    if croatian() {
+        format!("Nedovršeno: {episode} · {percent}%")
+    } else {
+        format!("In progress: {episode} · {percent}%")
+    }
 }

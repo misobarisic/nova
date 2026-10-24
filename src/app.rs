@@ -278,6 +278,7 @@ struct HomeCatalogGroup {
 struct Shared {
     bookmarks: bookmarks::State,
     viewing_journal: viewing_journal::JournalTracker,
+    previously_watched: previously_watched::State,
     watch_queue: watch_queue::State,
     playback_tools: playback_tools::PlaybackToolsState,
     progress_projection: progress_projection::State,
@@ -845,6 +846,7 @@ mod playback_tools;
 mod plugin_cache;
 mod plugin_settings;
 mod posters;
+mod previously_watched;
 mod profile_actions;
 #[cfg(test)]
 mod profile_actions_tests;

@@ -1,0 +1,19 @@
+// Profile-scoped, explicit reminder. Never carries later-episode metadata.
+export global LastTimeBridge {
+    in-out property <bool> open;
+    // The retained surface owns focus/input until its exit really finishes.
+    in-out property <bool> visual-retained;
+    // Profile invalidation hides/clears paint immediately rather than animating it.
+    in-out property <int> dismiss-generation;
+    callback visual_closed();
+    in-out property <bool> confirmation;
+    in-out property <string> title;
+    in-out property <string> date;
+    in-out property <string> episode;
+    in-out property <string> synopsis;
+    in-out property <string> partial;
+    in-out property <bool> can-replay;
+    callback replay();
+    callback confirm();
+    callback closed();
+}
