@@ -1,5 +1,28 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
+
+/// Preserve switch delegates while their rows change so running thumb/color
+/// animations survive a synchronous settings refresh. Rebuild on identity changes.
+pub(super) fn update_control_rows<T: Clone + PartialEq + 'static>(
+    current: slint::ModelRc<T>,
+    rows: Vec<T>,
+    same_id: impl Fn(&T, &T) -> bool,
+) -> Option<slint::ModelRc<T>> {
+    if let Some(model) = current.as_any().downcast_ref::<VecModel<T>>()
+        && model.row_count() == rows.len()
+        && model.iter().zip(&rows).all(|(old, new)| same_id(&old, new))
+    {
+        for (index, row) in rows.into_iter().enumerate() {
+            if model.row_data(index).as_ref() != Some(&row) {
+                model.set_row_data(index, row);
+            }
+        }
+        None
+    } else {
+        Some(Rc::new(VecModel::from(rows)).into())
+    }
+}
+
 /// One scan per cache, with repeated requests coalesced to the latest path.
 /// Generations reject results computed before a clear or directory change.
 #[derive(Default)]
@@ -864,7 +887,17 @@ impl Bridge {
                 })
                 .collect::<Vec<_>>();
             app.set_home_catalog_rows(Rc::new(VecModel::from(featured)).into());
-            app.set_home_row_catalog_rows(Rc::new(VecModel::from(home_rows)).into());
+            if let Some(rows) =
+                update_control_rows(app.get_home_row_catalog_rows(), home_rows, |old, new| {
+                    old.builtin == new.builtin
+                        && old.title == new.title
+                        && old.addon == new.addon
+                        && old.media_type == new.media_type
+                        && old.genre == new.genre
+                })
+            {
+                app.set_home_row_catalog_rows(rows);
+            }
         }
     }
 
@@ -1334,6 +1367,81 @@ pub(crate) fn write_settings(settings: &CacheSettings) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn addon_switch_animates_across_row_publications() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::ComponentHandle;
+
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = crate::AppWindow::new().unwrap();
+        app.global::<crate::Anim>().set_enabled(true);
+        app.global::<crate::Anim>().set_hover(false);
+        app.global::<crate::Anim>().set_transitions(false);
+        app.set_show_home(false);
+        app.set_show_settings(true);
+        app.set_settings_selected_id(0);
+        app.set_settings_detail_open(true);
+        app.set_cinemeta_installed(true);
+        let row = crate::AddonRow {
+            label: "Motion addon".into(),
+            url: "https://example.com/manifest.json".into(),
+            ..Default::default()
+        };
+        app.set_addon_rows(Rc::new(VecModel::from(vec![row.clone()])).into());
+        app.window().set_size(slint::PhysicalSize::new(1280, 1600));
+        app.show().unwrap();
+        let knob_x = || {
+            ElementHandle::find_by_element_id(&app, "ToggleSwitch::knob")
+                .next()
+                .expect("installed addon switch thumb")
+                .absolute_position()
+                .x
+        };
+        let advance = |millis| {
+            for _ in 0..millis {
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+                let _ = knob_x();
+            }
+        };
+        let _ = knob_x();
+        advance(200);
+        for enabled in [true, false] {
+            let start = knob_x();
+            let mut next = row.clone();
+            next.enabled = enabled;
+            // Exercise the publisher used after toggles and background logo
+            // completions, while the real compiled addon delegate is mounted.
+            if let Some(rows) =
+                super::update_control_rows(app.get_addon_rows(), vec![next], |old, new| {
+                    old.url == new.url
+                })
+            {
+                app.set_addon_rows(rows);
+            }
+            let _ = knob_x();
+            advance(45);
+            let middle = knob_x();
+            advance(200);
+            let end = knob_x();
+            assert!(
+                if enabled {
+                    start < middle && middle < end
+                } else {
+                    start > middle && middle > end
+                },
+                "enabled={enabled}: thumb must interpolate: {start} -> {middle} -> {end}"
+            );
+        }
+        // A different addon must get a fresh delegate even at the same index.
+        let mut replacement = row;
+        replacement.url = "https://other.example/manifest.json".into();
+        assert!(
+            super::update_control_rows(app.get_addon_rows(), vec![replacement], |old, new| old.url
+                == new.url,)
+            .is_some()
+        );
+    }
+
     #[test]
     fn disk_usage_requests_coalesce_and_reject_old_results() {
         let mut scan = super::DiskUsageScan::default();

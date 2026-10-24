@@ -732,7 +732,21 @@ impl Bridge {
                 Ok(rows)
             })();
         match rows {
-            Ok(rows) => app.set_plugin_setting_rows(Rc::new(VecModel::from(rows)).into()),
+            Ok(rows) => {
+                if let Some(rows) = settings::update_control_rows(
+                    app.get_plugin_setting_rows(),
+                    rows,
+                    |old, new| {
+                        old.key == new.key
+                            && old.kind == new.kind
+                            && old.collection == new.collection
+                            && old.item == new.item
+                            && old.item_role == new.item_role
+                    },
+                ) {
+                    app.set_plugin_setting_rows(rows);
+                }
+            }
             Err(error) => app.set_plugin_settings_notice(error.to_string().into()),
         }
     }

@@ -1056,7 +1056,11 @@ impl Bridge {
             })
             .collect::<Vec<_>>();
         drop(shared);
-        app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
+        if let Some(rows) =
+            settings::update_control_rows(app.get_addon_rows(), rows, |old, new| old.url == new.url)
+        {
+            app.set_addon_rows(rows);
+        }
         for url in logo_requests {
             let bridge = self.clone();
             // Use the shared transport so Android also warms the decoded cache.
