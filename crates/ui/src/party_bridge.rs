@@ -8,6 +8,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_leave => invoke_party_bridge_leave(),
         on_choose_media => invoke_party_bridge_choose_media(),
         on_choose_stream => invoke_party_bridge_choose_stream(),
+        on_reveal_spoilers => invoke_party_bridge_reveal_spoilers(),
         on_copy_invite => invoke_party_bridge_copy_invite(),
         on_return_to_player => invoke_party_bridge_return_to_player(),
         on_set_paused => invoke_party_bridge_set_paused(arg0),

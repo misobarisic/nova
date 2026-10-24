@@ -1693,7 +1693,29 @@ impl Bridge {
         self.stremio_checkpoint();
     }
 
-    fn publish_player_context(&self, context: &PlaybackContext) {
+    pub(super) fn publish_player_context(&self, context: &PlaybackContext) {
+        // Remote and offline playback can bypass the episode picker. Apply
+        // the local profile policy again at the final OSD/OS-title boundary.
+        let mut safe_context = context.clone();
+        let protected = {
+            let state = self.shared.lock().unwrap();
+            spoiler::hidden(
+                &state,
+                &context.media_type,
+                &context.media_id,
+                &context.request_id,
+            )
+        };
+        if protected {
+            let number = if context.episode_number.is_empty() {
+                text::tr("Episode").to_string()
+            } else {
+                context.episode_number.clone()
+            };
+            safe_context.episode_label = number.clone();
+            safe_context.osd_episode_title = number;
+        }
+        let context = &safe_context;
         let request = self
             .shared
             .lock()

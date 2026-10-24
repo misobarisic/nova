@@ -89,6 +89,8 @@ export global SettingsSearch {
                 if self.matches(dates) { return dates; }
                 let metadata = self.candidate("prefetch_metadata", @tr("Prefetch episode metadata"), "Prefetch episode metadata", 6, 1);
                 if self.matches(metadata) { return metadata; }
+                let spoiler = self.candidate("spoiler_protection", @tr("Spoiler protection"), "Spoiler protection unwatched titles descriptions artwork", 6, -1);
+                if self.matches(spoiler) { return spoiler; }
                 let thumbnails = self.candidate("show_unwatched_thumbs", @tr("Show unwatched thumbnails"), "Show unwatched thumbnails", 6, 2);
                 if self.matches(thumbnails) { return thumbnails; }
                 let discover = self.candidate("discover_min_cols", @tr("Discover grid columns"), "Discover grid columns", 6, 3);

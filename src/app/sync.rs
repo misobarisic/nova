@@ -2670,6 +2670,16 @@ impl Bridge {
         write_settings(&settings);
         if publish_models {
             self.settings_to_ui();
+            if local.spoiler_protection != settings.spoiler_protection
+                || local.show_unwatched_thumbs != settings.show_unwatched_thumbs
+            {
+                if settings.spoiler_protection {
+                    release_reminders::cancel_profile_notifications(
+                        profiles::ProfileStore::capture().id(),
+                    );
+                }
+                self.refresh_spoiler_presentation();
+            }
         }
     }
 }
@@ -3327,6 +3337,25 @@ fn activity_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spoiler_preference_sync_is_independent_and_respects_device_overrides() {
+        let base = CacheSettings {
+            show_unwatched_thumbs: false,
+            ..Default::default()
+        };
+        let fields = vec![("spoiler_protection".into(), "true".into())];
+        let merged = merge_settings_fields(&base, &fields);
+        assert!(merged.spoiler_protection);
+        assert!(!merged.show_unwatched_thumbs);
+        let mut overridden = base.clone();
+        overridden
+            .sync_overrides
+            .insert("spoiler_protection".into(), serde_json::json!(false));
+        let retained = merge_settings_fields(&overridden, &fields);
+        assert!(!retained.spoiler_protection);
+        assert!(!retained.show_unwatched_thumbs);
+    }
 
     #[test]
     fn typed_library_migration_preserves_clocks_baselines_and_legacy_removals() {

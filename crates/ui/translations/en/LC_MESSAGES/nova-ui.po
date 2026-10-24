@@ -1982,3 +1982,12 @@ msgstr ""
 
 msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
 msgstr ""
+
+msgid "Spoiler protection"
+msgstr ""
+
+msgid "Hide unwatched episode titles, descriptions and artwork on this profile. Reveal an episode from its options."
+msgstr ""
+
+msgid "Reveal episode spoilers"
+msgstr ""

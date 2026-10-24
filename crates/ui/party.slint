@@ -57,6 +57,7 @@ export component PartyPage inherits Rectangle {
             if root.tv-index < 1 && (!PartyBridge.active && !PartyBridge.busy) { root.tv-index = 1; return; }
             if root.tv-index < 2 && (!PartyBridge.active && !PartyBridge.busy && PartyBridge.input != "") { root.tv-index = 2; return; }
             if root.tv-index < 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
+            if root.tv-index < 3 && PartyBridge.active && PartyBridge.has_media && PartyBridge.spoilers_hidden && !PartyBridge.busy { root.tv-index = 3; return; }
             if root.tv-index < 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
             if root.tv-index < 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
             if root.tv-index < 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
@@ -80,6 +81,7 @@ export component PartyPage inherits Rectangle {
             if root.tv-index > 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
             if root.tv-index > 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
             if root.tv-index > 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
+            if root.tv-index > 3 && PartyBridge.active && PartyBridge.has_media && PartyBridge.spoilers_hidden && !PartyBridge.busy { root.tv-index = 3; return; }
             if root.tv-index > 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
             if root.tv-index > 2 && (!PartyBridge.active && !PartyBridge.busy && PartyBridge.input != "") { root.tv-index = 2; return; }
             if root.tv-index > 1 && (!PartyBridge.active && !PartyBridge.busy) { root.tv-index = 1; return; }
@@ -162,6 +164,13 @@ export component PartyPage inherits Rectangle {
                 VerticalLayout { padding: 16px; spacing: 10px;
                     Text { text: PartyBridge.title; color: Theme.current.text_bright; font-size: root.wide ? 28px : 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
                     if PartyBridge.episode != "": Text { font-size: 14px; text: PartyBridge.episode; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                    if PartyBridge.spoilers_hidden: reveal_spoilers := PillButton {
+                        property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
+                        changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                        label: @tr("Reveal episode spoilers");
+                        clicked => { PartyBridge.reveal_spoilers(); }
+                    }
                     if PartyBridge.status != "": Text { text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
                     Text { font-size: 13px; text: PartyBridge.time_text; color: Theme.current.text_muted; }
                     party_timeline := MiniSlider {

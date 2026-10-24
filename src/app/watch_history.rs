@@ -446,6 +446,12 @@ impl Bridge {
                 row.episode = row.episode.or(video.episode_number());
             }
         }
+        let state = self.shared.lock().unwrap();
+        for row in &mut rows {
+            if spoiler::hidden(&state, &row.type_, &row.series_id, &row.episode_id) {
+                row.episode_label.clear();
+            }
+        }
         rows
     }
 
@@ -960,6 +966,11 @@ pub(super) fn prepare_progress_history(
                 row.episode_label = episode_context_label(video);
                 row.season = row.season.or(video.season);
                 row.episode = row.episode.or(video.episode_number());
+            }
+        }
+        for row in &mut rows {
+            if spoiler::hidden(state, &row.type_, &row.series_id, &row.episode_id) {
+                row.episode_label.clear();
             }
         }
         rows

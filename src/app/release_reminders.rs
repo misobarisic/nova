@@ -280,6 +280,7 @@ fn events(
     let titles: Vec<LibraryEntry> = load(owner, "library")?;
     let progress: HashMap<String, EpisodeProgress> = load(owner, EPISODE_PROGRESS_KEY)?;
     let subs = subscriptions(owner)?;
+    let protect_spoilers = spoiler::owner_enabled(owner);
     let mut result = Vec::new();
     let mut undated = 0;
     for title in titles {
@@ -309,25 +310,35 @@ fn events(
             };
             let key = serde_json::to_string(&(&title.type_, &title.id, &video.id))
                 .expect("event identity");
+            let watched = progress
+                .get(&progress_map_key(&title.id, &video.id))
+                .is_some_and(|p| p.watched);
+            let protected = protect_spoilers && !watched;
             result.push(Event {
                 key,
                 type_: title.type_.clone(),
                 title_id: title.id.clone(),
                 episode_id: video.id.clone(),
-                summary: format!("{} — {}", title.name, video.label()),
-                description: video.overview.clone().unwrap_or_default(),
+                summary: format!(
+                    "{} — {}",
+                    title.name,
+                    if protected {
+                        episode_se_label(&video)
+                    } else {
+                        video.label()
+                    }
+                ),
+                description: if protected {
+                    String::new()
+                } else {
+                    video.overview.clone().unwrap_or_default()
+                },
                 time,
                 aliases: proven_aliases(&video)
                     .into_iter()
                     .map(|id| serde_json::to_string(&(&title.type_, id)).unwrap())
                     .collect(),
-                watched: std::iter::once(video.id.clone())
-                    .chain(proven_aliases(&video))
-                    .any(|id| {
-                        progress
-                            .get(&progress_map_key(&title.id, &id))
-                            .is_some_and(|p| p.watched)
-                    }),
+                watched,
                 notice: None,
             });
         }
@@ -590,6 +601,33 @@ fn dismiss_native(state: &mut Delivery, keys: &[String]) {
             .filter(|key| state.delivered.contains_key(*key))
             .cloned(),
     );
+}
+fn notification_summary(owner: &profiles::ProfileStore, event: &Event) -> String {
+    if !spoiler::owner_enabled(owner) {
+        return event.summary.clone();
+    }
+    let progress: HashMap<String, EpisodeProgress> =
+        load(owner, EPISODE_PROGRESS_KEY).unwrap_or_default();
+    if progress
+        .get(&progress_map_key(&event.title_id, &event.episode_id))
+        .is_some_and(|p| p.watched)
+    {
+        return event.summary.clone();
+    }
+    let titles: Vec<LibraryEntry> = load(owner, "library").unwrap_or_default();
+    let title = titles
+        .iter()
+        .find(|title| title.id == event.title_id && title.type_ == event.type_)
+        .map(|title| title.name.as_str())
+        .unwrap_or("Nova");
+    let videos: Vec<Video> =
+        load(owner, &episodes_key(&event.type_, &event.title_id)).unwrap_or_default();
+    let number = videos
+        .iter()
+        .find(|v| v.id == event.episode_id)
+        .map(episode_se_label)
+        .unwrap_or_else(|| text::tr("Episode").into());
+    format!("{title} — {number}")
 }
 #[cfg(any(target_os = "android", test))]
 fn native_events(state: &Delivery) -> Vec<&Event> {
@@ -1317,6 +1355,16 @@ impl Bridge {
             _ => {}
         }
     }
+    pub(super) fn refresh_release_spoilers(&self) {
+        self.shared.lock().unwrap().release_reminders.pending = None;
+        if let Some(app) = self.app() {
+            let bridge = app.global::<crate::CalendarBridge>();
+            bridge.set_export_ready(false);
+            bridge.set_export_preview("".into());
+        }
+        self.refresh_release_reminders();
+    }
+
     fn release_export_token(&self, app: &AppWindow) -> String {
         let ui = app.global::<crate::CalendarBridge>();
         let mut selected = self
@@ -1329,12 +1377,20 @@ impl Bridge {
             .cloned()
             .collect::<Vec<_>>();
         selected.sort();
+        let spoiler_protection = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .spoiler_protection;
         serde_json::to_string(&(
             ui.get_export_start().to_string(),
             ui.get_export_end().to_string(),
             ui.get_export_scope(),
             app.get_calendar_search().to_string(),
             selected,
+            spoiler_protection,
+            spoiler_protection.then(progress_projection::revision),
         ))
         .unwrap()
     }
@@ -1454,6 +1510,22 @@ impl Bridge {
             for (key, _) in &hidden {
                 ledger.entries.remove(key);
             }
+            if spoiler::owner_enabled(&owner) {
+                let progress: HashMap<String, EpisodeProgress> =
+                    load(&owner, EPISODE_PROGRESS_KEY).unwrap_or_default();
+                for entry in ledger.entries.values_mut() {
+                    if !progress
+                        .get(&progress_map_key(
+                            &entry.event.title_id,
+                            &entry.event.episode_id,
+                        ))
+                        .is_some_and(|p| p.watched)
+                    {
+                        entry.event.summary = notification_summary(&owner, &entry.event);
+                        entry.event.description.clear();
+                    }
+                }
+            }
             let ics = export_ics(&mut ledger, &events, start, end, Utc::now().timestamp());
             ledger.entries.extend(hidden);
             Ok((ledger, ics, omitted))
@@ -1545,11 +1617,17 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
         return Ok(());
     }
 
-    let inputs = [profile_policy::KEY, KEY, "library", EPISODE_PROGRESS_KEY]
-        .into_iter()
-        .map(|key| owner.read(key).map(|raw| (key, raw)))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+    let inputs = [
+        profile_policy::KEY,
+        KEY,
+        "library",
+        EPISODE_PROGRESS_KEY,
+        "settings",
+    ]
+    .into_iter()
+    .map(|key| owner.read(key).map(|raw| (key, raw)))
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())?;
     let now = Local::now();
     let all = delivery_events(owner, now.timestamp())?;
     let before = serde_json::to_string(&state).unwrap();
@@ -1599,7 +1677,7 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
                 text::tr("Released today"),
                 native
                     .iter()
-                    .map(|event| event.summary.as_str())
+                    .map(|event| notification_summary(owner, event))
                     .collect::<Vec<_>>()
                     .join("\n")
             )
@@ -1619,6 +1697,88 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spoiler_events_and_old_notification_receipts_never_disclose_unwatched_metadata() {
+        const ROOT: &str = "NOVA_SPOILER_REMINDERS_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-spoiler-reminders-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root).args(["--exact", "app::release_reminders::tests::spoiler_events_and_old_notification_receipts_never_disclose_unwatched_metadata", "--nocapture"]).output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&PathBuf::from(root));
+        profiles::initialize().unwrap();
+        let owner = profiles::ProfileStore::capture();
+        let settings = CacheSettings {
+            spoiler_protection: true,
+            ..Default::default()
+        };
+        owner
+            .write("settings", &serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        owner
+            .write(
+                "library",
+                r#"[{"id":"show","type_":"series","name":"Safe series"}]"#,
+            )
+            .unwrap();
+        owner.write(&episodes_key("series", "show"), r#"[{"id":"show:1:1","season":1,"episode":1,"name":"Secret ending","overview":"Who dies","released":"2026-10-23"}]"#).unwrap();
+        let protected = events(&owner, false, "", None).unwrap().0.remove(0);
+        assert_eq!(protected.summary, "Safe series — S1 E1");
+        assert!(protected.description.is_empty());
+        let mut old = protected.clone();
+        old.summary = "Safe series — Secret ending".into();
+        old.description = "Who dies".into();
+        old.watched = true;
+        assert_eq!(
+            notification_summary(&owner, &old),
+            "Safe series — S1 E1",
+            "a stale receipt's watched bit cannot authorize disclosure"
+        );
+        spoiler::reveal("series", "show", "show:1:1");
+        assert_eq!(
+            notification_summary(&owner, &old),
+            "Safe series — S1 E1",
+            "a foreground reveal never authorizes the lock screen"
+        );
+        let mut progress = HashMap::new();
+        Bridge::set_episode_watched_locked(&mut progress, "show", "show:1:1", true);
+        owner
+            .write(
+                EPISODE_PROGRESS_KEY,
+                &serde_json::to_string(&progress).unwrap(),
+            )
+            .unwrap();
+        let watched = events(&owner, false, "", None).unwrap().0.remove(0);
+        assert!(watched.summary.contains("Secret ending"));
+        assert_eq!(watched.description, "Who dies");
+        assert_eq!(notification_summary(&owner, &old), old.summary);
+        let other = profiles::ProfileStore::for_profile(&profiles::create("Other").unwrap());
+        assert!(!spoiler::owner_enabled(&other));
+        owner
+            .write(
+                "settings",
+                &serde_json::to_string(&CacheSettings::default()).unwrap(),
+            )
+            .unwrap();
+        owner.write(EPISODE_PROGRESS_KEY, "{}").unwrap();
+        assert!(
+            events(&owner, false, "", None).unwrap().0[0]
+                .summary
+                .contains("Secret ending")
+        );
+    }
+
     fn event(id: &str, raw: &str) -> Event {
         Event {
             key: format!("series:show:{id}"),

@@ -304,6 +304,7 @@ impl Bridge {
             ));
             app.set_cache_date_relative(settings.date_relative);
             app.set_cache_show_unwatched_thumbs(settings.show_unwatched_thumbs);
+            app.set_spoiler_protection(settings.spoiler_protection);
             app.set_cache_lru_mb(settings.lru_cache_mb as f32);
             app.set_cache_prefetch_metadata(settings.prefetch_metadata);
             app.set_tmdb_api_key(settings.tmdb_api_key.clone().into());
@@ -581,6 +582,7 @@ impl Bridge {
                 ),
                 date_relative: app.get_cache_date_relative(),
                 show_unwatched_thumbs: app.get_cache_show_unwatched_thumbs(),
+                spoiler_protection: app.get_spoiler_protection(),
                 lru_cache_mb: (app.get_cache_lru_mb().round() as i32).clamp(32, 512) as u32,
                 prefetch_metadata: app.get_cache_prefetch_metadata(),
                 categories: state.cache_settings.categories.clone(),
@@ -693,10 +695,21 @@ impl Bridge {
         app.set_hero_title_alignment(settings.hero_title_alignment.index());
         {
             let mut state = self.shared.lock().unwrap();
+            let spoiler_changed = state.cache_settings.spoiler_protection
+                != settings.spoiler_protection
+                || state.cache_settings.show_unwatched_thumbs != settings.show_unwatched_thumbs;
             let remote_changed =
                 state.cache_settings.remote_control_enabled != settings.remote_control_enabled;
             state.cache_settings = settings.clone();
             drop(state);
+            if spoiler_changed {
+                if settings.spoiler_protection {
+                    release_reminders::cancel_profile_notifications(
+                        profiles::ProfileStore::capture().id(),
+                    );
+                }
+                self.refresh_spoiler_presentation();
+            }
             if remote_changed {
                 self.remote_control_policy_changed(settings.remote_control_enabled);
             }

@@ -108,6 +108,13 @@ pub(crate) fn library_badge_for(
     episodes: &[Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> String {
+    let safe_label = |v: &Video| {
+        if active_cache_settings().spoiler_protection {
+            episode_se_label(v)
+        } else {
+            episode_context_label(v)
+        }
+    };
     let is_ours = |p: &EpisodeProgress| p.series_id == series_id;
     if episodes.is_empty() {
         // No episode list: report a resume point when one exists.
@@ -188,7 +195,7 @@ pub(crate) fn library_badge_for(
             return format!(
                 "{} {}{}",
                 text::tr("▶ Resume"),
-                episode_context_label(v),
+                safe_label(v),
                 unaired_suffix()
             );
         }
@@ -210,7 +217,7 @@ pub(crate) fn library_badge_for(
             return format!(
                 "{} {}{}",
                 text::tr("▶ Resume"),
-                episode_context_label(v),
+                safe_label(v),
                 unaired_suffix()
             );
         }
@@ -224,7 +231,7 @@ pub(crate) fn library_badge_for(
         return format!(
             "{} {}{}",
             text::tr("▶ Resume"),
-            episode_context_label(v),
+            safe_label(v),
             unaired_suffix()
         );
     }

@@ -2381,7 +2381,10 @@ impl DownloadCoordinator {
     /// `(title, text)` for the background notification: how many downloads are
     /// pending/active and the overall progress of the active one.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-    pub(crate) fn background_status(&self) -> (String, String) {
+    pub(crate) fn background_status(
+        &self,
+        mut protected: impl FnMut(&DownloadJob) -> bool,
+    ) -> (String, String) {
         let state = self.inner.state();
         let active = state
             .manifest
@@ -2409,7 +2412,11 @@ impl DownloadCoordinator {
         let title = text::downloading_files(pending);
         let text = match active {
             Some(job) => {
-                let name = first_line(&job.display);
+                let name = if protected(job) {
+                    text::tr("Downloading").into()
+                } else {
+                    first_line(&job.display)
+                };
                 match job
                     .resource_progress
                     .or(job.total_bytes.map(|total| (job.bytes_downloaded, total)))
@@ -2781,10 +2788,19 @@ impl Bridge {
     /// manifest. Completed episode jobs only; movies and partial transfers
     /// are not listed here.
     pub(super) fn downloads_list_to_ui(&self) {
-        let rows = completed_episode_download_rows(
-            self.downloads.completed_episode_jobs(),
-            read_episodes_cache_for,
-        );
+        let jobs = self.downloads.completed_episode_jobs();
+        let protected_jobs: HashSet<_> = {
+            let state = self.shared.lock().unwrap();
+            jobs.iter()
+                .filter(|job| {
+                    spoiler::hidden(&state, &job.media_type, &job.media_id, &job.request_id)
+                })
+                .map(|job| job.id.clone())
+                .collect()
+        };
+        let rows = completed_episode_download_rows(jobs, read_episodes_cache_for, |job| {
+            protected_jobs.contains(&job.id)
+        });
         if let Some(app) = self.app() {
             app.set_downloads_rows(Rc::new(VecModel::from(rows)).into());
         }
@@ -2879,8 +2895,40 @@ impl Bridge {
     pub(super) fn refresh_download_background_status(&self) {
         #[cfg(target_os = "android")]
         {
+            // An outgoing profile callback must not publish its local policy
+            // after another profile has become the selected notification owner.
+            if !profiles::is_current(&profiles::capture()) {
+                return;
+            }
             let busy = self.downloads.has_active_work();
-            let (title, text) = self.downloads.background_status();
+            // Snapshot policy before entering the coordinator lock. Raw source
+            // labels may contain episode names even on legacy/no-cache jobs.
+            let jobs = self.downloads.jobs();
+            let active_profile = profiles::active_context().id;
+            let (protection, watched) = {
+                let state = self.shared.lock().unwrap();
+                let watched = jobs
+                    .iter()
+                    .filter_map(|job| {
+                        let key = progress_map_key(&job.media_id, &job.request_id);
+                        state
+                            .progress
+                            .get(&key)
+                            .is_some_and(|progress| progress.watched)
+                            .then_some(key)
+                    })
+                    .collect::<HashSet<_>>();
+                (state.cache_settings.spoiler_protection, watched)
+            };
+            let (title, text) = self.downloads.background_status(|job| {
+                // The active job/owners can change after the snapshot. Check
+                // ownership on the exact row selected under the coordinator
+                // lock; a new episode without watched evidence stays hidden.
+                let locally_protected = protection
+                    && job.media_type != "movie"
+                    && !watched.contains(&progress_map_key(&job.media_id, &job.request_id));
+                spoiler::download_notification_hidden(locally_protected, &active_profile, job)
+            });
             crate::app::android_bg::set_download_service(busy, &title, &text);
         }
     }
@@ -2917,8 +2965,9 @@ impl Bridge {
 fn completed_episode_download_rows(
     jobs: Vec<DownloadJob>,
     mut read_episodes: impl FnMut(&str, &str) -> Option<Vec<Video>>,
+    mut protected: impl FnMut(&DownloadJob) -> bool,
 ) -> Vec<DownloadRow> {
-    let mut labels: HashMap<(String, String), HashMap<String, String>> = HashMap::new();
+    let mut labels: HashMap<(String, String), HashMap<String, (String, String)>> = HashMap::new();
     jobs.into_iter()
         .map(|job| {
             // Prefer the real episode label from the cached episode list;
@@ -2929,17 +2978,30 @@ fn completed_episode_download_rows(
                     let mut by_id = HashMap::new();
                     for video in read_episodes(&job.media_type, &job.media_id).unwrap_or_default() {
                         // Match the previous first-matching-video behavior.
-                        by_id
-                            .entry(video.id.clone())
-                            .or_insert_with(|| episode_context_label(&video));
+                        by_id.entry(video.id.clone()).or_insert_with(|| {
+                            (episode_context_label(&video), episode_se_label(&video))
+                        });
                     }
                     by_id
                 });
+            let protected = protected(&job);
             let label = title_labels
                 .get(&job.request_id)
-                .cloned()
-                .unwrap_or_else(|| fallback_episode_label(&job.request_id));
-            let display = if job.display.trim().is_empty() {
+                .map(|(label, number)| {
+                    if protected {
+                        number.clone()
+                    } else {
+                        label.clone()
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if protected {
+                        spoiler::numbered_download_label(None, &job.request_id)
+                    } else {
+                        fallback_episode_label(&job.request_id)
+                    }
+                });
+            let display = if protected || job.display.trim().is_empty() {
                 String::new()
             } else {
                 first_line(&job.display)
@@ -2951,12 +3013,16 @@ fn completed_episode_download_rows(
             };
             let size = format_bytes(job.total_bytes.unwrap_or(job.bytes_downloaded));
             let details = match job.file_name.as_deref() {
-                Some(name) if !name.is_empty() => format!("{name} · {size}"),
+                Some(name) if !protected && !name.is_empty() => format!("{name} · {size}"),
                 _ => size,
             };
             DownloadRow {
                 id: SharedString::from(&job.id),
-                title: SharedString::from(&job.title),
+                title: if protected && job.media_type.is_empty() {
+                    text::tr("Recovered files").into()
+                } else {
+                    SharedString::from(&job.title)
+                },
                 subtitle: SharedString::from(&subtitle),
                 details: SharedString::from(&details),
             }
@@ -3142,6 +3208,196 @@ mod tests {
     }
 
     #[test]
+    fn spoiler_download_inventory_hides_source_names_and_uses_safe_missing_metadata_fallbacks() {
+        let jobs = ["cached", "show:1:2", "OpaqueSecret"]
+            .into_iter()
+            .map(|id| DownloadJob {
+                id: id.into(),
+                media_id: "show".into(),
+                media_type: "series".into(),
+                request_id: id.into(),
+                title: "Safe show".into(),
+                display: "SourceSecret".into(),
+                file_name: Some("FinaleSecret.mkv".into()),
+                total_bytes: Some(512),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let read = |_: &str, _: &str| {
+            Some(vec![Video {
+                id: "cached".into(),
+                name: "Betrayal title".into(),
+                season: Some(1),
+                episode: Some(1),
+                ..Default::default()
+            }])
+        };
+        let protected = completed_episode_download_rows(jobs.clone(), read, |_| true);
+        assert_eq!(
+            protected
+                .iter()
+                .map(|row| row.subtitle.as_str())
+                .collect::<Vec<_>>(),
+            ["S1 E1", "S1 E2", "Episode"]
+        );
+        assert!(protected.iter().all(|row| row.title == "Safe show"
+            && !row.details.contains("Secret")
+            && row.details.contains("512")));
+        let revealed = completed_episode_download_rows(jobs, read, |job| job.id != "cached");
+        assert!(revealed[0].subtitle.contains("Betrayal title"));
+        assert!(revealed[0].subtitle.contains("SourceSecret"));
+        assert!(revealed[0].details.contains("FinaleSecret"));
+        assert_eq!(revealed[2].subtitle.as_str(), "Episode");
+    }
+
+    #[test]
+    fn spoiler_download_notification_keeps_counts_and_progress_without_legacy_names() {
+        let coordinator = DownloadCoordinator::new(temp_root("spoiler-notification"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "active", DownloadPhase::Downloading, false);
+        {
+            let mut downloads = coordinator.inner.state();
+            let job = &mut downloads.manifest.jobs[0];
+            job.media_type = "series".into();
+            job.media_id = "spoiler-downloads".into();
+            job.request_id = "opaque".into();
+            job.display = "Secret episode filename.mkv\n1080p".into();
+            job.total_bytes = Some(100);
+            job.bytes_downloaded = 50;
+        }
+        let mut state = Shared::default();
+        state.cache_settings.spoiler_protection = true;
+        let status = || {
+            coordinator.background_status(|job| {
+                spoiler::notification_hidden(
+                    &state,
+                    &job.media_type,
+                    &job.media_id,
+                    &job.request_id,
+                )
+            })
+        };
+        let (title, body) = status();
+        assert!(title.contains('1'));
+        assert!(body.contains("50"));
+        assert!(!body.contains("Secret"));
+        spoiler::reveal("series", "spoiler-downloads", "opaque");
+        assert!(
+            !status().1.contains("Secret"),
+            "foreground reveal cannot authorize lockscreen metadata"
+        );
+        Bridge::set_episode_watched_locked(
+            &mut state.progress,
+            "spoiler-downloads",
+            "opaque",
+            true,
+        );
+        assert!(
+            coordinator
+                .background_status(|job| spoiler::notification_hidden(
+                    &state,
+                    &job.media_type,
+                    &job.media_id,
+                    &job.request_id
+                ))
+                .1
+                .contains("Secret episode")
+        );
+        let _ = fs::remove_dir_all(&coordinator.inner.root);
+    }
+
+    #[test]
+    fn spoiler_download_notification_redacts_inactive_owner_after_profile_switch() {
+        let coordinator = DownloadCoordinator::new(temp_root("spoiler-notification-owner"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "owned", DownloadPhase::Downloading, false);
+        {
+            let mut downloads = coordinator.inner.state();
+            let job = &mut downloads.manifest.jobs[0];
+            job.media_type = "series".into();
+            job.media_id = "show".into();
+            job.request_id = "opaque".into();
+            job.display = "Secret ending filename.mkv".into();
+            job.total_bytes = Some(100);
+            job.bytes_downloaded = 25;
+            job.offline.manual_keep = false;
+            job.offline.owners.insert(crate::download::offline::Owner {
+                profile: "alice".into(),
+                policy: "alice-show".into(),
+            });
+        }
+        let mut alice = Shared::default();
+        alice.cache_settings.spoiler_protection = true;
+        let mut bob = Shared::default();
+        assert!(!bob.cache_settings.spoiler_protection);
+        // Bob's local watch flag cannot authorize Alice's device-wide job.
+        Bridge::set_episode_watched_locked(&mut bob.progress, "show", "opaque", true);
+        let before = coordinator.background_status(|job| {
+            spoiler::download_notification_hidden(
+                spoiler::notification_hidden(
+                    &alice,
+                    &job.media_type,
+                    &job.media_id,
+                    &job.request_id,
+                ),
+                "alice",
+                job,
+            )
+        });
+        let after = coordinator.background_status(|job| {
+            spoiler::download_notification_hidden(
+                spoiler::notification_hidden(&bob, &job.media_type, &job.media_id, &job.request_id),
+                "bob",
+                job,
+            )
+        });
+        assert_eq!(before, after);
+        assert!(after.0.contains('1'));
+        assert!(after.1.contains("25"));
+        assert!(!after.1.contains("Secret"));
+        coordinator.inner.state().manifest.jobs[0]
+            .offline
+            .manual_keep = true;
+        assert!(
+            !coordinator
+                .background_status(|job| spoiler::download_notification_hidden(
+                    spoiler::notification_hidden(
+                        &bob,
+                        &job.media_type,
+                        &job.media_id,
+                        &job.request_id
+                    ),
+                    "bob",
+                    job
+                ))
+                .1
+                .contains("Secret"),
+            "retaining the file does not authorize an inactive owner's metadata"
+        );
+        coordinator.inner.state().manifest.jobs[0]
+            .offline
+            .owners
+            .clear();
+        assert!(
+            coordinator
+                .background_status(|job| spoiler::download_notification_hidden(
+                    spoiler::notification_hidden(
+                        &bob,
+                        &job.media_type,
+                        &job.media_id,
+                        &job.request_id
+                    ),
+                    "bob",
+                    job
+                ))
+                .1
+                .contains("Secret"),
+            "ordinary local unprotected notifications retain their presentation"
+        );
+        let _ = fs::remove_dir_all(&coordinator.inner.root);
+    }
+
+    #[test]
     fn downloaded_episode_labels_read_each_typed_title_once_per_publication() {
         let jobs = (0..500)
             .map(|index| {
@@ -3156,27 +3412,35 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut calls = HashMap::new();
-        let rows = completed_episode_download_rows(jobs.clone(), |kind, id| {
-            *calls.entry((kind.to_owned(), id.to_owned())).or_insert(0) += 1;
-            (id != "missing").then(|| {
-                vec![Video {
-                    id: "episode".into(),
-                    name: format!("{kind} cached title"),
-                    ..Default::default()
-                }]
-            })
-        });
+        let rows = completed_episode_download_rows(
+            jobs.clone(),
+            |kind, id| {
+                *calls.entry((kind.to_owned(), id.to_owned())).or_insert(0) += 1;
+                (id != "missing").then(|| {
+                    vec![Video {
+                        id: "episode".into(),
+                        name: format!("{kind} cached title"),
+                        ..Default::default()
+                    }]
+                })
+            },
+            |_| false,
+        );
         assert_eq!(calls.len(), 3);
         assert!(calls.values().all(|count| *count == 1));
         assert_eq!(rows[0].subtitle.as_str(), "series cached title");
         assert_eq!(rows[497].subtitle.as_str(), "anime cached title");
-        let refreshed = completed_episode_download_rows(jobs, |_, _| {
-            Some(vec![Video {
-                id: "episode".into(),
-                name: "New metadata".into(),
-                ..Default::default()
-            }])
-        });
+        let refreshed = completed_episode_download_rows(
+            jobs,
+            |_, _| {
+                Some(vec![Video {
+                    id: "episode".into(),
+                    name: "New metadata".into(),
+                    ..Default::default()
+                }])
+            },
+            |_| false,
+        );
         assert_eq!(
             refreshed[0].subtitle.as_str(),
             "New metadata",
@@ -4416,7 +4680,7 @@ mod tests {
             false,
         );
         assert!(coordinator.has_active_work());
-        let (title, _text) = coordinator.background_status();
+        let (title, _text) = coordinator.background_status(|_| false);
         assert!(title.contains('1'), "{title}");
 
         let root = coordinator.inner.root.clone();

@@ -2271,9 +2271,18 @@ impl Bridge {
             else {
                 continue;
             };
+            let protected = spoiler::hidden(&state, &c.type_, &c.series_id, &c.episode_id);
+            let episode_artwork = episode_artwork
+                && spoiler::artwork_allowed(&state, &c.type_, &c.series_id, &c.episode_id);
             let video = episodes.iter().find(|v| v.id == c.episode_id);
             let subtitle = video
-                .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
+                .map(|v| {
+                    if protected {
+                        episode_se_label(v)
+                    } else {
+                        format!("{} · {}", episode_badge(v), episode_row_label(v))
+                    }
+                })
                 .unwrap_or_else(|| text::tr("Resume").to_string());
             let record = state
                 .progress
@@ -2298,7 +2307,10 @@ impl Bridge {
                 episode_id: c.episode_id.clone(),
                 title: e.name.clone(),
                 subtitle,
-                episode_title: video.map(episode_row_label).unwrap_or_default(),
+                episode_title: video
+                    .filter(|_| !protected)
+                    .map(episode_row_label)
+                    .unwrap_or_default(),
                 ep_no: video.map(episode_badge).unwrap_or_default(),
                 remaining: if new {
                     text::new_episodes(
@@ -2640,7 +2652,14 @@ impl Bridge {
             let Some(v) = episodes.iter().find(|v| v.id == u.episode_id) else {
                 continue;
             };
-            let subtitle = format!("{} · {}", episode_badge(v), episode_row_label(v));
+            let protected = spoiler::hidden(&state, &u.type_, &u.series_id, &u.episode_id);
+            let episode_artwork = episode_artwork
+                && spoiler::artwork_allowed(&state, &u.type_, &u.series_id, &u.episode_id);
+            let subtitle = if protected {
+                episode_se_label(v)
+            } else {
+                format!("{} · {}", episode_badge(v), episode_row_label(v))
+            };
             let date = v
                 .released
                 .as_deref()
@@ -2652,7 +2671,11 @@ impl Bridge {
                 title: e.name.clone(),
                 subtitle,
                 date,
-                episode_title: episode_row_label(v),
+                episode_title: if protected {
+                    String::new()
+                } else {
+                    episode_row_label(v)
+                },
                 ep_no: episode_badge(v),
                 art_url,
                 poster_url: e.poster_url.clone(),
@@ -2817,6 +2840,10 @@ impl Bridge {
         };
         let Some(entry) = entry else { return };
         match action {
+            3 => {
+                spoiler::reveal(&entry.type_, &entry.series_id, &entry.episode_id);
+                self.refresh_spoiler_presentation();
+            }
             0 => self.episode_home_picked(entry),
             1 => {
                 self.episode_home_enter(&entry.type_, &entry.series_id);
@@ -3479,7 +3506,21 @@ pub(super) fn upcoming_row(
         .find(|e| e.id == u.series_id && e.type_ == u.type_)?;
     let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
     let v = episodes.iter().find(|v| v.id == u.episode_id)?;
-    let subtitle = format!("{} · {}", episode_badge(v), episode_row_label(v));
+    let settings = active_cache_settings();
+    let progress = read_progress_map();
+    let record = progress.get(&progress_map_key(&u.series_id, &u.episode_id));
+    let protected = settings.spoiler_protection
+        && !record.is_some_and(|p| p.watched)
+        && !spoiler::revealed(&u.type_, &u.series_id, &u.episode_id);
+    let episode_artwork = episode_artwork
+        && !protected
+        && (settings.show_unwatched_thumbs
+            || record.is_some_and(|p| p.watched || p.position_secs > 0.0));
+    let subtitle = if protected {
+        episode_se_label(v)
+    } else {
+        format!("{} · {}", episode_badge(v), episode_row_label(v))
+    };
     let date = v
         .released
         .as_deref()
@@ -3492,7 +3533,12 @@ pub(super) fn upcoming_row(
         title: SharedString::from(&e.name),
         subtitle: SharedString::from(&subtitle),
         date: SharedString::from(&date),
-        episode_title: episode_row_label(v).into(),
+        episode_title: if protected {
+            String::new()
+        } else {
+            episode_row_label(v)
+        }
+        .into(),
         ep_no: episode_badge(v).into(),
         art_url: art_url.into(),
         poster,
@@ -6284,6 +6330,7 @@ pub(super) fn prepare_progress_home(
                     .find(|e| e.id == c.series_id && e.type_ == c.type_)?;
                 let cached = metadata.episodes(&c.type_, &c.series_id);
                 let videos = cached.as_slice();
+                let protected = spoiler::hidden(state, &c.type_, &c.series_id, &c.episode_id);
                 let video = videos.iter().find(|v| v.id == c.episode_id);
                 let record = state
                     .progress
@@ -6303,9 +6350,18 @@ pub(super) fn prepare_progress_home(
                     episode_id: c.episode_id.clone(),
                     title: e.name.clone(),
                     subtitle: video
-                        .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
+                        .map(|v| {
+                            if protected {
+                                episode_se_label(v)
+                            } else {
+                                format!("{} · {}", episode_badge(v), episode_row_label(v))
+                            }
+                        })
                         .unwrap_or_else(|| text::tr("Resume").into()),
-                    episode_title: video.map(episode_row_label).unwrap_or_default(),
+                    episode_title: video
+                        .filter(|_| !protected)
+                        .map(episode_row_label)
+                        .unwrap_or_default(),
                     ep_no: video.map(episode_badge).unwrap_or_default(),
                     remaining: if new {
                         text::new_episodes(
@@ -6317,7 +6373,13 @@ pub(super) fn prepare_progress_home(
                     art_url: home_card_art_url(
                         &e.poster_url,
                         video,
-                        state.cache_settings.home_episode_artwork,
+                        state.cache_settings.home_episode_artwork
+                            && spoiler::artwork_allowed(
+                                state,
+                                &c.type_,
+                                &c.series_id,
+                                &c.episode_id,
+                            ),
                     ),
                     poster_url: e.poster_url.clone(),
                     progress: if new {
@@ -6353,10 +6415,15 @@ pub(super) fn prepare_progress_home(
                     .find(|e| e.id == u.series_id && e.type_ == u.type_)?;
                 let cached = metadata.episodes(&u.type_, &u.series_id);
                 let video = cached.iter().find(|v| v.id == u.episode_id)?;
+                let protected = spoiler::hidden(state, &u.type_, &u.series_id, &u.episode_id);
                 Some(UpcomingRowDraft {
                     id: u.series_id.clone(),
                     title: e.name.clone(),
-                    subtitle: format!("{} · {}", episode_badge(video), episode_row_label(video)),
+                    subtitle: if protected {
+                        episode_se_label(video)
+                    } else {
+                        format!("{} · {}", episode_badge(video), episode_row_label(video))
+                    },
                     date: video
                         .released
                         .as_deref()
@@ -6364,12 +6431,22 @@ pub(super) fn prepare_progress_home(
                             Bridge::format_human_date(date, state.cache_settings.date_relative)
                         })
                         .unwrap_or_default(),
-                    episode_title: episode_row_label(video),
+                    episode_title: if protected {
+                        String::new()
+                    } else {
+                        episode_row_label(video)
+                    },
                     ep_no: episode_badge(video),
                     art_url: home_card_art_url(
                         &e.poster_url,
                         Some(video),
-                        state.cache_settings.home_episode_artwork,
+                        state.cache_settings.home_episode_artwork
+                            && spoiler::artwork_allowed(
+                                state,
+                                &u.type_,
+                                &u.series_id,
+                                &u.episode_id,
+                            ),
                     ),
                     poster_url: e.poster_url.clone(),
                     index,

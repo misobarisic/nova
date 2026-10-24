@@ -9,6 +9,23 @@ use nova_playback_api::PlaybackAction;
 use std::time::Instant;
 use unicode_normalization::UnicodeNormalization;
 
+fn party_episode_caption(state: &Shared, media: &PartyMedia) -> String {
+    if spoiler::hidden(
+        state,
+        &media.identity.media_type,
+        &media.identity.title_id,
+        &media.identity.episode_id,
+    ) {
+        match (media.season, media.episode) {
+            (Some(season), Some(episode)) => format!("S{season} E{episode}"),
+            (_, Some(episode)) => format!("E{episode}"),
+            _ => text::tr("Episode").into(),
+        }
+    } else {
+        media.identity.episode.clone()
+    }
+}
+
 fn participant_initial(name: &str) -> SharedString {
     name.trim()
         .nfc()
@@ -260,6 +277,25 @@ impl Bridge {
         app.on_party_leave(move || b.party_leave());
         let b = self.clone();
         app.on_party_choose_stream(move || b.party_choose_stream());
+        let b = self.clone();
+        app.on_party_reveal_spoilers(move || {
+            let media = b
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_ref()
+                .and_then(|room| room.media.clone());
+            if let Some(media) = media {
+                spoiler::reveal(
+                    &media.identity.media_type,
+                    &media.identity.title_id,
+                    &media.identity.episode_id,
+                );
+                b.refresh_spoiler_presentation();
+            }
+        });
         let b = self.clone();
         app.on_party_choose_media(move || b.party_prepare_media_change(true));
         let b = self.clone();
@@ -1019,7 +1055,19 @@ impl Bridge {
         app.set_party_has_media(media.is_some());
         app.set_party_can_return_to_player(app.get_player_open());
         app.set_party_title(media.map_or("", |m| m.identity.title.as_str()).into());
-        app.set_party_episode(media.map_or("", |m| m.identity.episode.as_str()).into());
+        app.set_party_spoilers_hidden(media.is_some_and(|media| {
+            let state = self.shared.lock().unwrap();
+            spoiler::hidden(
+                &state,
+                &media.identity.media_type,
+                &media.identity.title_id,
+                &media.identity.episode_id,
+            )
+        }));
+        let episode = media
+            .map(|media| party_episode_caption(&self.shared.lock().unwrap(), media))
+            .unwrap_or_default();
+        app.set_party_episode(episode.into());
         let duration = media.map_or(0.0, |m| m.duration);
         let position = room
             .timeline
@@ -1127,6 +1175,46 @@ mod tests {
             assert_eq!(participant_initial(name), initial);
         }
     }
+    #[test]
+    fn spoiler_party_caption_uses_local_watched_state_and_exact_reveal() {
+        let mut state = Shared::default();
+        state.cache_settings.spoiler_protection = true;
+        let mut first = media("spoiler-party", 1);
+        first.identity.episode = "The surprise ending".into();
+        assert_eq!(party_episode_caption(&state, &first), "S1 E1");
+        let mut same_number = first.clone();
+        same_number.identity.title_id = "unproven-provider".into();
+        Bridge::set_episode_watched_locked(
+            &mut state.progress,
+            &same_number.identity.title_id,
+            &same_number.identity.episode_id,
+            true,
+        );
+        assert_eq!(party_episode_caption(&state, &first), "S1 E1");
+        spoiler::reveal("series", "spoiler-party", &first.identity.episode_id);
+        assert_eq!(party_episode_caption(&state, &first), "The surprise ending");
+        let mut second = media("spoiler-party", 2);
+        second.identity.episode = "A second surprise".into();
+        assert_eq!(party_episode_caption(&state, &second), "S1 E2");
+        Bridge::set_episode_watched_locked(
+            &mut state.progress,
+            "spoiler-party",
+            &second.identity.episode_id,
+            true,
+        );
+        assert_eq!(party_episode_caption(&state, &second), "A second surprise");
+        Bridge::set_episode_watched_locked(
+            &mut state.progress,
+            "spoiler-party",
+            &second.identity.episode_id,
+            false,
+        );
+        assert_eq!(party_episode_caption(&state, &second), "S1 E2");
+        second.season = None;
+        second.episode = None;
+        assert_eq!(party_episode_caption(&state, &second), "Episode");
+    }
+
     fn media(id: &str, episode: u32) -> PartyMedia {
         PartyMedia {
             identity: MediaIdentity {

@@ -219,6 +219,9 @@ pub(super) fn visible_native_videos<'a>(state: &Shared, modal: &'a ModalItem) ->
     }
 }
 pub(super) fn season_artwork(state: &Shared, modal: &ModalItem, season: u32) -> Option<String> {
+    if state.cache_settings.spoiler_protection {
+        return None;
+    }
     if state.catalog_detail.active() {
         episodes(state, modal, season)
             .iter()

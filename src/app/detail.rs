@@ -139,7 +139,8 @@ impl EpisodePreviewRequest {
             && revision == self.image_revision
             && state.stream_generation == self.stream_generation
             && state.modal_item.as_ref().is_some_and(|modal| {
-                Arc::ptr_eq(&modal.open_token, &self.open_token)
+                !spoiler::hidden(state, &modal.type_, &modal.id, &self.episode_id)
+                    && Arc::ptr_eq(&modal.open_token, &self.open_token)
                     && modal.request_id == self.episode_id
             })
     }
@@ -314,7 +315,7 @@ impl Bridge {
         // Reset any leftover episode-picker state from a previous item.
         app.set_modal_episodes(false);
         app.set_detail_deep_stream(false);
-        apply_stream_episode_context(&app, None);
+        self.apply_stream_episode_context(&app, None);
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
         app.set_season_combo_idx(-1);
         app.set_season_cards(Rc::new(VecModel::<SeasonCard>::from(vec![])).into());
@@ -1565,7 +1566,7 @@ impl Bridge {
             if !app.get_episode_context().is_empty()
                 && let Some(video) = selected
             {
-                apply_stream_episode_context(&app, Some(&video));
+                self.apply_stream_episode_context(&app, Some(&video));
                 if thumbnail_changed
                     && !app.get_player_open()
                     && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
@@ -1815,7 +1816,7 @@ impl Bridge {
                 .unwrap_or_default();
             let episodes: Vec<_> = catalog_detail::episodes(&state, m, season)
                 .into_iter()
-                .filter(|v| episode_matches_filter(v, &filter))
+                .filter(|v| spoiler::matches_filter(&state, m, v, &filter))
                 .collect();
             let total = episodes.len();
             let page = m.episode_page.min(page_count(total).saturating_sub(1));
@@ -1827,14 +1828,26 @@ impl Bridge {
                 .map(|v| {
                     let (watched, progress, resume_suffix) =
                         Self::episode_watch_state(&state.progress, &m.id, &v.id);
-                    let label = episode_row_label(v);
+                    let protected = spoiler::hidden(&state, &m.type_, &m.id, &v.id);
+                    let label = if protected {
+                        episode_se_label(v)
+                    } else {
+                        episode_row_label(v)
+                    };
                     // No checkmark prefix: watched state already shows on the
                     // artwork disc overlay.
                     let text = SharedString::from(label);
                     // The artwork card keeps release metadata separate from
                     // its two-line synopsis. Bound the supplied overview before
                     // Slint elides it at the current card width.
-                    let details = Self::episode_details(v.overview.as_deref(), &resume_suffix);
+                    let details = Self::episode_details(
+                        if protected {
+                            None
+                        } else {
+                            v.overview.as_deref()
+                        },
+                        &resume_suffix,
+                    );
                     let date = v
                         .released
                         .as_deref()
@@ -1843,7 +1856,8 @@ impl Bridge {
                                 .or_else(|| Some(d.trim().to_string()))
                         })
                         .unwrap_or_default();
-                    let show_thumb = Self::episode_thumb_visible(show_unwatched, watched, progress);
+                    let show_thumb = !protected
+                        && Self::episode_thumb_visible(show_unwatched, watched, progress);
                     RowSeed {
                         id: v.id.as_str().into(),
                         artwork_identity: detail_artwork_identity(
@@ -1989,7 +2003,22 @@ impl Bridge {
                     Self::episode_watch_state(&state.progress, &modal.id, &video.id);
                 row.watched = watched;
                 row.progress = progress;
-                row.details = Self::episode_details(video.overview.as_deref(), &suffix).into();
+                let protected = spoiler::hidden(&state, &modal.type_, &modal.id, &video.id);
+                row.text = if protected {
+                    episode_se_label(video)
+                } else {
+                    episode_row_label(video)
+                }
+                .into();
+                row.details = Self::episode_details(
+                    if protected {
+                        None
+                    } else {
+                        video.overview.as_deref()
+                    },
+                    &suffix,
+                )
+                .into();
                 row.lines = (Self::estimate_stream_lines(&row.text)
                     + if row.details.is_empty() {
                         0
@@ -1997,11 +2026,12 @@ impl Bridge {
                         Self::estimate_stream_lines(&row.details)
                     })
                 .max(1);
-                let visible = Self::episode_thumb_visible(
-                    state.cache_settings.show_unwatched_thumbs,
-                    watched,
-                    progress,
-                );
+                let visible = !protected
+                    && Self::episode_thumb_visible(
+                        state.cache_settings.show_unwatched_thumbs,
+                        watched,
+                        progress,
+                    );
                 row.artwork_identity = detail_artwork_identity(
                     modal,
                     "episode",
@@ -2027,7 +2057,8 @@ impl Bridge {
                         SharedString::default()
                     };
                 }
-                if old.watched != row.watched
+                if old.text != row.text
+                    || old.watched != row.watched
                     || old.progress != row.progress
                     || old.details != row.details
                     || old.lines != row.lines
@@ -2118,7 +2149,7 @@ impl Bridge {
                     .map_or(0, |&season| {
                         catalog_detail::episodes(&state, m, season)
                             .into_iter()
-                            .filter(|v| episode_matches_filter(v, &filter))
+                            .filter(|v| spoiler::matches_filter(&state, m, v, &filter))
                             .count()
                     })
             })
@@ -2320,7 +2351,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_modal_episodes(true);
             app.set_detail_deep_stream(false);
-            apply_stream_episode_context(&app, None);
+            self.apply_stream_episode_context(&app, None);
             app.set_season_names(Rc::new(VecModel::from(season_names)).into());
             app.set_season_combo_idx(season_idx as i32);
             self.clear_streams();
@@ -2414,7 +2445,7 @@ impl Bridge {
         let ordered: Vec<String> = season_eps.iter().map(|v| v.id.clone()).collect();
         let video = *season_eps
             .iter()
-            .filter(|v| episode_matches_filter(v, &filter))
+            .filter(|v| spoiler::matches_filter(&state, m, v, &filter))
             .nth(index)?;
         Some((m.id.clone(), video.id.clone(), ordered))
     }
@@ -2504,6 +2535,20 @@ impl Bridge {
         let Some((series_id, episode_id, ordered)) = self.resolve_filtered_episode(index) else {
             return;
         };
+        if action == 5 {
+            let type_ = self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .map(|m| m.type_.clone());
+            if let Some(type_) = type_ {
+                spoiler::reveal(&type_, &series_id, &episode_id);
+                self.refresh_spoiler_presentation();
+            }
+            return;
+        }
         let mut watched_ids: Vec<String> = Vec::new();
         {
             let mut state = self.shared.lock().unwrap();
@@ -2652,7 +2697,7 @@ impl Bridge {
             let season_eps = catalog_detail::episodes(&state, m, season);
             let episodes: Vec<&&Video> = season_eps
                 .iter()
-                .filter(|v| episode_matches_filter(v, &filter))
+                .filter(|v| spoiler::matches_filter(&state, m, v, &filter))
                 .collect();
             let video = match episodes.get(index) {
                 Some(v) => v,
@@ -2749,7 +2794,7 @@ impl Bridge {
             // deep-link back shortcut ends here (`continue_picked` sets it
             // again afterwards for its own auto-opened streams).
             app.set_detail_deep_stream(false);
-            apply_stream_episode_context(&app, Some(&video));
+            self.apply_stream_episode_context(&app, Some(&video));
             self.clear_streams();
             self.set_stream_hint(Some(StreamHint::Fixed("Loading streams…")));
             // Streams render inside the Episodes tab for series.
@@ -2847,6 +2892,16 @@ impl Bridge {
     }
 
     fn load_player_episode_backdrop(&self, series_id: String, episode_id: String, url: String) {
+        {
+            let state = self.shared.lock().unwrap();
+            if state
+                .modal_item
+                .as_ref()
+                .is_some_and(|m| spoiler::hidden(&state, &m.type_, &series_id, &episode_id))
+            {
+                return;
+            }
+        }
         let token = self
             .shared
             .lock()
@@ -2864,7 +2919,8 @@ impl Bridge {
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let state = bridge.shared.lock().unwrap();
                 let current = state.modal_item.as_ref().is_some_and(|item| {
-                    Arc::ptr_eq(&item.open_token, &token)
+                    !spoiler::hidden(&state, &item.type_, &series_id, &episode_id)
+                        && Arc::ptr_eq(&item.open_token, &token)
                         && item.id == series_id
                         && item.request_id == episode_id
                         && item.videos.iter().any(|video| {
@@ -2905,7 +2961,7 @@ impl Bridge {
             // The episode list is on screen now, so a deep-link back shortcut
             // no longer applies (system back returns here from new streams).
             app.set_detail_deep_stream(false);
-            apply_stream_episode_context(&app, None);
+            self.apply_stream_episode_context(&app, None);
             self.clear_streams();
             self.set_stream_hint(None);
             // Reveal the Episodes tab underneath the fullscreen selector.
@@ -4402,6 +4458,173 @@ mod source_lookup_tests {
             description: String::new(),
             genres: Vec::new(),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn spoiler_models_reveal_only_the_exact_episode_without_mutating_progress() {
+        const ROOT: &str = "NOVA_SPOILER_MODELS_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-spoiler-models-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root).env("XDG_CACHE_HOME", root.join("cache")).args(["--exact", "app::detail::source_lookup_tests::spoiler_models_reveal_only_the_exact_episode_without_mutating_progress", "--nocapture"]).output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let mut selected = modal();
+        selected.videos.truncate(2);
+        selected.seasons = vec![1];
+        selected.season_index = 0;
+        for (index, video) in selected.videos.iter_mut().enumerate() {
+            video.name = format!("Secret twist {index}");
+            video.overview = Some(format!("Revealing description {index}"));
+            video.thumbnail = Some(format!("https://example.test/spoiler-{index}"));
+            nova_media::cache::decoded_cache_insert(
+                &image_cache_key(
+                    video.thumbnail.as_ref().unwrap(),
+                    ImageUse::EpisodeThumbnail,
+                ),
+                SharedPixelBuffer::<Rgba8Pixel>::new(64, 36),
+            );
+        }
+        let series = selected.id.clone();
+        let first = selected.videos[0].clone();
+        let second = selected.videos[1].clone();
+        write_json(&episodes_key("series", &series), &selected.videos);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.spoiler_protection = true;
+            state.cache_settings.home_episode_artwork = true;
+            state.entries.push(serde_json::from_value(serde_json::json!({"id":series,"type_":"series","name":"Safe show","poster_url":"https://example.test/show"})).unwrap());
+            state.continue_list.push(ContinueEntry {
+                series_id: series.clone(),
+                type_: "series".into(),
+                episode_id: first.id.clone(),
+                ..Default::default()
+            });
+            state.modal_item = Some(selected);
+        }
+        app.set_episode_filter("Secret twist".into());
+        assert!(
+            bridge.current_episode_page().2.is_empty(),
+            "hidden names cannot be discovered by filtering"
+        );
+        app.set_episode_filter("e1".into());
+        assert_eq!(bridge.current_episode_page().2.len(), 1);
+        app.set_episode_filter("".into());
+        let rows = bridge.current_episode_page().2;
+        assert_eq!(rows[0].text.as_str(), "S1 E1");
+        assert!(
+            rows.iter()
+                .all(|row| row.details.is_empty() && !row.has_thumb)
+        );
+        bridge.apply_stream_episode_context(&app, Some(&first));
+        assert_eq!(app.get_episode_context().as_str(), "S1 E1");
+        assert!(app.get_stream_episode_title().is_empty());
+        assert!(
+            bridge
+                .current_season_cards()
+                .iter()
+                .all(|row| !row.has_thumb)
+        );
+        let home = bridge.current_continue_rows();
+        assert_eq!(home.len(), 1);
+        assert!(home[0].episode_title.is_empty());
+        assert_eq!(home[0].subtitle.as_str(), "S1 E1");
+        assert!(!home[0].art_url.contains("spoiler-"));
+        // A watched action immediately exposes that episode; unwatching hides
+        // it again, including a previously painted memory-cache thumbnail.
+        app.set_episode_rows(Rc::new(VecModel::from(rows)).into());
+        Bridge::set_episode_watched_locked(
+            &mut bridge.shared.lock().unwrap().progress,
+            &series,
+            &first.id,
+            true,
+        );
+        bridge.refresh_detail_progress_ui();
+        assert_eq!(
+            app.get_episode_rows().row_data(0).unwrap().text.as_str(),
+            "Secret twist 0"
+        );
+        assert!(app.get_episode_rows().row_data(0).unwrap().has_thumb);
+        Bridge::set_episode_watched_locked(
+            &mut bridge.shared.lock().unwrap().progress,
+            &series,
+            &first.id,
+            false,
+        );
+        bridge.refresh_detail_progress_ui();
+        assert_eq!(
+            app.get_episode_rows().row_data(0).unwrap().text.as_str(),
+            "S1 E1"
+        );
+        assert!(!app.get_episode_rows().row_data(0).unwrap().has_thumb);
+        let before = bridge.shared.lock().unwrap().progress.clone();
+        bridge.episode_watch_action(0, 5);
+        let rows = bridge.current_episode_page().2;
+        assert_eq!(rows[0].text.as_str(), "Secret twist 0");
+        assert!(rows[0].details.contains("Revealing description 0"));
+        assert!(rows[0].has_thumb);
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .show_unwatched_thumbs = false;
+        assert!(
+            !bridge.current_episode_page().2[0].has_thumb,
+            "explicit reveal respects the independent thumbnail preference"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .show_unwatched_thumbs = true;
+        assert_eq!(rows[1].text.as_str(), "S1 E2");
+        assert!(rows[1].details.is_empty());
+        assert!(!rows[1].has_thumb);
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(&bridge.shared.lock().unwrap().progress).unwrap()
+        );
+        bridge.apply_stream_episode_context(&app, Some(&second));
+        assert!(app.get_stream_episode_title().is_empty());
+        assert_eq!(
+            bridge.current_continue_rows()[0].episode_title.as_str(),
+            "Secret twist 0"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .id = "another-show".into();
+        assert_eq!(bridge.current_episode_page().2[0].text.as_str(), "S1 E1");
     }
 
     #[test]

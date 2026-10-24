@@ -14,6 +14,7 @@ export global PartyBridge {
     in-out property <bool> paused;
     in-out property <string> title;
     in-out property <string> episode;
+    in-out property <bool> spoilers_hidden;
     in-out property <string> status;
     in-out property <string> error;
     in-out property <string> warning;
@@ -30,6 +31,7 @@ export global PartyBridge {
     callback leave();
     callback choose_media();
     callback choose_stream();
+    callback reveal_spoilers();
     callback copy_invite();
     callback return_to_player();
     callback set_paused(bool);

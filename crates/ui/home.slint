@@ -134,6 +134,10 @@ component ContinueCard inherits Rectangle {
                 title: @tr("Enter series");
                 activated => { root.action_requested(root.popup_new, root.popup_entry, 1); }
             }
+            MenuItem {
+                title: @tr("Reveal episode spoilers");
+                activated => { root.action_requested(root.popup_new, root.popup_entry, 3); }
+            }
             MenuSeparator {}
             MenuItem {
                 title: root.removal_label;
@@ -3241,6 +3245,7 @@ export component HomePage {
                 { label: @tr("Play"), enabled: true },
                 { label: @tr("Enter series"), enabled: true },
                 { label: root.menu_history ? @tr("Remove from watch history") : root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
+                { label: @tr("Reveal episode spoilers"), enabled: !root.menu_history },
             ];
             picked(a) => {
                 if (root.menu_history) {

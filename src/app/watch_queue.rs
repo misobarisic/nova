@@ -429,7 +429,7 @@ impl Bridge {
             state.streams = vec![row];
             state.stream_filter = 0;
         }
-        apply_stream_episode_context(
+        self.apply_stream_episode_context(
             &app,
             (entry.type_ != "movie").then(|| entry.video()).as_ref(),
         );

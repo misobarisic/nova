@@ -350,7 +350,7 @@ impl Bridge {
         if let Some(video) = next {
             if let Some(app) = self.app() {
                 app.set_season_download_status(text::tr("Select a stream for download").into());
-                apply_stream_episode_context(&app, Some(&video));
+                self.apply_stream_episode_context(&app, Some(&video));
             }
             self.start_stream_search(video.id);
             // A season with no stream providers has no completion callback.

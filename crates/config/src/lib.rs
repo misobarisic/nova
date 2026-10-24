@@ -815,6 +815,9 @@ cache_settings_type! {
     /// watched and resumed episodes keep their artwork.
     #[serde(default = "default_true")]
     pub show_unwatched_thumbs: bool,
+    /// Hide unwatched episode artwork, titles and overviews across this profile.
+    #[serde(default)]
+    pub spoiler_protection: bool,
     /// Maximum decoded image cache size in megabytes.
     #[serde(default = "default_lru_mb")]
     pub lru_cache_mb: u32,
@@ -1115,6 +1118,7 @@ impl Default for CacheSettings {
             player_episode_backdrop_max_side: None,
             date_relative: true,
             show_unwatched_thumbs: true,
+            spoiler_protection: false,
             // Keep in step with `default_lru_mb` (the serde default used for
             // settings files written before the field existed).
             lru_cache_mb: 128,
@@ -2145,6 +2149,20 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.home_devices_enabled, visible);
         }
+    }
+
+    #[test]
+    fn spoiler_protection_is_opt_in_and_round_trips_independently_of_thumbnail_visibility() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(!settings.spoiler_protection);
+        assert!(!CacheSettings::default().spoiler_protection);
+        settings.spoiler_protection = true;
+        settings.show_unwatched_thumbs = false;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(restored.spoiler_protection);
+        assert!(!restored.show_unwatched_thumbs);
     }
 
     #[test]

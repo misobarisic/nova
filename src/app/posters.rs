@@ -666,12 +666,14 @@ impl Bridge {
                 {
                     let (watched, progress, _) =
                         Self::episode_watch_state(&state.progress, &m.id, &v.id);
-                    if Self::episode_thumb_visible(
-                        state.cache_settings.show_unwatched_thumbs,
-                        watched,
-                        progress,
-                    ) && let Some(url) =
-                        v.thumbnail.as_deref().filter(|url| !url.trim().is_empty())
+                    if !spoiler::hidden(&state, &m.type_, &m.id, &v.id)
+                        && Self::episode_thumb_visible(
+                            state.cache_settings.show_unwatched_thumbs,
+                            watched,
+                            progress,
+                        )
+                        && let Some(url) =
+                            v.thumbnail.as_deref().filter(|url| !url.trim().is_empty())
                     {
                         candidates.push((
                             url.to_owned(),
@@ -839,11 +841,13 @@ impl Bridge {
                 }
                 let (watched, progress, _) =
                     Self::episode_watch_state(&state.progress, &m.id, &v.id);
-                if Self::episode_thumb_visible(
-                    state.cache_settings.show_unwatched_thumbs,
-                    watched,
-                    progress,
-                ) {
+                if !spoiler::hidden(&state, &m.type_, &m.id, &v.id)
+                    && Self::episode_thumb_visible(
+                        state.cache_settings.show_unwatched_thumbs,
+                        watched,
+                        progress,
+                    )
+                {
                     identities.insert(super::detail::detail_artwork_identity(
                         m,
                         "episode",

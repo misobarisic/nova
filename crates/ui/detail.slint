@@ -1453,6 +1453,7 @@ export component DetailPage {
                 { label: @tr("Clear resume position"), enabled: !root.menu_flag && root.menu_progress > 0 },
                 { label: @tr("Open episode"), enabled: true },
                 { label: @tr("Add to watch queue"), enabled: true },
+                { label: @tr("Reveal episode spoilers"), enabled: true },
             ];
             picked(a) => {
                 if (a == 0) {
@@ -1465,7 +1466,8 @@ export component DetailPage {
                     root.kb_active = false;
                     root.episode_picked(root.menu_idx);
                 } else {
-                    QueueBridge.add_episode(root.menu_idx);
+                    if a == 4 { QueueBridge.add_episode(root.menu_idx); }
+                    else { root.episode_watch_action(root.menu_idx, 5); }
                 }
                 root.close_menu();
             }

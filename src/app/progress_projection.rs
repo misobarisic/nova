@@ -616,6 +616,17 @@ impl Bridge {
         }
         self.refresh_detail_progress_ui();
         self.refresh_watch_queue_progress();
+        // A remote/manual Unwatch must also retract a title already painted
+        // in the retained Settings downloaded-file inventory.
+        let protection = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .spoiler_protection;
+        if protection && self.app().is_some_and(|app| app.get_show_settings()) {
+            self.downloads_list_to_ui();
+        }
         if let Some(app) = self.app() {
             app.set_detail_library_activity_action(action);
         }

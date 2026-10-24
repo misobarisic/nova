@@ -101,6 +101,19 @@ export component SettingsDisplayModule inherits Window {
                     }
                 }
             }
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "spoiler_protection";
+                    row-title: @tr("Spoiler protection");
+                    row-desc: @tr("Hide unwatched episode titles, descriptions and artwork on this profile. Reveal an episode from its options.");
+                    ToggleSwitch {
+                        name: @tr("Spoiler protection");
+                        checked <=> SettingsBridge.spoiler_protection;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == -1 && SettingsBridge.kb_active;
+                        toggled => { root.select_grouping(-1); SettingsContent.schedule_setting("spoiler_protection"); }
+                    }
+                }
+            }
             SectionHeader { label: @tr("Discover layout"); }
             SettingsCard {
                 SettingsRow {

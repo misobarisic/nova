@@ -821,7 +821,7 @@ impl Bridge {
             state.streams = vec![row];
             state.stream_filter = 0;
         }
-        apply_stream_episode_context(&app, Some(&automatic.next));
+        self.apply_stream_episode_context(&app, Some(&automatic.next));
         self.stream_picked(0);
     }
 

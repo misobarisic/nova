@@ -5613,3 +5613,12 @@ msgstr "Ovaj izvor možda koristi drukčiju verziju. Nastavite na {} ili počnit
 
 msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
 msgstr "Ovaj izvor ne može nastaviti na prethodnom položaju. Počnite ispočetka ili odustanite i odaberite drugi izvor."
+
+msgid "Spoiler protection"
+msgstr "Zaštita od spojlera"
+
+msgid "Hide unwatched episode titles, descriptions and artwork on this profile. Reveal an episode from its options."
+msgstr "Sakrij naslove, opise i slike neodgledanih epizoda na ovom profilu. Otkrij epizodu u njezinim opcijama."
+
+msgid "Reveal episode spoilers"
+msgstr "Otkrij spojlere epizode"
