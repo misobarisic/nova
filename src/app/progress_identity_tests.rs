@@ -118,6 +118,49 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     write_progress_map(&bridge.shared.lock().unwrap().progress.clone());
     persistence::flush().unwrap();
     bridge.apply_library_to_ui();
+    super::run::wire_page_navigation(&app, &bridge);
+    let retained_library = app.get_library();
+    let retained_home = app.get_home_continue();
+    app.set_library_scroll_y(-321.0);
+    let reads = detail::trace_episode_reads(|| app.invoke_library_picked());
+    assert!(
+        reads.is_empty(),
+        "Library navigation must not scan metadata on the UI thread: {reads:?}"
+    );
+    assert!(app.get_show_library());
+    assert!(
+        app.get_library() == retained_library,
+        "show retained cards before the worker finishes"
+    );
+    assert_eq!(app.get_library_scroll_y(), -321.0);
+    app.set_home_view(2);
+    let reads = detail::trace_episode_reads(|| app.invoke_home_picked());
+    assert!(
+        reads.is_empty(),
+        "Home navigation must not scan metadata on the UI thread: {reads:?}"
+    );
+    assert!(app.get_show_home());
+    assert_eq!(
+        app.get_home_view(),
+        0,
+        "explicit Home navigation returns to its landing page"
+    );
+    assert!(app.get_home_continue() == retained_home);
+    app.set_home_view(1);
+    bridge.show_discover_page();
+    app.set_home_scroll_y(-654.0);
+    let before = progress_projection::publication_count();
+    settled(before);
+    assert_eq!(
+        app.get_home_view(),
+        1,
+        "late refresh must not leave a newly opened Home subpage"
+    );
+    assert_eq!(app.get_home_scroll_y(), -654.0);
+    assert!(
+        !app.get_show_home() && !app.get_show_library(),
+        "late data cannot replay navigation after leaving Home"
+    );
     let painted = app.get_library().row_data(0).unwrap().id.to_string();
     // The current filter can change before its next publication. Activation
     // still targets the painted native identity, not a rederived neighbour.
@@ -174,6 +217,12 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     // restores the opening season once, but never overwrites a manual choice.
     let mut late = videos();
     late[1].season = Some(2);
+    bridge
+        .shared
+        .lock()
+        .unwrap()
+        .progress
+        .remove(&progress_map_key(ORIGINAL, SECOND));
     super::bridge::install_global_bridge(&bridge);
     let before = progress_projection::publication_count();
     for id in [ORIGINAL, CANONICAL] {

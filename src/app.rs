@@ -259,6 +259,7 @@ struct HomeShowcaseArtwork {
     metadata_retry_at: Option<std::time::Instant>,
 }
 
+#[derive(Clone)]
 struct MetadataPrefetch {
     revision: u64,
     /// None while queued or fetching; repeated Library visits must not
@@ -280,6 +281,8 @@ struct Shared {
     watch_queue: watch_queue::State,
     playback_tools: playback_tools::PlaybackToolsState,
     progress_projection: progress_projection::State,
+    library_prefetch_preparing: bool,
+    saved_episode_refresh_preparing: bool,
     similar_cache: Arc<Mutex<similar::Cache>>,
     recommendations: recommendations::State,
     addon_subtitles: subtitles::State,

@@ -46,6 +46,7 @@ pub(super) fn invalidation_key(key: &str) -> bool {
             | "continue_hidden"
             | "new_episodes_hidden:v1"
             | "watch_history_hidden:v1"
+            | super::profile_policy::KEY
     ) || key.starts_with("episodes:")
         || key.starts_with("meta_header:")
 }
@@ -320,7 +321,7 @@ fn prepare_with_aliases(
 /// Progress keys are copied once; record/history clones are bounded to short
 /// lock holds. In particular, this avoids repeated `skip(offset)` scans of a
 /// HashMap while the UI is trying to finish another watched gesture.
-fn snapshot(bridge: &Bridge, current: impl Fn() -> bool) -> Option<Shared> {
+pub(super) fn snapshot(bridge: &Bridge, current: impl Fn() -> bool) -> Option<Shared> {
     let (mut snapshot, keys) = {
         let state = bridge.shared.lock().ok()?;
         let entries = state
@@ -617,6 +618,7 @@ impl Bridge {
         }
         self.publish_progress_cards(prepared.cards);
         self.publish_progress_home(prepared.home);
+        self.ensure_recommendations_loaded();
         #[cfg(test)]
         {
             PUBLICATION_MICROS.store(
@@ -849,7 +851,7 @@ mod tests {
         };
         storage::init_at(&PathBuf::from(root));
         let writer = persistence::start().unwrap();
-        for mutation in 0..5 {
+        for mutation in 0..6 {
             persistence::flush().unwrap();
             let owner = State::default();
             assert!(owner.request(View::default()));
@@ -900,6 +902,10 @@ mod tests {
                 }
                 3 => write_json("settings", &CacheSettings::default()),
                 4 => write_persisted_library(&[entry("replacement", "series")]),
+                5 => write_json(
+                    super::super::profile_policy::KEY,
+                    &super::super::profile_policy::ProfilePolicy::default(),
+                ),
                 _ => unreachable!(),
             }
             assert!(

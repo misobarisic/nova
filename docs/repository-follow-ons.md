@@ -83,8 +83,11 @@ Remaining candidates need profiling and their own changes:
   two-second refresh. Prepare this from a bounded worker snapshot with profile,
   query and data-revision guards, keeping sync Store lock holds short.
 
-Legacy startup/navigation Library/Home refreshes retain their synchronous path;
-the new worker specifically handles explicit watched gestures. See
+Home/Library navigation now retains same-profile models and requests the shared
+progress projection worker instead of scanning metadata in the navigation callback.
+Library prefetch eligibility and scheduled episode-refresh preparation run on
+profile-owned workers; cold Home catalog-cache decoding also runs off-thread.
+Startup restoration retains its synchronous bootstrap. See
 `src/app/progress_projection.rs` and the responsiveness quick reference in
 `docs/project-structure.md`.
 

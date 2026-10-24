@@ -1253,8 +1253,9 @@ impl Bridge {
             app.set_show_library(true);
             app.set_show_settings(false);
         }
-        // Retry startup/scroll failures from disk or network on each visit.
-        self.apply_library_to_ui();
+        // Publish prepared rows without holding navigation behind a complete
+        // filter/sort/episode-cache pass; retained artwork stays visible.
+        self.request_progress_projection();
         // Fill missing metadata. Failed posters separately recover mappings
         // even when the entry already has cached episodes and header text.
         // Unlike Discover, this is not gated by "Prefetch episode metadata":
@@ -1783,14 +1784,24 @@ impl Bridge {
         let rows = cards
             .into_iter()
             .map(|snapshot| {
-                let poster = artwork.get(&(snapshot.id.clone(), snapshot.poster_url.clone()));
+                let poster = artwork
+                    .get(&(snapshot.id.clone(), snapshot.poster_url.clone()))
+                    .cloned()
+                    .or_else(|| {
+                        decoded_cache_get(&image_cache_key(
+                            &snapshot.poster_url,
+                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                        ))
+                        .map(Image::from_rgba8)
+                    });
+                let is_loaded = poster.is_some();
                 MediaCard {
                     id: snapshot.id.into(),
                     title: snapshot.title.into(),
                     year: snapshot.year.into(),
                     poster_path: snapshot.poster_url.into(),
-                    poster: poster.cloned().unwrap_or_default(),
-                    is_loaded: poster.is_some(),
+                    poster: poster.unwrap_or_default(),
+                    is_loaded,
                     badge: snapshot.badge.into(),
                     status: text::tr(snapshot.status).into(),
                     status_key: snapshot.status.into(),

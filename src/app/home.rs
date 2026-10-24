@@ -747,26 +747,37 @@ impl Bridge {
                 restore,
             )
         };
-        let mut cached =
-            read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap_or_default();
-        let previous_count = cached.catalogs.len();
-        cached.update(&selected, Vec::new());
-        if cached.catalogs.len() != previous_count {
-            write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
-        }
-        if restore {
-            self.install_home_showcase(self.project_home_showcase_cache(&cached, &sources));
+        if sources.is_empty() {
+            self.install_home_showcase(Vec::new());
         }
         let bridge = self.clone();
-        home_catalog_fetch::fetch(
-            self,
-            targets,
-            HOME_SHOWCASE_PER_CATALOG,
-            home_catalog_fetch::Scope::Showcase(generation),
-            move |batches| {
-                bridge.finish_home_showcase_refresh(generation, sources, batches);
-            },
-        );
+        thread::spawn(move || {
+            let mut cached =
+                read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap_or_default();
+            cached.update(&selected, Vec::new());
+            let _ = profiles::invoke_from_event_loop(move || {
+                if bridge.home_showcase_gen.load(Ordering::Relaxed) != generation
+                    || home_showcase_sources(&bridge.shared.lock().unwrap()) != sources
+                {
+                    return;
+                }
+                if restore {
+                    bridge.install_home_showcase(
+                        bridge.project_home_showcase_cache(&cached, &sources),
+                    );
+                }
+                let finish = bridge.clone();
+                home_catalog_fetch::fetch(
+                    &bridge,
+                    targets,
+                    HOME_SHOWCASE_PER_CATALOG,
+                    home_catalog_fetch::Scope::Showcase(generation),
+                    move |batches| {
+                        finish.finish_home_showcase_refresh(generation, sources, batches);
+                    },
+                );
+            });
+        });
     }
 
     /// Invalidate any in-flight response when addon/catalog preferences
@@ -833,27 +844,36 @@ impl Bridge {
             )
         };
 
-        let mut cached =
-            read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
-        let before = serde_json::to_value(&cached.catalogs).ok();
-        cached.update_with_limit(&selected, Vec::new(), HOME_RAW_CANDIDATES_PER_CATALOG);
-        if before != serde_json::to_value(&cached.catalogs).ok() {
-            write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
-        }
-        if restore || sources.is_empty() {
-            let groups = self.project_home_row_cache(&cached, &sources, &installed);
-            self.install_home_catalog_rows(groups);
+        if sources.is_empty() {
+            self.install_prepared_home_catalog_rows(Vec::new());
         }
         let bridge = self.clone();
-        home_catalog_fetch::fetch(
-            self,
-            targets,
-            HOME_CATALOG_ROWS_PER_CATALOG,
-            home_catalog_fetch::Scope::Rows(generation),
-            move |batches| {
-                bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
-            },
-        );
+        thread::spawn(move || {
+            let mut cached =
+                read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
+            cached.update_with_limit(&selected, Vec::new(), HOME_RAW_CANDIDATES_PER_CATALOG);
+            let _ = profiles::invoke_from_event_loop(move || {
+                if bridge.home_catalog_rows_gen.load(Ordering::Relaxed) != generation
+                    || home_catalog_row_sources(&bridge.shared.lock().unwrap()) != sources
+                {
+                    return;
+                }
+                if restore || sources.is_empty() {
+                    let groups = bridge.project_home_row_cache(&cached, &sources, &installed);
+                    bridge.install_prepared_home_catalog_rows(groups);
+                }
+                let finish = bridge.clone();
+                home_catalog_fetch::fetch(
+                    &bridge,
+                    targets,
+                    HOME_CATALOG_ROWS_PER_CATALOG,
+                    home_catalog_fetch::Scope::Rows(generation),
+                    move |batches| {
+                        finish.finish_home_catalog_rows_refresh(generation, sources, batches);
+                    },
+                );
+            });
+        });
     }
 
     pub(super) fn invalidate_home_catalog_rows(&self) {
@@ -898,7 +918,10 @@ impl Bridge {
             read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
         cached.update_with_limit(&selected, batches, HOME_RAW_CANDIDATES_PER_CATALOG);
         write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
-        self.install_home_catalog_rows(self.project_home_row_cache(&cached, &sources, &installed));
+        self.install_prepared_home_catalog_rows(
+            self.project_home_row_cache(&cached, &sources, &installed),
+        );
+        self.request_progress_projection();
     }
 
     pub(super) fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
@@ -2332,6 +2355,11 @@ impl Bridge {
         self.install_home_catalog_rows(groups);
     }
 
+    pub(super) fn refresh_prepared_home_history_models(&self) {
+        let groups = self.shared.lock().unwrap().home_catalog_row_groups.clone();
+        self.install_prepared_home_catalog_rows(groups);
+    }
+
     /// Negative IDs are built-ins; nonnegative IDs address catalog sections.
     /// Cached groups own stable source identities, so missing/empty catalogs
     /// never shift another configured row into their slot.
@@ -2859,11 +2887,9 @@ impl Bridge {
             // "see all" subpage.
             app.set_home_view(0);
         }
-        self.rebuild_continue_list();
-        self.rebuild_upcoming_list();
-        self.apply_home_to_ui();
-        self.dispatch_continue_posters();
-        self.dispatch_upcoming_posters();
+        // Keep the same-profile models on screen while the guarded worker
+        // joins history/metadata. Route feedback must not wait on cache scans.
+        self.request_progress_projection();
         self.ensure_home_showcase_loaded();
         self.ensure_home_catalog_rows_loaded();
         self.refresh_saved_episode_metadata();
@@ -4313,6 +4339,23 @@ mod tests {
             state.installed[0].available = false;
         }
         bridge.refresh_home_showcase();
+        // Cache decoding now happens off-thread. Drain queued UI deliveries
+        // without advancing the virtual paging/animation clock used below.
+        fn await_cache(app: slint::Weak<AppWindow>, deadline: std::time::Instant) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cached Home showcase did not arrive"
+            );
+            if app.upgrade().unwrap().get_home_featured_count() == 2 {
+                slint::quit_event_loop().unwrap();
+            } else {
+                slint::invoke_from_event_loop(move || await_cache(app, deadline)).unwrap();
+            }
+        }
+        let weak = app.as_weak();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        slint::invoke_from_event_loop(move || await_cache(weak, deadline)).unwrap();
+        slint::run_event_loop().unwrap();
         assert_eq!(app.get_home_featured_title(), "cached-a");
         assert_eq!(app.get_home_featured_release_info(), "2016");
         assert_eq!(app.get_home_featured_tagline(), "Cached tagline");
@@ -4418,6 +4461,10 @@ mod tests {
         bridge.shared.lock().unwrap().installed[0].enabled = true;
         bridge.invalidate_home_showcase();
         bridge.ensure_home_showcase_loaded();
+        let weak = app.as_weak();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        slint::invoke_from_event_loop(move || await_cache(weak, deadline)).unwrap();
+        slint::run_event_loop().unwrap();
         assert_eq!(
             app.get_home_featured_title(),
             "single",

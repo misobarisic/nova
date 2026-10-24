@@ -150,7 +150,7 @@ impl Bridge {
             }
             (signature, recommendations.generation)
         };
-        self.refresh_home_history_models();
+        self.refresh_prepared_home_history_models();
         if !signature.seeds.is_empty() {
             self.fetch_recommendation_seed(signature, generation, 0, Vec::new());
         }
@@ -195,7 +195,7 @@ impl Bridge {
                 }
                 if index + 1 < signature.seeds.len() {
                     bridge.shared.lock().unwrap().recommendations.candidates = candidates.clone();
-                    bridge.refresh_home_history_models();
+                    bridge.refresh_prepared_home_history_models();
                     bridge.fetch_recommendation_seed(signature, generation, index + 1, candidates);
                     return;
                 }
@@ -205,7 +205,7 @@ impl Bridge {
                     state.recommendations.pending = false;
                     state.recommendations.refreshed = Some(std::time::Instant::now());
                 }
-                bridge.refresh_home_history_models();
+                bridge.refresh_prepared_home_history_models();
             });
         });
     }
@@ -248,7 +248,7 @@ impl Bridge {
             };
             set_active_cache_settings(settings.clone());
             write_settings(&settings);
-            self.refresh_home_history_models();
+            self.refresh_prepared_home_history_models();
         }
         true
     }

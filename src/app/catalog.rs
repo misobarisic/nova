@@ -1292,40 +1292,68 @@ impl Bridge {
     /// Complete cached entries keep their cache; failed/missing images trigger
     /// their own repair path, which also saves any newly confirmed mappings.
     pub(super) fn prefetch_library_meta(&self) {
-        let mut entries = {
-            let state = self.shared.lock().unwrap();
-            state.entries.clone()
+        let (entries, displayed) = {
+            let mut state = self.shared.lock().unwrap();
+            if state.library_prefetch_preparing || state.restoring_models {
+                return;
+            }
+            state.library_prefetch_preparing = true;
+            (
+                state
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        (
+                            e.type_.clone(),
+                            e.id.clone(),
+                            !e.description.is_empty() || !e.genres.is_empty(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                state.library_displayed.clone(),
+            )
         };
-        if let Some(app) = self.app() {
-            let order: HashMap<_, _> = app
-                .get_library()
-                .iter()
+        let bridge = self.clone();
+        let context = profiles::capture();
+        thread::spawn(move || {
+            let order = displayed
+                .into_iter()
                 .enumerate()
-                .map(|(index, row)| (row.id.to_string(), index))
-                .collect();
-            // Follow the displayed filter/sort order rather than old insertion
-            // order, so the cards the user is viewing get their mappings first.
-            entries.sort_by_key(|entry| order.get(&entry.id).copied().unwrap_or(usize::MAX));
-        }
-        let pairs: Vec<(String, String)> = entries
-            .iter()
-            .filter_map(|e| {
-                if e.id.is_empty() || e.type_.is_empty() {
-                    return None;
-                }
-                let has_text = !e.description.is_empty()
-                    || !e.genres.is_empty()
-                    || header_text_cached(&e.type_, &e.id);
-                let has_episodes = e.type_ == "movie"
-                    || read_episodes_cache_for(&e.type_, &e.id)
-                        .is_some_and(|videos| !videos.is_empty());
-                if has_text && has_episodes {
-                    return None;
-                }
-                Some((e.type_.clone(), e.id.clone()))
-            })
-            .collect();
-        self.prefetch_meta_pairs(pairs);
+                .map(|(i, key)| (key, i))
+                .collect::<HashMap<_, _>>();
+            let mut entries = entries;
+            entries.sort_by_key(|(type_, id, _)| {
+                order
+                    .get(&(type_.clone(), id.clone()))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+            let mut pairs = entries
+                .into_iter()
+                .filter_map(|(type_, id, text)| {
+                    if !profiles::is_current(&context) || type_.is_empty() || id.is_empty() {
+                        return None;
+                    }
+                    let has_text = text || header_text_cached(&type_, &id);
+                    let has_episodes = type_ == "movie"
+                        || read_episodes_cache_for(&type_, &id).is_some_and(|v| !v.is_empty());
+                    (!(has_text && has_episodes)).then_some((type_, id))
+                })
+                .collect::<Vec<_>>();
+            let saved = {
+                let mut state = bridge.shared.lock().unwrap();
+                state.library_prefetch_preparing = false;
+                state
+                    .entries
+                    .iter()
+                    .map(|e| (e.type_.clone(), e.id.clone()))
+                    .collect::<HashSet<_>>()
+            };
+            pairs.retain(|key| saved.contains(key));
+            if profiles::is_current(&context) {
+                bridge.prefetch_meta_pairs(pairs);
+            }
+        });
     }
 
     /// Revalidate watched saved series even when their cache looks complete.
@@ -1344,19 +1372,97 @@ impl Bridge {
         {
             return;
         }
-        let revision = nova_providers::metadata_revision();
-        let (work, owners) = {
+        {
             let mut state = self.shared.lock().unwrap();
-            let owners = metadata_owners(&state);
-            let work = reserve_saved_episode_refresh(
-                &mut state,
-                revision,
-                std::time::Instant::now(),
-                now_secs(),
-            );
-            (work, owners)
-        };
-        self.run_saved_episode_refresh(work, owners, revision);
+            if state.saved_episode_refresh_preparing
+                || state.restoring_models
+                || state.saved_episode_refresh_next.is_some_and(|(rev, at)| {
+                    rev == nova_providers::metadata_revision() && std::time::Instant::now() < at
+                })
+                || state
+                    .metadata_prefetch
+                    .values()
+                    .any(|job| job.retry_at.is_none())
+            {
+                return;
+            }
+            state.saved_episode_refresh_preparing = true;
+        }
+        let bridge = self.clone();
+        let context = profiles::capture();
+        thread::spawn(move || {
+            let version = progress_projection::revision();
+            let revision = nova_providers::metadata_revision();
+            let current =
+                || profiles::is_current(&context) && progress_projection::revision() == version;
+            let mut prepared = progress_projection::snapshot(&bridge, current);
+            if let Some(data) = prepared.as_mut() {
+                let state = bridge.shared.lock().unwrap();
+                data.installed = state.installed.clone();
+                data.metadata_prefetch = state.metadata_prefetch.clone();
+                data.saved_episode_refresh_next = state.saved_episode_refresh_next;
+                data.loading_addons = state.loading_addons;
+            }
+            let owners = prepared.as_ref().map(metadata_owners).unwrap_or_default();
+            let work = prepared
+                .as_mut()
+                .map(|data| {
+                    reserve_saved_episode_refresh(
+                        data,
+                        revision,
+                        std::time::Instant::now(),
+                        now_secs(),
+                    )
+                })
+                .unwrap_or_default();
+            let _ = profiles::invoke_from_event_loop(move || {
+                let accepted = {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.saved_episode_refresh_preparing = false;
+                    if progress_projection::revision() != version
+                        || nova_providers::metadata_revision() != revision
+                        || metadata_owners(&state) != owners
+                    {
+                        drop(state);
+                        bridge.refresh_saved_episode_metadata();
+                        return;
+                    }
+                    // Claim only the bounded prepared batch against current
+                    // reservations; a concurrent missing-metadata pass wins.
+                    let mut accepted = VecDeque::new();
+                    if !state
+                        .metadata_prefetch
+                        .values()
+                        .any(|job| job.retry_at.is_none())
+                    {
+                        for job in work {
+                            if state
+                                .entries
+                                .iter()
+                                .any(|e| e.id == job.id && e.type_ == job.type_)
+                                && reserve_metadata_prefetch(
+                                    &mut state,
+                                    &job.type_,
+                                    &job.id,
+                                    revision,
+                                    std::time::Instant::now(),
+                                )
+                            {
+                                accepted.push_back(job);
+                            }
+                        }
+                    }
+                    if !accepted.is_empty() {
+                        state.saved_episode_refresh_next = Some((
+                            revision,
+                            std::time::Instant::now() + SAVED_EPISODE_BATCH_INTERVAL,
+                        ));
+                    }
+                    accepted
+                };
+                bridge.run_saved_episode_refresh(accepted, owners, revision);
+            });
+        });
     }
 
     fn finish_saved_episode_refresh(&self, job: &SavedEpisodeRefresh, success: bool) {
