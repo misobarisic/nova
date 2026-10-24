@@ -125,10 +125,14 @@ impl Bridge {
             2 => {
                 let mut hidden: HashMap<String, u64> =
                     read_json(watch_history::HIDDEN_KEY).unwrap_or_default();
-                hidden.insert(
-                    watch_history::title_key(type_, id),
-                    now_secs().max(entry.played_at_secs),
-                );
+                let keys = watch_history::hidden_title_keys(&self.shared.lock().unwrap(), &entry);
+                let at = now_secs().max(entry.played_at_secs);
+                for key in keys {
+                    hidden
+                        .entry(key)
+                        .and_modify(|old| *old = (*old).max(at))
+                        .or_insert(at);
+                }
                 write_json(watch_history::HIDDEN_KEY, &hidden);
                 self.apply_home_to_ui();
             }

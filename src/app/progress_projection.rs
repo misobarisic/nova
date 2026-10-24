@@ -225,6 +225,7 @@ struct Prepared {
     upcoming: Vec<UpcomingEntry>,
     history: Vec<watch_history::HistoryEntry>,
     archive: Vec<watch_history::HistoryEntry>,
+    history_identities: Arc<watch_history::HistoryIdentities>,
     activity_actions: HashMap<(String, String), i32>,
     settings: CacheSettings,
     aliases: HashMap<String, EpisodeProgress>,
@@ -309,6 +310,7 @@ fn prepare_with_aliases(
         upcoming: std::mem::take(&mut data.upcoming_list),
         history: std::mem::take(&mut data.home_history_list),
         archive: std::mem::take(&mut data.home_history_archive),
+        history_identities: data.history_identities.clone(),
         activity_actions,
         settings: std::mem::take(&mut data.cache_settings),
         // Duplicate the owned writer payload here, rather than clone history
@@ -596,6 +598,7 @@ impl Bridge {
             state.upcoming_list = prepared.upcoming;
             state.home_history_list = prepared.history;
             state.home_history_archive = prepared.archive;
+            state.history_identities = prepared.history_identities;
             let action = state
                 .modal_item
                 .as_ref()

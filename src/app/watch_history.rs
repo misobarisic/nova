@@ -10,6 +10,187 @@ pub(super) fn title_key(type_: &str, id: &str) -> String {
     serde_json::to_string(&(type_, id)).expect("history title identity")
 }
 
+#[derive(Default)]
+pub(super) struct HistoryIdentities {
+    stamp: library::DisplayProofStamp,
+    episodes: HashMap<media_identity::EpisodeKey, String>,
+    global: HashMap<String, String>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum HistoryEpisode {
+    Proven(String),
+    Native(String, String, String),
+}
+
+impl HistoryIdentities {
+    fn prepare(
+        rows: &[HistoryEntry],
+        continuing: &[ContinueEntry],
+        mut episodes: impl FnMut(&str, &str) -> Vec<Video>,
+    ) -> Self {
+        let titles = rows
+            .iter()
+            .map(|row| (row.type_.clone(), row.series_id.clone()))
+            .chain(
+                continuing
+                    .iter()
+                    .map(|row| (row.type_.clone(), row.series_id.clone())),
+            )
+            .filter(|(type_, _)| matches!(type_.as_str(), "series" | "anime"))
+            .collect::<HashSet<_>>();
+        let relevant = rows
+            .iter()
+            .filter(|row| matches!(row.type_.as_str(), "series" | "anime"))
+            .map(|row| (row.series_id.clone(), row.episode_id.clone()))
+            .chain(
+                continuing
+                    .iter()
+                    .filter(|row| matches!(row.type_.as_str(), "series" | "anime"))
+                    .map(|row| (row.series_id.clone(), row.episode_id.clone())),
+            )
+            .collect::<HashSet<_>>();
+        let index = media_identity::IdentityIndex::with_progress(
+            titles
+                .into_iter()
+                .map(|(media_type, series_id)| media_identity::TitleInventory {
+                    videos: episodes(&media_type, &series_id),
+                    media_type,
+                    series_id,
+                }),
+            relevant.iter().cloned(),
+        );
+        let mut result = Self {
+            stamp: library::display_proof_stamp(),
+            ..Default::default()
+        };
+        let mut ambiguous = HashSet::new();
+        // Keep only the compact proof needed by current cards. Metadata is
+        // decoded on the projection worker, never again for a Hide gesture.
+        for group in index.progress_groups {
+            if !group.iter().any(|key| relevant.contains(key)) {
+                continue;
+            }
+            let Some(identity) = group
+                .iter()
+                .map(|(_, episode)| episode)
+                .filter(|episode| media_identity::canonical_episode_namespace(episode).is_some())
+                .min()
+                .cloned()
+            else {
+                continue;
+            };
+            for key in group {
+                if media_identity::canonical_episode_namespace(&key.1).is_some() {
+                    result.global.insert(key.1.clone(), identity.clone());
+                }
+                if ambiguous.contains(&key) {
+                    continue;
+                }
+                if result
+                    .episodes
+                    .get(&key)
+                    .is_some_and(|old| old != &identity)
+                {
+                    // Progress keys omit the media type. Two typed inventories
+                    // can reuse an opaque ID for different episodes; neither
+                    // mapping may win merely because its HashSet iterated last.
+                    result.episodes.remove(&key);
+                    ambiguous.insert(key);
+                } else {
+                    result.episodes.insert(key, identity.clone());
+                }
+            }
+        }
+        result
+    }
+
+    fn episode(&self, type_: &str, parent: &str, episode: &str) -> HistoryEpisode {
+        if matches!(type_, "series" | "anime") {
+            if self.stamp == library::display_proof_stamp()
+                && let Some(identity) = self
+                    .episodes
+                    .get(&(parent.into(), episode.into()))
+                    .or_else(|| self.global.get(episode))
+            {
+                return HistoryEpisode::Proven(identity.clone());
+            }
+            // A globally scoped episode ID proves itself even before the
+            // first worker result. Opaque IDs and movie IDs never do.
+            if media_identity::canonical_episode_namespace(episode).is_some() {
+                return HistoryEpisode::Proven(episode.into());
+            }
+        }
+        HistoryEpisode::Native(type_.into(), parent.into(), episode.into())
+    }
+}
+
+fn filter_history(
+    mut rows: Vec<HistoryEntry>,
+    visible: &[ContinueEntry],
+    hidden: &HashMap<String, u64>,
+    identities: &HistoryIdentities,
+    resume_only: bool,
+) -> Vec<HistoryEntry> {
+    let visible_episodes = visible
+        .iter()
+        .map(|row| identities.episode(&row.type_, &row.series_id, &row.episode_id))
+        .collect::<HashSet<_>>();
+    let visible_titles = visible
+        .iter()
+        .map(|row| (&row.type_, &row.series_id))
+        .collect::<HashSet<_>>();
+    let mut hidden_episodes = HashMap::<HistoryEpisode, u64>::new();
+    for row in &rows {
+        if let Some(at) = hidden.get(&title_key(&row.type_, &row.series_id)) {
+            hidden_episodes
+                .entry(identities.episode(&row.type_, &row.series_id, &row.episode_id))
+                .and_modify(|old| *old = (*old).max(*at))
+                .or_insert(*at);
+        }
+    }
+    let mut seen = HashSet::new();
+    // Choose the newest alias before checking eligibility: a completed or
+    // brief latest run must not resurrect an older resumable projection.
+    rows.retain(|row| seen.insert(identities.episode(&row.type_, &row.series_id, &row.episode_id)));
+    rows.retain(|row| {
+        let episode = identities.episode(&row.type_, &row.series_id, &row.episode_id);
+        row.meaningful
+            && (!resume_only || row.can_resume())
+            && (!resume_only
+                || (!visible_titles.contains(&(&row.type_, &row.series_id))
+                    && !visible_episodes.contains(&episode)))
+            && hidden
+                .get(&title_key(&row.type_, &row.series_id))
+                .into_iter()
+                .chain(hidden_episodes.get(&episode))
+                .all(|at| row.played_at_secs > *at)
+    });
+    rows
+}
+
+pub(super) fn hidden_title_keys(state: &Shared, selected: &HistoryEntry) -> HashSet<String> {
+    let identity = state.history_identities.episode(
+        &selected.type_,
+        &selected.series_id,
+        &selected.episode_id,
+    );
+    history_candidates(&state.progress, &state.entries, false)
+        .iter()
+        .filter(|row| {
+            state
+                .history_identities
+                .episode(&row.type_, &row.series_id, &row.episode_id)
+                == identity
+        })
+        .map(|row| title_key(&row.type_, &row.series_id))
+        .chain(std::iter::once(title_key(
+            &selected.type_,
+            &selected.series_id,
+        )))
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct HistoryEntry {
     pub(super) series_id: String,
@@ -72,10 +253,34 @@ fn project_watch_history(
     rows
 }
 
+#[cfg(test)]
 fn project_history(
     progress: &HashMap<String, EpisodeProgress>,
     library: &[LibraryEntry],
     visible_continue: &HashSet<(String, String)>,
+    resume_only: bool,
+) -> Vec<HistoryEntry> {
+    let visible = visible_continue
+        .iter()
+        .map(|(type_, series_id)| ContinueEntry {
+            type_: type_.clone(),
+            series_id: series_id.clone(),
+            episode_id: String::new(),
+            updated_at_secs: 0,
+        })
+        .collect::<Vec<_>>();
+    filter_history(
+        history_candidates(progress, library, resume_only),
+        &visible,
+        &HashMap::new(),
+        &HistoryIdentities::default(),
+        resume_only,
+    )
+}
+
+fn history_candidates(
+    progress: &HashMap<String, EpisodeProgress>,
+    library: &[LibraryEntry],
     resume_only: bool,
 ) -> Vec<HistoryEntry> {
     let mut rows = Vec::new();
@@ -95,9 +300,6 @@ fn project_history(
             .filter(|type_| !type_.is_empty())
             .or_else(|| legacy().map(|entry| entry.type_.as_str()));
         let Some(type_) = type_ else { continue };
-        if visible_continue.contains(&(type_.to_owned(), record.series_id.clone())) {
-            continue;
-        }
         let saved = library
             .iter()
             .find(|entry| entry.type_ == type_ && entry.id == record.series_id);
@@ -106,9 +308,7 @@ fn project_history(
             .filter(|title| !title.trim().is_empty())
             .or_else(|| saved.map(|entry| entry.name.as_str()))
             .unwrap_or_default();
-        if title.trim().is_empty()
-            || (resume_only && saved.is_some_and(|entry| entry.watch_status != WatchStatus::Auto))
-        {
+        if title.trim().is_empty() {
             continue;
         }
         let poster_url = snapshot
@@ -135,7 +335,9 @@ fn project_history(
             duration_secs: record.duration_secs,
             // A sticky watched flag is resumable only for an actual rewatch.
             // Legacy records lack measured play time; keep their valid resumes.
-            resumable: playback_can_resume(record),
+            resumable: playback_can_resume(record)
+                && (!resume_only
+                    || saved.is_none_or(|entry| entry.watch_status == WatchStatus::Auto)),
             rewatch: snapshot.is_some_and(|history| history.rewatch),
             // A brief new rewatch must not erase the archive entry earned by
             // an earlier completion. Home still requires this run to qualify.
@@ -158,19 +360,15 @@ fn project_history(
     // Select the latest episode before rejecting completed or brief openings:
     // finishing E4 must never resurrect a stale unfinished E2.
     rows.retain(|row| seen.insert((row.type_.clone(), row.series_id.clone())));
-    rows.retain(|row| row.meaningful && (!resume_only || row.can_resume()));
     rows
 }
 
-fn visible_continue_titles(
-    state: &Shared,
-    visible_ids: &HashSet<String>,
-) -> HashSet<(String, String)> {
+fn visible_continue_entries(state: &Shared, visible_ids: &HashSet<String>) -> Vec<ContinueEntry> {
     if !state
         .cache_settings
         .home_row_enabled(&HomeRowSource::ContinueWatching)
     {
-        return HashSet::new();
+        return Vec::new();
     }
     state
         .continue_list
@@ -182,7 +380,7 @@ fn visible_continue_titles(
                 .iter()
                 .any(|saved| saved.id == entry.series_id && saved.type_ == entry.type_)
         })
-        .map(|entry| (entry.type_.clone(), entry.series_id.clone()))
+        .cloned()
         .collect()
 }
 
@@ -210,16 +408,12 @@ impl Bridge {
             return Vec::new();
         }
         let visible_continue = if resume_only {
-            visible_continue_titles(&state, &visible_ids)
+            visible_continue_entries(&state, &visible_ids)
         } else {
-            HashSet::new()
+            Vec::new()
         };
-        let mut rows = project_history(
-            &state.progress,
-            &state.entries,
-            &visible_continue,
-            resume_only,
-        );
+        let mut rows = history_candidates(&state.progress, &state.entries, resume_only);
+        let identities = state.history_identities.clone();
         drop(state);
         let hidden: HashMap<String, u64> = read_json(HIDDEN_KEY).unwrap_or_default();
         rows.retain(|row| {
@@ -229,11 +423,7 @@ impl Bridge {
                 &row.series_id,
             )
         });
-        rows.retain(|row| {
-            hidden
-                .get(&title_key(&row.type_, &row.series_id))
-                .is_none_or(|hidden_at| row.played_at_secs > *hidden_at)
-        });
+        rows = filter_history(rows, &visible_continue, &hidden, &identities, resume_only);
         rows.truncate(WATCH_HISTORY_MAX);
         // Legacy playback can borrow existing episode labels offline. This is
         // cache-only: opening Home never fetches entire metadata for history.
@@ -271,6 +461,214 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alias_video(id: &str, alias: &str) -> Video {
+        serde_json::from_value(serde_json::json!({"id":id,"novaStreamIds":[alias],
+            "novaMetadataRevision":nova_providers::metadata_revision()}))
+        .unwrap()
+    }
+
+    #[test]
+    fn canonical_parent_projections_collapse_before_the_history_limit() {
+        let progress = map((0..101).flat_map(|n| {
+            let episode = format!("tt{}:1:1", 100000 + n);
+            [
+                played("series", &format!("native-{n}"), &episode, n + 1),
+                played("series", &format!("mirror-{n}"), &episode, n + 1),
+            ]
+        }));
+        let rows = project_watch_history(&progress, &[], &HashSet::new());
+        assert_eq!(rows.len(), WATCH_HISTORY_MAX);
+        assert_eq!(
+            rows.iter()
+                .map(|row| &row.episode_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            WATCH_HISTORY_MAX
+        );
+        assert_eq!(
+            project_history(&progress, &[], &HashSet::new(), false).len(),
+            101
+        );
+        assert_eq!(
+            progress.len(),
+            202,
+            "display collapse must preserve progress views"
+        );
+    }
+
+    #[test]
+    fn prepared_alias_history_shares_hide_and_visible_continue_identity() {
+        let mut state = Shared {
+            progress: map([
+                played("series", "native", "opaque-e1", 100),
+                played("series", "other", "kitsu:10:1", 100),
+            ]),
+            ..Default::default()
+        };
+        let original = state.progress.clone();
+        let metadata = progress_projection::Metadata::new(
+            |_, id| {
+                (
+                    Some(vec![alias_video(
+                        if id == "native" {
+                            "opaque-e1"
+                        } else {
+                            "kitsu:10:1"
+                        },
+                        "tt100:1:1",
+                    )]),
+                    None,
+                )
+            },
+            || true,
+        );
+        prepare_progress_history(&mut state, &metadata, &HashMap::new());
+        assert_eq!(state.home_history_list.len(), 1);
+        assert_eq!(state.home_history_archive.len(), 1);
+        let selected = state.home_history_list[0].clone();
+        let hidden_keys = hidden_title_keys(&state, &selected);
+        assert_eq!(
+            hidden_keys,
+            HashSet::from([title_key("series", "native"), title_key("series", "other")])
+        );
+        let rows = history_candidates(&state.progress, &state.entries, true);
+        // A legacy dismissal written under just the other raw title must
+        // suppress the currently selected representative too.
+        let hidden = HashMap::from([(title_key("series", "other"), 150)]);
+        assert!(
+            filter_history(rows.clone(), &[], &hidden, &state.history_identities, true).is_empty()
+        );
+        let visible = [ContinueEntry {
+            type_: "series".into(),
+            series_id: "other".into(),
+            episode_id: "kitsu:10:1".into(),
+            updated_at_secs: 100,
+        }];
+        assert!(
+            filter_history(
+                rows.clone(),
+                &visible,
+                &HashMap::new(),
+                &state.history_identities,
+                true
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            filter_history(
+                rows.clone(),
+                &visible,
+                &HashMap::new(),
+                &state.history_identities,
+                false
+            )
+            .len(),
+            1
+        );
+        let mut newer = rows;
+        newer[0].played_at_secs = 200;
+        assert_eq!(
+            filter_history(newer, &[], &hidden, &state.history_identities, true).len(),
+            1
+        );
+        assert_eq!(state.progress, original);
+        prepare_progress_history(&mut state, &metadata, &hidden);
+        assert!(state.home_history_list.is_empty());
+        assert!(state.home_history_archive.is_empty());
+    }
+
+    #[test]
+    fn history_keeps_distinct_episodes_movies_and_unproven_or_stale_ids() {
+        let progress = map([
+            played("series", "native", "opaque-e1", 100),
+            played("series", "canonical", "tt100:1:1", 100),
+            played("series", "sequel", "tt100:2:1", 100),
+            played("movie", "film-a", "tt100:1:1", 100),
+            played("movie", "film-b", "tt100:1:1", 100),
+            played("series", "unrelated", "opaque-e1", 100),
+        ]);
+        let rows = history_candidates(&progress, &[], true);
+        let mut stale = alias_video("opaque-e1", "tt100:1:1");
+        stale.extra.insert(
+            "novaMetadataRevision".into(),
+            serde_json::json!(nova_providers::metadata_revision().wrapping_add(1)),
+        );
+        let identities = HistoryIdentities::prepare(&rows, &[], |_, id| {
+            if id == "native" {
+                vec![stale.clone()]
+            } else {
+                vec![]
+            }
+        });
+        assert_eq!(
+            filter_history(rows.clone(), &[], &HashMap::new(), &identities, true).len(),
+            6
+        );
+        let ambiguous = HistoryIdentities::prepare(&rows, &[], |_, id| {
+            if id == "native" {
+                vec![
+                    alias_video("opaque-e1", "tt100:1:1"),
+                    alias_video("opaque-e2", "tt100:1:1"),
+                ]
+            } else {
+                vec![]
+            }
+        });
+        assert_eq!(
+            filter_history(rows, &[], &HashMap::new(), &ambiguous, true).len(),
+            6
+        );
+    }
+
+    #[test]
+    fn history_proof_rejects_conflicting_typed_inventory_keys() {
+        let progress = map([
+            played("series", "same", "opaque", 100),
+            played("series", "other", "tt200:1:1", 100),
+        ]);
+        let rows = history_candidates(&progress, &[], true);
+        let visible = [ContinueEntry {
+            type_: "anime".into(),
+            series_id: "same".into(),
+            episode_id: "opaque".into(),
+            updated_at_secs: 100,
+        }];
+        let identities = HistoryIdentities::prepare(&rows, &visible, |type_, id| {
+            if id == "same" {
+                vec![alias_video(
+                    "opaque",
+                    if type_ == "series" {
+                        "tt100:1:1"
+                    } else {
+                        "tt200:1:1"
+                    },
+                )]
+            } else {
+                Vec::new()
+            }
+        });
+        assert!(matches!(
+            identities.episode("series", "same", "opaque"),
+            HistoryEpisode::Native(..)
+        ));
+        assert_eq!(
+            filter_history(rows, &visible, &HashMap::new(), &identities, true).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn latest_completed_alias_does_not_resurrect_an_older_resume() {
+        let mut newest = played("series", "new", "tt100:1:1", 200);
+        newest.position_secs = 1200.0;
+        newest.watched = true;
+        let progress = map([played("series", "old", "tt100:1:1", 100), newest]);
+        assert!(project_watch_history(&progress, &[], &HashSet::new()).is_empty());
+        let archive = project_history(&progress, &[], &HashSet::new(), false);
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive[0].series_id, "new");
+    }
 
     fn played(type_: &str, id: &str, episode: &str, at: u64) -> EpisodeProgress {
         serde_json::from_value(serde_json::json!({
@@ -363,25 +761,31 @@ mod tests {
             type_: "series".into(),
             ..Default::default()
         }];
-        assert!(visible_continue_titles(&state, &HashSet::new()).is_empty());
+        assert!(visible_continue_entries(&state, &HashSet::new()).is_empty());
         state.cache_settings.home_rows = Some(vec![nova_config::HomeRow {
             source: HomeRowSource::ContinueWatching,
             enabled: false,
         }]);
-        let visible = visible_continue_titles(&state, &HashSet::from(["show".into()]));
+        let visible = visible_continue_entries(&state, &HashSet::from(["show".into()]));
         assert!(visible.is_empty());
         assert_eq!(
-            project_watch_history(
-                &map([played("series", "show", "e1", 10)]),
-                &state.entries,
-                &visible
+            filter_history(
+                history_candidates(
+                    &map([played("series", "show", "e1", 10)]),
+                    &state.entries,
+                    true
+                ),
+                &visible,
+                &HashMap::new(),
+                &state.history_identities,
+                true,
             )
             .len(),
             1
         );
         state.cache_settings.home_rows.as_mut().unwrap()[0].enabled = true;
         assert_eq!(
-            visible_continue_titles(&state, &HashSet::from(["show".into()])).len(),
+            visible_continue_entries(&state, &HashSet::from(["show".into()])).len(),
             1
         );
     }
@@ -504,19 +908,20 @@ pub(super) fn prepare_progress_history(
     metadata: &super::progress_projection::Metadata<'_>,
     hidden: &HashMap<String, u64>,
 ) {
+    let candidates = history_candidates(&state.progress, &state.entries, false);
+    let identities = Arc::new(HistoryIdentities::prepare(
+        &candidates,
+        &state.continue_list,
+        |type_, id| metadata.episodes(type_, id).as_ref().clone(),
+    ));
     let visible = if state
         .cache_settings
         .home_row_enabled(&HomeRowSource::ContinueWatching)
     {
-        state
-            .continue_list
-            .iter()
-            .map(|c| (c.type_.clone(), c.series_id.clone()))
-            .collect()
+        state.continue_list.clone()
     } else {
-        HashSet::new()
+        Vec::new()
     };
-    let empty = HashSet::new();
     let prepare = |resume_only| {
         let mut rows = if resume_only
             && !state
@@ -525,12 +930,7 @@ pub(super) fn prepare_progress_history(
         {
             Vec::new()
         } else {
-            project_history(
-                &state.progress,
-                &state.entries,
-                if resume_only { &visible } else { &empty },
-                resume_only,
-            )
+            history_candidates(&state.progress, &state.entries, resume_only)
         };
         rows.retain(|row| {
             profile_policy::allows_title(
@@ -539,11 +939,7 @@ pub(super) fn prepare_progress_history(
                 &row.series_id,
             )
         });
-        rows.retain(|row| {
-            hidden
-                .get(&title_key(&row.type_, &row.series_id))
-                .is_none_or(|at| row.played_at_secs > *at)
-        });
+        rows = filter_history(rows, &visible, hidden, &identities, resume_only);
         rows.truncate(WATCH_HISTORY_MAX);
         for row in &mut rows {
             let cached = metadata.title(&row.type_, &row.series_id);
@@ -572,4 +968,5 @@ pub(super) fn prepare_progress_history(
     let archive = prepare(false);
     state.home_history_list = entries;
     state.home_history_archive = archive;
+    state.history_identities = identities;
 }

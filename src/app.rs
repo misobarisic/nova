@@ -419,6 +419,8 @@ struct Shared {
     home_history_list: Vec<watch_history::HistoryEntry>,
     /// Explicit history view includes completed titles without populating Home.
     home_history_archive: Vec<watch_history::HistoryEntry>,
+    /// Worker-prepared episode proofs for history cards and Hide actions.
+    history_identities: Arc<watch_history::HistoryIdentities>,
     /// Exact episode/resume selected from History, scoped to one modal opening.
     history_selection: Option<watch_history_actions::HistorySelection>,
     /// Released episodes awaiting an explicit return, separate from active viewing.

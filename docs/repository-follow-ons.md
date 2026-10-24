@@ -91,6 +91,31 @@ Startup restoration retains its synchronous bootstrap. See
 `src/app/progress_projection.rs` and the responsiveness quick reference in
 `docs/project-structure.md`.
 
+## Home identity and action audit
+
+Reviewed on 2026-10-24. Watch history now collapses proven episode aliases,
+shares hidden clocks and visible Continue exclusions, and keeps its proof on
+the progress worker. Continue resolves partial/rewatch alias targets to a
+unique cached native episode; disabled or capped-out Continue cards no longer
+suppress New Episodes.
+
+The bounded source audit found these remaining cases; they were not reproduced
+on Android during this change:
+
+- `home.rs::{continue_remove,new_episode_remove}` dismiss only one raw source
+  parent. An overlapping source can reveal the same episode after removal.
+  Extend dismissal through proven episode identities without hiding unrelated
+  seasons, changing watched state or merging whole titles from partial overlap.
+- `home.rs::episode_home_enter` resolves a raw ID without its media type. Pass
+  the painted card's typed identity through detail entry so a shared raw ID
+  cannot select a different Library item.
+- Continue/New Episodes menus in `crates/ui/home.slint` retain row indices.
+  Capture stable typed title/episode identities so a background reorder cannot
+  retarget an already open menu, matching Watch history's action contract.
+
+Keep distinct episodes, movies and ambiguous/stale alias evidence separate.
+Validate each follow-on with focused action regressions before expanding scope.
+
 ## Stored-data compression audit
 
 Status: measured on 2026-10-14. Library/history snapshots and their baselines now

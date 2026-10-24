@@ -2150,11 +2150,19 @@ impl Bridge {
         list.sort_by_key(|c| std::cmp::Reverse(c.updated_at_secs));
         // Preserve every stored source/history record. Only duplicate cards for
         // the same proven episode collapse, with the latest playback first.
-        let mut seen = HashSet::new();
-        list.retain(|card| retain_home_episode(card, &episode_identities, &mut seen));
-        new_episodes.retain(|(_, card)| retain_home_episode(card, &episode_identities, &mut seen));
-        new_episodes.truncate(CONTINUE_MAX);
-        list.truncate(CONTINUE_MAX);
+        let continue_visible = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .home_row_enabled(&HomeRowSource::ContinueWatching);
+        deduplicate_episode_home_rows(
+            &mut list,
+            &mut new_episodes,
+            &episode_identities,
+            continue_visible,
+            CONTINUE_MAX,
+        );
         let new_episodes = new_episodes.into_iter().map(|(_, entry)| entry).collect();
         let stale_map = {
             let mut state = self.shared.lock().unwrap();
@@ -3166,6 +3174,53 @@ fn retain_home_episode(
     !duplicate
 }
 
+fn deduplicate_episode_home_rows(
+    continuing: &mut Vec<ContinueEntry>,
+    new: &mut Vec<(i64, ContinueEntry)>,
+    identities: &HomeEpisodeIdentities,
+    continue_visible: bool,
+    limit: usize,
+) {
+    let source_aliases = continuing
+        .iter()
+        .filter(|_| continue_visible)
+        .filter_map(|card| {
+            identities.get(&(
+                card.type_.clone(),
+                card.series_id.clone(),
+                card.episode_id.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    continuing.retain(|card| retain_home_episode(card, identities, &mut seen));
+    continuing.truncate(limit);
+    // A disabled rail or a card outside its cap cannot stand in for a visible
+    // New Episodes card. Still deduplicate each rail independently.
+    seen.clear();
+    if continue_visible {
+        for card in continuing {
+            retain_home_episode(card, identities, &mut seen);
+        }
+        // A suppressed duplicate may carry a second confirmed namespace for
+        // a retained card. Preserve that bridge without admitting unrelated
+        // episodes from cards beyond the visible cap.
+        loop {
+            let previous = seen.len();
+            for aliases in &source_aliases {
+                if aliases.iter().any(|alias| seen.contains(alias)) {
+                    seen.extend(aliases.iter().cloned());
+                }
+            }
+            if seen.len() == previous {
+                break;
+            }
+        }
+    }
+    new.retain(|(_, card)| retain_home_episode(card, identities, &mut seen));
+    new.truncate(limit);
+}
+
 fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
     let Some(record) = record else {
         return String::new();
@@ -3396,7 +3451,12 @@ pub(crate) fn continue_resume_id(
     // opening can turn that record into a resumable rewatch; a manual mark at
     // an old partial position must still advance to the next episode.
     if genuine_partial_rewatch(latest) {
-        return Some(latest.episode_id.clone());
+        return Some(continue_native_resume_id(
+            type_,
+            item_id,
+            &latest.episode_id,
+            episodes,
+        ));
     }
     if type_ == "movie" {
         return (!latest.watched && latest.position_secs > 0.0).then(|| latest.episode_id.clone());
@@ -3404,9 +3464,67 @@ pub(crate) fn continue_resume_id(
     if latest.watched {
         next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
     } else if latest.position_secs > 0.0 {
-        Some(latest.episode_id.clone())
+        Some(continue_native_resume_id(
+            type_,
+            item_id,
+            &latest.episode_id,
+            episodes,
+        ))
     } else {
         next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
+    }
+}
+
+fn continue_native_resume_id(
+    type_: &str,
+    item_id: &str,
+    episode_id: &str,
+    episodes: Option<&[Video]>,
+) -> String {
+    let Some(episodes) = episodes.filter(|episodes| {
+        type_ != "movie" && !episodes.iter().any(|video| video.id == episode_id)
+    }) else {
+        return episode_id.to_owned();
+    };
+    // Projected aliases share playback clocks, so the latest-record tie can
+    // select an alias absent from the native inventory. Resolve only through
+    // the same conflict/ambiguity checks as progress reconciliation. Compact
+    // videos avoid cloning descriptions/artwork merely to index identities.
+    let videos = episodes
+        .iter()
+        .map(|video| {
+            let mut compact = Video {
+                id: video.id.clone(),
+                ..Default::default()
+            };
+            compact.extra.insert(
+                "novaStreamIds".into(),
+                serde_json::json!(confirmed_episode_stream_ids(video)),
+            );
+            compact
+        })
+        .collect();
+    let index = media_identity::IdentityIndex::new([media_identity::TitleInventory {
+        media_type: type_.to_owned(),
+        series_id: item_id.to_owned(),
+        videos,
+    }]);
+    let group = index.progress_groups.iter().find(|group| {
+        group
+            .iter()
+            .any(|(parent, id)| parent == item_id && id == episode_id)
+    });
+    let Some(group) = group else {
+        return episode_id.to_owned();
+    };
+    let mut natives = episodes.iter().filter(|video| {
+        group
+            .iter()
+            .any(|(parent, id)| parent == item_id && *id == video.id)
+    });
+    match (natives.next(), natives.next()) {
+        (Some(video), None) => video.id.clone(),
+        _ => episode_id.to_owned(),
     }
 }
 
@@ -5129,6 +5247,150 @@ mod tests {
     }
 
     #[test]
+    fn continue_alias_clock_tie_resumes_the_confirmed_native_episode() {
+        let mut native = video("kitsu:10:1", 2, 1, Some("2020-01-01"));
+        native
+            .extra
+            .insert("novaStreamIds".into(), serde_json::json!(["tt100:2:1"]));
+        let episodes = vec![native, video("kitsu:10:2", 2, 2, Some("2020-01-02"))];
+        let source = progress("show", "kitsu:10:1", 600.0, false, 10);
+        let mut alias = source.clone();
+        alias.episode_id = "tt100:2:1".into();
+        assert!(continue_playback_order(&alias) > continue_playback_order(&source));
+        let records = HashMap::from([
+            (progress_map_key("show", &source.episode_id), source),
+            (progress_map_key("show", &alias.episode_id), alias.clone()),
+        ]);
+        for rewatch in [false, true] {
+            let mut latest = alias.clone();
+            latest.watched = rewatch;
+            latest.history = Some(PlaybackHistory {
+                rewatch,
+                ..Default::default()
+            });
+            assert_eq!(
+                continue_resume_id("series", "show", &latest, Some(&episodes), &records),
+                Some("kitsu:10:1".into()),
+                "both first playback and a real rewatch retain native routing"
+            );
+        }
+        assert_eq!(records[&progress_map_key("show", "tt100:2:1")], alias);
+    }
+
+    #[test]
+    fn continue_native_resolution_rejects_stale_and_ambiguous_aliases() {
+        let mut native = video("kitsu:10:1", 1, 1, None);
+        native
+            .extra
+            .insert("novaStreamIds".into(), serde_json::json!(["tt100:1:1"]));
+        let mut stale = native.clone();
+        stale.extra.insert(
+            "novaMetadataRevision".into(),
+            serde_json::json!(nova_providers::metadata_revision().wrapping_add(1)),
+        );
+        let mut other = native.clone();
+        other.id = "kitsu:10:2".into();
+        let mut conflicting = native.clone();
+        conflicting.extra.insert(
+            "novaStreamIds".into(),
+            serde_json::json!(["tt100:1:1", "tt200:1:1"]),
+        );
+        for episodes in [vec![stale], vec![native.clone(), other], vec![conflicting]] {
+            assert_eq!(
+                continue_native_resume_id("series", "show", "tt100:1:1", Some(&episodes)),
+                "tt100:1:1",
+                "unproven aliases retain the original playback identity"
+            );
+        }
+        let episodes = [native];
+        for (type_, id) in [
+            ("movie", "tt100:1:1"),
+            ("series", "tt100:2:1"),
+            ("series", "kitsu:10:1"),
+        ] {
+            assert_eq!(
+                continue_native_resume_id(type_, "show", id, Some(&episodes)),
+                id
+            );
+        }
+        assert_eq!(
+            continue_native_resume_id("series", "show", "tt100:1:1", None),
+            "tt100:1:1"
+        );
+    }
+
+    #[test]
+    fn new_episode_exclusion_uses_only_visible_capped_continue_cards() {
+        let card = |parent: &str, episode: &str| ContinueEntry {
+            series_id: parent.into(),
+            type_: "series".into(),
+            episode_id: episode.into(),
+            updated_at_secs: 1,
+        };
+        let first = card("first", "tt100:1:1");
+        let overflow = card("overflow", "tt200:1:1");
+        let first_alias = card("first-alias", "tt100:1:1");
+        let overflow_alias = card("overflow-alias", "tt200:1:1");
+        let mut identities: HomeEpisodeIdentities =
+            [&first, &overflow, &first_alias, &overflow_alias]
+                .into_iter()
+                .map(|card| {
+                    (
+                        (
+                            card.type_.clone(),
+                            card.series_id.clone(),
+                            card.episode_id.clone(),
+                        ),
+                        vec![card.episode_id.clone()],
+                    )
+                })
+                .collect();
+        let mut continuing = vec![first.clone(), overflow];
+        let mut new = vec![(0, first_alias.clone()), (0, overflow_alias.clone())];
+        deduplicate_episode_home_rows(&mut continuing, &mut new, &identities, true, 1);
+        assert_eq!(continuing.len(), 1);
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].1.series_id, overflow_alias.series_id);
+
+        let bridge = card("bridge", "bridge-episode");
+        let bridged = card("bridged", "kitsu:10:1");
+        for (entry, aliases) in [
+            (&bridge, vec!["tt100:1:1".into(), "kitsu:10:1".into()]),
+            (&bridged, vec!["kitsu:10:1".into()]),
+        ] {
+            identities.insert(
+                (
+                    entry.type_.clone(),
+                    entry.series_id.clone(),
+                    entry.episode_id.clone(),
+                ),
+                aliases,
+            );
+        }
+        let mut continuing = vec![first.clone(), bridge];
+        let mut new = vec![(0, bridged)];
+        deduplicate_episode_home_rows(&mut continuing, &mut new, &identities, true, 1);
+        assert!(
+            new.is_empty(),
+            "a suppressed alias still proves the retained episode's identity"
+        );
+
+        let mut continuing = vec![first.clone(), first];
+        let mut new = vec![(0, first_alias.clone()), (0, first_alias)];
+        deduplicate_episode_home_rows(&mut continuing, &mut new, &identities, false, 20);
+        assert_eq!(
+            continuing.len(),
+            1,
+            "disabled rails still deduplicate their own state"
+        );
+        assert_eq!(
+            new.len(),
+            1,
+            "a disabled Continue rail cannot suppress New Episodes"
+        );
+    }
+
+    #[test]
     fn continue_prefers_explicit_partial_rewatch_without_changing_completion() {
         let episodes = vec![
             video("e1", 1, 1, Some("2020-01-01")),
@@ -5517,11 +5779,15 @@ pub(super) fn prepare_progress_home(
     }
     new.sort_by_key(|(newest, e)| (std::cmp::Reverse(*newest), e.series_id.clone()));
     continuing.sort_by_key(|e| std::cmp::Reverse(e.updated_at_secs));
-    let mut seen = HashSet::new();
-    continuing.retain(|e| retain_home_episode(e, &aliases, &mut seen));
-    new.retain(|(_, e)| retain_home_episode(e, &aliases, &mut seen));
-    continuing.truncate(MAX);
-    new.truncate(MAX);
+    deduplicate_episode_home_rows(
+        &mut continuing,
+        &mut new,
+        &aliases,
+        state
+            .cache_settings
+            .home_row_enabled(&HomeRowSource::ContinueWatching),
+        MAX,
+    );
     upcoming.sort_by_key(|e| e.air_days);
     upcoming.truncate(MAX);
     state.continue_list = continuing;
