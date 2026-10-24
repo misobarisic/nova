@@ -42,6 +42,8 @@ fn returning_episodes_have_independent_navigation_and_removal() {
     app.set_home_new_episodes(
         Rc::new(VecModel::from(vec![nova::ContinueRow {
             id: "returning".into(),
+            media_type: "series".into(),
+            episode_id: "returning:1:2".into(),
             title: "Returning show".into(),
             badge: 2,
             remaining: "2 new episodes".into(),
@@ -57,6 +59,16 @@ fn returning_episodes_have_independent_navigation_and_removal() {
     let removes = Rc::new(RefCell::new(Vec::new()));
     let captured = removes.clone();
     app.on_new_episode_remove(move |index| captured.borrow_mut().push(index));
+    let captured = removes.clone();
+    app.on_home_episode_action(move |new_row, type_, id, episode, action| {
+        assert!(new_row);
+        assert_eq!(type_, "series");
+        assert_eq!(id, "returning");
+        assert_eq!(episode, "returning:1:2");
+        assert_eq!(action, 2);
+        captured.borrow_mut().push(0);
+    });
+
     app.on_continue_picked(|_| panic!("returning episode routed to Continue Watching"));
     app.on_continue_remove(|_| panic!("new episode removal used Continue hide"));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));

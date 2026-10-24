@@ -99,22 +99,21 @@ the progress worker. Continue resolves partial/rewatch alias targets to a
 unique cached native episode; disabled or capped-out Continue cards no longer
 suppress New Episodes.
 
-The bounded source audit found these remaining cases; they were not reproduced
-on Android during this change:
+The remaining audit findings were fixed in the next change:
 
-- `home.rs::{continue_remove,new_episode_remove}` dismiss only one raw source
-  parent. An overlapping source can reveal the same episode after removal.
-  Extend dismissal through proven episode identities without hiding unrelated
-  seasons, changing watched state or merging whole titles from partial overlap.
-- `home.rs::episode_home_enter` resolves a raw ID without its media type. Pass
-  the painted card's typed identity through detail entry so a shared raw ID
-  cannot select a different Library item.
-- Continue/New Episodes menus in `crates/ui/home.slint` retain row indices.
-  Capture stable typed title/episode identities so a background reorder cannot
-  retarget an already open menu, matching Watch history's action contract.
+- Continue/New dismissals retain the typed source and proven global episode
+  identities in the existing hidden maps, with legacy raw-ID reads. Other
+  sources cannot restore a dismissed episode/batch, while different media
+  types, unrelated seasons, later releases and newer playback remain eligible.
+- `episode_home_enter` matches both media type and raw ID for Continue, New
+  Episodes and Upcoming, and returns without reusing a previous Detail target
+  when the requested typed entry is absent.
+- Continue/New touch sheets and native popups capture the painted typed
+  episode. Their `home_episode_action` callback revalidates that identity after
+  model updates; a reordered index cannot retarget the open menu.
 
-Keep distinct episodes, movies and ambiguous/stale alias evidence separate.
-Validate each follow-on with focused action regressions before expanding scope.
+Focused backend and headless menu regressions cover these contracts. No
+Android build or device verification was requested for this follow-up.
 
 ## Stored-data compression audit
 

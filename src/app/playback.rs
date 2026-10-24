@@ -1750,14 +1750,10 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             state.playback.as_ref().map(|t| t.series_id.clone())
         };
-        if let Some(id) = armed {
+        if armed.is_some() {
             let map = {
                 let mut state = self.shared.lock().unwrap();
-                if state.continue_hidden.remove(&id).is_some() {
-                    Some(state.continue_hidden.clone())
-                } else {
-                    None
-                }
+                home::clear_home_continue_hidden(&mut state)
             };
             if let Some(map) = map {
                 write_continue_hidden(&map);

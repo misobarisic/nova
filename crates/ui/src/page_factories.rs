@@ -148,6 +148,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_new_episode_enter => invoke_home_bridge_new_episode_enter(arg0),
             on_new_episode_remove => invoke_home_bridge_new_episode_remove(arg0),
             on_history_action => invoke_home_bridge_history_action(arg0, arg1, arg2),
+            on_home_episode_action => invoke_home_bridge_home_episode_action(arg0, arg1, arg2, arg3, arg4),
             on_continue_remove => invoke_home_bridge_continue_remove(arg0),
             on_continue_enter => invoke_home_bridge_continue_enter(arg0),
             on_upcoming_picked => invoke_home_bridge_upcoming_picked(arg0),

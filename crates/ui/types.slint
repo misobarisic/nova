@@ -258,6 +258,8 @@ export struct SheetItem {
 /// One entry in the Home → Continue Watching row: a library series with
 /// a resumable episode (latest progress first).
 export struct ContinueRow {
+    media_type: string,
+    episode_id: string,
     /// Library entry id (stable key for poster dispatch guards).
     id: string,
     /// Series title.

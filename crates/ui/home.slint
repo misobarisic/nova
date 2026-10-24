@@ -106,11 +106,12 @@ component ContinueCard inherits Rectangle {
     // Open the card menu (page-level sheet): a touch hold, or — on touch
     // platforms — a right-click, mirroring the Library cards.
     callback menu_requested();
-    // Menu actions. The card has no index of its own: the `for` site binds
-    // these to the row index.
-    // "Enter series": open the detail page without starting playback.
-    callback enter_requested();
-    callback remove_requested();
+    // Capture the painted target before a native popup opens; row delegates
+    // can receive new data while the popup is still on screen.
+    property <ContinueRow> popup_entry;
+    in property <bool> new_episode: false;
+    property <bool> popup_new;
+    callback action_requested(bool, ContinueRow, int);
     in property <string> removal_label: @tr("Remove from Continue Watching");
 
     width: card-width;
@@ -127,16 +128,16 @@ component ContinueCard inherits Rectangle {
         Menu {
             MenuItem {
                 title: @tr("Play");
-                activated => { root.picked(); }
+                activated => { root.action_requested(root.popup_new, root.popup_entry, 0); }
             }
             MenuItem {
                 title: @tr("Enter series");
-                activated => { root.enter_requested(); }
+                activated => { root.action_requested(root.popup_new, root.popup_entry, 1); }
             }
             MenuSeparator {}
             MenuItem {
                 title: root.removal_label;
-                activated => { root.remove_requested(); }
+                activated => { root.action_requested(root.popup_new, root.popup_entry, 2); }
             }
         }
     }
@@ -198,6 +199,8 @@ component ContinueCard inherits Rectangle {
                         if (root.touch_menus) {
                             root.menu_requested();
                         } else {
+                            root.popup_entry = root.entry;
+                            root.popup_new = root.new_episode;
                             cont_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
                         }
                     }
@@ -1551,6 +1554,7 @@ export component HomePage {
     // `continue_enter` opens the detail page without starting playback, and
     // `continue_remove` hides the card until the item is resumed again.
     callback history_action(string, string, int);
+    callback home_episode_action(bool, string, string, string, int);
     callback continue_remove(int);
     callback continue_enter(int);
     callback upcoming_picked(int);
@@ -1569,12 +1573,12 @@ export component HomePage {
     // the task to the back, keeping process state; desktop never fires it).
     callback exit_to_background();
 
-    // Card menu state. `menu_idx` is the card the open/next menu acts on;
-    // `menu_open` only drives the bottom sheet (single instance, -1 closed).
-    // Pure UI state: actions reuse the callbacks above.
+    // Continue/New menus retain the painted typed episode, never a mutable
+    // row index. Upcoming keeps its separate calendar/index action path.
     out property <bool> card_menu_open: root.menu_open;
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
+    property <ContinueRow> menu_episode;
     property <bool> menu_upcoming: false;
     property <bool> menu_new: false;
     property <bool> menu_history: false;
@@ -1600,9 +1604,10 @@ export component HomePage {
             root.close_menu();
             return;
         }
+        if (idx < 0 || idx >= root.continue_rows.length) { return; }
         root.menu_upcoming = false;
         root.menu_new = false;
-        root.menu_idx = idx;
+        root.menu_episode = root.continue_rows[idx];
         root.menu_open = true;
     }
 
@@ -1622,6 +1627,8 @@ export component HomePage {
     }
 
     function open_new_episode_menu(idx: int) {
+        if (idx < 0 || idx >= root.new_episode_rows.length) { return; }
+        root.menu_episode = root.new_episode_rows[idx];
         root.menu_history = false;
         root.menu_upcoming = false;
         root.menu_new = true;
@@ -2394,8 +2401,7 @@ export component HomePage {
                                                             menu_requested => {
                                                                 if (root.touch_menus) { root.open_continue_menu(i); }
                                                             }
-                                                            enter_requested => { root.continue_enter(i); }
-                                                            remove_requested => { root.continue_remove(i); }
+                                                            action_requested(new_row, target, a) => { root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a); }
                                                             pan_hint => {
                                                                 root.kb_active = false;
                                                                 root.rail_panned();
@@ -2459,6 +2465,7 @@ export component HomePage {
 
                                                         for c[i] in root.new_episode_rows: ContinueCard {
                                                             entry: c;
+                                                            new_episode: true;
                                                             removal_label: @tr("Remove from New episodes");
                                                             card-width: root.rail_item_width;
                                                             tappable: root.view == 0;
@@ -2475,8 +2482,7 @@ export component HomePage {
                                                             menu_requested => {
                                                                 if (root.touch_menus) { root.open_new_episode_menu(i); }
                                                             }
-                                                            enter_requested => { root.new_episode_enter(i); }
-                                                            remove_requested => { root.new_episode_remove(i); }
+                                                            action_requested(new_row, target, a) => { root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a); }
                                                             pan_hint => {
                                                                 root.kb_active = false;
                                                                 root.rail_panned();
@@ -2810,6 +2816,7 @@ export component HomePage {
                                                 spacing: root.item-gap;
 
                                                 for c[i] in root.episode_grid_rows: ContinueCard {
+                                                    new_episode: root.view == -3;
                                                     row: Math.floor(i / root.grid_cols);
                                                     col: Math.mod(i, root.grid_cols);
 
@@ -2832,11 +2839,8 @@ export component HomePage {
                                                             if (root.view == -3) { root.open_new_episode_menu(i); } else { root.open_continue_menu(i); }
                                                         }
                                                     }
-                                                    enter_requested => {
-                                                        if (root.view == -3) { root.new_episode_enter(i); } else { root.continue_enter(i); }
-                                                    }
-                                                    remove_requested => {
-                                                        if (root.view == -3) { root.new_episode_remove(i); } else { root.continue_remove(i); }
+                                                    action_requested(new_row, target, a) => {
+                                                        root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a);
                                                     }
                                                 }
                                             }
@@ -3176,12 +3180,7 @@ export component HomePage {
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
             sheet_title: root.menu_history ? root.menu_history_title : root.menu_upcoming && root.menu_idx >= 0 && root.menu_idx < root.upcoming_rows.length
-                ? root.upcoming_rows[root.menu_idx].title
-                : root.menu_new && root.menu_idx >= 0 && root.menu_idx < root.new_episode_rows.length
-                ? root.new_episode_rows[root.menu_idx].title
-                : root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
-                ? root.continue_rows[root.menu_idx].title
-                : @tr("Continue Watching");
+                ? root.upcoming_rows[root.menu_idx].title : root.menu_episode.title;
             items: root.menu_history && root.menu_recommendation ? [
                 { label: @tr("Open"), enabled: true },
                 { label: @tr("Hide recommendation"), enabled: true },
@@ -3196,19 +3195,9 @@ export component HomePage {
                 } else if (root.menu_upcoming) {
                     root.kb_active = false;
                     root.upcoming_picked(root.menu_idx);
-                } else if (root.menu_new) {
-                    if (a == 0) { root.new_episode_picked(root.menu_idx); }
-                    else if (a == 1) { root.new_episode_enter(root.menu_idx); }
-                    else { root.new_episode_remove(root.menu_idx); }
-                } else if (a == 0) {
-                    root.kb_active = false;
-                    root.kb_zone = 1;
-                    root.kb_idx = root.menu_idx;
-                    root.continue_picked(root.menu_idx);
-                } else if (a == 1) {
-                    root.continue_enter(root.menu_idx);
                 } else {
-                    root.continue_remove(root.menu_idx);
+                    root.kb_active = false;
+                    root.home_episode_action(root.menu_new, root.menu_episode.media_type, root.menu_episode.id, root.menu_episode.episode_id, a);
                 }
                 root.close_menu();
             }

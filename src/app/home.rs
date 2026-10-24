@@ -2101,24 +2101,31 @@ impl Bridge {
             let Some(episode_id) = episode_id else {
                 continue;
             };
+            let proofs = HomeEpisodeProofs::new(&entry.type_, episode_slice);
+            let identity = proofs.aliases(&entry.type_, &episode_id);
             if returning {
                 let available = new_episode_ids(&entry.id, episode_slice, &state.progress);
-                if new_hidden
-                    .get(&entry.id)
-                    .is_some_and(|hidden| available.iter().all(|id| hidden.contains(id)))
-                {
+                if new_episodes_are_hidden(
+                    &new_hidden,
+                    &entry.type_,
+                    &entry.id,
+                    &available,
+                    &proofs,
+                ) {
                     continue;
                 }
-            } else if state
-                .continue_hidden
-                .get(&entry.id)
-                .is_some_and(|at| *at >= p.updated_at_secs)
-            {
+            } else if continue_is_hidden(
+                &state.continue_hidden,
+                &entry.type_,
+                &entry.id,
+                &identity,
+                p.updated_at_secs,
+            ) {
                 continue;
             }
             episode_identities.insert(
                 (entry.type_.clone(), entry.id.clone(), episode_id.clone()),
-                home_episode_identity(&entry.type_, &episode_id, episode_slice),
+                identity,
             );
             let card = ContinueEntry {
                 series_id: entry.id.clone(),
@@ -2177,9 +2184,10 @@ impl Bridge {
                 .continue_hidden
                 .iter()
                 .filter(|(id, at)| {
-                    latest_times
-                        .get(id.as_str())
-                        .is_none_or(|updated| *updated > **at)
+                    !is_home_hide_key(id)
+                        && latest_times
+                            .get(id.as_str())
+                            .is_none_or(|updated| *updated > **at)
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
@@ -2312,6 +2320,8 @@ impl Bridge {
             .map(|d| {
                 let (poster, is_loaded) = home_card_image(&d.art_url, &d.poster_url);
                 ContinueRow {
+                    media_type: d.type_.into(),
+                    episode_id: d.episode_id.into(),
                     id: d.id.into(),
                     title: d.title.into(),
                     subtitle: d.subtitle.into(),
@@ -2669,16 +2679,18 @@ impl Bridge {
     /// page (the episode hasn't aired, so there are no streams to jump
     /// to; the user lands on the episode list).
     pub(super) fn upcoming_picked(&self, index: usize) {
-        let series_id = {
+        let selected = {
             self.shared
                 .lock()
                 .unwrap()
                 .upcoming_list
                 .get(index)
-                .map(|u| u.series_id.clone())
+                .map(|u| (u.type_.clone(), u.series_id.clone()))
         };
-        let Some(series_id) = series_id else { return };
-        self.episode_home_enter(&series_id);
+        let Some((type_, series_id)) = selected else {
+            return;
+        };
+        self.episode_home_enter(&type_, &series_id);
     }
 
     /// Main thread: a Continue Watching card was picked — open the series
@@ -2706,14 +2718,16 @@ impl Bridge {
     }
 
     fn episode_home_picked(&self, c: ContinueEntry) {
-        self.episode_home_enter(&c.series_id);
+        if !self.episode_home_enter(&c.type_, &c.series_id) {
+            return;
+        }
         let is_movie = self
             .shared
             .lock()
             .unwrap()
             .modal_item
             .as_ref()
-            .is_some_and(|m| m.id == c.series_id && m.type_ == "movie");
+            .is_some_and(|m| m.id == c.series_id && m.type_ == c.type_ && m.type_ == "movie");
         if is_movie && let Some(app) = self.app() {
             self.watch_now();
             app.set_detail_deep_stream(true);
@@ -2724,7 +2738,7 @@ impl Bridge {
         let (season, row_idx) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
-                Some(m) if m.id == c.series_id && !m.seasons.is_empty() => m,
+                Some(m) if m.id == c.series_id && m.type_ == c.type_ && !m.seasons.is_empty() => m,
                 _ => return,
             };
             let videos = &m.videos;
@@ -2778,29 +2792,49 @@ impl Bridge {
                 .unwrap()
                 .modal_item
                 .as_ref()
-                .is_some_and(|m| m.id == c.series_id);
+                .is_some_and(|m| m.id == c.series_id && m.type_ == c.type_);
             if on_streams && still_same {
                 app.set_detail_deep_stream(true);
             }
         }
     }
 
-    /// Main thread: remove the Continue Watching card at `index` until playback
-    /// of that item resumes. Stamps the hide time, persists it, and syncs the
-    /// hide mesh-wide (the `continue_hidden` domain).
-    pub(super) fn continue_remove(&self, index: usize) {
-        let id = {
-            self.shared
-                .lock()
-                .unwrap()
-                .continue_list
-                .get(index)
-                .map(|c| c.series_id.clone())
+    pub(super) fn home_episode_action(
+        &self,
+        new_row: bool,
+        type_: &str,
+        id: &str,
+        episode: &str,
+        action: i32,
+    ) {
+        let entry = {
+            let state = self.shared.lock().unwrap();
+            episode_home_action_entry(&state, new_row, type_, id, episode)
         };
-        let Some(id) = id else { return };
+        let Some(entry) = entry else { return };
+        match action {
+            0 => self.episode_home_picked(entry),
+            1 => {
+                self.episode_home_enter(&entry.type_, &entry.series_id);
+            }
+            2 if new_row => self.remove_new_episode_entry(entry),
+            2 => self.remove_continue_entry(entry),
+            _ => {}
+        }
+    }
+
+    pub(super) fn continue_remove(&self, index: usize) {
+        if let Some(entry) = self.continue_entry(index) {
+            self.remove_continue_entry(entry);
+        }
+    }
+
+    fn remove_continue_entry(&self, entry: ContinueEntry) {
+        let episodes = read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
+        let proofs = HomeEpisodeProofs::new(&entry.type_, &episodes);
         let map = {
             let mut state = self.shared.lock().unwrap();
-            state.continue_hidden.insert(id, now_secs());
+            dismiss_continue(&mut state.continue_hidden, &entry, &proofs, now_secs());
             state.continue_hidden.clone()
         };
         write_continue_hidden(&map);
@@ -2819,23 +2853,26 @@ impl Bridge {
             .cloned()
     }
 
-    fn episode_home_enter(&self, id: &str) {
+    fn episode_home_enter(&self, type_: &str, id: &str) -> bool {
         let entry = self
             .shared
             .lock()
             .unwrap()
             .entries
             .iter()
-            .find(|e| e.id == id)
+            .find(|e| e.id == id && e.type_ == type_)
             .cloned();
         if let Some(entry) = entry {
             self.open_library_entry(entry);
+            true
+        } else {
+            false
         }
     }
 
     pub(super) fn continue_enter(&self, index: usize) {
         if let Some(entry) = self.continue_entry(index) {
-            self.episode_home_enter(&entry.series_id);
+            self.episode_home_enter(&entry.type_, &entry.series_id);
         }
     }
 
@@ -2848,7 +2885,7 @@ impl Bridge {
             .get(index)
             .cloned();
         if let Some(entry) = entry {
-            self.episode_home_enter(&entry.series_id);
+            self.episode_home_enter(&entry.type_, &entry.series_id);
         }
     }
 
@@ -2860,8 +2897,14 @@ impl Bridge {
             .new_episodes_list
             .get(index)
             .cloned();
-        let Some(entry) = entry else { return };
+        if let Some(entry) = entry {
+            self.remove_new_episode_entry(entry);
+        }
+    }
+
+    fn remove_new_episode_entry(&self, entry: ContinueEntry) {
         let episodes = read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
+        let proofs = HomeEpisodeProofs::new(&entry.type_, &episodes);
         let ids = new_episode_ids(
             &entry.series_id,
             &episodes,
@@ -2869,7 +2912,7 @@ impl Bridge {
         );
         let mut hidden: HashMap<String, Vec<String>> =
             read_json(NEW_EPISODES_HIDDEN_KEY).unwrap_or_default();
-        hidden.insert(entry.series_id, ids);
+        dismiss_new_episode_batch(&mut hidden, &entry, ids, &proofs);
         write_json(NEW_EPISODES_HIDDEN_KEY, &hidden);
         self.rebuild_continue_list();
         self.apply_home_to_ui();
@@ -3119,39 +3162,209 @@ fn home_card_image(url: &str, fallback: &str) -> (Image, bool) {
 
 // Canonical episode IDs and current metadata aliases prove individual episodes,
 // never an entire franchise. Movies deliberately have no cross-source collapse.
-fn home_episode_identity(media_type: &str, id: &str, episodes: &[Video]) -> Vec<String> {
-    if media_type == "movie" {
-        return Vec::new();
-    }
-    let mut aliases = episodes
-        .iter()
-        .find(|video| video.id == id)
-        .map(confirmed_episode_stream_ids)
-        .unwrap_or_default();
-    aliases.push(id.to_owned());
-    aliases
-        .into_iter()
-        .filter(|alias| {
-            let Some((parent, episode)) = alias.rsplit_once(':') else {
-                return false;
-            };
-            if episode.parse::<u32>().is_err() {
-                return false;
-            }
-            if let Some((title, season)) = parent.rsplit_once(':')
-                && season.parse::<u32>().is_ok()
-                && matches!(
-                    nova_providers::ExternalId::parse(title),
-                    Some(nova_providers::ExternalId::Imdb(_))
-                )
-            {
-                return true;
-            }
-            parent
-                .strip_prefix("kitsu:")
-                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+fn episode_home_action_entry(
+    state: &Shared,
+    new_row: bool,
+    type_: &str,
+    id: &str,
+    episode: &str,
+) -> Option<ContinueEntry> {
+    let rows = if new_row {
+        &state.new_episodes_list
+    } else {
+        &state.continue_list
+    };
+    rows.iter()
+        .find(|row| row.type_ == type_ && row.series_id == id && row.episode_id == episode)
+        .filter(|row| {
+            !new_row
+                || !state
+                    .progress
+                    .get(&progress_map_key(&row.series_id, &row.episode_id))
+                    .is_some_and(|p| p.watched)
         })
-        .collect()
+        .cloned()
+}
+
+struct HomeEpisodeProofs {
+    aliases: HashMap<String, Vec<String>>,
+}
+
+impl HomeEpisodeProofs {
+    fn new(type_: &str, videos: &[Video]) -> Self {
+        if !matches!(type_, "series" | "anime") {
+            return Self {
+                aliases: HashMap::new(),
+            };
+        }
+        let compact = videos
+            .iter()
+            .map(|video| {
+                let mut result = Video {
+                    id: video.id.clone(),
+                    ..Default::default()
+                };
+                result.extra.insert(
+                    "novaStreamIds".into(),
+                    serde_json::json!(confirmed_episode_stream_ids(video)),
+                );
+                result
+            })
+            .collect();
+        let index = media_identity::IdentityIndex::new([media_identity::TitleInventory {
+            media_type: type_.into(),
+            series_id: "home-source".into(),
+            videos: compact,
+        }]);
+        let mut aliases = HashMap::new();
+        for group in index.progress_groups {
+            let global = group
+                .iter()
+                .map(|(_, id)| id.clone())
+                .filter(|id| media_identity::canonical_episode_namespace(id).is_some())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            for (_, id) in group {
+                aliases.insert(id, global.clone());
+            }
+        }
+        Self { aliases }
+    }
+
+    fn aliases(&self, type_: &str, id: &str) -> Vec<String> {
+        if !matches!(type_, "series" | "anime") {
+            return Vec::new();
+        }
+        self.aliases.get(id).cloned().unwrap_or_else(|| {
+            media_identity::canonical_episode_namespace(id)
+                .map(|_| vec![id.into()])
+                .unwrap_or_default()
+        })
+    }
+}
+
+fn home_episode_identity(media_type: &str, id: &str, episodes: &[Video]) -> Vec<String> {
+    HomeEpisodeProofs::new(media_type, episodes).aliases(media_type, id)
+}
+
+// Existing JSON maps/sync rows retain their value shapes. New keys distinguish
+// a typed source title from a proven global episode; legacy raw IDs still read.
+fn home_title_hide_key(type_: &str, id: &str) -> String {
+    watch_history::title_key(type_, id)
+}
+
+fn is_home_hide_key(id: &str) -> bool {
+    id.starts_with('[')
+        && serde_json::from_str::<Vec<String>>(id).is_ok_and(|parts| {
+            parts.len() == 2 || (parts.len() == 3 && parts[0] == "episode" && parts[1].is_empty())
+        })
+}
+
+fn home_episode_hide_key(id: &str) -> String {
+    serde_json::to_string(&("episode", "", id)).expect("episode dismissal identity")
+}
+
+fn continue_is_hidden(
+    hidden: &HashMap<String, u64>,
+    type_: &str,
+    id: &str,
+    aliases: &[String],
+    updated: u64,
+) -> bool {
+    hidden
+        .get(id)
+        .filter(|_| !is_home_hide_key(id))
+        .into_iter()
+        .chain(hidden.get(&home_title_hide_key(type_, id)))
+        .chain(
+            aliases
+                .iter()
+                .filter_map(|alias| hidden.get(&home_episode_hide_key(alias))),
+        )
+        .any(|at| *at >= updated)
+}
+
+fn new_episodes_are_hidden(
+    hidden: &HashMap<String, Vec<String>>,
+    type_: &str,
+    id: &str,
+    available: &[String],
+    proofs: &HomeEpisodeProofs,
+) -> bool {
+    available.iter().all(|episode| {
+        hidden
+            .get(id)
+            .filter(|_| !is_home_hide_key(id))
+            .into_iter()
+            .chain(hidden.get(&home_title_hide_key(type_, id)))
+            .any(|ids| ids.contains(episode))
+            || proofs.aliases(type_, episode).iter().any(|alias| {
+                hidden
+                    .get(&home_episode_hide_key(alias))
+                    .is_some_and(|ids| ids.contains(alias))
+            })
+    })
+}
+
+fn dismiss_continue(
+    hidden: &mut HashMap<String, u64>,
+    entry: &ContinueEntry,
+    proofs: &HomeEpisodeProofs,
+    now: u64,
+) {
+    let at = now.max(entry.updated_at_secs);
+    for key in std::iter::once(home_title_hide_key(&entry.type_, &entry.series_id)).chain(
+        proofs
+            .aliases(&entry.type_, &entry.episode_id)
+            .iter()
+            .map(|alias| home_episode_hide_key(alias)),
+    ) {
+        hidden
+            .entry(key)
+            .and_modify(|old| *old = (*old).max(at))
+            .or_insert(at);
+    }
+}
+
+fn dismiss_new_episode_batch(
+    hidden: &mut HashMap<String, Vec<String>>,
+    entry: &ContinueEntry,
+    ids: Vec<String>,
+    proofs: &HomeEpisodeProofs,
+) {
+    for alias in ids.iter().flat_map(|id| proofs.aliases(&entry.type_, id)) {
+        hidden.insert(home_episode_hide_key(&alias), vec![alias]);
+    }
+    hidden.insert(home_title_hide_key(&entry.type_, &entry.series_id), ids);
+}
+
+pub(super) fn clear_home_continue_hidden(state: &mut Shared) -> Option<HashMap<String, u64>> {
+    let target = state.playback.as_ref()?;
+    let type_ = target
+        .history
+        .as_ref()
+        .map(|history| history.type_.as_str())
+        .unwrap_or_default();
+    let videos = state
+        .modal_item
+        .as_ref()
+        .filter(|modal| modal.id == target.series_id && modal.type_ == type_)
+        .map(|modal| modal.videos.as_slice())
+        .unwrap_or_default();
+    let aliases = home_episode_identity(type_, &target.episode_id, videos);
+    let keys = std::iter::once(target.series_id.clone())
+        .chain(std::iter::once(home_title_hide_key(
+            type_,
+            &target.series_id,
+        )))
+        .chain(aliases.iter().map(|alias| home_episode_hide_key(alias)))
+        .collect::<Vec<_>>();
+    let mut changed = false;
+    for key in keys {
+        changed |= state.continue_hidden.remove(&key).is_some();
+    }
+    changed.then(|| state.continue_hidden.clone())
 }
 
 type HomeEpisodeIdentities = HashMap<(String, String, String), Vec<String>>;
@@ -3590,6 +3803,200 @@ fn new_episode_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dismissal_video(id: &str, alias: &str) -> Video {
+        serde_json::from_value(serde_json::json!({"id":id,"novaStreamIds":[alias],
+            "novaMetadataRevision":nova_providers::metadata_revision()}))
+        .unwrap()
+    }
+
+    fn dismissal_card(type_: &str, parent: &str, episode: &str) -> ContinueEntry {
+        ContinueEntry {
+            type_: type_.into(),
+            series_id: parent.into(),
+            episode_id: episode.into(),
+            updated_at_secs: 100,
+        }
+    }
+
+    #[test]
+    fn dismissal_continue_covers_proven_aliases_without_hiding_other_types_or_seasons() {
+        let source = HomeEpisodeProofs::new("series", &[dismissal_video("opaque", "tt100:1:1")]);
+        let alternate =
+            HomeEpisodeProofs::new("series", &[dismissal_video("kitsu:10:1", "tt100:1:1")]);
+        let entry = dismissal_card("series", "source", "opaque");
+        let mut hidden = HashMap::new();
+        dismiss_continue(&mut hidden, &entry, &source, 200);
+        assert!(continue_is_hidden(
+            &hidden,
+            "series",
+            "alternate",
+            &alternate.aliases("series", "kitsu:10:1"),
+            100
+        ));
+        assert!(!continue_is_hidden(
+            &hidden,
+            "series",
+            "alternate",
+            &alternate.aliases("series", "kitsu:10:1"),
+            201
+        ));
+        assert!(!continue_is_hidden(
+            &hidden,
+            "series",
+            "sequel",
+            &["tt100:2:1".into()],
+            100
+        ));
+        assert!(!continue_is_hidden(&hidden, "movie", "source", &[], 100));
+        assert!(!continue_is_hidden(
+            &hidden,
+            "movie",
+            &home_title_hide_key("series", "source"),
+            &[],
+            100
+        ));
+        hidden.insert(home_title_hide_key("movie", "source"), 300);
+        let mut state = Shared {
+            continue_hidden: hidden,
+            playback: Some(PlaybackTarget {
+                series_id: "source".into(),
+                episode_id: "tt100:1:1".into(),
+                history: Some(PlaybackHistory {
+                    type_: "series".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(clear_home_continue_hidden(&mut state).is_some());
+        assert_eq!(
+            state.continue_hidden,
+            HashMap::from([(home_title_hide_key("movie", "source"), 300)])
+        );
+        assert!(continue_is_hidden(
+            &HashMap::from([("legacy".into(), 200)]),
+            "series",
+            "legacy",
+            &[],
+            100
+        ));
+    }
+
+    #[test]
+    fn dismissal_new_episode_batch_covers_aliases_but_allows_future_releases() {
+        let source = HomeEpisodeProofs::new(
+            "series",
+            &[
+                dismissal_video("a1", "tt100:1:1"),
+                dismissal_video("a2", "tt100:1:2"),
+            ],
+        );
+        let other = HomeEpisodeProofs::new(
+            "series",
+            &[
+                dismissal_video("b1", "tt100:1:1"),
+                dismissal_video("b2", "tt100:1:2"),
+                dismissal_video("b3", "tt100:1:3"),
+            ],
+        );
+        let entry = dismissal_card("series", "source", "a1");
+        let mut hidden = HashMap::new();
+        dismiss_new_episode_batch(&mut hidden, &entry, vec!["a1".into(), "a2".into()], &source);
+        assert!(new_episodes_are_hidden(
+            &hidden,
+            "series",
+            "other",
+            &["b1".into(), "b2".into()],
+            &other
+        ));
+        assert!(!new_episodes_are_hidden(
+            &hidden,
+            "series",
+            "other",
+            &["b1".into(), "b2".into(), "b3".into()],
+            &other
+        ));
+        assert!(!new_episodes_are_hidden(
+            &hidden,
+            "movie",
+            "source",
+            &["a1".into()],
+            &HomeEpisodeProofs::new("movie", &[])
+        ));
+        let legacy = HashMap::from([("source".into(), vec!["a1".into()])]);
+        assert!(new_episodes_are_hidden(
+            &legacy,
+            "series",
+            "source",
+            &["a1".into()],
+            &source
+        ));
+    }
+
+    #[test]
+    fn dismissal_rejects_stale_and_ambiguous_episode_evidence() {
+        let entry = dismissal_card("series", "source", "a1");
+        let mut stale = dismissal_video("a1", "tt100:1:1");
+        stale.extra.insert(
+            "novaMetadataRevision".into(),
+            serde_json::json!(nova_providers::metadata_revision().wrapping_add(1)),
+        );
+        for videos in [
+            vec![stale],
+            vec![
+                dismissal_video("a1", "tt100:1:1"),
+                dismissal_video("a2", "tt100:1:1"),
+            ],
+        ] {
+            let proofs = HomeEpisodeProofs::new("series", &videos);
+            let mut hidden = HashMap::new();
+            dismiss_continue(&mut hidden, &entry, &proofs, 200);
+            assert!(!continue_is_hidden(
+                &hidden,
+                "series",
+                "other",
+                &["tt100:1:1".into()],
+                100
+            ));
+        }
+    }
+
+    #[test]
+    fn home_episode_actions_resolve_the_captured_type_and_episode_after_reordering() {
+        let series = dismissal_card("series", "shared", "e1");
+        let movie = dismissal_card("movie", "shared", "shared");
+        let mut state = Shared {
+            continue_list: vec![movie.clone(), series.clone()],
+            new_episodes_list: vec![series],
+            ..Default::default()
+        };
+        assert_eq!(
+            episode_home_action_entry(&state, false, "series", "shared", "e1")
+                .unwrap()
+                .type_,
+            "series"
+        );
+        state.continue_list.reverse();
+        assert_eq!(
+            episode_home_action_entry(&state, false, "movie", "shared", "shared")
+                .unwrap()
+                .episode_id,
+            movie.episode_id
+        );
+        assert!(episode_home_action_entry(&state, false, "series", "shared", "e2").is_none());
+        state.progress.insert(
+            progress_map_key("shared", "e1"),
+            EpisodeProgress {
+                watched: true,
+                ..Default::default()
+            },
+        );
+        assert!(episode_home_action_entry(&state, true, "series", "shared", "e1").is_none());
+        state.continue_list.clear();
+        assert!(episode_home_action_entry(&state, false, "series", "shared", "e1").is_none());
+    }
 
     #[test]
     fn continue_cards_collapse_only_current_confirmed_episode_aliases() {
@@ -5045,6 +5452,63 @@ mod tests {
         assert!(bridge.shared.lock().unwrap().new_episodes_list.is_empty());
         assert!(bridge.current_new_episode_rows().is_empty());
         verify_history_catalog_projection(&bridge, &app);
+        // Raw IDs may be shared by different media types. Enter must use the
+        // painted type even when the other Library entry precedes it.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = vec![
+                library_entry("shared-detail", "movie", "Film", WatchStatus::Auto),
+                library_entry("shared-detail", "series", "Series", WatchStatus::Auto),
+            ];
+            state.continue_list = vec![dismissal_card("series", "shared-detail", "e1")];
+            state.new_episodes_list =
+                vec![dismissal_card("movie", "shared-detail", "shared-detail")];
+        }
+        bridge.continue_enter(0);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .type_,
+            "series"
+        );
+        bridge.new_episode_enter(0);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .type_,
+            "movie"
+        );
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        assert!(!bridge.episode_home_enter("anime", "shared-detail"));
+        assert!(Arc::ptr_eq(
+            &token,
+            &bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .open_token
+        ));
     }
 
     /// Runs in the projection test's isolated UI/storage process above.
@@ -5740,24 +6204,25 @@ pub(super) fn prepare_progress_home(
             )
         };
         let Some(episode_id) = episode else { continue };
+        let proofs = HomeEpisodeProofs::new(&e.type_, videos);
+        let identity = proofs.aliases(&e.type_, &episode_id);
         if returning {
             let available = new_episode_ids(&e.id, videos, &state.progress);
-            if new_hidden
-                .get(&e.id)
-                .is_some_and(|hidden| available.iter().all(|id| hidden.contains(id)))
-            {
+            if new_episodes_are_hidden(new_hidden, &e.type_, &e.id, &available, &proofs) {
                 continue;
             }
-        } else if state
-            .continue_hidden
-            .get(&e.id)
-            .is_some_and(|at| *at >= p.updated_at_secs)
-        {
+        } else if continue_is_hidden(
+            &state.continue_hidden,
+            &e.type_,
+            &e.id,
+            &identity,
+            p.updated_at_secs,
+        ) {
             continue;
         }
         aliases.insert(
             (e.type_.clone(), e.id.clone(), episode_id.clone()),
-            home_episode_identity(&e.type_, &episode_id, videos),
+            identity,
         );
         let card = ContinueEntry {
             series_id: e.id.clone(),
@@ -5956,6 +6421,8 @@ impl Bridge {
                         .map(|row| (row.poster, true))
                         .unwrap_or_else(|| home_card_image(&d.art_url, &d.poster_url));
                     ContinueRow {
+                        media_type: d.type_.into(),
+                        episode_id: d.episode_id.into(),
                         id: d.id.into(),
                         title: d.title.into(),
                         subtitle: d.subtitle.into(),

@@ -888,6 +888,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let b = bridge.clone();
+    app.on_home_episode_action(move |new_row, type_, id, episode, action| {
+        b.home_episode_action(new_row, &type_, &id, &episode, action)
+    });
+
+    let b = bridge.clone();
     app.on_continue_remove(move |i| b.continue_remove(i as usize));
 
     let b = bridge.clone();

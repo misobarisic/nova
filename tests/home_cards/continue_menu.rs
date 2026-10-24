@@ -4,8 +4,8 @@
 //! card's popup: with touch menus enabled a hold — or a right-click, as on the
 //! Library cards — opens the page-level sheet, offering the Library actions
 //! (mark watched/unwatched, On Hold, Dropped, back to automatic, remove from
-//! library) next to Play and "Remove from Continue Watching", each dispatching
-//! the matching callback for the card index. The same sheet opens from a hold
+//! library) next to Play and "Remove from Continue Watching", dispatching the
+//! captured typed episode target. The same sheet opens from a hold
 //! on the "see all" subpage grid. On pointer platforms (touch menus off, i.e.
 //! desktop) the hold timer stays unarmed and a right-click opens the native
 //! popup instead — the headless backend can't host that popup, so the guard
@@ -16,6 +16,7 @@ use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 fn s(v: &str) -> SharedString {
     SharedString::from(v)
@@ -99,6 +100,118 @@ fn subpage_card(app: &nova::AppWindow) -> Option<ElementHandle> {
 }
 
 #[test]
+fn episode_menus_keep_painted_identity_across_reorder_and_removal() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::episode_menus_keep_painted_identity_across_reorder_and_removal"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(true);
+    app.set_touch_menus(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 900));
+    app.show().unwrap();
+    let a = nova::ContinueRow {
+        id: "shared".into(),
+        media_type: "series".into(),
+        episode_id: "e1".into(),
+        title: "Original series".into(),
+        ..Default::default()
+    };
+    let b = nova::ContinueRow {
+        id: "shared".into(),
+        media_type: "movie".into(),
+        episode_id: "shared".into(),
+        title: "Other film".into(),
+        ..Default::default()
+    };
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let captured = actions.clone();
+    app.on_home_episode_action(move |new_row, type_, id, episode, action| {
+        captured.borrow_mut().push((
+            new_row,
+            type_.to_string(),
+            id.to_string(),
+            episode.to_string(),
+            action,
+        ));
+    });
+    app.on_continue_remove(|_| panic!("menu used a mutable Continue index"));
+    app.on_new_episode_remove(|_| panic!("menu used a mutable New Episodes index"));
+    for new_row in [false, true] {
+        for grid in [false, true] {
+            for (label, action) in [("Play", 0), ("Enter series", 1), ("Remove", 2)] {
+                let rows = Rc::new(VecModel::from(vec![a.clone(), b.clone()]));
+                app.set_home_continue(if new_row {
+                    Rc::new(VecModel::default()).into()
+                } else {
+                    rows.clone().into()
+                });
+                app.set_home_new_episodes(if new_row {
+                    rows.clone().into()
+                } else {
+                    Rc::new(VecModel::default()).into()
+                });
+                app.set_home_view(if grid {
+                    if new_row { -3 } else { 1 }
+                } else {
+                    0
+                });
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(350));
+                let element = if grid {
+                    subpage_card(&app)
+                } else {
+                    landing_card(&app)
+                }
+                .unwrap_or_else(|| {
+                    panic!("missing painted card: new={new_row}, grid={grid}, action={action}")
+                });
+                right_click(&app, center(&element));
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+                // Keep the delegate count but change which identity occupies
+                // index zero; also remove the target entirely for Remove.
+                rows.set_vec(if action == 2 {
+                    vec![b.clone()]
+                } else {
+                    vec![b.clone(), a.clone()]
+                });
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+                let label = if label == "Remove" {
+                    if new_row {
+                        "Remove from New episodes"
+                    } else {
+                        "Remove from Continue Watching"
+                    }
+                } else {
+                    label
+                };
+                let item = ElementHandle::find_by_accessible_label(&app, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("missing {label}"));
+                let position = center(&item);
+                press(&app, position);
+                release(&app, position);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+                assert_eq!(
+                    actions.borrow().last(),
+                    Some(&(
+                        new_row,
+                        "series".into(),
+                        "shared".into(),
+                        "e1".into(),
+                        action
+                    ))
+                );
+            }
+        }
+    }
+    assert_eq!(actions.borrow().len(), 12);
+}
+
+#[test]
 fn continue_menu_matches_the_library_card_menu() {
     if !crate::isolation::run(concat!(
         module_path!(),
@@ -120,6 +233,8 @@ fn continue_menu_matches_the_library_card_menu() {
     let rows: Vec<nova::ContinueRow> = (0..6)
         .map(|i| nova::ContinueRow {
             id: s(format!("s{i}").as_str()),
+            media_type: "series".into(),
+            episode_id: s(format!("s{i}:1:1").as_str()),
             title: s(format!("Show {i}").as_str()),
             subtitle: s("S1 E1 · Pilot"),
             poster: Default::default(),
@@ -140,6 +255,24 @@ fn continue_menu_matches_the_library_card_menu() {
     let picks: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     let removes: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     let enters: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    {
+        let picks = picks.clone();
+        let removes = removes.clone();
+        let enters = enters.clone();
+        app.on_home_episode_action(move |new_row, type_, id, episode, action| {
+            assert!(!new_row);
+            assert_eq!(type_, "series");
+            let i = id.strip_prefix('s').unwrap().parse::<i32>().unwrap();
+            assert_eq!(episode, format!("s{i}:1:1"));
+            match action {
+                0 => picks.borrow_mut().push(i),
+                1 => enters.borrow_mut().push(i),
+                2 => removes.borrow_mut().push(i),
+                _ => panic!("unexpected action"),
+            }
+        });
+    }
+
     {
         let picks = picks.clone();
         app.on_continue_picked(move |i| picks.borrow_mut().push(i));

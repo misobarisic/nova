@@ -2094,6 +2094,7 @@ export component AppWindow inherits Window {
     callback new_episode_enter(int);
     callback new_episode_remove(int);
     callback home_history_action(string, string, int);
+    callback home_episode_action(bool, string, string, string, int);
     callback continue_remove(int);
     // "Enter series": open the card's detail page without starting playback.
     callback continue_enter(int);
@@ -2258,6 +2259,7 @@ export component AppWindow inherits Window {
     public function home_bridge_new_episode_enter(i: int) { root.new_episode_enter(i); }
     public function home_bridge_new_episode_remove(i: int) { root.new_episode_remove(i); }
     public function home_bridge_history_action(type: string, id: string, action: int) { root.home_history_action(type, id, action); }
+    public function home_bridge_home_episode_action(new_row: bool, type_: string, id: string, episode: string, action: int) { root.home_episode_action(new_row, type_, id, episode, action); }
     public function home_bridge_continue_remove(i: int) { root.continue_remove(i); }
     public function home_bridge_continue_enter(i: int) { root.continue_enter(i); }
     public function home_bridge_upcoming_picked(i: int) { root.upcoming_picked(i); }
