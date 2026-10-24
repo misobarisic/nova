@@ -1,0 +1,62 @@
+name: Launch requested cache validation releases
+run-name: Launch v0.0.44 for sequential release-cache validation
+
+on:
+  push:
+    branches: ["ci/release-cache-validation-20261024"]
+    paths: [".github/workflows/launch-cache-validation-release.yml"]
+
+permissions: {}
+
+concurrency:
+  group: launch-cache-validation-release
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    if: github.repository == 'misobarisic/nova' && github.ref == 'refs/heads/ci/release-cache-validation-20261024'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: v0.0.44
+      RELEASE_VERSION: 0.0.44
+      RELEASE_SHA: 40b62ca019f69e09588d944dbfa2bf90f4c86b26
+    steps:
+      - name: Checkout the exact requested release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+
+      - name: Verify version, create the annotated tag, and dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)" = "$RELEASE_SHA"
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+          manifest = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
+          lock = tomllib.loads(pathlib.Path("Cargo.lock").read_text())
+          expected = os.environ["RELEASE_VERSION"]
+          assert manifest["package"]["version"] == expected
+          assert os.environ["RELEASE_TAG"] == "v" + expected
+          nova = [p for p in lock["package"] if p["name"] == "nova"]
+          assert len(nova) == 1 and nova[0]["version"] == expected
+          PY
+          tag_object="$(gh api --method POST "repos/$GH_REPO/git/tags" \
+            -f "tag=$RELEASE_TAG" -f "message=Nova $RELEASE_TAG" \
+            -f "object=$RELEASE_SHA" -f type=commit --jq .sha)"
+          gh api --method POST "repos/$GH_REPO/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$tag_object"
+          # GITHUB_TOKEN-created tags do not emit further workflow push runs.
+          # Dispatch the existing main workflow explicitly, as the tag dispatcher does.
+          gh workflow run release-on-main.yml --ref main \
+            -f "tag=$RELEASE_TAG" -f "commit=$RELEASE_SHA" -f publish=true
