@@ -1890,6 +1890,7 @@ fn selected_library_entries(
         .collect()
 }
 
+#[cfg(test)]
 fn selected_library_entry(
     entries: &[LibraryEntry],
     candidate: &LibraryCandidate,
