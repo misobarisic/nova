@@ -1,0 +1,30 @@
+name: Dispatch Nova release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: dispatch-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the tagged commit in main's cache scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: >-
+          gh workflow run release-on-main.yml --ref main
+          -f "tag=$RELEASE_TAG" -f "commit=$RELEASE_SHA" -f publish=true

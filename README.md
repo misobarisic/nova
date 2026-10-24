@@ -90,7 +90,12 @@ in release mode. Development versions include the last reachable tag and a
 short commit hash, with `-dirty` for local source changes.
 
 Keep the root Cargo version at the last release between tags. To prepare a
-release, bump it and tag that commit `v<version>`; tagged CI rejects a mismatch.
+release, bump it on `main` and tag that commit `v<version>`; tagged CI rejects a mismatch.
+The tag dispatcher runs the release pipeline in `main`'s cache scope while
+checking out that exact tagged commit. Each release target has its own dependency
+cache. `NOVA_RELEASE_TAG` supplies the release identity independently of the
+workflow ref. A manual dispatch with `publish=false` builds and verifies all
+artifacts without publishing. See [release CI and measurements](docs/release-ci.md).
 Android's version name and installation code are derived from that version;
 packaging reserves an installation epoch to keep current releases newer than
 older placeholder builds. See the project map for the version-code scheme.
