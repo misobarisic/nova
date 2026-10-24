@@ -19,6 +19,9 @@ pub(super) struct IdentityIndex {
     /// each source parent. A caller resolves these through sync action clocks;
     /// projecting a group must never create a fresh watched/unwatched action.
     pub progress_groups: Vec<Vec<EpisodeKey>>,
+    /// Unique destination type from a current inventory; None marks a typed
+    /// collision that must not be resolved by choosing an arbitrary winner.
+    pub progress_types: BTreeMap<EpisodeKey, Option<String>>,
     coverage: BTreeMap<TitleKey, BTreeSet<usize>>,
     incomplete: BTreeSet<TitleKey>,
 }
@@ -196,7 +199,17 @@ impl IdentityIndex {
                     continue;
                 }
                 for alias in &valid[index] {
-                    keys.insert((node.title.1.clone(), alias.clone()));
+                    let key = (node.title.1.clone(), alias.clone());
+                    if node.inventory {
+                        let known = result
+                            .progress_types
+                            .entry(key.clone())
+                            .or_insert_with(|| Some(node.title.0.clone()));
+                        if known.as_ref().is_some_and(|kind| kind != &node.title.0) {
+                            *known = None;
+                        }
+                    }
+                    keys.insert(key);
                 }
             }
             if keys.len() > 1 {

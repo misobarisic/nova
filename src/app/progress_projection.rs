@@ -475,7 +475,7 @@ impl Bridge {
                                 sync::resolve_progress_alias_groups(
                                     &store.lock().unwrap(),
                                     &sync::profile_domain(sync::DOMAIN_PROGRESS),
-                                    &index.progress_groups,
+                                    &index,
                                 )
                             })
                             .unwrap_or_default()

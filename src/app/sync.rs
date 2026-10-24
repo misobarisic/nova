@@ -1636,10 +1636,10 @@ pub(super) fn project_headless_profile(owner: &profiles::ProfileStore) -> nova_s
 pub(super) fn resolve_progress_alias_groups(
     store: &nova_sync::Store,
     domain: &str,
-    groups: &[Vec<media_identity::EpisodeKey>],
+    index: &media_identity::IdentityIndex,
 ) -> HashMap<String, EpisodeProgress> {
     let mut changes = HashMap::new();
-    for group in groups {
+    for group in &index.progress_groups {
         let keys = group
             .iter()
             .filter_map(|(series, episode)| {
@@ -1663,9 +1663,30 @@ pub(super) fn resolve_progress_alias_groups(
             {
                 continue;
             }
+            let kind = match index.progress_types.get(&(series.clone(), episode.clone())) {
+                Some(Some(kind)) => Some(kind.clone()),
+                Some(None) => continue, // Conflicting typed inventory is not proof.
+                None => store
+                    .record(domain, &key)
+                    .and_then(|record| record.value.as_deref())
+                    .and_then(|raw| serde_json::from_str::<EpisodeProgress>(raw).ok())
+                    .and_then(|row| row.history.map(|history| history.type_))
+                    .filter(|kind| !kind.is_empty()),
+            };
             let mut view = progress.clone();
             view.series_id = series.clone();
             view.episode_id = episode.clone();
+            // The winning playback action can come from a different source
+            // type. Retarget its view without inventing a phantom typed parent.
+            if let Some(kind) = kind {
+                if let Some(history) = view.history.as_mut() {
+                    history.type_ = kind;
+                }
+            } else if *series != progress.series_id {
+                // A history-only destination without a known type can still
+                // share progress, but cannot inherit another parent's title.
+                view.history = None;
+            }
             changes.insert(key, view);
         }
     }
@@ -2392,9 +2413,8 @@ impl Bridge {
                 videos,
             }
         });
-        let groups = media_identity::IdentityIndex::with_progress(inventories, progress_keys)
-            .progress_groups;
-        if groups.is_empty() {
+        let index = media_identity::IdentityIndex::with_progress(inventories, progress_keys);
+        if index.progress_groups.is_empty() {
             return false;
         }
         // A local watch/unwatch queued before metadata arrived must be visible
@@ -2409,7 +2429,7 @@ impl Bridge {
         let changes = resolve_progress_alias_groups(
             &owner.lock().unwrap(),
             &profile_domain(DOMAIN_PROGRESS),
-            &groups,
+            &index,
         );
         let snapshot = {
             let mut state = self.shared.lock().unwrap();
@@ -3607,6 +3627,164 @@ mod tests {
     }
 
     #[cfg(feature = "desktop")]
+    #[test]
+    fn alias_projection_preserves_destination_types_without_new_actions() {
+        let inventory = |kind: &str, parent: &str, episode: &str, aliases: &[&str]| {
+            media_identity::TitleInventory {
+                media_type: kind.into(),
+                series_id: parent.into(),
+                videos: vec![Video {
+                    id: episode.into(),
+                    extra: [
+                        ("novaStreamIds".into(), serde_json::json!(aliases)),
+                        (
+                            "novaMetadataRevision".into(),
+                            serde_json::json!(nova_providers::metadata_revision()),
+                        ),
+                    ]
+                    .into(),
+                    ..Default::default()
+                }],
+            }
+        };
+        let native = ("native-season-a".to_owned(), "native-episode".to_owned());
+        let canonical = ("tt100".to_owned(), "tt100:1:1".to_owned());
+        let index = media_identity::IdentityIndex::new([
+            inventory("anime", &native.0, &native.1, &[&canonical.1]),
+            inventory("series", &canonical.0, &canonical.1, &[]),
+        ]);
+        let domain = "typed-alias-test";
+        let mut store = nova_sync::Store::default();
+        let old = EpisodeProgress {
+            series_id: native.0.clone(),
+            episode_id: native.1.clone(),
+            history: Some(PlaybackHistory {
+                type_: "anime".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let winner = EpisodeProgress {
+            series_id: canonical.0.clone(),
+            episode_id: canonical.1.clone(),
+            history: Some(PlaybackHistory {
+                type_: "series".into(),
+                ..Default::default()
+            }),
+            watched: true,
+            position_secs: 900.,
+            duration_secs: 1800.,
+            updated_at_secs: 100,
+            play_count: 3,
+            ..Default::default()
+        };
+        store.set(
+            domain,
+            &progress_map_key(&native.0, &native.1),
+            Some(serde_json::to_string(&old).unwrap()),
+            0,
+            1,
+        );
+        store.set(
+            domain,
+            &progress_map_key(&canonical.0, &canonical.1),
+            Some(serde_json::to_string(&winner).unwrap()),
+            0,
+            1,
+        );
+        let records = store.records(domain);
+        let versions = records
+            .iter()
+            .map(|(key, _)| (key.clone(), store.record(domain, key).unwrap().clone()))
+            .collect::<Vec<_>>();
+        let clock = store.clock();
+        let projected = resolve_progress_alias_groups(&store, domain, &index);
+        let native_view = &projected[&progress_map_key(&native.0, &native.1)];
+        assert_eq!(native_view.history.as_ref().unwrap().type_, "anime");
+        assert_eq!(
+            projected[&progress_map_key(&canonical.0, &canonical.1)]
+                .history
+                .as_ref()
+                .unwrap()
+                .type_,
+            "series"
+        );
+        assert!(native_view.watched);
+        assert_eq!(native_view.play_count, winner.play_count);
+        assert_eq!(native_view.updated_at_secs, winner.updated_at_secs);
+        assert_eq!(native_view.position_secs, winner.position_secs);
+        assert_eq!(native_view.duration_secs, winner.duration_secs);
+        assert_eq!(store.clock(), clock);
+        assert_eq!(store.records(domain), records);
+        for (key, record) in versions {
+            assert_eq!(store.record(domain, &key), Some(&record));
+        }
+
+        // Received canonical history may have no cached inventory. Its known
+        // destination type still survives a newer native anime action.
+        let mut newer = winner.clone();
+        newer.series_id = native.0.clone();
+        newer.episode_id = native.1.clone();
+        newer.history.as_mut().unwrap().type_ = "anime".into();
+        store.set(
+            domain,
+            &progress_map_key(&native.0, &native.1),
+            Some(serde_json::to_string(&newer).unwrap()),
+            0,
+            1,
+        );
+        let history_only = media_identity::IdentityIndex::with_progress(
+            [inventory("anime", &native.0, &native.1, &[&canonical.1])],
+            [canonical.clone()],
+        );
+        let projected = resolve_progress_alias_groups(&store, domain, &history_only);
+        assert_eq!(
+            projected[&progress_map_key(&canonical.0, &canonical.1)]
+                .history
+                .as_ref()
+                .unwrap()
+                .type_,
+            "series"
+        );
+
+        // A manual canonical register may have no title history at all. A
+        // newer native action must share facts without inventing an anime
+        // canonical title when neither inventory nor history proves its type.
+        let mut untyped = winner.clone();
+        untyped.history = None;
+        store.set(
+            domain,
+            &progress_map_key(&canonical.0, &canonical.1),
+            Some(serde_json::to_string(&untyped).unwrap()),
+            0,
+            1,
+        );
+        store.set(
+            domain,
+            &progress_map_key(&native.0, &native.1),
+            Some(serde_json::to_string(&newer).unwrap()),
+            0,
+            1,
+        );
+        let projected = resolve_progress_alias_groups(&store, domain, &history_only);
+        let canonical_view = &projected[&progress_map_key(&canonical.0, &canonical.1)];
+        assert!(canonical_view.history.is_none());
+        assert_eq!(canonical_view.play_count, newer.play_count);
+        assert_eq!(canonical_view.position_secs, newer.position_secs);
+        assert!(canonical_view.watched);
+
+        // Two inventories claiming different types for the same storage key
+        // cannot license choosing either destination type arbitrarily.
+        let ambiguous = media_identity::IdentityIndex::new([
+            inventory("anime", &native.0, &native.1, &[&canonical.1]),
+            inventory("series", &native.0, &native.1, &[&canonical.1]),
+            inventory("series", &canonical.0, &canonical.1, &[]),
+        ]);
+        assert_eq!(ambiguous.progress_types.get(&native), Some(&None));
+        let projected = resolve_progress_alias_groups(&store, domain, &ambiguous);
+        assert!(!projected.contains_key(&progress_map_key(&native.0, &native.1)));
+    }
+
     #[test]
     fn synced_episode_aliases_agree_on_completion_and_explicit_unwatch() {
         const ROOT: &str = "NOVA_SYNC_ALIAS_TEST_ROOT";

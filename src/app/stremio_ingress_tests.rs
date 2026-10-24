@@ -1942,10 +1942,21 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
                 assert!(
                     progress[&progress_map_key(id, &format!("{id}-episode-{episode}"))].watched
                 );
-                assert!(
-                    !progress
-                        .contains_key(&progress_map_key(id, &format!("tt100:{season}:{episode}")))
-                );
+                // The ordinary Home projection retains proven aliases under
+                // the same native parent. They are read views, not a second
+                // canonical title or a fresh playback action.
+                if let Some(alias) =
+                    progress.get(&progress_map_key(id, &format!("tt100:{season}:{episode}")))
+                {
+                    let native =
+                        &progress[&progress_map_key(id, &format!("{id}-episode-{episode}"))];
+                    assert_eq!(alias.watched, native.watched);
+                    assert_eq!(alias.position_secs, native.position_secs);
+                    assert_eq!(alias.duration_secs, native.duration_secs);
+                    assert_eq!(alias.updated_at_secs, native.updated_at_secs);
+                    assert_eq!(alias.unwatched_at_secs, native.unwatched_at_secs);
+                    assert_eq!(alias.play_count, native.play_count);
+                }
             }
             assert!(!progress.contains_key(&progress_map_key(id, &format!("{id}-unconfirmed"))));
         }
@@ -1961,6 +1972,14 @@ fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
             }
         }
         let entries = fixture.bridge.shared.lock().unwrap().entries.clone();
+        let local = local_titles(&entries, &progress);
+        assert!(
+            local
+                .iter()
+                .filter(|title| title.id.starts_with("native-season-"))
+                .all(|title| title.media_type == "anime"),
+            "derived canonical history must not invent series-typed native parents"
+        );
         assert_eq!(entries.len(), if include_canonical { 3 } else { 2 });
         assert_eq!(
             entries.iter().any(|entry| entry.id == "tt100"),
