@@ -15,7 +15,8 @@ The validator checks the full commit SHA, tag resolution, main ancestry and
 refs before each build, after builds and immediately before publication, so
 observed tag movement or deletion fails closed. The publishing job alone has
 `contents: write` and explicitly supplies `tag_name` and `target_commitish`.
-It waits for the reused Linux/Windows/Android checks and every packaging job.
+It waits for every release build and packaging job. Linux/Windows/Android
+check jobs run on PR/main source changes and are not repeated by releases.
 
 Concurrency is per tag with cancellation disabled. A second publishing
 dispatch is rejected if a release for that tag already exists. Different tags
@@ -69,7 +70,7 @@ gh workflow run release-on-main.yml --ref main \
   -f tag=vX.Y.Z -f commit=<full-tagged-commit-sha> -f publish=false
 ```
 
-This runs source validation, checks, all five release builds and artifact
+This runs source validation, all five release builds and artifact
 verification, and may populate release caches, but skips GitHub publication.
 It requires a tag on trusted main source containing this release support;
 it does not create a public test release. Re-run a completed dry run to measure

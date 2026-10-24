@@ -72,8 +72,8 @@ and `--target aarch64-linux-android`.
 Pushing a version tag dispatches `.github/workflows/release-on-main.yml` against
 `main` through `.github/workflows/dispatch-release.yml`. The release validates
 the tag object, exact commit, Cargo version and ancestry before checking out
-the tagged source. The three checks are reused against that same source, and
-publication depends on them and all verified artifacts. `NOVA_RELEASE_TAG`
+the tagged source. Releases run all five builds and artifact verification;
+the three check jobs run on PR/main source changes. `NOVA_RELEASE_TAG`
 preserves the release identity even though the workflow ref is `main`.
 Check caches remain isolated; five `cd-release` dependency caches are shared
 across releases within main's cache scope. `publish=false` is a nonpublishing
@@ -236,7 +236,7 @@ nova/
 ├── .github/                  # GitHub Actions automation
 │   ├── scripts/package-android.py # derive, align, sign, verify APK variants
 │   └── workflows/
-│       ├── build-release.yml  # PR/main checks; reusable exact-source release checks
+│       ├── build-release.yml  # PR/main checks; reusable check entry point
 │       ├── dispatch-release.yml # version-tag push → main-context dispatch
 │       └── release-on-main.yml # validated tagged source; cached builds and publishing
 ├── Cargo.toml                # workspace + root package `nova`

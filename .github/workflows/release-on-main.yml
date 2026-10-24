@@ -65,15 +65,6 @@ jobs:
           if [[ "$PUBLISH" == true ]]; then args+=(--unpublished); fi
           python3 .github/scripts/validate-release.py "${args[@]}"
 
-  checks:
-    name: Check the exact tagged source
-    needs: [validate]
-    uses: ./.github/workflows/build-release.yml
-    permissions:
-      contents: read
-    with:
-      commit: ${{ needs.validate.outputs.commit }}
-
   android-build:
     needs: [validate]
     env:
@@ -394,7 +385,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [validate, checks, android-package, linux-build, windows-build]
+    needs: [validate, android-package, linux-build, windows-build]
     env:
       NOVA_RELEASE_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
       NOVA_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
