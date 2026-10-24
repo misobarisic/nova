@@ -4894,6 +4894,27 @@ mod tests {
     #[cfg(not(target_os = "android"))]
     #[test]
     fn close_restores_catalog_fullscreen_and_invalidates_capture_session() {
+        // Slint's event-loop proxy is process-global; the sleep-timer fixture
+        // also installs a platform. Keep this UI lifecycle test independent.
+        const CHILD: &str = "NOVA_PLAYER_CLOSE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, "1")
+                .args([
+                    "--exact",
+                    "tests::close_restores_catalog_fullscreen_and_invalidates_capture_session",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = Player::setup(&app);
