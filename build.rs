@@ -7,6 +7,9 @@ use std::process::Command;
 #[path = "build-support/version.rs"]
 mod version;
 
+#[path = "build-support/release_tag.rs"]
+mod release_tag;
+
 fn main() {
     generate_build_version();
     generate_license_catalog();
@@ -84,6 +87,7 @@ fn main() {
 
 fn generate_build_version() {
     println!("cargo:rerun-if-changed=build-support/version.rs");
+    println!("cargo:rerun-if-changed=build-support/release_tag.rs");
     // A tag/commit or a tracked source edit changes the identity even when the
     // Rust package version stays at the last release between tags.
     for path in version::SOURCE_PATHS {
@@ -94,22 +98,38 @@ fn generate_build_version() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
-    for key in ["GITHUB_REF_TYPE", "GITHUB_REF_NAME"] {
+    for key in ["NOVA_RELEASE_TAG", "GITHUB_REF_TYPE", "GITHUB_REF_NAME"] {
         println!("cargo:rerun-if-env-changed={key}");
     }
     let package = env::var("CARGO_PKG_VERSION").expect("Cargo package version");
-    if env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
-        let tag = env::var("GITHUB_REF_NAME").expect("release tag");
-        assert_eq!(
-            tag,
-            format!("v{package}"),
-            "release tag must match Cargo.toml"
+    let explicit = env::var("NOVA_RELEASE_TAG").ok();
+    let ref_type = env::var("GITHUB_REF_TYPE").ok();
+    let ref_name = env::var("GITHUB_REF_NAME").ok();
+    let release_tag = release_tag::select(
+        &package,
+        explicit.as_deref(),
+        ref_type.as_deref(),
+        ref_name.as_deref(),
+    )
+    .expect("valid release tag");
+    if let Some(tag) = release_tag {
+        let tagged = version::git(&["rev-parse", &format!("refs/tags/{tag}^{{commit}}")]);
+        let head = version::git(&["rev-parse", "HEAD"]);
+        assert!(
+            tagged.is_some() && tagged == head,
+            "release tag must reference HEAD"
         );
     }
-    let tag = version::git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]);
+    let tag = release_tag
+        .map(str::to_owned)
+        .or_else(|| version::git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]));
     let commit = version::git(&["rev-parse", "--short=8", "HEAD"]);
     let exact = (env::var("PROFILE").as_deref() == Ok("release"))
-        .then(|| version::git(&["describe", "--tags", "--match", "v[0-9]*", "--exact-match"]))
+        .then(|| {
+            release_tag.map(str::to_owned).or_else(|| {
+                version::git(&["describe", "--tags", "--match", "v[0-9]*", "--exact-match"])
+            })
+        })
         .flatten();
     let mut status_args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
     status_args.extend_from_slice(version::SOURCE_PATHS);

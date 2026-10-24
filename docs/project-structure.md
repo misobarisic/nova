@@ -69,7 +69,16 @@ Clippy and workspace checks, the shared OpenGL state guard regression on Linux,
 and Windows GNU and ARM64 Android target checks. Linux also checks the desktop build with update checking omitted. `check-android` uses the
 Android Nix shell with `--no-default-features --features android,update-check --lib -p nova`
 and `--target aarch64-linux-android`.
-Pushing a Git tag selects the `cd-release` Cargo profile through the workflow's
+Pushing a version tag dispatches `.github/workflows/release-on-main.yml` against
+`main` through `.github/workflows/dispatch-release.yml`. The release validates
+the tag object, exact commit, Cargo version and ancestry before checking out
+the tagged source. The three checks are reused against that same source, and
+publication depends on them and all verified artifacts. `NOVA_RELEASE_TAG`
+preserves the release identity even though the workflow ref is `main`.
+Check caches remain isolated; five `cd-release` dependency caches are shared
+across releases within main's cache scope. `publish=false` is a nonpublishing
+build/verification dispatch. Details and measured limits are in [release CI](release-ci.md).
+The release selects the `cd-release` Cargo profile through the workflow's
 `NOVA_RELEASE_PROFILE`, building four Android APKs, a Linux
 x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all seven
 files to a GitHub Release. Android release filenames are
@@ -227,7 +236,9 @@ nova/
 ├── .github/                  # GitHub Actions automation
 │   ├── scripts/package-android.py # derive, align, sign, verify APK variants
 │   └── workflows/
-│       └── build-release.yml  # PR checks; tagged Android + Windows release builds
+│       ├── build-release.yml  # PR/main checks; reusable exact-source release checks
+│       ├── dispatch-release.yml # version-tag push → main-context dispatch
+│       └── release-on-main.yml # validated tagged source; cached builds and publishing
 ├── Cargo.toml                # workspace + root package `nova`
 ├── about.toml                # accepted SPDX licenses for the in-app catalog
 ├── build.rs                  # version identity, license catalog; native link directives
@@ -1735,7 +1746,7 @@ unit/documentation coverage.
 | Sync peer removal confirmation in a scrolled page | `crates/ui/settings.slint` viewport overlay, `SettingsContent.sync_remove_prompt_*`, peer actions in `crates/ui-settings-sync/sync-module.slint`; `tests/settings_sync/sync_overflow.rs` covers long names, rotation, Cancel/Back, safe keyboard default and explicit confirmation without changing page scroll. |
 | Sync and watch-party invite QR / Android sync camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui-settings-sync/sync-module.slint`, `src/app/run.rs` |
 | Android background execution (downloads/sign-in FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaAuthService,NovaSyncJobService}.java`, `nova_sync::{background_engine,SyncEngine::one_shot}`, `crates/sync/src/protocol.rs` (outbound pass guard), `crates/sync/tests/background_ownership.rs`, `DownloadCoordinator::has_active_work` |
-| Cargo profiles / symbol stripping / fat-LTO tagged builds | Root `Cargo.toml` (`dev`, inherited `test`, `dev-release`, `release`, `cd-release`); `Makefile` (`RELEASE_PROFILE`), `.github/workflows/build-release.yml` and `.github/scripts/package-{android,linux,windows}.*` (`NOVA_RELEASE_PROFILE`); `.cargo/config.toml` aliases and `flake.nix` toolchains |
+| Cargo profiles / symbol stripping / fat-LTO tagged builds / release caches | Root `Cargo.toml` (`dev`, inherited `test`, `dev-release`, `release`, `cd-release`); `Makefile` (`RELEASE_PROFILE`), `.github/workflows/{build-release,dispatch-release,release-on-main}.yml`, `.github/scripts/{validate-release.py,package-version.sh}` and `.github/scripts/package-{android,linux,windows}.*` (`NOVA_RELEASE_PROFILE`, `NOVA_RELEASE_TAG`); `build-support/release_tag.rs`; [release CI](release-ci.md); `.cargo/config.toml` aliases and `flake.nix` toolchains |
 | Consolidated UI tests / per-case subprocess isolation | `tests/ui_*.rs`, matching case folders under `tests/`, shared `tests/support/isolation.rs`; suite boundaries, filtering, measurements and generated-leaf harness selection in §8 Testing; profile cases join `ui_navigation`, completion ratings join `ui_tracking`, Watch party joins `ui_player`, and Stremio account cases join `ui_settings_preferences` |
 | App paths / shared settings | `crates/config/src/lib.rs` (absolute XDG roots with HOME/temp fallback) |
 | Persistence backend / metadata compression / equivalent writes | `crates/storage/src/{lib,codec}.rs`, `src/app/io.rs` (`metadata_cache_key`) |
@@ -1745,7 +1756,7 @@ unit/documentation coverage.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop video handoff blocked), `CacheSettings::uses_external_player` (effective platform policy); desktop Settings disables External while Android retains it |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/{tracking,tracking-panel}.slint` (account setup and title episode mapping review) |
-| CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `nix/native-media/`, `.github/workflows/build-release.yml` (`android-build` three-ABI matrix → `android-package` merge/sign → release assets; `check-linux`, `check-windows`, ARM64 app checking plus `android/test_runtime_packaging.py` for repeated three-ABI APK staging on PRs/main source pushes; `android/cargo-apk2-readonly-libs.patch` fixes read-only dependency copies; `android/cargo-apk2-uncompressed-libs.patch` stores native libraries for direct loading), `.github/scripts/{package-android,test_package_android,test_package_windows}.py` (APK payload/ABI checks, compressed/extracted universal versus stored/16 KiB aligned per-ABI policies, binary manifest regressions, and repeatable Windows staging regression), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
+| CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `nix/native-media/`, `.github/workflows/release-on-main.yml` and reusable `.github/workflows/build-release.yml` (`android-build` three-ABI matrix → `android-package` merge/sign → release assets; `check-linux`, `check-windows`, ARM64 app checking plus `android/test_runtime_packaging.py` for repeated three-ABI APK staging on PRs/main source pushes; `android/cargo-apk2-readonly-libs.patch` fixes read-only dependency copies; `android/cargo-apk2-uncompressed-libs.patch` stores native libraries for direct loading), `.github/scripts/{package-android,test_package_android,test_package_windows}.py` (APK payload/ABI checks, compressed/extracted universal versus stored/16 KiB aligned per-ABI policies, binary manifest regressions, and repeatable Windows staging regression), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |
 
 | Selective backup/import/recovery | `src/app/backup/`, `documents.rs`, `crates/ui/backup.slint`, Settings Data destination and `BackupBridge`; per-source profile inclusion preserves mapping/component choices, previews bind the full selection and expose scrollable TV review rows, and recovery deletion requires confirmation of the exact reviewed inventory (`docs/backups.md`). `Choice.included` defaults to true for legacy receipts; storage keys are unchanged. Data uses the Settings push/fade and pop/fade with a retained inactive exit, repeated-Back shielding and focus recovery; master/Page transitions switches and rapid reopen are covered in `tests/navigation/backup.rs`. Same-ID option models update rows in place so toggle delegates survive, and BackupChoice resyncs authoritative checked updates after local clicks. |

@@ -55,7 +55,14 @@ class WindowsPackagingTests(unittest.TestCase):
                 NOVA_RELEASE_PROFILE="release",
                 PATH=f"{tools}:{os.environ['PATH']}",
             )
-            for _ in range(2):
+            (root / "Cargo.toml").write_text('[package]\nname = "nova"\nversion = "0.0.31"\n')
+            # Both legacy tag contexts and dispatched main contexts retain the
+            # intended filename; the third run also exercises read-only reuse.
+            for explicit in (None, "v0.0.31", "v0.0.31"):
+                env.pop("NOVA_RELEASE_TAG", None)
+                env["GITHUB_REF_NAME"] = "v0.0.31"
+                if explicit:
+                    env.update(NOVA_RELEASE_TAG=explicit, GITHUB_REF_NAME="main")
                 subprocess.run(["bash", str(script)], cwd=root, env=env, check=True)
                 with zipfile.ZipFile(root / "dist/Nova-Windows-x86_64-0.0.31.zip") as archive:
                     self.assertEqual(set(archive.namelist()), {
