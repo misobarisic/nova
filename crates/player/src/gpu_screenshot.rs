@@ -404,6 +404,15 @@ mod tests {
                 init.set_property("ao", "null")?;
                 init.set_property("hwdec", "no")?;
                 init.set_property("gpu-sw", true)?;
+                // The legacy multipass renderer intermittently returns black
+                // frames under headless llvmpipe, even in an isolated test.
+                // Keep this explicit CPU fixture deterministic with its
+                // single-pass backend. The assertions still exercise real GL
+                // rendering/readback, orientation, subtitles, encoding and host
+                // state; hardware/default runs retain the multipass path.
+                if std::env::var("LIBGL_ALWAYS_SOFTWARE").as_deref() == Ok("1") {
+                    init.set_property("gpu-dumb-mode", true)?;
+                }
                 init.set_property("pause", true)
             })
             .unwrap();

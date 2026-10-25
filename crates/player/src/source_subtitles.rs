@@ -1,6 +1,61 @@
 //! Source-attached caption facts stay with the accepted playback session.
-//! mpv's asynchronous `sub-files` loader often omits their declared language.
+//! Remote captions are fetched outside mpv so video headers cannot follow them.
 use nova_config::playback_preferences::normalize_language;
+use std::path::PathBuf;
+
+/// One caption request, with video authority kept separate from its destination.
+pub struct SourceSubtitleRequest {
+    pub url: String,
+    pub video_url: String,
+    pub video_headers: Vec<(String, String)>,
+}
+
+/// A private, session-owned caption file. Dropping a stale result removes it.
+pub struct SourceSubtitleFile(PathBuf);
+
+impl SourceSubtitleFile {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        use std::io::Write;
+        if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+            return Err("invalid subtitle file size".into());
+        }
+        let directory = nova_config::app_cache_dir().join("subtitles");
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = directory.join(format!(
+            "source-{}-{nonce}-{}.sub",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options.open(&path).map_err(|error| error.to_string())?;
+        let file = Self(path);
+        output.write_all(bytes).map_err(|error| error.to_string())?;
+        Ok(file)
+    }
+}
+
+impl Drop for SourceSubtitleFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+struct PreparedSubtitle {
+    url: String,
+    file: SourceSubtitleFile,
+    loaded: bool,
+}
 
 /// Runtime-only source metadata, never serialized into preferences or sync.
 #[derive(Clone, PartialEq, Eq)]
@@ -65,13 +120,100 @@ pub(super) struct SourceSubtitles {
     source: String,
     session: u64,
     subtitles: Vec<SourceSubtitle>,
+    headers: Vec<(String, String)>,
+    files: Vec<PreparedSubtitle>,
 }
 
 impl SourceSubtitles {
     pub(super) fn begin(&mut self, source: &str, session: u64, subtitles: Vec<SourceSubtitle>) {
+        self.clear();
         self.source = source.into();
         self.session = session;
         self.subtitles = subtitles;
+    }
+
+    pub(super) fn set_headers(&mut self, headers: &[(String, String)]) {
+        self.headers = headers.to_vec();
+    }
+
+    pub(super) fn requests(&self) -> Vec<SourceSubtitleRequest> {
+        let mut seen = std::collections::HashSet::new();
+        self.subtitles
+            .iter()
+            .filter(|subtitle| seen.insert(&subtitle.url))
+            .map(|subtitle| SourceSubtitleRequest {
+                url: subtitle.url.clone(),
+                video_url: self.source.clone(),
+                video_headers: self.headers.clone(),
+            })
+            .collect()
+    }
+
+    pub(super) fn attach(&mut self, session: u64, url: &str, file: SourceSubtitleFile) -> bool {
+        if self.session != session
+            || !self.subtitles.iter().any(|subtitle| subtitle.url == url)
+            || self.files.iter().any(|subtitle| subtitle.url == url)
+        {
+            return false;
+        }
+        self.files.push(PreparedSubtitle {
+            url: url.into(),
+            file,
+            loaded: false,
+        });
+        true
+    }
+
+    #[cfg(target_os = "android")]
+    pub(super) fn local_paths(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .map(|subtitle| subtitle.file.0.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[cfg(target_os = "android")]
+    pub(super) fn is_empty(&self) -> bool {
+        self.subtitles.is_empty()
+    }
+
+    pub(super) fn load_pending(
+        &mut self,
+        mpv: &libmpv2::Mpv,
+        source: &str,
+        session: u64,
+        manual: bool,
+    ) {
+        if self.source != source || self.session != session {
+            return;
+        }
+        let raw = mpv.get_property::<String>("track-list").unwrap_or_default();
+        let tracks: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        for subtitle in self.files.iter_mut().filter(|subtitle| !subtitle.loaded) {
+            let path = subtitle.file.0.to_string_lossy();
+            // Android recovery may already have loaded the retained local path
+            // through sub-files. Never add that file a second time.
+            if tracks.as_array().is_some_and(|tracks| {
+                tracks
+                    .iter()
+                    .any(|track| track["external-filename"].as_str() == Some(path.as_ref()))
+            }) {
+                subtitle.loaded = true;
+                continue;
+            }
+            let primary = mpv.get_property::<String>("sid").ok();
+            let secondary = mpv.get_property::<String>("secondary-sid").ok();
+            // A malformed caption must not retry on every tick or prevent the
+            // independent addon fallback from supplying a usable language.
+            let _ = mpv.command("sub-add", &[&path, "auto"]);
+            subtitle.loaded = true;
+            if manual && let Some(primary) = primary {
+                let _ = mpv.set_property("sid", primary);
+            }
+            if let Some(secondary) = secondary {
+                let _ = mpv.set_property("secondary-sid", secondary);
+            }
+        }
     }
 
     pub(super) fn clear(&mut self) {
@@ -95,7 +237,12 @@ impl SourceSubtitles {
             let matching = self
                 .subtitles
                 .iter()
-                .filter(|subtitle| subtitle.url == url)
+                .filter(|subtitle| {
+                    subtitle.url == url
+                        || self.files.iter().any(|file| {
+                            file.url == subtitle.url && file.file.0.to_string_lossy() == url
+                        })
+                })
                 .collect::<Vec<_>>();
             if matching.is_empty() {
                 continue;
@@ -227,7 +374,46 @@ mod tests {
     }
 
     #[test]
-    fn native_sub_files_keep_async_loading_and_recover_declared_caption_facts() {
+    fn downloaded_source_captions_keep_exact_provenance_and_session_owned_files() {
+        let url = "https://caption.invalid/sub?edition=one&token=private";
+        let mut metadata = SourceSubtitles::default();
+        metadata.begin("video", 7, vec![source(url, Some("eng"))]);
+        let stale = SourceSubtitleFile::from_bytes(b"WEBVTT\n").unwrap();
+        let stale_path = stale.0.clone();
+        assert!(!metadata.attach(6, url, stale));
+        assert!(!stale_path.exists(), "stale worker files must be removed");
+        let wrong = SourceSubtitleFile::from_bytes(b"WEBVTT\n").unwrap();
+        assert!(!metadata.attach(
+            7,
+            "https://caption.invalid/sub?edition=two&token=private",
+            wrong
+        ));
+        let file = SourceSubtitleFile::from_bytes(b"WEBVTT\n").unwrap();
+        let path = file.0.clone();
+        assert!(metadata.attach(7, url, file));
+        let raw = json!([{"id":4,"type":"sub","external":true,"external-filename":path.to_string_lossy()}]).to_string();
+        let enriched: serde_json::Value =
+            serde_json::from_str(&metadata.enrich("video", 7, raw.clone())).unwrap();
+        assert_eq!(enriched[0]["lang"], "en");
+        assert_eq!(enriched[0]["nova-source-subtitle"], true);
+        assert_eq!(metadata.enrich("other-video", 7, raw.clone()), raw);
+        assert!(path.exists());
+        metadata.begin("video", 8, vec![source(url, Some("hr"))]);
+        assert!(
+            !path.exists(),
+            "replacement retires the old session's files"
+        );
+        assert_eq!(metadata.enrich("video", 8, raw.clone()), raw);
+    }
+
+    #[test]
+    fn native_local_source_captions_load_and_recover_declared_facts() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         struct Scratch(std::path::PathBuf);
         impl Drop for Scratch {
@@ -241,7 +427,6 @@ mod tests {
         )));
         std::fs::create_dir(&scratch.0).unwrap();
         let video = scratch.0.join("audio.wav");
-        let caption = scratch.0.join("opaque-caption.vtt");
         let size = 80_000_u32;
         let mut wav = b"RIFF".to_vec();
         wav.extend((size + 36).to_le_bytes());
@@ -257,13 +442,60 @@ mod tests {
         wav.extend(size.to_le_bytes());
         wav.resize(wav.len() + size as usize, 128);
         std::fs::write(&video, wav).unwrap();
-        std::fs::write(
-            &caption,
-            "WEBVTT\n\n00:00.000 --> 00:05.000\nLocal caption fixture\n",
+        let caption = SourceSubtitleFile::from_bytes(
+            b"WEBVTT\n\n00:00.000 --> 00:05.000\nLocal caption fixture\n",
         )
         .unwrap();
         let video = video.to_string_lossy().into_owned();
-        let caption = caption.to_string_lossy().into_owned();
+        let path = caption.0.to_string_lossy().into_owned();
+        let url = "https://caption.invalid/opaque?token=private";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let requested = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let observed = requested.clone();
+        let stopped = stop.clone();
+        let worker = std::thread::spawn(move || {
+            while !stopped.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        observed.store(true, Ordering::SeqCst);
+                        // Respond if the native whitelist ever regresses so
+                        // this security assertion fails instead of hanging.
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let _ = socket.read(&mut [0; 4096]);
+                        let _ = socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("caption listener failed: {error}"),
+                }
+            }
+        });
+        struct ListenerWorker(Arc<AtomicBool>, Option<std::thread::JoinHandle<()>>);
+        impl Drop for ListenerWorker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+                if let Some(worker) = self.1.take() {
+                    worker.join().unwrap();
+                }
+            }
+        }
+        let _listener = ListenerWorker(stop, Some(worker));
+        // This is the same syntactically valid static MPD as the native trace
+        // that reached DASH nested_io_open (probe score 100), then denied HTTP
+        // against the local file's file,crypto,data protocol whitelist. Plain
+        // M3U/HLS alone would only test mpv's earlier playlist rejection.
+        let dash = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT5S" minBufferTime="PT1S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011"><Period duration="PT5S"><AdaptationSet mimeType="video/mp4" contentType="video" segmentAlignment="true"><Representation id="1" bandwidth="10000" codecs="avc1.42c01e" width="16" height="16"><BaseURL>http://{address}/dash.mp4</BaseURL><SegmentBase indexRange="0-100"><Initialization range="0-100"/></SegmentBase></Representation></AdaptationSet></Period></MPD>"#
+        );
+        let reference = SourceSubtitleFile::from_bytes(dash.as_bytes()).unwrap();
+        let reference_path = reference.0.to_string_lossy().into_owned();
+        let reference_url = "https://caption.invalid/reference?token=private";
         let mpv = libmpv2::Mpv::with_initializer(|init| {
             init.set_property("config", false)?;
             init.set_property("vo", "null")?;
@@ -271,10 +503,36 @@ mod tests {
             init.set_property("pause", true)
         })
         .unwrap();
-        super::super::set_string_list(&mpv, c"sub-files", vec![caption.clone()]).unwrap();
+        super::super::set_http_header_fields(
+            &mpv,
+            &[
+                (
+                    "Authorization".into(),
+                    "Bearer NOVA_TEST_SYNTHETIC_TOKEN".into(),
+                ),
+                ("Cookie".into(), "nova_test=synthetic".into()),
+            ],
+        )
+        .unwrap();
         let mut metadata = SourceSubtitles::default();
-        metadata.begin(&video, 42, vec![source(&caption, Some("eng"))]);
-        for _ in 0..2 {
+        metadata.begin(
+            &video,
+            42,
+            vec![source(url, Some("eng")), source(reference_url, None)],
+        );
+        assert!(metadata.attach(42, url, caption));
+        assert!(metadata.attach(42, reference_url, reference));
+        for reload in 0..2 {
+            // The initial async fetch attaches through sub-add after video
+            // starts; Android recovery instead retains local sub-files.
+            if reload > 0 {
+                super::super::set_string_list(
+                    &mpv,
+                    c"sub-files",
+                    vec![path.clone(), reference_path.clone()],
+                )
+                .unwrap();
+            }
             mpv.command("loadfile", &[&video]).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
@@ -286,12 +544,17 @@ mod tests {
                     break;
                 }
             }
+            metadata.load_pending(&mpv, &video, 42, false);
+            assert!(
+                !requested.load(Ordering::SeqCst),
+                "cached DASH captions must not open a nested network request with video credentials (reload {reload})"
+            );
             let raw = mpv.get_property::<String>("track-list").unwrap();
             let native = super::super::track_preferences::parse_tracks(&raw);
             let untagged = native.iter().find(|track| !track.audio).unwrap();
             assert!(
                 untagged.descriptor.language.is_none(),
-                "sub-files does not carry declared language"
+                "local files do not carry the source's declared language"
             );
             let enriched = metadata.enrich(&video, 42, raw.clone());
             let tracks = super::super::track_preferences::parse_tracks(&enriched);

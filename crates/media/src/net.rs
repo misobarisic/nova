@@ -560,6 +560,99 @@ pub fn fetch_metadata_bytes(
     MetadataTransport.fetch(url, timeout, response_limit)
 }
 
+/// Fetch a source caption without sharing mpv's global HTTP authority. All
+/// video headers are origin-bound, including custom token headers: once a
+/// redirect leaves that origin they stay absent for the rest of the chain.
+pub fn fetch_source_subtitle_bytes(
+    url: &str,
+    video_url: &str,
+    video_headers: &[(String, String)],
+    timeout: std::time::Duration,
+    response_limit: usize,
+) -> Result<Vec<u8>, String> {
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue, LOCATION};
+    use std::io::Read;
+    let parse = |value: &str| {
+        reqwest::Url::parse(value)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+    };
+    let mut url = parse(url).ok_or("invalid source subtitle URL")?;
+    let video_origin = parse(video_url).map(|url| url.origin());
+    let mut authorized = video_origin.as_ref() == Some(&url.origin());
+    let mut headers = HeaderMap::new();
+    let mut bytes = 0usize;
+    for (name, value) in video_headers.iter().take(16) {
+        let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        if matches!(
+            name.as_str(),
+            "host" | "content-length" | "connection" | "proxy-authorization"
+        ) || value.bytes().any(|byte| byte < b' ' || byte == 127)
+        {
+            continue;
+        }
+        let Ok(value) = HeaderValue::from_str(value) else {
+            continue;
+        };
+        bytes = bytes.saturating_add(name.as_str().len() + value.as_bytes().len() + 2);
+        if bytes > 8 * 1024 {
+            break;
+        }
+        headers.append(name, value);
+    }
+    let builder = reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    #[cfg(target_os = "android")]
+    let builder = builder.tls_backend_preconfigured(imp::tls_config()?);
+    let client = builder.build().map_err(|_| "subtitle HTTP client failed")?;
+    let deadline = std::time::Instant::now() + timeout;
+    for redirects in 0..=5 {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or("subtitle request timed out")?;
+        let mut request = client.get(url.clone()).timeout(remaining);
+        if authorized {
+            request = request.headers(headers.clone());
+        }
+        let response = request.send().map_err(|_| "subtitle request failed")?;
+        if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            if redirects == 5 {
+                return Err("too many subtitle redirects".into());
+            }
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or("invalid subtitle redirect")?;
+            let next = url
+                .join(location)
+                .ok()
+                .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+                .ok_or("invalid subtitle redirect")?;
+            authorized &= next.origin() == url.origin();
+            url = next;
+            continue;
+        }
+        let response = response
+            .error_for_status()
+            .map_err(|_| "subtitle HTTP error")?;
+        let mut body = Vec::new();
+        response
+            .take(response_limit as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|_| "subtitle response failed")?;
+        if body.len() > response_limit {
+            return Err("subtitle response exceeded its byte limit".into());
+        }
+        return Ok(body);
+    }
+    unreachable!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +661,114 @@ mod tests {
     use std::io::{Cursor, Write};
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
+
+    #[test]
+    fn source_caption_headers_follow_only_same_origin_redirects() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+        let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin_url = format!("http://{}", origin.local_addr().unwrap());
+        let foreign_url = format!("http://{}", foreign.local_addr().unwrap());
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let mut workers = Vec::new();
+        for (listener, count) in [(origin, 6), (foreign, 2)] {
+            let observations = observations.clone();
+            let origin_url = origin_url.clone();
+            let foreign_url = foreign_url.clone();
+            workers.push(std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                for _ in 0..count {
+                    let (mut stream, _) = loop {
+                        match listener.accept() {
+                            Ok(connection) => break connection,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(std::time::Instant::now() < deadline, "caption request missing");
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            Err(error) => panic!("{error}"),
+                        }
+                    };
+                    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                    let path = request.split_whitespace().nth(1).unwrap().to_owned();
+                    let authorized = ["authorization: bearer test", "cookie: caption=test", "x-private-key: custom"]
+                        .map(|header| request.contains(header));
+                    observations.lock().unwrap().push((path.clone(), authorized));
+                    let location = match path.as_str() {
+                        "/same" => Some(format!("{origin_url}/private")),
+                        "/out" => Some(format!("{foreign_url}/bounce")),
+                        "/bounce" => Some(format!("{origin_url}/final")),
+                        _ => None,
+                    };
+                    let response = if let Some(location) = location {
+                        format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    } else if path == "/private" && authorized != [true; 3] {
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+                    } else {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nWEBVTT\n".into()
+                    };
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            }));
+        }
+        let headers = vec![
+            ("Authorization".into(), "Bearer test".into()),
+            ("Cookie".into(), "caption=test".into()),
+            ("X-Private-Key".into(), "custom".into()),
+        ];
+        for url in [
+            format!("{origin_url}/private"),
+            format!("{origin_url}/same"),
+            format!("{foreign_url}/caption"),
+            format!("{origin_url}/out"),
+        ] {
+            assert_eq!(
+                fetch_source_subtitle_bytes(
+                    &url,
+                    &format!("{origin_url}/video"),
+                    &headers,
+                    Duration::from_secs(5),
+                    1024
+                )
+                .unwrap(),
+                b"WEBVTT\n"
+            );
+        }
+        assert!(
+            fetch_source_subtitle_bytes(
+                &format!("{origin_url}/private"),
+                &format!("{origin_url}/video"),
+                &headers,
+                Duration::from_secs(5),
+                3
+            )
+            .is_err()
+        );
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let observed = observations.lock().unwrap();
+        assert_eq!(observed.len(), 8);
+        for (path, headers) in observed.iter() {
+            assert_eq!(
+                *headers,
+                if matches!(path.as_str(), "/private" | "/same" | "/out") {
+                    [true; 3]
+                } else {
+                    [false; 3]
+                },
+                "{path}"
+            );
+        }
+    }
 
     struct Backend {
         owner: &'static str,

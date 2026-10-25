@@ -182,6 +182,14 @@ start over. Equal durations alone do not establish the same cut; Nova never
 converts the old playhead to a percentage. Resume stays disabled when the old
 position is outside the replacement's known runtime (or no usable runtime is
 available); Start over and cancellation remain available. Cancel closes that replacement.
+Paired receiver source changes use the same guard and receiver resume/start-over
+controls; an unchanged source with matching runtime resumes directly without the
+ordinary episode Ask prompt.
+
+Native seeks require the current source to report seekability. An accepted seek
+holds the requested timeline position for at most five seconds before returning
+to the actual playhead if it does not land. Pause, EOF, decoder recovery and
+startup-error checks continue during that brief hold, including while paused.
 
 Playback → Scene bookmarks lists the current episode's saved scenes.
 Each row keeps its note and timestamp on the left and Lucide edit, clear-note
@@ -297,6 +305,13 @@ and the next-episode offer keep it visible.
 Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
 and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in
 `tests/player/{osd_header,shortcuts}.rs`.
+
+The native screenshot regression uses single-pass rendering when explicitly run
+with `LIBGL_ALWAYS_SOFTWARE=1`: the installed legacy multipass renderer can return
+black frames under headless llvmpipe, including in isolated runs. Its assertions
+still check actual GL rendering/readback, orientation, subtitles, encoding and
+host-state restoration. These CPU-fixture runs do not validate multipass rendering;
+hardware/default test runs and production initialization retain that path.
 
 TV interface mode uses two remote-focus rows. With controls hidden, OK toggles
 pause/play and reveals the OSD together; Left/Right previews a ten-second seek
@@ -776,14 +791,30 @@ establish physical-device audio quality or latency.
 ## Source-provided caption metadata
 
 Captions attached to a stream retain their declared language through resolution,
-resume prompts, native playback and same-session Android recovery. Loading still
-uses mpv's asynchronous `sub-files` option; Nova does not fetch every caption or
-reload it with `sub-add` merely to assign a language.
+resume prompts, native playback and same-session Android recovery. A bounded
+three-worker pool fetches them independently of video startup, with a twenty-second
+request timeout, five-redirect limit and eight-MiB file limit. Captions on the
+video's exact origin can use its request headers. Captions on other origins get
+none of those headers; a redirect leaving the origin permanently drops them for
+that request, including custom token headers and redirects back to the video
+origin. Video authorization stays on the native video connection.
+
+mpv receives only local caption files, so its global video headers cannot leak
+through subtitle requests or redirects. Files belong to the accepted playback
+session and are removed on replacement, close or rejection of a late result.
+Android recovery reloads retained local files without another remote fetch.
+The native Linux security probe also supplied cached M3U/HLS, DASH and ffconcat
+reference bodies through both subtitle loading paths. No nested network request
+occurred: FFmpeg rejected HLS detection for the fixed `.sub` cache extension,
+mpv rejected playlist-only external subtitles, DASH's nested HTTP open was
+blocked by the local-file `file,crypto,data` protocol whitelist, and ffconcat
+rejected unsafe remote names. These observations cover the installed native
+stack; physical Android execution remains unverified.
 
 `SourceSubtitle` and the accepted source's caption inventory are runtime-only.
 The shared native inventory reader matches an external subtitle's complete
-`external-filename` to the exact supplied URL, including its query, and checks
-both the video source and playback session. It fills an unknown language from
+`external-filename` to its local file and exact supplied URL, including its query,
+and checks both the video source and playback session. It fills an unknown language from
 the declaration and marks the caption as Included with stream in track menus.
 An already known native language takes precedence. Unknown or conflicting
 language declarations remain unknown; filenames are never language evidence.

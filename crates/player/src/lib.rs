@@ -48,7 +48,7 @@ pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 mod gpu_screenshot;
 
 mod source_subtitles;
-pub use source_subtitles::SourceSubtitle;
+pub use source_subtitles::{SourceSubtitle, SourceSubtitleFile, SourceSubtitleRequest};
 
 mod addon_subtitles;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
@@ -1199,6 +1199,9 @@ struct State {
     /// option, with the UI still at 0) mirrors mpv instead of being mistaken
     /// for a scrub and frozen.
     seek_pending: AtomicBool,
+    /// A native setter can succeed without ever moving the demuxer. Bound the
+    /// optimistic slider hold, including for paused and unseekable sources.
+    seek_deadline: Mutex<Option<Instant>>,
     seek_buffer: Mutex<Option<SeekBuffer>>,
     /// The load timeout / setup error was already reported for this session.
     reported: AtomicBool,
@@ -1531,6 +1534,7 @@ impl Player {
             allow_external: AtomicBool::new(true),
             start_pause_hold: AtomicBool::new(false),
             seek_pending: AtomicBool::new(false),
+            seek_deadline: Mutex::new(None),
             seek_buffer: Mutex::new(None),
             reported: AtomicBool::new(false),
             opened_at: Mutex::new(Instant::now()),
@@ -2100,8 +2104,8 @@ impl Player {
         )
     }
 
-    /// Typed source captions retain declared facts through the ordinary async
-    /// sub-files loader. URL-only public entry points remain compatible.
+    /// Typed source captions retain declared facts while an origin-aware app
+    /// worker fetches them. mpv only receives local caption files.
     pub fn play_with_source_subtitles_and_load_policy(
         &self,
         url: &str,
@@ -2176,11 +2180,14 @@ impl Player {
             self.state.screenshot_session.load(Ordering::SeqCst),
             subtitles.clone(),
         );
-        let subtitles = subtitles
-            .into_iter()
-            .map(|subtitle| subtitle.url)
-            .collect::<Vec<_>>();
-        *self.state.pending_subtitles.lock().unwrap() = subtitles.clone();
+        self.state
+            .source_subtitles
+            .lock()
+            .unwrap()
+            .set_headers(headers);
+        // http-header-fields is global to mpv, including subtitle requests and
+        // redirects. Only local captions may enter this native list.
+        self.state.pending_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
         let start_paused = policy.paused || !ANDROID_FOREGROUND.load(Ordering::SeqCst);
         #[cfg(not(target_os = "android"))]
@@ -2197,7 +2204,7 @@ impl Player {
             *self.state.pending_start.lock().unwrap() = Some(start_pos_secs.max(0.0));
             *self.state.last_url.lock().unwrap() = Some(url.to_string());
             *self.state.last_headers.lock().unwrap() = headers.to_vec();
-            *self.state.last_subtitles.lock().unwrap() = subtitles;
+            self.state.last_subtitles.lock().unwrap().clear();
             *self.state.last_hwdec_log.lock().unwrap() = String::from("<unset>");
             *self.state.session_hwdec.lock().unwrap() = None;
             self.state.hwdec_checked.store(false, Ordering::SeqCst);
@@ -2206,6 +2213,7 @@ impl Player {
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
+        *self.state.seek_deadline.lock().unwrap() = None;
         *self.state.seek_buffer.lock().unwrap() = None;
         self.state.reported.store(false, Ordering::SeqCst);
         *self.state.opened_at.lock().unwrap() = Instant::now();
@@ -2414,9 +2422,61 @@ impl Player {
         }
     }
 
+    /// Requests for the accepted source only. The transport must bind video
+    /// headers to the video's origin, including across caption redirects.
+    pub fn source_subtitle_requests(&self) -> Vec<SourceSubtitleRequest> {
+        self.state.source_subtitles.lock().unwrap().requests()
+    }
+
+    /// Accept a downloaded caption only into the exact originating session.
+    /// Local files stay owned by the player through Android renderer recovery.
+    pub fn attach_source_subtitle(
+        &self,
+        session: u64,
+        url: &str,
+        file: SourceSubtitleFile,
+    ) -> bool {
+        if self.state.screenshot_session.load(Ordering::SeqCst) != session {
+            return false;
+        }
+        let mut subtitles = self.state.source_subtitles.lock().unwrap();
+        if !subtitles.attach(session, url, file) {
+            return false;
+        }
+        #[cfg(target_os = "android")]
+        {
+            *self.state.last_subtitles.lock().unwrap() = subtitles.local_paths();
+        }
+        true
+    }
+
+    fn load_source_subtitles(&self) {
+        if self.state.pending.lock().unwrap().is_some() {
+            return;
+        }
+        let source = self.state.preference_source.lock().unwrap().clone();
+        let engine = self.state.mpv.lock().unwrap();
+        let Some(mpv) = engine.as_ref() else {
+            return;
+        };
+        if mpv.get_property::<String>("path").ok().as_deref() != Some(source.as_str()) {
+            return;
+        }
+        if mpv.get_property::<f64>("time-pos").is_err() {
+            return;
+        }
+        let manual = self.state.preferences.lock().unwrap().manual_subtitles;
+        self.state.source_subtitles.lock().unwrap().load_pending(
+            mpv,
+            &source,
+            self.state.screenshot_session.load(Ordering::SeqCst),
+            manual,
+        );
+    }
+
     /// Seek to `pos` seconds (OSD slider).
     pub fn seek(&self, pos: f32) {
-        if self.state.start_pause_hold.load(Ordering::SeqCst) {
+        if !pos.is_finite() || self.state.start_pause_hold.load(Ordering::SeqCst) {
             return;
         }
         let app = self.state.app.upgrade();
@@ -2425,6 +2485,20 @@ impl Player {
         let session = self.state.screenshot_session.load(Ordering::SeqCst);
         let now = Instant::now();
         let target = pos.max(0.0) as f64;
+        // Android can seek a queued decoder/surface reload before native
+        // properties return. Its per-load start owns that request, rather than
+        // an indefinitely pending native time-pos setter.
+        #[cfg(target_os = "android")]
+        if pending {
+            self.state.recovery.lock().unwrap().seek(target);
+            *self.state.pending_start.lock().unwrap() = Some(target);
+            if let Some(app) = app {
+                app.set_position(target as f32);
+            }
+            self.state.seek_pending.store(false, Ordering::SeqCst);
+            *self.state.seek_deadline.lock().unwrap() = None;
+            return;
+        }
         let grace = app.as_ref().and_then(|app| {
             if pending || !self.state.started.load(Ordering::SeqCst) {
                 return None;
@@ -2455,6 +2529,33 @@ impl Player {
                 cache.as_deref(),
             )
         });
+        // Reject unsupported seeks before publishing an optimistic target.
+        // mpv can return success for time-pos on a pipe without moving it.
+        let accepted = self.state.mpv.lock().ok().is_some_and(|engine| {
+            engine.as_ref().is_some_and(|mpv| {
+                !pending
+                    && self.state.started.load(Ordering::SeqCst)
+                    && mpv.get_property::<String>("path").ok().as_deref() == Some(source.as_str())
+                    && mpv.get_property::<bool>("seekable").unwrap_or(false)
+                    && mpv.set_property("time-pos", target).is_ok()
+            })
+        });
+        if !accepted {
+            self.state.seek_pending.store(false, Ordering::SeqCst);
+            *self.state.seek_deadline.lock().unwrap() = None;
+            *self.state.seek_buffer.lock().unwrap() = None;
+            if let Some(app) = app {
+                if let Ok(engine) = self.state.mpv.lock()
+                    && let Some(mpv) = engine.as_ref()
+                    && mpv.get_property::<String>("path").ok().as_deref() == Some(source.as_str())
+                    && let Ok(actual) = mpv.get_property::<f64>("time-pos")
+                {
+                    app.set_position(actual.max(0.0) as f32);
+                }
+                app.set_buffered_until(0.0);
+            }
+            return;
+        }
         *self.state.seek_buffer.lock().unwrap() = grace;
         if let Some(app) = app {
             app.set_buffered_until(
@@ -2473,15 +2574,10 @@ impl Player {
                 *self.state.pending_start.lock().unwrap() = Some(pos.max(0.0) as f64);
             }
         }
-        // Mark the seek in flight: the tick scrub guard only suppresses
-        // mirroring while the thumb is ahead of mpv (see `seek_pending`).
+        // Hold the committed target briefly while mpv catches up. Native
+        // acceptance does not guarantee the requested position is reachable.
+        *self.state.seek_deadline.lock().unwrap() = Some(now + Duration::from_secs(5));
         self.state.seek_pending.store(true, Ordering::SeqCst);
-        let Ok(mpv) = self.state.mpv.lock() else {
-            return;
-        };
-        if let Some(mpv) = mpv.as_ref() {
-            let _ = mpv.set_property("time-pos", pos as f64);
-        }
     }
 
     /// Relative commands resolve against the receiver's latest playhead.
@@ -3605,6 +3701,7 @@ impl Player {
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
+        *self.state.seek_deadline.lock().unwrap() = None;
         *self.state.seek_buffer.lock().unwrap() = None;
         self.state.reported.store(false, Ordering::SeqCst);
 
@@ -3707,6 +3804,7 @@ impl Player {
             return;
         }
 
+        self.load_source_subtitles();
         self.resolve_preferred_tracks();
 
         self.poll_subtitle_sync();
@@ -3774,7 +3872,15 @@ impl Player {
             let dur: f64 = mpv.get_property("duration").unwrap_or(0.0);
             let paused = live_paused.unwrap_or(false);
             let seek_pending = self.state.seek_pending.load(Ordering::SeqCst);
-            let diverged = seek_pending && (app.get_position() as f64 - pos).abs() > 2.0;
+            let diverged = seek_pending
+                && self
+                    .state
+                    .seek_deadline
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|deadline| Instant::now() < deadline)
+                && mpv.get_property::<bool>("seekable").unwrap_or(false)
+                && (app.get_position() as f64 - pos).abs() > 2.0;
             // A queued replacement must not inherit the previous file's
             // cache. The same source ownership check guards track preferences.
             let buffered_until = if !pending_load
@@ -3835,6 +3941,7 @@ impl Player {
             if seek_pending && !diverged {
                 // mpv caught up with the seek: disengage the guard.
                 self.state.seek_pending.store(false, Ordering::SeqCst);
+                *self.state.seek_deadline.lock().unwrap() = None;
             }
 
             Snapshot {
@@ -3927,21 +4034,8 @@ impl Player {
             }
         }
 
-        // Handled after the resume-reload above (see the `diverged` comment).
-        // Keep the time label on the thumb's position while mpv catches up with
-        // the seek (the text would otherwise show the stale spot).
-        if snapshot.diverged {
-            if snapshot.dur > 0.0 {
-                let ui_pos = app.get_position() as f64;
-                app.set_time_text(slint::SharedString::from(format!(
-                    "{} / {}",
-                    format_time(ui_pos),
-                    format_time(snapshot.dur)
-                )));
-            }
-            return;
-        }
-
+        // An optimistic seek holds only the displayed position. Pause, EOF,
+        // decoder and startup-error convergence must continue while it lands.
         // Linux: converge screen inhibition on live state (self-heals EOF
         // and any pause change that bypassed toggle()). Transition-only
         // internally, so steady ticks cost just a mutex lock.
@@ -4007,7 +4101,9 @@ impl Player {
                 app.invoke_osd_mouse_moved();
             }
             app.set_playback_started(true);
-            app.set_position(snapshot.pos as f32);
+            if !snapshot.diverged {
+                app.set_position(snapshot.pos as f32);
+            }
             app.set_duration(snapshot.dur.max(1.0) as f32);
             app.set_buffered_until(snapshot.buffered_until);
             // OSD visibility is owned solely by the auto-hide countdown in
@@ -4015,7 +4111,11 @@ impl Player {
             // fade them after 5 s): do not override that policy here.
             app.set_time_text(slint::SharedString::from(format!(
                 "{} / {}",
-                format_time(snapshot.pos),
+                format_time(if snapshot.diverged {
+                    app.get_position() as f64
+                } else {
+                    snapshot.pos
+                }),
                 format_time(snapshot.dur)
             )));
 
@@ -4104,6 +4204,7 @@ impl Player {
             || self.state.party_playback_rate.lock().unwrap().is_some()
             || !self.state.last_headers.lock().unwrap().is_empty()
             || !self.state.last_subtitles.lock().unwrap().is_empty()
+            || !self.state.source_subtitles.lock().unwrap().is_empty()
         {
             return false;
         }
@@ -4889,6 +4990,144 @@ mod tests {
             0.0
         );
         assert_eq!(estimated_buffered_until(-1.0, 100.0, Some(55.0), None), 0.0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn paused_unseekable_and_expired_seeks_keep_native_state_converging() {
+        const CHILD: &str = "NOVA_PLAYER_SEEK_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, "1")
+                .args([
+                    "--exact",
+                    "tests::paused_unseekable_and_expired_seeks_keep_native_state_converging",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = Player::setup(&app);
+        let size = 80_000_u32;
+        let mut wav = b"RIFF".to_vec();
+        wav.extend((size + 36).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16_u32.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(8000_u32.to_le_bytes());
+        wav.extend(8000_u32.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(8_u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(size.to_le_bytes());
+        wav.resize(wav.len() + size as usize, 128);
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let fixture = wav.clone();
+        let producer = std::thread::spawn(move || {
+            writer.write_all(&fixture).unwrap();
+        });
+        let pipe = format!("fd://{}", reader.as_raw_fd());
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")?;
+            init.set_property("cache", false)?;
+            init.set_property("pause", true)?;
+            init.set_property("keep-open", true)
+        })
+        .unwrap();
+        mpv.command("loadfile", &[&pipe]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while mpv.get_property::<f64>("time-pos").is_err() {
+            assert!(Instant::now() < deadline, "pipe fixture did not load");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!mpv.get_property::<bool>("seekable").unwrap());
+        // The native acceptance code alone cannot establish success.
+        assert!(mpv.set_property("time-pos", 8.0_f64).is_ok());
+        *player.state.mpv.lock().unwrap() = Some(mpv);
+        *player.state.preference_source.lock().unwrap() = pipe;
+        app.set_player_open(true);
+        player.tick();
+        assert!(app.get_playback_started());
+        app.set_position(8.0); // The slider may publish its target before callback.
+        player.seek(8.0);
+        assert!(!player.state.seek_pending.load(Ordering::SeqCst));
+        assert!(app.get_position() < 2.0);
+        player.tick();
+        assert!(app.get_is_paused());
+        producer.join().unwrap();
+
+        // Exercise a successful native source with a pending target that never
+        // arrives, without waiting five wall-clock seconds in a unit test.
+        let path = std::env::temp_dir().join(format!("nova-seek-{}.wav", std::process::id()));
+        std::fs::write(&path, wav).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(path.clone());
+        let source = path.to_string_lossy().into_owned();
+        {
+            let engine = player.state.mpv.lock().unwrap();
+            let mpv = engine.as_ref().unwrap();
+            mpv.command("loadfile", &[&source]).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while mpv.get_property::<String>("path").ok().as_deref() != Some(source.as_str())
+                || !mpv.get_property::<bool>("seekable").unwrap_or(false)
+                || mpv.get_property::<f64>("time-pos").is_err()
+            {
+                assert!(Instant::now() < deadline, "local fixture did not load");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        *player.state.preference_source.lock().unwrap() = source;
+        app.set_position(8.0);
+        app.set_is_paused(false);
+        player.state.seek_pending.store(true, Ordering::SeqCst);
+        *player.state.seek_deadline.lock().unwrap() = Some(Instant::now() + Duration::from_secs(5));
+        player.tick();
+        assert!(app.get_is_paused(), "pending seeks must still mirror pause");
+        assert_eq!(
+            app.get_position(),
+            8.0,
+            "accepted targets have a short grace period"
+        );
+        *player.state.seek_deadline.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+        player.tick();
+        assert!(!player.state.seek_pending.load(Ordering::SeqCst));
+        assert!(
+            app.get_position() < 2.0,
+            "expired targets reconcile to actual position"
+        );
+        player.seek(4.0);
+        assert!(player.state.seek_pending.load(Ordering::SeqCst));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while player.state.seek_pending.load(Ordering::SeqCst) {
+            player.tick();
+            assert!(
+                Instant::now() < deadline,
+                "ordinary seek failed to reconcile"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!((app.get_position() - 4.0).abs() <= 2.0);
+        player.close();
     }
 
     #[cfg(not(target_os = "android"))]

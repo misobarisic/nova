@@ -10,6 +10,8 @@ pub(super) struct State {
     secondary_selection: u64,
     secondary_automatic_attempted: bool,
     pending: usize,
+    source_session: Option<u64>,
+    source_pending: usize,
     failed: usize,
     pub(super) automatic_attempted: bool,
     request: Option<Lookup>,
@@ -136,6 +138,7 @@ impl Bridge {
     ) {
         self.clear_addon_subtitles();
         let session = self.player.screenshot_session();
+        self.start_source_subtitles(session);
         let hints_ref = hints
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -267,6 +270,64 @@ impl Bridge {
         }
     }
 
+    fn start_source_subtitles(&self, session: u64) {
+        let requests = self.player.source_subtitle_requests();
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.addon_subtitles.source_session == Some(session) {
+                return;
+            }
+            state.addon_subtitles.source_session = Some(session);
+            state.addon_subtitles.source_pending = requests.len();
+        }
+        if requests.is_empty() {
+            return;
+        }
+        let requests = Arc::new(Mutex::new(VecDeque::from(requests)));
+        for _ in 0..3 {
+            let requests = requests.clone();
+            let bridge = self.clone();
+            thread::spawn(move || {
+                loop {
+                    let Some(request) = requests.lock().unwrap().pop_front() else {
+                        break;
+                    };
+                    if bridge.player.screenshot_session() != session {
+                        break;
+                    }
+                    let result = net::fetch_source_subtitle_bytes(
+                        &request.url,
+                        &request.video_url,
+                        &request.video_headers,
+                        Duration::from_secs(20),
+                        8 * 1024 * 1024,
+                    )
+                    .and_then(|bytes| crate::player::SourceSubtitleFile::from_bytes(&bytes));
+                    let bridge = bridge.clone();
+                    let _ = crate::app::profiles::invoke_from_event_loop(move || {
+                        if bridge.player.screenshot_session() != session
+                            || !bridge.app().is_some_and(|app| app.get_player_open())
+                        {
+                            return;
+                        }
+                        let mut state = bridge.shared.lock().unwrap();
+                        if state.addon_subtitles.source_session != Some(session) {
+                            return;
+                        }
+                        state.addon_subtitles.source_pending =
+                            state.addon_subtitles.source_pending.saturating_sub(1);
+                        drop(state);
+                        if let Ok(file) = result {
+                            bridge
+                                .player
+                                .attach_source_subtitle(session, &request.url, file);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
     pub(super) fn cancel_subtitle_download(&self) {
         let mut state = self.shared.lock().unwrap();
         state.addon_subtitles.selection = state.addon_subtitles.selection.wrapping_add(1);
@@ -322,6 +383,9 @@ impl Bridge {
         {
             return;
         }
+        // Native return from casting can queue a player session independently
+        // of addon lookup. Source captions still belong to that accepted source.
+        self.start_source_subtitles(self.player.screenshot_session());
         if self
             .app()
             .is_some_and(|app| app.get_subtitle_addon_status() == 2)
@@ -331,7 +395,10 @@ impl Bridge {
         let primary = {
             let mut state = self.shared.lock().unwrap();
             let state = &mut state.addon_subtitles;
-            if state.session != self.player.screenshot_session() || state.pending > 0 {
+            if state.session != self.player.screenshot_session()
+                || state.pending > 0
+                || state.source_pending > 0
+            {
                 return;
             }
             let primary = !state.automatic_attempted;
