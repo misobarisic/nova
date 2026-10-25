@@ -283,7 +283,11 @@ new envelope instead of overwriting unfamiliar intents.
 
 Queued work survives restarts. Nova reads the current remote entry before each
 mutation, serializes writes per target, respects service-wide cooldowns, and retries
-transient failures with backoff. Authentication failures require reconnecting the
+transient failures with backoff. After those reads, each mutation rechecks the
+saved credential and merged peer links, mapping revisions and automatic-sync
+consent. A peer Disconnect, unlink, remap or pause committed during a blocked
+read prevents the subsequent unauthorized mutation, even before the actor
+processes its queued sync notification. Authentication failures require reconnecting the
 same verified account. Restarted in-flight requests are uncertain and are reread
 before retry. The Tracking page shows pending, sending, retry, authentication,
 rejected, inactive-account, and alignment states. **Refresh / retry** cannot bypass

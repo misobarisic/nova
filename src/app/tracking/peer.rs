@@ -91,6 +91,72 @@ fn credential_snapshot_matches(
                 .is_some_and(|r| !r.is_deleted())
         })
 }
+/// The actor may be blocked in a tracker read while sync commits a revocation.
+/// Rebuild authorization from the merged records at the mutation boundary;
+/// waiting for the actor's queued Sync command would reuse stale consent.
+#[allow(clippy::too_many_arguments)]
+fn mutation_snapshot_allowed(
+    store: &nova_sync::Store,
+    domain: &str,
+    state: &TrackingState,
+    local: Option<&str>,
+    consumed: &str,
+    target: &TargetKey,
+    mappings: &[MappingStamp],
+    automatic: bool,
+) -> Result<(), ApiError> {
+    if local != Some(consumed)
+        || store
+            .record(domain, shared_credential_key(target.account.service))
+            .and_then(|record| record.value.as_deref())
+            != Some(consumed)
+        || nova_sync::parse_profile_domain(domain).is_some_and(|(id, _)| {
+            store
+                .record("profile_deletions", id)
+                .is_some_and(|record| !record.is_deleted())
+        })
+    {
+        return Err(ApiError::Authentication);
+    }
+    let current = apply_peer_records(state, &store.records(domain), 0, |_| false)
+        .map_err(|_| ApiError::Offline)?;
+    if !current.active_accounts.contains(&target.account)
+        || !selected_target_allowed(&current, target)
+        || !selected_mappings_allowed(&current, target, mappings)
+        || (automatic && current.automatic_paused.contains(&target.account.service))
+    {
+        return Err(ApiError::Offline);
+    }
+    Ok(())
+}
+
+pub(super) fn mutation_allowed(
+    storage: &KvStorage,
+    state: &TrackingState,
+    connection: &SavedConnection,
+    target: &TargetKey,
+    mappings: &[MappingStamp],
+    automatic: bool,
+) -> Result<(), ApiError> {
+    let (_, consumed, _) = connection_record(connection).map_err(|_| ApiError::Authentication)?;
+    let local = storage
+        .read(nova_tracking::credentials::credential_key(
+            target.account.service,
+        ))
+        .map_err(|_| ApiError::Offline)?;
+    let owner = nova_sync::local_store().map_err(|_| ApiError::Offline)?;
+    mutation_snapshot_allowed(
+        &owner.lock().unwrap(),
+        &storage.profile_store().domain(TRACKING_DOMAIN),
+        state,
+        local.as_deref(),
+        &consumed,
+        target,
+        mappings,
+        automatic,
+    )
+}
+
 impl RefreshStorage {
     pub(super) fn capture(
         storage: KvStorage,
@@ -475,6 +541,271 @@ mod tests {
     use super::*;
     const DOMAIN: &str = "profile:alice:tracking";
     const LOCAL: &str = "profile:alice:tracking:credentials:mal:v1";
+    #[test]
+    fn blocked_entry_read_rechecks_durable_peer_authorization_before_mutation() {
+        const ROOT: &str = "NOVA_TRACKING_MUTATION_AUTH_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-tracking-mutation-auth-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::tracking::worker::peer::tests::blocked_entry_read_rechecks_durable_peer_authorization_before_mutation", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&PathBuf::from(root));
+        struct DeferredRead {
+            service: Service,
+            calls: AtomicU64,
+            mutations: Arc<AtomicU64>,
+            entered: mpsc::SyncSender<()>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+        impl api::Transport for DeferredRead {
+            fn send(&self, _: api::Request) -> Result<api::Response, ApiError> {
+                let call = self.calls.fetch_add(1, Ordering::AcqRel);
+                let body = match (self.service, call) {
+                    (Service::MyAnimeList, 0) => serde_json::json!({"id":7,"name":"Owner"}),
+                    (Service::AniList, 0) => serde_json::json!({"data":{"Viewer":{
+                        "id":7,"name":"Owner","mediaListOptions":{"scoreFormat":"POINT_10"}
+                    }}}),
+                    (service, 1) => {
+                        self.entered.send(()).unwrap();
+                        self.resume
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                        if service == Service::MyAnimeList {
+                            serde_json::json!({"id":12,"my_list_status":null})
+                        } else {
+                            serde_json::json!({"data":{"Media":{"id":12,"mediaListEntry":null}}})
+                        }
+                    }
+                    _ => {
+                        self.mutations.fetch_add(1, Ordering::AcqRel);
+                        return Err(ApiError::Offline);
+                    }
+                };
+                Ok(api::Response {
+                    status: 200,
+                    retry_after: None,
+                    reset_at: None,
+                    body,
+                })
+            }
+        }
+        for service in [Service::MyAnimeList, Service::AniList] {
+            for automatic in [false, true] {
+                for change in [
+                    "unchanged",
+                    "disconnect",
+                    "unlink",
+                    "remap",
+                    "pause",
+                    "local_disconnect",
+                    "rotation",
+                ] {
+                    let account = AccountKey {
+                        service,
+                        remote_user_id: NonZeroU32::new(7).unwrap(),
+                    };
+                    let target = TargetKey {
+                        account: account.clone(),
+                        media_kind: MediaKind::Anime,
+                        remote_media_id: NonZeroU32::new(12).unwrap(),
+                    };
+                    let binding = Binding {
+                        id: "binding-1".into(),
+                        source: SourceRef {
+                            provider_id: "nova".into(),
+                            source_id: "title".into(),
+                            media_type: "series".into(),
+                        },
+                        target: target.clone(),
+                        account_generation: NonZeroU64::MIN,
+                        mapping_revision: NonZeroU64::MIN,
+                        enabled: true,
+                        bulk_origin: false,
+                        assignments: vec![Assignment {
+                            episode_id: "episode".into(),
+                            target_episode: NonZeroU32::MIN,
+                        }],
+                    };
+                    let state = TrackingState {
+                        accounts: vec![Account {
+                            key: account.clone(),
+                            generation: NonZeroU64::MIN,
+                            display_name: "Owner".into(),
+                        }],
+                        active_accounts: vec![account.clone()],
+                        targets: vec![Target {
+                            key: target.clone(),
+                            remote_entry_id: None,
+                            final_episode_total: Some(NonZeroU32::new(12).unwrap()),
+                            release_finished: true,
+                        }],
+                        bindings: vec![binding.clone()],
+                        ..Default::default()
+                    };
+                    let stamp = MappingStamp {
+                        binding_id: binding.id,
+                        revision: binding.mapping_revision,
+                        source: binding.source,
+                        assignments: binding.assignments,
+                    };
+                    let connection = SavedConnection {
+                        account,
+                        registration: ClientRegistration {
+                            client_id: "fixture".into(),
+                            redirect_uri: "http://127.0.0.1:8777/callback".into(),
+                        },
+                        tokens: Tokens {
+                            access: Secret::new("saved-access".into()).unwrap(),
+                            refresh: None,
+                            expires_at: None,
+                        },
+                    };
+                    let (credential_key, consumed, _) = connection_record(&connection).unwrap();
+                    let domain = "profile:alice:tracking";
+                    let local_key = format!(
+                        "profile:alice:{}",
+                        nova_tracking::credentials::credential_key(service)
+                    );
+                    let mut store = nova_sync::Store::default();
+                    let records = peer_records(&state).unwrap();
+                    let link_key = records
+                        .iter()
+                        .find(|(key, _, _)| key.starts_with("link:"))
+                        .unwrap()
+                        .0
+                        .clone();
+                    for (key, value, _) in records {
+                        store.set(domain, &key, Some(value), 0, 1);
+                    }
+                    store.set(domain, &credential_key, Some(consumed.clone()), 0, 1);
+                    store.queue_extra(&local_key, Some(consumed.clone()));
+                    store.save().unwrap();
+                    let owner = Arc::new(Mutex::new(store));
+                    let (entered, waiting) = mpsc::sync_channel(1);
+                    let (release, resume) = mpsc::sync_channel(1);
+                    let mutations = Arc::new(AtomicU64::new(0));
+                    let worker = thread::spawn({
+                        let owner = owner.clone();
+                        let mutations = mutations.clone();
+                        let credential_key = local_key.clone();
+                        move || {
+                            let mut client = api::Client::new(
+                                service,
+                                connection.tokens.access.duplicate(),
+                                DeferredRead {
+                                    service,
+                                    calls: AtomicU64::new(0),
+                                    mutations,
+                                    entered,
+                                    resume: Mutex::new(resume),
+                                },
+                            );
+                            client.verify(100).unwrap();
+                            let remote = client.read(target.remote_media_id, 100).unwrap();
+                            let local = nova_storage::try_get_str(&credential_key).unwrap();
+                            let allowed = mutation_snapshot_allowed(
+                                &owner.lock().unwrap(),
+                                domain,
+                                &state,
+                                local.as_deref(),
+                                &consumed,
+                                &target,
+                                &[stamp],
+                                automatic,
+                            );
+                            if allowed.is_ok() {
+                                let _ = client.update(
+                                    target.remote_media_id,
+                                    remote.as_ref(),
+                                    &EntryPatch {
+                                        progress: Some(1),
+                                        ..Default::default()
+                                    },
+                                    100,
+                                );
+                            }
+                            allowed.is_ok()
+                        }
+                    });
+                    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+                    {
+                        let mut store = owner.lock().unwrap();
+                        match change {
+                            "disconnect" => {
+                                store.set(domain, &credential_key, None, 0, 2);
+                            }
+                            "rotation" => {
+                                store.set(
+                                    domain,
+                                    &credential_key,
+                                    Some("newer-grant".into()),
+                                    0,
+                                    2,
+                                );
+                            }
+                            "unlink" => {
+                                store.set(domain, &link_key, None, 0, 2);
+                            }
+                            "remap" => {
+                                let mut value: serde_json::Value = serde_json::from_str(
+                                    store
+                                        .record(domain, &link_key)
+                                        .unwrap()
+                                        .value
+                                        .as_ref()
+                                        .unwrap(),
+                                )
+                                .unwrap();
+                                value["assignments"][0]["target_episode"] = 2.into();
+                                store.set(domain, &link_key, Some(value.to_string()), 0, 2);
+                            }
+                            "pause" => {
+                                let suffix = if service == Service::MyAnimeList {
+                                    "mal"
+                                } else {
+                                    "anilist"
+                                };
+                                let key = format!("automatic:{suffix}");
+                                store.set(domain, &key, Some(serde_json::json!({"kind":"preference","version":1,"service":service,"paused":true}).to_string()), 0, 2);
+                            }
+                            "local_disconnect" => store.queue_extra(&local_key, None),
+                            _ => {}
+                        }
+                        store.save().unwrap();
+                    }
+                    release.send(()).unwrap();
+                    let expected = change == "unchanged" || (change == "pause" && !automatic);
+                    assert_eq!(
+                        worker.join().unwrap(),
+                        expected,
+                        "{service:?} {automatic} {change}"
+                    );
+                    assert_eq!(
+                        mutations.load(Ordering::Acquire),
+                        u64::from(expected),
+                        "{service:?} {automatic} {change}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn refresh_snapshot_rejects_peer_rotation_disconnect_and_profile_deletion() {
         let mut store = refresh_store();

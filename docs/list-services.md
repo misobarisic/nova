@@ -96,6 +96,9 @@ bulk watched/checkpoint writes, and repeated stop acknowledgments do not add
 duplicate plays. Trakt records a watch above its documented 80% stop threshold;
 shorter stops retain resume progress. Episode scrobbles resolve the exact
 episode ID against the confirmed parent, never the show ID or display numbering.
+Player observations retain the source's captured media type with its native
+title and episode IDs. A movie and series with the same native title ID remain
+separate regardless of Library ordering, including live-history suppression.
 These observations and pending device codes are process-local and profile-owned.
 A bounded 16-event queue retains transiently failed player transitions, including
 terminal stops, until retry. Real frames update the live snapshot even without

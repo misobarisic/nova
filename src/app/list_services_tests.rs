@@ -716,6 +716,7 @@ fn trakt_actor_regressions(bridge: &Bridge) {
     );
     *handle.playback.lock().unwrap() = None;
     trakt_playback_regressions(bridge, &mut worker, &connection, &fake, generation);
+    trakt_typed_playback_regressions(bridge, &mut worker, &connection, &fake, generation);
     worker
         .set_record::<Connection>("connection:2", None)
         .unwrap();
@@ -742,6 +743,7 @@ fn trakt_playback_regressions(
         )
         .unwrap();
     let mut bad = trakt::Observation::test_movie("tt0903747", ScrobbleAction::Start);
+    bad.media_type = "series".into();
     bad.episode_id = "tt0903747:2:3".into();
     let good = trakt::Observation::test_movie("tt1111111", ScrobbleAction::Start);
     *handle.playback.lock().unwrap() = Some(bad.clone());
@@ -795,6 +797,10 @@ fn trakt_playback_regressions(
         series_id: "tt1111111".into(),
         episode_id: "tt1111111".into(),
         session: 901,
+        history: Some(PlaybackHistory {
+            type_: "movie".into(),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let before = fake.requests.lock().unwrap().len();
@@ -817,7 +823,7 @@ fn trakt_playback_regressions(
         "retained EOF and close must not send Pause 100% or a second Stop"
     );
     assert!(
-        !handle.has_trakt_observation("tt1111111", None),
+        !handle.has_trakt_observation("movie", "tt1111111", None),
         "the open end screen must not suppress bulk history forever"
     );
     // A real seek/replay on the same native load rearms a new viewing cycle.
@@ -845,4 +851,63 @@ fn trakt_playback_regressions(
         .map(|(url, _)| url.rsplit('/').next().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(actions, ["start", "stop", "pause", "start", "stop"]);
+}
+
+fn trakt_typed_playback_regressions(
+    bridge: &Bridge,
+    worker: &mut Worker,
+    connection: &Connection,
+    fake: &Arc<TraktFake>,
+    generation: u64,
+) {
+    let id = "catalog:42";
+    for (kind, imdb) in [("movie", "tt7777777"), ("series", "tt8888888")] {
+        let preview = serde_json::from_value(json!({
+            "id":id, "type":kind, "name":"Collision", "imdb_id":imdb
+        }))
+        .unwrap();
+        tracking::remember_source(&preview);
+    }
+    let film = LibraryEntry {
+        id: id.into(),
+        ..movie("tt7777777")
+    };
+    let show = LibraryEntry {
+        type_: "series".into(),
+        ..film.clone()
+    };
+    let video = serde_json::from_value(json!({"id":"tt8888888:2:3"})).unwrap();
+    write_episodes_cache_for("series", id, &[video]);
+    worker
+        .set_record(&flag_key(2, connection, "full"), Some(&true))
+        .unwrap();
+    worker.full[2] = true;
+    let mut observation = trakt::Observation::test_movie(id, ScrobbleAction::Stop);
+    observation.media_type = "series".into();
+    observation.episode_id = "tt8888888:2:3".into();
+    observation.test_percent(100.0);
+    let before = fake.requests.lock().unwrap().len();
+    for entries in [vec![film.clone(), show.clone()], vec![show, film]] {
+        bridge.shared.lock().unwrap().entries = entries;
+        fake.push(200, json!({"season":2,"number":3,"ids":{"trakt":888}}));
+        fake.push(200, json!({"action":"scrobble"}));
+        assert!(worker.trakt_observation(&observation, generation).unwrap());
+    }
+    let requests = fake.requests.lock().unwrap();
+    let calls = &requests[before..];
+    assert_eq!(calls.len(), 4);
+    for pair in calls.chunks_exact(2) {
+        assert!(pair[0].0.ends_with("/shows/tt8888888/seasons/2/episodes/3"));
+        assert!(pair[1].0.ends_with("/scrobble/stop"));
+        let body = pair[1].1.as_ref().unwrap();
+        assert_eq!(body["episode"]["ids"]["trakt"], 888);
+        assert!(body.get("movie").is_none());
+    }
+    drop(requests);
+    // Bulk history suppression uses the same typed identity.
+    let handle = bridge.list_services();
+    *handle.playback.lock().unwrap() = Some(observation);
+    assert!(handle.has_trakt_observation("series", id, None));
+    assert!(!handle.has_trakt_observation("movie", id, None));
+    *handle.playback.lock().unwrap() = None;
 }

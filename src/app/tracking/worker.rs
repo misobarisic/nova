@@ -2233,6 +2233,42 @@ impl Coordinator {
             .save_with_events(state, &consumed)
             .map_err(|_| storage_message())
     }
+    fn mutation_allowed(
+        &self,
+        index: usize,
+        target: &TargetKey,
+        mappings: &[MappingStamp],
+        automatic: bool,
+    ) -> Result<(), ApiError> {
+        if !self.live() {
+            return Err(ApiError::Offline);
+        }
+        let session = &self.sessions[index];
+        if self.bridge.tracking().login_generation[service_index(session.service)]
+            .load(Ordering::Acquire)
+            != session.epoch
+        {
+            return Err(ApiError::Authentication);
+        }
+        let connection = SavedConnection {
+            account: session.client.viewer()?.account.clone(),
+            registration: session.registration.clone(),
+            tokens: Tokens {
+                access: session.tokens.access.duplicate(),
+                refresh: session.tokens.refresh.as_ref().map(Secret::duplicate),
+                expires_at: session.tokens.expires_at,
+            },
+        };
+        peer::mutation_allowed(
+            &self.storage,
+            self.store.state(),
+            &connection,
+            target,
+            mappings,
+            automatic,
+        )
+    }
+
     fn deliver(&mut self) {
         if self.completion.is_some() && !self.commit_completion() {
             return;
@@ -2413,6 +2449,12 @@ impl Coordinator {
                             {
                                 return Err(ApiError::Offline);
                             }
+                            self.mutation_allowed(
+                                index,
+                                &target,
+                                &attempt.edit().completion_mappings,
+                                false,
+                            )?;
                             self.sessions[index].client.update(
                                 target.remote_media_id,
                                 remote.as_ref(),
@@ -2519,6 +2561,12 @@ impl Coordinator {
                         {
                             return Err(ApiError::Offline);
                         }
+                        self.mutation_allowed(
+                            index,
+                            &target,
+                            &attempt.patch().mappings,
+                            attempt.patch().intent == ProgressIntent::AutomaticForward,
+                        )?;
                         self.sessions[index].client.update(
                             target.remote_media_id,
                             remote.as_ref(),

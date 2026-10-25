@@ -1167,10 +1167,11 @@ impl Worker {
                 let event = local_watched_sequence(&source.entry.id, native)?;
                 let export = existing.is_some_and(|p| history_allowed(&selection, p, event));
                 let live_scrobble = i == 2
-                    && self
-                        .bridge
-                        .list_services()
-                        .has_trakt_observation(&source.entry.id, Some(native));
+                    && self.bridge.list_services().has_trakt_observation(
+                        &source.entry.type_,
+                        &source.entry.id,
+                        Some(native),
+                    );
                 if export && !remote_watched && !live_scrobble {
                     self.scope_current(i, generation, &connection, &source, &selection)?;
                     if !item_write_succeeded(self.client.set_watched(
@@ -1207,10 +1208,11 @@ impl Worker {
             // Never manufacture seconds from an unknown duration or let an
             // unrelated episode's position overwrite the remote checkpoint.
             let live_scrobble = i == 2
-                && self
-                    .bridge
-                    .list_services()
-                    .has_trakt_observation(&source.entry.id, None);
+                && self.bridge.list_services().has_trakt_observation(
+                    &source.entry.type_,
+                    &source.entry.id,
+                    None,
+                );
             if let Some((_, episode, p)) = latest_resume.filter(|_| !live_scrobble) {
                 let percent = resume_percent(&p).unwrap();
                 let compatible =

@@ -16,6 +16,7 @@ pub(super) struct DeviceSession {
 }
 #[derive(Clone)]
 pub(super) struct Observation {
+    pub(super) media_type: String,
     pub(super) series_id: String,
     pub(super) episode_id: String,
     pub(super) action: ScrobbleAction,
@@ -29,7 +30,7 @@ pub(super) struct Observation {
 /// actual seek/replay rearms it; a later pause tick or close cannot stop twice.
 #[derive(Default)]
 pub(super) struct PlaybackEnd {
-    owner: Option<(String, String, u64, u64)>,
+    owner: Option<(String, String, String, u64, u64)>,
     stopped_at: Option<f64>,
     replay: u64,
 }
@@ -43,6 +44,10 @@ impl PlaybackEnd {
         paused: bool,
         stopped: bool,
     ) -> Option<u64> {
+        let media_type = target
+            .history
+            .as_ref()
+            .map(|history| history.type_.as_str())?;
         // Player::close invalidates its native telemetry generation. That
         // teardown must not turn the EOF we already handled into a new stop.
         if stopped
@@ -50,8 +55,9 @@ impl PlaybackEnd {
             && self
                 .owner
                 .as_ref()
-                .is_some_and(|(series, episode, session, _)| {
-                    series == &target.series_id
+                .is_some_and(|(kind, series, episode, session, _)| {
+                    kind == media_type
+                        && series == &target.series_id
                         && episode == &target.episode_id
                         && *session == target.session
                 })
@@ -59,6 +65,7 @@ impl PlaybackEnd {
             return None;
         }
         let owner = (
+            media_type.to_string(),
             target.series_id.clone(),
             target.episode_id.clone(),
             target.session,
@@ -126,6 +133,18 @@ impl Bridge {
         if !duration.is_finite() || duration <= 0.0 || !position.is_finite() || position < 0.0 {
             return;
         }
+        // Identity comes from the opening's immutable source, never the first
+        // Library row or the currently browsed Detail title.
+        let Some(media_type) = target
+            .history
+            .as_ref()
+            .map(|history| history.type_.as_str())
+        else {
+            return;
+        };
+        if !matches!(media_type, "movie" | "series" | "anime") {
+            return;
+        }
         let h = self.list_services();
         let replay = h
             .playback_end
@@ -143,6 +162,7 @@ impl Bridge {
             ScrobbleAction::Start
         };
         let observation = Observation {
+            media_type: media_type.into(),
             series_id: target.series_id.clone(),
             episode_id: target.episode_id.clone(),
             action,
@@ -155,7 +175,8 @@ impl Bridge {
         let mut previous = h.playback.lock().unwrap();
         let unchanged = !stopped
             && previous.as_ref().is_some_and(|p| {
-                p.series_id == observation.series_id
+                p.media_type == observation.media_type
+                    && p.series_id == observation.series_id
                     && p.episode_id == observation.episode_id
                     && p.session == observation.session
                     && p.native == observation.native
@@ -188,9 +209,17 @@ impl Bridge {
     }
 }
 impl Handle {
-    pub(super) fn has_trakt_observation(&self, series: &str, episode: Option<&str>) -> bool {
-        let matches =
-            |o: &Observation| o.series_id == series && episode.is_none_or(|id| o.episode_id == id);
+    pub(super) fn has_trakt_observation(
+        &self,
+        media_type: &str,
+        series: &str,
+        episode: Option<&str>,
+    ) -> bool {
+        let matches = |o: &Observation| {
+            o.media_type == media_type
+                && o.series_id == series
+                && episode.is_none_or(|id| o.episode_id == id)
+        };
         self.playback.lock().unwrap().as_ref().is_some_and(matches)
             || self
                 .scrobbles
@@ -201,14 +230,16 @@ impl Handle {
     }
 }
 fn same_target(a: &Observation, b: &Observation) -> bool {
-    a.series_id == b.series_id
+    a.media_type == b.media_type
+        && a.series_id == b.series_id
         && a.episode_id == b.episode_id
         && a.session == b.session
         && a.native == b.native
         && a.replay == b.replay
 }
 fn same_observation(a: &Observation, b: &Observation) -> bool {
-    a.series_id == b.series_id
+    a.media_type == b.media_type
+        && a.series_id == b.series_id
         && a.episode_id == b.episode_id
         && a.session == b.session
         && a.native == b.native
@@ -499,7 +530,7 @@ impl Worker {
         let Some(entry) = self.bridge.personal_state().and_then(|s| {
             s.entries
                 .iter()
-                .find(|e| e.id == observation.series_id)
+                .find(|e| e.id == observation.series_id && e.type_ == observation.media_type)
                 .cloned()
         }) else {
             return Ok(false);
@@ -580,8 +611,12 @@ impl Refresh {
 }
 #[cfg(test)]
 impl Observation {
+    pub(super) fn test_percent(&mut self, percent: f64) {
+        self.percent = percent;
+    }
     pub(super) fn test_movie(id: &str, action: ScrobbleAction) -> Self {
         Self {
+            media_type: "movie".into(),
             series_id: id.into(),
             episode_id: id.into(),
             action,
