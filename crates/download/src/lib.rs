@@ -559,12 +559,13 @@ pub struct DownloadOutcome {
 }
 
 pub type ByteAdmission = Arc<dyn Fn(u64) -> bool + Send + Sync>;
+pub type WriteAdmission = Arc<dyn Fn(u64, u64) -> bool + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct CancellationToken {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
-    admission: Arc<std::sync::Mutex<Option<ByteAdmission>>>,
+    admission: Arc<std::sync::Mutex<Option<WriteAdmission>>>,
 }
 
 impl fmt::Debug for CancellationToken {
@@ -583,12 +584,22 @@ impl CancellationToken {
 
     /// Called before each HTTP/HLS body write, independently of UI progress.
     pub fn set_byte_admission(&self, check: Arc<dyn Fn(u64) -> bool + Send + Sync>) {
+        self.set_write_admission(Arc::new(move |next, _| check(next)));
+    }
+
+    /// Receives logical progress and the incoming body-write length separately,
+    /// so a caller can charge old HLS assets retained during replacement.
+    pub fn set_write_admission(&self, check: WriteAdmission) {
         *self.admission.lock().unwrap() = Some(check);
     }
 
     pub fn admit_bytes(&self, next_total: u64) -> bool {
+        self.admit_write(next_total, 0)
+    }
+
+    pub fn admit_write(&self, next_total: u64, incoming: u64) -> bool {
         let check = self.admission.lock().unwrap().clone();
-        let allowed = !self.is_cancelled() && check.is_none_or(|check| check(next_total));
+        let allowed = !self.is_cancelled() && check.is_none_or(|check| check(next_total, incoming));
         if !allowed {
             self.cancel();
         }

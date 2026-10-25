@@ -334,7 +334,10 @@ where
                 if asset.key && bytes > 16 {
                     return Err(invalid("Invalid AES-128 key length"));
                 }
-                if !cancel.admit_bytes(downloaded + bytes) {
+                // Tokio files can retain the previous write in their worker
+                // buffer. Physical admission must see that allocation first.
+                file.flush().await?;
+                if !cancel.admit_write(downloaded + bytes, chunk.len() as u64) {
                     file.flush().await?;
                     return Err(DownloadError::Cancelled);
                 }

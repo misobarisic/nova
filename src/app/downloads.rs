@@ -214,6 +214,15 @@ fn refresh_physical_accounting(jobs: &mut [DownloadJob]) {
     }
 }
 
+fn projected_write_bytes(physical: u64, logical_next: u64, incoming: u64) -> u64 {
+    // Replacement HLS segments coexist with old assets and partials. Logical
+    // presentation progress alone cannot describe their peak allocation.
+    let allocation = incoming.saturating_add(4095) / 4096 * 4096;
+    logical_next
+        .max(physical.saturating_add(allocation))
+        .saturating_add(8192)
+}
+
 impl DownloadCoordinator {
     pub(super) fn available_bytes(&self) -> Option<u64> {
         crate::download::available_bytes(&self.inner.root)
@@ -685,10 +694,62 @@ impl DownloadCoordinator {
             return Err(PauseReason::Disabled);
         }
         let device = smart_offline::read_device().map_err(|_| PauseReason::Disabled)?;
+        if smart_offline::owner_suppressed(&device, &owner, &request.request_id) {
+            return Err(PauseReason::Disabled);
+        }
         if let Some(reason) = device.environmental_pause(smart_offline::environment()) {
             return Err(reason);
         }
         let mut state = self.inner.state();
+        if state.active.as_ref().is_some_and(|active| {
+            state.manifest.jobs.iter().any(|job| {
+                job.id == active.id
+                    && job.media_type == request.media_type
+                    && job.media_id == request.media_id
+                    && job.request_id == request.request_id
+                    && job.phase == DownloadPhase::Failed
+            })
+        }) {
+            // A cancelled worker still owns its old source and files until
+            // finish releases the slot. Do not refresh underneath that worker.
+            return Err(PauseReason::Background);
+        }
+        if let Some(previous) = state
+            .manifest
+            .jobs
+            .iter()
+            .find(|job| {
+                job.media_type == request.media_type
+                    && job.media_id == request.media_id
+                    && job.request_id == request.request_id
+                    && job.offline.automatic()
+                    && job.phase == DownloadPhase::Failed
+                    && job.offline.retry_at.is_some_and(|at| at <= now_secs())
+                    && job.source != request.source
+                    && (matches!(job.source, JobSource::Torrent { .. })
+                        || matches!(request.source, JobSource::Torrent { .. }))
+            })
+            .cloned()
+        {
+            estimate.ok_or(PauseReason::NeedsSource)?;
+            // A different bundle cannot inherit the old torrent directory or
+            // artifact accounting. Use normal shared-owner cleanup before
+            // admitting its replacement, and revalidate after releasing locks.
+            let pending = self
+                .claim_removals(&mut state, &HashSet::from([previous.id.clone()]))
+                .ok_or(PauseReason::NeedsSource)?;
+            drop(state);
+            drop(_device);
+            self.finish_removals(pending);
+            if self.job(&previous.id).is_some() {
+                return Err(PauseReason::NeedsSource);
+            }
+            let id = self.smart_admit(request, resolver, owner, estimate)?;
+            for owner in previous.offline.owners {
+                self.attach_smart_owner(&id, owner);
+            }
+            return Ok(id);
+        }
         refresh_physical_accounting(&mut state.manifest.jobs);
         let ledger = Ledger::from_jobs(&state.manifest.jobs);
         let estimate_cap = estimate
@@ -827,6 +888,10 @@ impl DownloadCoordinator {
     }
 
     fn smart_byte_admission(&self, id: &str, next: u64) -> bool {
+        self.smart_write_admission(id, next, 0)
+    }
+
+    fn smart_write_admission(&self, id: &str, next: u64, incoming: u64) -> bool {
         use crate::download::offline::{GIB, Ledger, PauseReason};
         let mut state = self.inner.state();
         let Some(index) = state.manifest.jobs.iter().position(|j| j.id == id) else {
@@ -837,7 +902,7 @@ impl DownloadCoordinator {
         if job.offline.manual_keep {
             return true;
         }
-        let next = next.max(job.bytes_downloaded).saturating_add(8192);
+        let next = projected_write_bytes(job.bytes_downloaded, next, incoming);
         let mut reason = smart_offline::job_pause(job);
         if next > job.offline.reserved_bytes {
             reason = Some(PauseReason::Budget);
@@ -1009,7 +1074,9 @@ impl DownloadCoordinator {
                 return;
             }
             if job.offline.automatic()
-                && (job.phase == DownloadPhase::Failed || is_resolver_download(job))
+                && (job.phase == DownloadPhase::Failed
+                    || is_resolver_download(job)
+                    || smart_offline::job_source_pause(job).is_some())
             {
                 job.phase = DownloadPhase::Failed;
                 job.offline.retry_at = Some(now_secs());
@@ -1294,9 +1361,11 @@ impl DownloadCoordinator {
         if job.offline.automatic() {
             let coordinator = self.clone();
             let id = job.id.clone();
-            active.cancel.set_byte_admission(Arc::new(move |bytes| {
-                coordinator.smart_byte_admission(&id, bytes)
-            }));
+            active
+                .cancel
+                .set_write_admission(Arc::new(move |bytes, incoming| {
+                    coordinator.smart_write_admission(&id, bytes, incoming)
+                }));
         }
         let coordinator = self.clone();
         let job_id = job.id.clone();
@@ -1687,14 +1756,20 @@ impl DownloadCoordinator {
                             if error == RESOLVER_RESELECT {
                                 // A fresh explicit selection may already have
                                 // rearmed this row while the old worker exits.
-                                if job.phase != DownloadPhase::Queued {
+                                if job.phase != DownloadPhase::Queued
+                                    && !(job.phase == DownloadPhase::Failed
+                                        && job.offline.retry_at.is_some())
+                                {
                                     job.phase = DownloadPhase::Failed;
                                     job.error = Some(error);
                                 }
                             } else if active.cancel.is_cancelled() {
                                 // Resume can queue the job while the cancelled
                                 // worker is still unwinding. Preserve that intent.
-                                if job.phase != DownloadPhase::Queued {
+                                if job.phase != DownloadPhase::Queued
+                                    && !(job.phase == DownloadPhase::Failed
+                                        && job.offline.retry_at.is_some())
+                                {
                                     job.phase = DownloadPhase::Paused;
                                 }
                                 job.error = None;
@@ -3112,6 +3187,382 @@ fn fallback_episode_label(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smart_retry_refreshes_ordinary_sources_and_preserves_current_user_pause() {
+        use crate::download::offline::{DevicePolicy, Environment, Owner, PauseReason};
+        use std::collections::BTreeMap;
+        const ROOT: &str = "NOVA_SMART_SOURCE_RETRY_ROOT";
+        let Some(data_root) = std::env::var_os(ROOT) else {
+            let root = temp_root("smart-source-retry");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::downloads::tests::smart_retry_refreshes_ordinary_sources_and_preserves_current_user_pause", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let data_root = PathBuf::from(data_root);
+        storage::init_at(&data_root.join("store"));
+        let store = profiles::ProfileStore::for_profile("alice");
+        let policy = smart_offline::Policy {
+            media_type: "series".into(),
+            title_id: "show".into(),
+            source_owner: "https://addon.test/manifest.json".into(),
+            ..Default::default()
+        };
+        let owner = Owner {
+            profile: store.id().into(),
+            policy: serde_json::to_string(&("series", "show")).unwrap(),
+        };
+        store
+            .write(
+                smart_offline::KEY,
+                &serde_json::to_string(&BTreeMap::from([(owner.policy.clone(), policy.clone())]))
+                    .unwrap(),
+            )
+            .unwrap();
+        store
+            .write(
+                &episodes_key("series", "show"),
+                &serde_json::to_string(&vec![Video {
+                    id: "episode".into(),
+                    season: Some(1),
+                    episode: Some(1),
+                    released: Some("2020-01-01T00:00:00Z".into()),
+                    ..Default::default()
+                }])
+                .unwrap(),
+            )
+            .unwrap();
+        let device = DevicePolicy {
+            enabled_profiles: std::collections::BTreeSet::from([store.id().into()]),
+            ..Default::default()
+        };
+        storage::try_set_str(
+            smart_offline::DEVICE_KEY,
+            &serde_json::to_string(&device).unwrap(),
+        )
+        .unwrap();
+        smart_offline::set_environment(Environment {
+            connected: true,
+            wifi_or_ethernet: true,
+            unmetered: true,
+            charging: true,
+        });
+        for torrent in [false, true] {
+            let coordinator =
+                DownloadCoordinator::new(data_root.join(if torrent { "torrent" } else { "http" }));
+            install_active(&coordinator, "blocking", DownloadPhase::Downloading, false);
+            let old_source = if torrent {
+                JobSource::torrent("1111111111111111111111111111111111111111", Some(0))
+            } else {
+                JobSource::http("https://example.test/old.mp4")
+            };
+            let new_source = if torrent {
+                JobSource::torrent("2222222222222222222222222222222222222222", Some(0))
+            } else {
+                JobSource::http("https://example.test/new.mp4")
+            };
+            let request = |source| NewDownload {
+                source,
+                source_owner: policy.source_owner.clone(),
+                source_revision: smart_offline::source_revision(&policy, &store),
+                media_type: policy.media_type.clone(),
+                media_id: policy.title_id.clone(),
+                request_id: "episode".into(),
+                title: "Show".into(),
+                year: String::new(),
+                display: "Episode.mp4".into(),
+                addon: "Addon".into(),
+            };
+            let id = coordinator
+                .smart_admit(
+                    request(old_source.clone()),
+                    None,
+                    owner.clone(),
+                    Some(65536),
+                )
+                .unwrap();
+            coordinator.pause(&id);
+            coordinator.reconcile_smart_owners(
+                &HashSet::from([(owner.clone(), "episode".into())]),
+                None,
+                true,
+            );
+            assert_eq!(
+                coordinator.job(&id).unwrap().offline.pause_reason,
+                Some(PauseReason::User)
+            );
+            coordinator.resume(&id);
+            let current = coordinator.job(&id).unwrap();
+            assert_eq!(current.phase, DownloadPhase::Queued);
+            assert_eq!(current.source, old_source);
+            assert!(current.offline.retry_at.is_none());
+
+            coordinator.pause(&id);
+            let bob = profiles::ProfileStore::for_profile("bob");
+            bob.write(
+                smart_offline::KEY,
+                &store.read(smart_offline::KEY).unwrap().unwrap(),
+            )
+            .unwrap();
+            bob.write(
+                &episodes_key("series", "show"),
+                &store
+                    .read(&episodes_key("series", "show"))
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            if let Some(settings) = store.read("settings").unwrap() {
+                bob.write("settings", &settings).unwrap();
+            }
+            let sibling = Owner {
+                profile: bob.id().into(),
+                policy: owner.policy.clone(),
+            };
+            coordinator.attach_smart_owner(&id, sibling.clone());
+            store
+                .write(
+                    "settings",
+                    if torrent {
+                        "{\"revision\":2}"
+                    } else {
+                        "{\"revision\":1}"
+                    },
+                )
+                .unwrap();
+            let shared = coordinator.job(&id).unwrap();
+            assert!(smart_offline::source_revision_matches(
+                &sibling,
+                &shared.offline.source_revision
+            ));
+            assert_eq!(
+                smart_offline::job_source_pause(&shared),
+                Some(PauseReason::NeedsSource),
+                "disabled Bob cannot lend his matching revision to enabled Alice"
+            );
+            for enabled in [vec!["alice", "bob"], vec!["bob"]] {
+                let mut both = device.clone();
+                both.enabled_profiles = enabled.into_iter().map(String::from).collect();
+                storage::try_set_str(
+                    smart_offline::DEVICE_KEY,
+                    &serde_json::to_string(&both).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    smart_offline::job_source_pause(&shared).is_none(),
+                    "one enabled owner with a matching revision suffices"
+                );
+            }
+            storage::try_set_str(
+                smart_offline::DEVICE_KEY,
+                &serde_json::to_string(&device).unwrap(),
+            )
+            .unwrap();
+            coordinator.resume(&id);
+            let pending = coordinator.job(&id).unwrap();
+            assert_eq!(pending.phase, DownloadPhase::Failed);
+            assert!(pending.offline.retry_at.is_some_and(|at| at <= now_secs()));
+            // The previous worker can still be unwinding when Retry is pressed.
+            {
+                let mut state = coordinator.inner.state();
+                let active = state.active.as_mut().unwrap();
+                active.id = id.clone();
+                active.cancel.cancel();
+            }
+            assert_eq!(
+                coordinator.smart_admit(
+                    request(new_source.clone()),
+                    None,
+                    owner.clone(),
+                    Some(65536)
+                ),
+                Err(PauseReason::Background)
+            );
+            coordinator.finish(id.clone(), Err("cancelled".into()));
+            assert_eq!(coordinator.job(&id).unwrap().phase, DownloadPhase::Failed);
+            install_active(
+                &coordinator,
+                "blocking-next",
+                DownloadPhase::Downloading,
+                false,
+            );
+            let refreshed = coordinator
+                .smart_admit(
+                    request(new_source.clone()),
+                    None,
+                    owner.clone(),
+                    Some(65536),
+                )
+                .unwrap();
+            let job = coordinator.job(&refreshed).unwrap();
+            assert_eq!(job.phase, DownloadPhase::Queued);
+            assert_eq!(job.source, new_source);
+            assert_eq!(
+                job.offline.source_revision,
+                smart_offline::source_revision(&policy, &store)
+            );
+            assert!(smart_offline::job_pause(&job).is_none());
+            if !torrent {
+                hls_replacement_respects_physical_quota(&coordinator, &refreshed);
+            }
+            if torrent {
+                assert_ne!(refreshed, id);
+                assert!(coordinator.job(&id).is_none());
+                assert_eq!(
+                    job.torrent_directory,
+                    Some(crate::torrent::download_directory(
+                        "2222222222222222222222222222222222222222",
+                        &coordinator.inner.root.join("torrents"),
+                        None
+                    ))
+                );
+            }
+            coordinator.remove(&refreshed);
+            assert!(coordinator.job(&refreshed).is_none());
+            assert_eq!(
+                coordinator.smart_admit(request(new_source), None, owner.clone(), Some(65536)),
+                Err(PauseReason::Disabled),
+                "a lookup completed after manual removal must not recreate the job"
+            );
+            storage::try_set_str(
+                smart_offline::DEVICE_KEY,
+                &serde_json::to_string(&device).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    fn hls_replacement_respects_physical_quota(coordinator: &DownloadCoordinator, id: &str) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for _ in 0..5 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    if socket.read(&mut byte).unwrap() == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                let manifest = String::from_utf8_lossy(&request).starts_with("GET /video.m3u8 ");
+                let body = if manifest {
+                    b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.ts?new\n#EXTINF:4,\nnext.ts\n#EXT-X-ENDLIST\n".to_vec()
+                } else {
+                    vec![42; 65536]
+                };
+                let kind = if manifest {
+                    "application/vnd.apple.mpegurl"
+                } else {
+                    "video/mp2t"
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(header.as_bytes());
+                let _ = socket.write_all(&body);
+            }
+        });
+        let mut job = coordinator.job(id).unwrap();
+        let path = job.artifact_path.clone().unwrap();
+        let bundle = path.parent().unwrap().join("hls");
+        fs::create_dir_all(&bundle).unwrap();
+        let old_asset = bundle.join("asset-0.ts");
+        fs::write(&old_asset, vec![1; 512 * 1024]).unwrap();
+        fs::write(
+            bundle.join("asset-0.ts.done"),
+            format!("{base}/segment.ts?old\n{}", 512 * 1024),
+        )
+        .unwrap();
+        let retained_part = bundle.join("asset-9.ts.part");
+        fs::write(&retained_part, vec![2; 4096]).unwrap();
+        let physical = crate::torrent::physical_bytes(path.parent().unwrap());
+        coordinator
+            .inner
+            .state()
+            .manifest
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == id)
+            .unwrap()
+            .offline
+            .reserved_bytes = physical + 8192;
+        job.source = JobSource::http(format!("{base}/video.m3u8"));
+        let client = crate::download::new_http_client().unwrap();
+        let transfer = || {
+            let token = CancellationToken::new();
+            let captured = coordinator.clone();
+            let id = id.to_owned();
+            token.set_write_admission(Arc::new(move |next, incoming| {
+                captured.smart_write_admission(&id, next, incoming)
+            }));
+            crate::download::download_http_for_job_blocking(&client, &job, &path, token, |_| {})
+        };
+        assert!(transfer().is_err_and(|error| error.is_cancelled()));
+        assert_eq!(fs::read(&old_asset).unwrap(), vec![1; 512 * 1024]);
+        assert_eq!(
+            fs::metadata(bundle.join("asset-0.ts.part")).unwrap().len(),
+            0
+        );
+        assert_eq!(
+            crate::torrent::physical_bytes(path.parent().unwrap()),
+            physical
+        );
+        assert_eq!(
+            coordinator.job(id).unwrap().offline.pause_reason,
+            Some(crate::download::offline::PauseReason::Budget)
+        );
+        // With sufficient peak capacity the replacement and next segment both
+        // finish; logical progress is not charged a second time after writes.
+        coordinator
+            .inner
+            .state()
+            .manifest
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == id)
+            .unwrap()
+            .offline
+            .reserved_bytes = physical + 1024 * 1024;
+        assert!(transfer().is_ok());
+        assert_eq!(fs::read(&old_asset).unwrap(), vec![42; 65536]);
+        assert_eq!(
+            fs::read(bundle.join("asset-1.ts")).unwrap(),
+            vec![42; 65536]
+        );
+        assert!(retained_part.exists());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn hls_replacement_projection_counts_incoming_without_double_counting_progress() {
+        let existing = 528384;
+        let reservation = 536576;
+        assert!(projected_write_bytes(existing, 65536, 65536) > reservation);
+        assert_eq!(projected_write_bytes(existing, 65536, 65536), 602112);
+        // Normal sequential HTTP/HLS has no retained duplicate presentation.
+        assert_eq!(projected_write_bytes(65536, 131072, 65536), 139264);
+        assert_eq!(projected_write_bytes(1, 2, 1), 12289);
+        assert_eq!(
+            projected_write_bytes(u64::MAX, u64::MAX, u64::MAX),
+            u64::MAX
+        );
+    }
 
     #[test]
     fn removing_rule_keeps_only_completed_files_and_never_promotes_live_auto_work() {

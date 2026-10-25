@@ -524,7 +524,10 @@ where
                 "response body exceeds the advertised total size".into(),
             ));
         }
-        if !cancellation.admit_bytes(next) {
+        // Complete the preceding Tokio file write before physical admission
+        // inspects the filesystem for this chunk's peak allocation.
+        file.flush().await?;
+        if !cancellation.admit_write(next, chunk.len() as u64) {
             file.flush().await?;
             return Err(DownloadError::Cancelled);
         }

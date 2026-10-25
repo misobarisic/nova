@@ -240,7 +240,7 @@ pub(super) fn owner_wants(
         && policy.source_owner == source
         && desired(&policy, &store).iter().any(|v| v.id == episode)
 }
-fn source_revision(policy: &Policy, store: &profiles::ProfileStore) -> String {
+pub(super) fn source_revision(policy: &Policy, store: &profiles::ProfileStore) -> String {
     preference_hash(
         "offline-source",
         &serde_json::to_string(&(
@@ -267,6 +267,30 @@ pub(super) fn removed_rule_keeps_file(owner: &Owner) -> bool {
     !store.retired().unwrap_or(true)
         && read_policies(&store).is_ok_and(|policies| !policies.contains_key(&owner.policy))
 }
+pub(super) fn job_source_pause(job: &DownloadJob) -> Option<PauseReason> {
+    let mut authorized = false;
+    for owner in &job.offline.owners {
+        let wanted = owner_wants(
+            owner,
+            &job.media_type,
+            &job.media_id,
+            &job.request_id,
+            &job.offline.source_owner,
+        );
+        authorized |= wanted;
+        // The same owner must authorize this episode and its source revision.
+        // Disabled profiles keep their references, but cannot lend authority.
+        if wanted && source_revision_matches(owner, &job.offline.source_revision) {
+            return None;
+        }
+    }
+    Some(if authorized {
+        PauseReason::NeedsSource
+    } else {
+        PauseReason::Disabled
+    })
+}
+
 pub(super) fn job_pause(job: &DownloadJob) -> Option<PauseReason> {
     if !job.offline.automatic() {
         return None;
@@ -274,24 +298,8 @@ pub(super) fn job_pause(job: &DownloadJob) -> Option<PauseReason> {
     let Ok(device) = read_device() else {
         return Some(PauseReason::Disabled);
     };
-    if !job.offline.owners.iter().any(|owner| {
-        owner_wants(
-            owner,
-            &job.media_type,
-            &job.media_id,
-            &job.request_id,
-            &job.offline.source_owner,
-        )
-    }) {
-        return Some(PauseReason::Disabled);
-    }
-    if !job
-        .offline
-        .owners
-        .iter()
-        .any(|owner| source_revision_matches(owner, &job.offline.source_revision))
-    {
-        return Some(PauseReason::NeedsSource);
+    if let Some(reason) = job_source_pause(job) {
+        return Some(reason);
     }
     device.environmental_pause(environment())
 }
@@ -326,6 +334,16 @@ fn suppressed(device: &DevicePolicy, owner: &Owner, episode: &str, signature: &s
         .suppressed
         .get(&serde_json::to_string(&(owner, episode)).unwrap())
         .is_some_and(|saved| saved == signature)
+}
+pub(super) fn owner_suppressed(device: &DevicePolicy, owner: &Owner, episode: &str) -> bool {
+    policy_for(owner).is_none_or(|policy| {
+        suppressed(
+            device,
+            owner,
+            episode,
+            &frontier_signature(&policy, &owner_for(owner)),
+        )
+    })
 }
 fn notice(owner: &Owner, message: &str) {
     NOTICES

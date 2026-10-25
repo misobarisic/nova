@@ -27,7 +27,8 @@ Provider selected-file byte hints are estimates. A bounded HTTP HEAD probe can
 supply missing single-resource totals; a playlist's byte length is never treated
 as its media size. Unknown totals wait for manual download. Known estimates
 reserve a 5% margin plus 16 MiB for bundle/metadata overhead, with a hard cutoff.
-HTTP and HLS check admission before each body write. Torrent sessions use a
+HTTP and HLS check admission before each body write, including incoming physical
+allocation while old HLS segments and partials coexist with replacements. Torrent sessions use a
 filesystem-storage middleware for every ordinary and vectored piece write,
 including shared/already-managed bundles. The middleware serializes admission
 and write, accounts allocated Unix blocks (conservative logical sizes elsewhere),
@@ -45,7 +46,10 @@ unattended work. Network, charging and device-policy pauses resume when their
 conditions recover; user pauses remain paused. Budget, free-space and changed-source
 pauses require **Retry / Restore offline** after adjusting storage, the allowance
 or the selected source. Source/settings revisions and profile retirement are
-revalidated after lookup and before media writes.
+revalidated after lookup and before media writes. An enabled owner must authorize
+both the episode and the recorded source revision. Explicit Retry refreshes stale
+ordinary HTTP/torrent sources through bounded lookup; a current user pause is
+preserved until explicitly resumed.
 
 Cleanup removes only automatic media no longer needed by a policy. Another
 profile's reference, a manual keep or active downloaded playback protects the
