@@ -673,9 +673,9 @@ component DiscoverGrid {
 
                                 if card.badge != "": Rectangle {
                                     x: 5px; y: parent.height - self.height - 5px;
-                                    width: parent.width - 10px; height: 30px;
+                                    width: Math.min(parent.width - 10px, badge_text.preferred-width + 12px); height: 30px;
                                     border-radius: 6px; background: Theme.current.card;
-                                    Text {
+                                    badge_text := Text {
                                         x: 6px; y: 0; width: parent.width - 12px; height: 100%;
                                         text: card.badge; color: Theme.current.text_primary;
                                         font-size: InterfaceStyle.tv ? 17px : 11px;
