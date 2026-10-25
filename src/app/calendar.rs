@@ -5,6 +5,18 @@ use super::home::{
 };
 use super::*;
 use crate::{CalendarDay, CalendarRelease};
+use chrono::Datelike;
+
+/// UI dates follow the device's civil day. Provider release-day comparisons
+/// continue to use their existing UTC-based anchor in `episodes::today_days`.
+fn calendar_day_at<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> i64 {
+    let date = now.date_naive();
+    days_from_civil(i64::from(date.year()), date.month(), date.day())
+}
+
+fn calendar_today_days() -> i64 {
+    calendar_day_at(chrono::Local::now())
+}
 
 impl Bridge {
     pub(super) fn show_downloads_page(&self) {
@@ -34,8 +46,9 @@ impl Bridge {
             app.set_show_downloads(false);
             app.set_show_calendar(true);
             if app.get_calendar_first() == 0 {
-                app.set_calendar_first(month_first(today_days()) as i32);
-                app.set_calendar_selected(today_days() as i32);
+                let today = calendar_today_days();
+                app.set_calendar_first(month_first(today) as i32);
+                app.set_calendar_selected(today as i32);
             }
         }
         self.apply_calendar_to_ui();
@@ -66,8 +79,9 @@ impl Bridge {
 
     pub(super) fn calendar_today(&self) {
         if let Some(app) = self.app() {
-            app.set_calendar_first(month_first(today_days()) as i32);
-            app.set_calendar_selected(today_days() as i32);
+            let today = calendar_today_days();
+            app.set_calendar_first(month_first(today) as i32);
+            app.set_calendar_selected(today as i32);
         }
         self.calendar_reset();
     }
@@ -143,7 +157,8 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             (state.entries.clone(), state.progress.clone())
         };
-        let today = today_days();
+        let today = calendar_today_days();
+        let release_today = today_days();
         let query = app.get_calendar_search().to_lowercase();
         let mut schedule = Vec::new();
         for e in &entries {
@@ -167,7 +182,7 @@ impl Bridge {
                         .get(&progress_map_key(&e.id, &v.id))
                         .is_some_and(|p| p.watched)
                 },
-                today,
+                release_today,
             );
             schedule.extend(
                 selected
@@ -461,6 +476,29 @@ mod tests {
     fn date(year: i64, month: u32, day: u32) -> i64 {
         days_from_civil(year, month, day)
     }
+    #[test]
+    fn today_anchor_uses_local_civil_day_at_offset_month_and_year_boundaries() {
+        for (instant, offset, expected) in [
+            ("2026-11-01T00:30:00Z", -7 * 3600, date(2026, 10, 31)),
+            ("2026-10-31T23:30:00Z", 2 * 3600, date(2026, 11, 1)),
+            ("2027-01-01T00:30:00Z", -8 * 3600, date(2026, 12, 31)),
+            ("2026-12-31T23:30:00Z", 14 * 3600, date(2027, 1, 1)),
+        ] {
+            let utc = chrono::DateTime::parse_from_rfc3339(instant).unwrap();
+            let local = utc.with_timezone(&chrono::FixedOffset::east_opt(offset).unwrap());
+            let today = calendar_day_at(local);
+            assert_eq!(today, expected, "{instant} at {offset}");
+            let (year, month, _) = civil_from_days(expected);
+            let first = month_first(today);
+            assert_eq!(first, date(year, month, 1));
+            let cells = cal_cells(first, &HashMap::new(), Some(today), today);
+            let marked = cells.iter().filter(|cell| cell.today).collect::<Vec<_>>();
+            assert_eq!(marked.len(), 1);
+            assert_eq!(i64::from(marked[0].epoch), expected);
+            assert!(marked[0].selected);
+        }
+    }
+
     #[test]
     fn all_releases_include_past_dates_and_ignore_invalid_dates() {
         let videos: Vec<Video> = serde_json::from_value(serde_json::json!([

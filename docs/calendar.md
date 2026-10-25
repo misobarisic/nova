@@ -29,7 +29,8 @@ list, without month boundaries or Previous/Next month buttons. It initially
 starts at the selected day (today on first entry); scrolling near the bottom
 loads another 60 releases, crossing empty months and years. Earlier releases
 adds the previous 60 while preserving the visible card's position; scroll up
-to read them. Today resets to the current date, and search/scope/view changes
+to read them. Initial selection, Today and the day outline use the device’s local
+civil date, including near UTC day/month boundaries. Search/scope/view changes
 reset the loaded window. These transient limits are not persisted. Artwork
 remains viewport-driven. Month and Week retain their Previous/Next controls.
 Next episode retains Home's future-only, caught-up semantics.
