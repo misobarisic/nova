@@ -1225,7 +1225,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             state.continue_hidden = read_continue_hidden();
             // Backfill the sync-era library order for pre-sync saves (their saved
             // order becomes the `added_at_secs` order).
-            if backfill_added_at(&mut state.entries) {
+            let _reservation = persistence::reserve(1);
+            if _reservation.is_some() && backfill_added_at(&mut state.entries) {
                 let entries = state.entries.clone();
                 drop(state);
                 write_persisted_library(&entries);

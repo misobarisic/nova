@@ -2510,6 +2510,9 @@ impl Bridge {
         let Some((series_id, episode_id, _)) = self.resolve_filtered_episode(index) else {
             return;
         };
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let now_watched = {
             let mut state = self.shared.lock().unwrap();
             let now_watched = !state
@@ -2552,6 +2555,9 @@ impl Bridge {
             }
             return;
         }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let mut watched_ids: Vec<String> = Vec::new();
         {
             let mut state = self.shared.lock().unwrap();
@@ -2663,6 +2669,9 @@ impl Bridge {
             // released (unaired episodes were filtered above).
             0 => !watched_flags.iter().all(|&w| w),
             _ => return,
+        };
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
         };
         {
             let mut state = self.shared.lock().unwrap();

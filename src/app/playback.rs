@@ -1721,7 +1721,8 @@ impl Bridge {
         if let Some(target) = outgoing.filter(|_| stopped) {
             self.list_services_playback(&target, target.last_pos, target.last_dur, false, true);
         }
-        let map = {
+        let _reservation = persistence::reserve(1);
+        let map = if _reservation.is_some() {
             let mut state = self.shared.lock().unwrap();
             let Some(target) = state.playback.clone() else {
                 return;
@@ -1753,6 +1754,8 @@ impl Bridge {
             } else {
                 None
             }
+        } else {
+            None
         };
         if let Some(map) = map {
             write_progress_map(&map);
@@ -2421,7 +2424,7 @@ impl Bridge {
             !paused,
             1.,
         );
-        if let Some(map) = map {
+        if let Some((map, _reservation)) = map {
             nova_sync::playback_checkpoint(|| write_progress_map(&map));
             self.shared.lock().unwrap().casting.progress_dirty = true;
         }
@@ -2552,7 +2555,9 @@ impl Bridge {
             let due_by_delta = (pos - target.last_saved_pos).abs() >= PROGRESS_MIN_DELTA_SECS;
             let newly_watched = watched_now && !already_watched;
             let pause_save = paused && (pos - target.last_saved_pos).abs() > 0.001;
-            if !(due_by_time || due_by_delta || newly_watched || pause_save) {
+            let due = due_by_time || due_by_delta || newly_watched || pause_save;
+            let reservation = due.then(|| persistence::reserve(1)).flatten();
+            if reservation.is_none() {
                 if paused {
                     nova_sync::flush_local_sync();
                 }
@@ -2574,6 +2579,7 @@ impl Bridge {
                 }
                 return;
             }
+            let _reservation = reservation;
             target.last_saved_at = now;
             target.last_saved_pos = pos;
             let key = progress_map_key(&target.series_id, &target.episode_id);
@@ -2633,6 +2639,7 @@ impl Bridge {
             let (saw_frames, watched_now) = (target.last_dur > 0.0 || target.last_pos > 0.0, {
                 is_watched_position(target.last_pos, target.last_dur)
             });
+            let reservation = saw_frames.then(|| persistence::reserve(1)).flatten();
             {
                 let mut state = self.shared.lock().unwrap();
                 let still_mine = state
@@ -2645,7 +2652,7 @@ impl Bridge {
                 } else {
                     return;
                 }
-                if saw_frames {
+                if saw_frames && reservation.is_some() {
                     let key = progress_map_key(&target.series_id, &target.episode_id);
                     let entry = state
                         .progress
@@ -2671,7 +2678,7 @@ impl Bridge {
                 }
             }
             nova_sync::flush_local_sync();
-            if saw_frames && watched_now {
+            if reservation.is_some() && watched_now {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
             // Closing reveals Home again without a navigation callback. Rebuild
@@ -2698,6 +2705,8 @@ pub(crate) enum ResumeStep {
     /// The engine reached the resume point: disarm the safety seek so a later
     /// user scrub is never pulled back to it.
     Landed,
+    /// The saved position cannot belong to this runtime: disarm without seeking.
+    Discarded,
     /// The engine opened elsewhere (ignored the load-time start): issue the
     /// safety seek now.
     Seek,
@@ -2705,8 +2714,6 @@ pub(crate) enum ResumeStep {
 
 /// Pure resume decision used by [`Bridge::note_player_progress_from_ui`]:
 /// `resume` is the saved position, `pos`/`dur` the live engine values,
-    /// The saved position cannot belong to this runtime: disarm without seeking.
-    Discarded,
 /// `started` whether frames are flowing, and `done` whether the resume point
 /// was already reached/handled. Within 5 s counts as landed (the same slack
 /// the tick uses elsewhere).
@@ -2720,6 +2727,9 @@ pub(crate) fn resume_step(
     if done || !dur.is_finite() || dur <= 0.0 || !started {
         return ResumeStep::Idle;
     }
+    if !resume.is_finite() || resume < 0.0 || resume >= dur {
+        return ResumeStep::Discarded;
+    }
     if (resume - pos).abs() <= 5.0 {
         ResumeStep::Landed
     } else {
@@ -2727,9 +2737,6 @@ pub(crate) fn resume_step(
     }
 }
 
-    if !resume.is_finite() || resume < 0.0 || resume >= dur {
-        return ResumeStep::Discarded;
-    }
 /// Read the whole progress map (empty when absent/corrupt).
 pub(crate) fn read_progress_map() -> HashMap<String, EpisodeProgress> {
     persistence::pending_progress().unwrap_or_else(|| {
@@ -2758,7 +2765,7 @@ fn record_cast_progress(
     position: f64,
     duration: f64,
     paused: bool,
-) -> Option<HashMap<String, EpisodeProgress>> {
+) -> Option<(HashMap<String, EpisodeProgress>, persistence::Reservation)> {
     if !position.is_finite() || !duration.is_finite() || position < 0.0 || duration < 0.0 {
         return None;
     }
@@ -2774,7 +2781,10 @@ fn record_cast_progress(
     let key = progress_map_key(&target.series_id, &target.episode_id);
     let newly_watched = is_watched_position(position, duration)
         && !state.progress.get(&key).is_some_and(|p| p.watched);
-    if due || newly_watched {
+    let reservation = (due || newly_watched)
+        .then(|| persistence::reserve(1))
+        .flatten();
+    if reservation.is_some() {
         target.last_saved_at = now;
         target.last_saved_pos = position;
         let entry = state
@@ -2804,7 +2814,7 @@ fn record_cast_progress(
     {
         state.playback = Some(target.clone());
     }
-    (due || newly_watched).then(|| state.progress.clone())
+    reservation.map(|reservation| (state.progress.clone(), reservation))
 }
 
 /// Count short, advancing samples only: buffering/pauses contribute nothing,
@@ -4069,16 +4079,6 @@ mod retry_tests {
     use super::*;
 
     #[test]
-    fn retry_snapshot_never_crosses_episode_title_or_modal_reopening() {
-        let token = Arc::new(());
-        let mut modal = ModalItem {
-            details: Default::default(),
-            open_token: token.clone(),
-            pending_watch_now: None,
-            episodes_loading: false,
-            id: "show".into(),
-            type_: "series".into(),
-    #[test]
     fn resume_safety_seek_discards_invalid_and_out_of_runtime_checkpoints() {
         for position in [f64::NAN, f64::INFINITY, -1.0, 3600.0, 6000.0] {
             assert_eq!(
@@ -4096,6 +4096,16 @@ mod retry_tests {
         );
     }
 
+    #[test]
+    fn retry_snapshot_never_crosses_episode_title_or_modal_reopening() {
+        let token = Arc::new(());
+        let mut modal = ModalItem {
+            details: Default::default(),
+            open_token: token.clone(),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "show".into(),
+            type_: "series".into(),
             request_id: "episode-2".into(),
             videos: Vec::new(),
             season_backdrops: HashMap::new(),
@@ -4694,7 +4704,8 @@ mod cast_observation_tests {
             session: 1,
             ..Default::default()
         };
-        let map = record_cast_progress(&mut state, &mut old, 990., 1000., false).unwrap();
+        let (map, _reservation) =
+            record_cast_progress(&mut state, &mut old, 990., 1000., false).unwrap();
         assert!(
             map.get(&progress_map_key("old-title", "old-episode"))
                 .unwrap()

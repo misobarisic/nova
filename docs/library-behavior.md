@@ -185,6 +185,11 @@ replaces its row, preventing its old index from acting on a different show.
   enabled in Settings → Downloads.
 - Every change persists progress and refreshes badges in place (posters keep
   loading), plus Home rows and category filters.
+- Library and history edits reserve bounded writer capacity before changing the
+  saved view. A full or failed writer rejects new edits through the storage
+  failure diagnostic; the previous saved view stays unchanged. Admitted manual
+  watched/unwatched transitions retain their order, including during retry.
+  Player telemetry and close handling continue when a checkpoint is rejected.
 
 ## User categories
 

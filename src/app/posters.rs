@@ -1532,6 +1532,9 @@ impl Bridge {
         if url.is_empty() {
             return;
         }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let changed = {
             let mut state = self.shared.lock().unwrap();
             match state.entries.iter_mut().find(|e| e.id == id) {
@@ -1556,6 +1559,9 @@ impl Bridge {
         if url.is_empty() {
             return;
         }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let changed = {
             let mut state = self.shared.lock().unwrap();
             match state.entries.iter_mut().find(|e| e.id == id) {
@@ -1586,6 +1592,9 @@ impl Bridge {
         year: &str,
         overwrite: bool,
     ) {
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let changed = {
             let mut state = self.shared.lock().unwrap();
             match state.entries.iter_mut().find(|e| e.id == id) {

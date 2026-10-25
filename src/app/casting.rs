@@ -417,8 +417,10 @@ impl Bridge {
                 source.observation_id,
             );
         }
-        let progress = self.shared.lock().unwrap().progress.clone();
-        playback::write_progress_map(&progress);
+        if let Some(_reservation) = persistence::reserve(1) {
+            let progress = self.shared.lock().unwrap().progress.clone();
+            playback::write_progress_map(&progress);
+        }
         nova_sync::flush_local_sync();
         self.finish_viewing_journal();
     }

@@ -7,7 +7,51 @@ use std::sync::{Condvar, mpsc};
 
 const MAX_PENDING: usize = 64;
 static ACTIVE: Mutex<Option<Arc<Queue>>> = Mutex::new(None);
-thread_local! { static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+thread_local! {
+    static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RESERVATIONS: std::cell::RefCell<Vec<Reserved>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[derive(Clone)]
+struct Reserved {
+    queue: Arc<Queue>,
+    owner: profiles::ProfileStore,
+    remaining: std::rc::Rc<std::cell::Cell<usize>>,
+}
+/// Reserve bounded capacity before changing authoritative app state. The
+/// reservation stays on this thread and is consumed by the normal write API.
+/// Dropping an unused reservation releases its capacity without queuing work.
+pub(super) struct Reservation(Option<Reserved>);
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let Some(reserved) = self.0.take() else {
+            return;
+        };
+        RESERVATIONS.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|slot| !std::rc::Rc::ptr_eq(&slot.remaining, &reserved.remaining))
+        });
+        let mut state = reserved.queue.state.lock().unwrap();
+        state.reserved -= reserved.remaining.get();
+        reserved.queue.changed.notify_all();
+    }
+}
+
+pub(super) fn reserve(count: usize) -> Option<Reservation> {
+    if applying() || IN_WORKER.get() {
+        return Some(Reservation(None));
+    }
+    let Some(queue) = ACTIVE.lock().unwrap().clone() else {
+        return Some(Reservation(None));
+    };
+    match queue.reserve(count) {
+        Ok(reserved) => Some(reserved),
+        Err(error) => {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+            None
+        }
+    }
+}
 
 pub(super) fn register_collections() {
     register_for(&profiles::ProfileStore::capture());
@@ -130,6 +174,7 @@ impl Snapshot {
 #[derive(Default)]
 struct State {
     pending: VecDeque<(u64, profiles::ProfileStore, Snapshot)>,
+    reserved: usize,
     next: u64,
     completed: u64,
     head_started: bool,
@@ -143,24 +188,58 @@ struct Queue {
     changed: Condvar,
 }
 impl Queue {
-    fn enqueue(&self, snapshot: Snapshot) -> Result<bool, String> {
-        let owner = profiles::ProfileStore::capture();
+    fn reserve(self: &Arc<Self>, count: usize) -> Result<Reservation, String> {
         let mut state = self.state.lock().unwrap();
-        while state.pending.len() >= MAX_PENDING
-            && state.error.is_none()
-            && !state.stop
-            && !state.closing
+        if state.stop
+            || state.closing
+            || state.error.is_some()
+            || count > MAX_PENDING.saturating_sub(state.pending.len() + state.reserved)
         {
-            state = self.changed.wait(state).unwrap();
-        }
-        if state.stop || state.closing {
-            return Ok(false);
-        }
-        if state.pending.len() >= MAX_PENDING {
             return Err(state
                 .error
                 .clone()
-                .unwrap_or_else(|| "persistence queue full".into()));
+                .unwrap_or_else(|| "persistence queue unavailable; edit not accepted".into()));
+        }
+        state.reserved += count;
+        let reserved = Reserved {
+            queue: self.clone(),
+            owner: profiles::ProfileStore::capture(),
+            remaining: std::rc::Rc::new(std::cell::Cell::new(count)),
+        };
+        RESERVATIONS.with(|slots| slots.borrow_mut().push(reserved.clone()));
+        Ok(Reservation(Some(reserved)))
+    }
+
+    fn enqueue(&self, snapshot: Snapshot) -> Result<bool, String> {
+        let owner = profiles::ProfileStore::capture();
+        let reserved = RESERVATIONS.with(|slots| {
+            slots
+                .borrow()
+                .iter()
+                .rev()
+                .find(|slot| {
+                    std::ptr::eq(slot.queue.as_ref(), self)
+                        && slot.owner == owner
+                        && slot.remaining.get() > 0
+                })
+                .cloned()
+        });
+        let mut state = self.state.lock().unwrap();
+        if let Some(reserved) = reserved {
+            // A producer admitted before shutdown must finish in this queue;
+            // a synchronous fallback would overtake its earlier snapshots.
+            reserved.remaining.set(reserved.remaining.get() - 1);
+            state.reserved -= 1;
+        } else {
+            if state.stop || state.closing {
+                return Ok(false);
+            }
+            if state.pending.len() + state.reserved >= MAX_PENDING {
+                return Err(state
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "persistence queue full; edit not accepted".into()));
+            }
         }
         state.next += 1;
         let sequence = state.next;
@@ -292,6 +371,14 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.queue.state.lock().unwrap().closing = true;
         self.queue.changed.notify_all();
+        // Admitted producers may still be completing their mutation. They
+        // consume their reserved capacity even after closing is set.
+        {
+            let mut state = self.queue.state.lock().unwrap();
+            while state.reserved > 0 {
+                state = self.queue.changed.wait(state).unwrap();
+            }
+        }
         // Drain while producers still see this queue; no synchronous writer
         // may overtake a pending job during shutdown.
         if let Err(error) = self.queue.flush() {
@@ -384,7 +471,11 @@ fn try_patch(patch: ExternalPatch, projection: bool) -> Option<mpsc::Receiver<Re
     let queue = ACTIVE.lock().unwrap().clone()?;
     let (done, receipt) = mpsc::channel();
     let mut state = queue.state.try_lock().ok()?;
-    if state.pending.len() >= MAX_PENDING || state.stop || state.closing {
+    if state.pending.len() + state.reserved >= MAX_PENDING
+        || state.reserved > 0
+        || state.stop
+        || state.closing
+    {
         return None;
     }
     state.next += 1;
@@ -402,37 +493,43 @@ fn try_patch(patch: ExternalPatch, projection: bool) -> Option<mpsc::Receiver<Re
 pub(super) fn running() -> bool {
     ACTIVE.lock().unwrap().is_some()
 }
-fn enqueue(snapshot: Snapshot) -> bool {
+fn enqueue(snapshot: Snapshot) -> Result<bool, String> {
     if applying() || IN_WORKER.get() {
-        return false;
+        return Ok(false);
     }
     let queue = ACTIVE.lock().unwrap().clone();
     let Some(queue) = queue else {
-        return false;
+        return Ok(false);
     };
-    match queue.enqueue(snapshot) {
-        Ok(accepted) => accepted,
-        Err(error) => {
-            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
-            true
-        }
+    if queue.enqueue(snapshot)? {
+        Ok(true)
+    } else {
+        Err("persistence worker closing; edit not accepted".into())
     }
 }
 pub(super) fn write_library(entries: &[LibraryEntry]) {
-    // In-memory edits precede the ordered write. Do not let an older worker
-    // projection publish while the new snapshot is still waiting to save.
+    // Callers reserve capacity before touching Shared. Invalidate projections
+    // before the admitted snapshot can become visible to other readers.
     progress_projection::invalidate();
-    if !enqueue(Snapshot::Library(entries.to_vec())) {
-        write_json("library", entries);
+    match enqueue(Snapshot::Library(entries.to_vec())) {
+        Ok(true) => {}
+        Ok(false) => write_json("library", entries),
+        Err(error) => {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error))
+        }
     }
 }
 pub(super) fn write_progress(map: &HashMap<String, EpisodeProgress>) {
     progress_projection::invalidate();
-    if !enqueue(Snapshot::Progress(
+    match enqueue(Snapshot::Progress(
         map.clone(),
         nova_sync::is_playback_checkpoint(),
     )) {
-        write_json(EPISODE_PROGRESS_KEY, map);
+        Ok(true) => {}
+        Ok(false) => write_json(EPISODE_PROGRESS_KEY, map),
+        Err(error) => {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error))
+        }
     }
 }
 pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
@@ -525,6 +622,201 @@ mod tests {
             _ => unreachable!(),
         }
     }
+    #[test]
+    fn reservations_are_atomic_bounded_and_owned_by_the_issuing_profile() {
+        let queue = Arc::new(Queue {
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+        });
+        for n in 0..MAX_PENDING - 1 {
+            queue.enqueue(progress(n as f64, false)).unwrap();
+        }
+        assert!(
+            queue.reserve(2).is_err(),
+            "compound edits need all slots before changing either map"
+        );
+        assert_eq!(queue.state.lock().unwrap().reserved, 0);
+        let reservation =
+            profiles::with_context(profiles::context_for("alice"), || queue.reserve(1).unwrap());
+        assert!(queue.reserve(1).is_err());
+        profiles::with_context(profiles::context_for("bob"), || {
+            assert!(
+                queue.enqueue(progress(999.0, false)).is_err(),
+                "another owner cannot consume Alice's slot"
+            );
+        });
+        profiles::with_context(profiles::context_for("alice"), || {
+            queue.enqueue(progress(64.0, false)).unwrap();
+        });
+        assert_eq!(queue.state.lock().unwrap().pending.len(), MAX_PENDING);
+        assert_eq!(queue.state.lock().unwrap().reserved, 0);
+        drop(reservation);
+        let fresh = Arc::new(Queue {
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+        });
+        let reservation = fresh.reserve(2).unwrap();
+        assert_eq!(fresh.state.lock().unwrap().reserved, 2);
+        drop(reservation);
+        assert_eq!(fresh.state.lock().unwrap().reserved, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn full_failed_queue_rejects_public_edits_before_shared_changes_and_recovers_order() {
+        const ROOT: &str = "NOVA_PERSISTENCE_ADMISSION_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-persistence-admission-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root)
+                .args(["--exact", "app::persistence::tests::full_failed_queue_rejects_public_edits_before_shared_changes_and_recovers_order", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+            details: Default::default(),
+            open_token: Arc::new(()),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "source".into(),
+            type_: "series".into(),
+            request_id: "episode".into(),
+            videos: vec![Video {
+                id: "episode".into(),
+                season: Some(1),
+                episode: Some(1),
+                ..Default::default()
+            }],
+            season_backdrops: HashMap::new(),
+            seasons: vec![1],
+            season_index: 0,
+            episode_page: 0,
+            name: "Source".into(),
+            year: String::new(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            logo_url: String::new(),
+            description: String::new(),
+            genres: vec![],
+        });
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let failing = Arc::new(AtomicBool::new(true));
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let (started, entered) = mpsc::channel();
+        let worker = Worker::spawn({
+            let gate = gate.clone();
+            let failing = failing.clone();
+            let saved = saved.clone();
+            move |_, snapshot| {
+                let _ = started.send(());
+                let mut ready = gate.0.lock().unwrap();
+                while !*ready {
+                    ready = gate.1.wait(ready).unwrap();
+                }
+                if failing.load(Ordering::Acquire) {
+                    return Err("injected persistence failure".into());
+                }
+                saved.lock().unwrap().push(snapshot.clone());
+                Ok(())
+            }
+        })
+        .unwrap();
+        *ACTIVE.lock().unwrap() = Some(worker.queue.clone());
+        // Hold the head in flight so exactly 64 nonperiodic saves are admitted.
+        for n in 1..=MAX_PENDING {
+            let _reservation = reserve(1).unwrap();
+            let Snapshot::Progress(map, _) = progress(n as f64, false) else {
+                unreachable!()
+            };
+            write_progress(&map);
+        }
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        // An external patch cannot cross a reserved local mutation, even when
+        // there would otherwise be room for that patch.
+        assert!(try_external(ExternalPatch::default()).is_none());
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        assert!(flush().is_err());
+        let before = bridge.shared.lock().unwrap().progress.clone();
+        let failures = io::write_failures();
+        bridge.episode_toggle_watched(0);
+        bridge.toggle_current_in_library();
+        assert_eq!(bridge.shared.lock().unwrap().progress, before);
+        assert!(bridge.shared.lock().unwrap().entries.is_empty());
+        assert_eq!(io::write_failures(), failures + 2);
+        assert_eq!(
+            worker.queue.state.lock().unwrap().pending.len(),
+            MAX_PENDING
+        );
+        assert!(
+            enqueue(progress(65.0, false)).is_err(),
+            "the public admission wrapper must report rejection"
+        );
+        failing.store(false, Ordering::Release);
+        flush().unwrap();
+        assert_eq!(
+            saved
+                .lock()
+                .unwrap()
+                .iter()
+                .map(position)
+                .collect::<Vec<_>>(),
+            (1..=MAX_PENDING).map(|n| n as f64).collect::<Vec<_>>()
+        );
+        {
+            let _reservation = reserve(2).unwrap();
+            assert!(
+                try_external(ExternalPatch::default()).is_none(),
+                "external projection must retry until local reservations are enqueued"
+            );
+            // A barrier may run during an admitted action (e.g. settings or
+            // download cleanup); it must not wait on this thread's own slots.
+            flush().unwrap();
+        }
+        bridge.episode_watch_action(0, 1);
+        bridge.episode_watch_action(0, 2);
+        flush().unwrap();
+        let snapshots = saved.lock().unwrap();
+        let tail = snapshots[snapshots.len() - 2..]
+            .iter()
+            .map(|snapshot| {
+                let Snapshot::Progress(map, _) = snapshot else {
+                    unreachable!()
+                };
+                map[&progress_map_key("source", "episode")].clone()
+            })
+            .collect::<Vec<_>>();
+        assert!(tail[0].watched);
+        assert!(!tail[1].watched);
+        assert_ne!(tail[0].manual_watch_action, tail[1].manual_watch_action);
+        drop(snapshots);
+        drop(worker);
+    }
+
     #[test]
     fn pending_periodic_saves_coalesce_without_erasing_manual_edits() {
         let queue = Queue {

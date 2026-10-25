@@ -588,6 +588,9 @@ impl Bridge {
         if episode_ids.is_empty() {
             return;
         }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         {
             let mut state = self.shared.lock().unwrap();
             for id in &episode_ids {
@@ -655,6 +658,9 @@ impl Bridge {
             5 => WatchStatus::PlanToWatch,
             0 => WatchStatus::Auto,
             _ => return,
+        };
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
         };
         let changed = {
             let mut state = self.shared.lock().unwrap();
@@ -818,6 +824,9 @@ impl Bridge {
                 return;
             }
         }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let groups = currently_in.then(|| self.library_display_groups());
         {
             let mut state = self.shared.lock().unwrap();
@@ -1002,6 +1011,9 @@ impl Bridge {
             app.set_in_library(true);
             return;
         }
+        let Some(_reservation) = persistence::reserve(2) else {
+            return;
+        };
         let replacement = LibraryEntry {
             id: item.id.clone(),
             type_: item.type_.clone(),
@@ -1044,6 +1056,9 @@ impl Bridge {
             return;
         }
         let Some(selected) = self.current_library_entry(index) else {
+            return;
+        };
+        let Some(_reservation) = persistence::reserve(1) else {
             return;
         };
         let groups = self.library_display_groups();
@@ -1289,6 +1304,9 @@ impl Bridge {
             state.cache_settings.categories.get(index).cloned()
         };
         let Some(name) = name else { return };
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         {
             let mut state = self.shared.lock().unwrap();
             state.cache_settings.categories.retain(|c| *c != name);
@@ -1317,6 +1335,9 @@ impl Bridge {
             .as_ref()
             .map(|item| (item.type_.clone(), item.id.clone()));
         let Some((type_, id)) = key else { return };
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
         let groups = self.library_display_groups();
         {
             let mut state = self.shared.lock().unwrap();
@@ -1742,6 +1763,7 @@ impl Bridge {
     /// Publish prepared values in place whenever the visible identities remain
     /// the same. A newly matching automatic filter retains artwork by URL.
     pub(super) fn publish_progress_cards(&self, cards: Vec<LibraryCardSnapshot>) {
+        self.refresh_unified_search_library();
         let Some(app) = self.app() else { return };
         self.remember_library_cards(&cards);
         let model = app.get_library();
@@ -1763,7 +1785,6 @@ impl Bridge {
                             id: snapshot.id.clone(),
                             type_: snapshot.type_.clone(),
                             poster_url: snapshot.poster_url.clone(),
-        self.refresh_unified_search_library();
                         });
                     }
                     if update_library_card_progress(&mut card, &snapshot) {
