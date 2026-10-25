@@ -16,13 +16,32 @@ import android.graphics.Rect;
 import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Rational;
 import android.view.View;
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 
 /** NativeActivity's surface and event loop remain owned by android-activity. */
 public final class NovaActivity extends NativeActivity {
+    // Only a resumed Activity may own foreground permission UI. The Application
+    // retained by headless jobs remains the Context for services and storage.
+    private static volatile WeakReference<NovaActivity> foreground = new WeakReference<>(null);
+
+    public static void requestNotificationPermission(int requestCode) {
+        if (Build.VERSION.SDK_INT < 33) return;
+        new Handler(Looper.getMainLooper()).post(() -> {
+            NovaActivity activity = foreground.get();
+            if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+            if (activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                    != PackageManager.PERMISSION_GRANTED) {
+                activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, requestCode);
+            }
+        });
+    }
+
     private static final String TRANSPORT = "dev.misob.nova.PIP_TRANSPORT";
     private volatile boolean eligible;
     private volatile boolean entering;
@@ -248,9 +267,15 @@ public final class NovaActivity extends NativeActivity {
         entering = false;
         pipVisible = false;
         super.onResume();
+        foreground = new WeakReference<>(this);
         nativePipEvent(0);
         applyPipParams();
         schedulePlaybackOrientation();
+    }
+
+    @Override protected void onPause() {
+        if (foreground.get() == this) foreground = new WeakReference<>(null);
+        super.onPause();
     }
 
     @Override protected void onStop() {
@@ -270,6 +295,7 @@ public final class NovaActivity extends NativeActivity {
     }
 
     @Override protected void onDestroy() {
+        if (foreground.get() == this) foreground = new WeakReference<>(null);
         getWindow().getDecorView().removeCallbacks(applyPlaybackOrientation);
         unregisterReceiver(receiver);
         super.onDestroy();

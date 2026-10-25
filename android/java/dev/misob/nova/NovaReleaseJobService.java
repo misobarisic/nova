@@ -1,7 +1,6 @@
 package dev.misob.nova;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -47,7 +46,7 @@ public final class NovaReleaseJobService extends JobService {
     }
     public static boolean enable(Context context) {
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            if (context instanceof Activity) ((Activity)context).runOnUiThread(() -> ((Activity)context).requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},0x54));
+            NovaActivity.requestNotificationPermission(0x54);
             return false;
         }
         return allowed(context);

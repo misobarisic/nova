@@ -30,6 +30,58 @@ class ReleaseReminders(unittest.TestCase):
         self.assertNotIn("startActivity", receiver_source)
         self.assertNotIn("startService", receiver_source)
 
+    def test_headless_context_does_not_own_foreground_permission_ui(self):
+        adapter = (ROOT / "src/app/android_bg.rs").read_text()
+        entry = (ROOT / "src/lib.rs").read_text()
+        self.assertNotIn("ndk_context::android_context()", adapter)
+        self.assertIn("let (vm, context) = APP_CONTEXT.get()?;", adapter)
+        self.assertIn('"getApplicationContext"', adapter)
+        self.assertIn("retain_app_context(env, context)", adapter)
+        self.assertIn("initialize_foreground_context(app.vm_as_ptr(), app.activity_as_ptr())", entry)
+        # Service and notification delivery keep using Application, while both
+        # permission entry points resolve the resumed Activity independently.
+        reminder = (JAVA / "NovaReleaseJobService.java").read_text()
+        download = (JAVA / "NovaBackgroundService.java").read_text()
+        self.assertIn("NovaActivity.requestNotificationPermission(0x54)", reminder)
+        self.assertIn("NovaActivity.requestNotificationPermission(0x53)", download)
+        self.assertNotIn("context instanceof Activity", reminder)
+        self.assertNotIn("context instanceof android.app.Activity", download)
+        activity = (JAVA / "NovaActivity.java").read_text()
+        prompt = activity.split("public static void requestNotificationPermission", 1)[1].split("private static final String TRANSPORT", 1)[0]
+        self.assertLess(prompt.index("new Handler(Looper.getMainLooper()).post"), prompt.index("foreground.get()"))
+        self.assertIn("activity.isFinishing() || activity.isDestroyed()", prompt)
+        resume = activity.split("protected void onResume()", 1)[1].split("protected void onPause()", 1)[0]
+        pause = activity.split("protected void onPause()", 1)[1].split("protected void onStop()", 1)[0]
+        self.assertIn("foreground = new WeakReference<>(this)", resume)
+        self.assertIn("foreground.get() == this", pause)
+        self.assertIn("foreground = new WeakReference<>(null)", pause)
+
+    def test_document_io_owns_request_and_finishes_current_rotation_instance(self):
+        source = (JAVA / "DocumentActivity.java").read_text()
+        self.assertIn("AtomicReference<Request> pending", source)
+        self.assertIn("final byte[] exportBytes", source)
+        self.assertNotIn("static volatile byte[] exportBytes", source)
+        self.assertIn("pending.compareAndSet(null, operation)", source)
+        # Both launch failure and native completion release only their own
+        # request. Old workers cannot clear or finish a subsequent operation.
+        self.assertIn("catch (RuntimeException error) { pending.compareAndSet(operation, null); throw error; }", source)
+        self.assertIn("operation == null || operation.id != request", source)
+        self.assertIn('!operation.token.equals(getIntent().getStringExtra("token"))', source)
+        self.assertIn('intent.putExtra("token", operation.token)', source)
+        self.assertIn("operation.current = new WeakReference<>(this)", source)
+        self.assertIn("request.reading.compareAndSet(false, true)", source)
+        worker = source.split("new Thread(() ->", 1)[1].split('}, "NovaDocument").start()', 1)[0]
+        self.assertIn("context.getContentResolver().openOutputStream", worker)
+        self.assertIn("context.getContentResolver().openInputStream", worker)
+        self.assertIn("pending.get() != request", worker)
+        self.assertNotIn("operation", worker)
+        completion = source.split("private static void complete", 1)[1].split("@Override public void onDestroy", 1)[0]
+        self.assertLess(completion.index("pending.compareAndSet(request, null)"), completion.index("nativeResult(request.id"))
+        self.assertEqual(source.count("nativeResult(request.id"), 1)
+        self.assertLess(completion.index("new Handler(Looper.getMainLooper()).post"), completion.index("request.current.get()"))
+        self.assertIn("activity.operation == request", completion)
+        self.assertIn("!isChangingConfigurations() && isFinishing()", source)
+
     def test_packager_patch_adds_serialized_receiver_metadata(self):
         patch = ROOT / "android/cargo-apk2-receivers.patch"
         fixture = '''pub struct Application {

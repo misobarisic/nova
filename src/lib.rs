@@ -55,6 +55,7 @@ fn android_main(app: slint::android::AndroidApp) {
     }
     // Stash the VM + activity raw pointers for the external-player fallback.
     crate::player::set_android_runtime(app.vm_as_ptr(), app.activity_as_ptr());
+    crate::app::android_bg::initialize_foreground_context(app.vm_as_ptr(), app.activity_as_ptr());
     // Keep a clone of the AndroidApp so system-bar changes can be marshalled
     // onto the Java main thread (Slint's event loop runs on a native thread).
     crate::player::set_android_app(app.clone());

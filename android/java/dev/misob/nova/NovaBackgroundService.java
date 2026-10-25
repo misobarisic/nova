@@ -39,30 +39,12 @@ public class NovaBackgroundService extends Service {
 
     /** Start (or bring up) the download foreground service. */
     public static void start(Context context) {
-        ensureNotificationPermission(context);
+        NovaActivity.requestNotificationPermission(0x53);
         Intent intent = new Intent(context, NovaBackgroundService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
             context.startService(intent);
-        }
-    }
-
-    /**
-     * API 33+: the foreground-service notification is hidden without this, and a
-     * Service cannot request it. Ask when started from the Activity (the only
-     * context Rust passes); no-op elsewhere.
-     */
-    private static void ensureNotificationPermission(Context context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || !(context instanceof android.app.Activity)) {
-            return;
-        }
-        android.app.Activity activity = (android.app.Activity) context;
-        if (activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            activity.requestPermissions(
-                    new String[] {"android.permission.POST_NOTIFICATIONS"}, 0x53);
         }
     }
 

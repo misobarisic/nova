@@ -14,8 +14,8 @@
 //!   records into its local state the next time it opens).
 //!
 //! All Android API calls live in Java; Rust only loads a class through the
-//! app's class loader (reachable from the `Context` published by
-//! `android-activity` via `ndk-context`) and calls a static method.
+//! app's class loader (reachable from the Application Context retained during
+//! foreground or headless bootstrap) and calls a static method.
 #![cfg(target_os = "android")]
 
 use std::path::PathBuf;
@@ -47,7 +47,7 @@ static AUTH_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// Cached global ref to the sync-job class.
 static JOB_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 static JOB_CANCEL: AtomicBool = AtomicBool::new(false);
-static HEADLESS_CONTEXT: OnceLock<(JavaVM, GlobalRef)> = OnceLock::new();
+static APP_CONTEXT: OnceLock<(JavaVM, GlobalRef)> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeCancelSync(
@@ -65,27 +65,52 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativePrepareSync(
     JOB_CANCEL.store(false, Ordering::Release);
 }
 
-/// Run `f` on the current thread with the app `Context` that `android-activity`
-/// published through `ndk-context`. Returns `None` when no Context is available
-/// (e.g. a job-only process that never started an Activity). The raw context
-/// pointer is passed so the closure can create a `JObject` whose lifetime lines
-/// up with its `JNIEnv`.
-///
-/// Shared with the camera scanner (`android_qr.rs`), which loads its activity
-/// the same way.
+/// Retain only the Application, so background work never depends on an
+/// Activity surviving rotation or being initialized by `ndk-context`.
+fn retain_app_context(env: &mut jni::JNIEnv, context: &JObject) -> jni::errors::Result<()> {
+    if APP_CONTEXT.get().is_none() {
+        let app = env
+            .call_method(
+                context,
+                "getApplicationContext",
+                "()Landroid/content/Context;",
+                &[],
+            )?
+            .l()?;
+        let global = env.new_global_ref(app)?;
+        let vm = env.get_java_vm()?;
+        let _ = APP_CONTEXT.set((vm, global));
+    }
+    Ok(())
+}
+
+/// Called before foreground app startup; jobs initialize the same adapter from
+/// their own Context. Neither path requires a previously launched Activity.
+pub(crate) fn initialize_foreground_context(
+    vm: *mut std::ffi::c_void,
+    activity: *mut std::ffi::c_void,
+) {
+    // SAFETY: AndroidApp owns these JNI references throughout android_main.
+    let result = (|| -> jni::errors::Result<()> {
+        let vm = unsafe { JavaVM::from_raw(vm.cast()) }?;
+        let mut env = vm.attach_current_thread()?;
+        let activity = unsafe { JObject::from_raw(activity.cast()) };
+        retain_app_context(&mut env, &activity)
+    })();
+    if let Err(error) = result {
+        eprintln!("nova: unable to initialize Android context: {error}");
+    }
+}
+
+/// Run `f` with the retained Application Context. Returns `None` before either
+/// foreground or headless bootstrap, without calling ndk-context's panicking
+/// accessor. Foreground UI actions resolve a live Activity separately in Java.
 pub(crate) fn with_app_context<R>(
     f: impl FnOnce(&mut jni::JNIEnv, jobject) -> jni::errors::Result<R>,
 ) -> Option<R> {
-    if let Some((vm, context)) = HEADLESS_CONTEXT.get() {
-        let mut guard = vm.attach_current_thread().ok()?;
-        return f(&mut guard, context.as_obj().as_raw()).ok();
-    }
-    let ctx = ndk_context::android_context();
-    // SAFETY: ndk-context holds these for the process lifetime; the wrappers do
-    // not take ownership and Drop does not release them.
-    let vm = unsafe { JavaVM::from_raw(ctx.vm() as *mut jni::sys::JavaVM) }.ok()?;
+    let (vm, context) = APP_CONTEXT.get()?;
     let mut guard = vm.attach_current_thread().ok()?;
-    f(&mut guard, ctx.context() as jobject).ok()
+    f(&mut guard, context.as_obj().as_raw()).ok()
 }
 
 /// Resolve an app class through the Context's class loader (the reliable way to
@@ -314,20 +339,6 @@ pub(crate) fn initialize_headless_context(
     crate::storage::init_at(&nova_config::app_data_dir());
     super::addon_packages::configure_blob_store();
 
-    if HEADLESS_CONTEXT.get().is_none() {
-        let app = env
-            .call_method(
-                context,
-                "getApplicationContext",
-                "()Landroid/content/Context;",
-                &[],
-            )
-            .map_err(|e| e.to_string())?
-            .l()
-            .map_err(|e| e.to_string())?;
-        let global = env.new_global_ref(app).map_err(|e| e.to_string())?;
-        let vm = env.get_java_vm().map_err(|e| e.to_string())?;
-        let _ = HEADLESS_CONTEXT.set((vm, global));
-    }
+    retain_app_context(env, context).map_err(|error| error.to_string())?;
     Ok(())
 }

@@ -36,6 +36,8 @@ pub(super) fn configure(enabled: bool) {
     });
 }
 pub(super) fn enable_notifications() -> bool {
+    // The Java adapter resolves the currently resumed Activity for permission
+    // UI; the Application Context also works after a no-Activity job ran first.
     call("enable", "(Landroid/content/Context;)Z").unwrap_or(false)
 }
 pub(super) fn delivery_available() -> bool {
