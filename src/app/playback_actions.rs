@@ -198,7 +198,7 @@ impl Bridge {
             PlaybackAction::DismissNextEpisode { token } => self.dismiss_next_episode(&token),
             PlaybackAction::SeekChapter { id } => {
                 let position = self.chapter_position(&id).ok_or("Chapter changed")?;
-                self.execute_playback_action(PlaybackAction::SeekAbsolute(position))?;
+                self.dispatch_playback_action(PlaybackAction::SeekAbsolute(position))?;
             }
             PlaybackAction::SetSubtitleStyle { control, value } => {
                 if !(PlaybackAction::SetSubtitleStyle { control, value }).valid_payload() {
@@ -244,7 +244,7 @@ impl Bridge {
                 let position = self
                     .scene_bookmark_position(&id)
                     .ok_or("Bookmark changed")?;
-                self.execute_playback_action(PlaybackAction::SeekAbsolute(position))?;
+                self.dispatch_playback_action(PlaybackAction::SeekAbsolute(position))?;
             }
             PlaybackAction::TryAnotherStream => {
                 if !app.get_try_another_stream_available() {

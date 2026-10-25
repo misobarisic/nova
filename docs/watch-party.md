@@ -5,6 +5,11 @@ plays their own source through their own installed addons, with their own local
 profile policy, subtitle/audio choices and playback preferences. A party does not
 pair devices or grant access to another participant's addons.
 
+Host chapter and saved-scene selections resolve to absolute seeks on the shared
+room timeline, so every participant moves together. Guests cannot use either
+control to change the shared position; their audio, subtitles and volume remain
+local choices.
+
 ## Recommendations from participants
 
 A source card can show **Watch party recommended** when another connected

@@ -450,6 +450,75 @@ fn leaving_retires_pending_work_and_temporary_rate_without_changing_sync_setting
 }
 
 #[test]
+fn semantic_chapter_and_bookmark_seeks_use_the_host_timeline_and_reject_guests() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::semantic_chapter_and_bookmark_seeks_use_the_host_timeline_and_reject_guests"
+        ),
+        |Fixture { app, bridge }| {
+            select_local_media(&bridge, room(PartyRole::Host).media.as_ref().unwrap());
+            let request = bridge.begin_playback_request();
+            assert!(bridge.playback_request_is_current(&request));
+            app.set_player_open(true);
+            app.set_playback_started(true);
+            app.set_duration(120.0);
+            app.set_position(80.0);
+            assert!(bridge.add_scene_bookmark("Shared scene"));
+            let bookmark = app
+                .get_scene_bookmarks()
+                .row_data(0)
+                .unwrap()
+                .id
+                .to_string();
+            app.set_player_chapters(
+                Rc::new(VecModel::from(vec![crate::ChapterRow {
+                    title: "Chapter".into(),
+                    position: 35.0,
+                }]))
+                .into(),
+            );
+            app.set_position(20.0);
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            let actions = [
+                PlaybackAction::SeekChapter {
+                    id: format!("c{:016x}", 35.0f64.to_bits()),
+                },
+                PlaybackAction::SeekBookmark { id: bookmark },
+            ];
+            for action in actions.iter().cloned() {
+                bridge.dispatch_playback_action(action).unwrap();
+                assert_eq!(
+                    app.get_position(),
+                    20.0,
+                    "the room coordinator owns the actual seek"
+                );
+            }
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                assert_eq!(state.party.pending.len(), 2);
+                assert!(matches!(
+                    state.party.pending[0],
+                    Operation::Command(1, HostCommand::SeekAbsolute(35.0))
+                ));
+                assert!(matches!(
+                    state.party.pending[1],
+                    Operation::Command(1, HostCommand::SeekAbsolute(80.0))
+                ));
+                state.party.pending.clear();
+                state.party.snapshot = Some(room(PartyRole::Guest));
+            }
+            for action in actions {
+                bridge.dispatch_playback_action(action).unwrap();
+                assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+                assert_eq!(app.get_position(), 20.0);
+                assert!(!app.get_party_error().is_empty());
+            }
+        },
+    );
+}
+
+#[test]
 fn guests_cannot_change_the_timeline_but_keep_local_track_and_volume_controls() {
     isolated(
         concat!(

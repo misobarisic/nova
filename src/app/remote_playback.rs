@@ -432,6 +432,7 @@ pub(super) struct State {
     session: Option<SessionId>,
     pub(super) start_context: Option<MediaIdentity>,
     pub(super) start_retry: Option<playback::RemoteRetry>,
+    pub(super) start_stream: Option<playback::SelectedStream>,
     offers: HashMap<String, Offer>,
     offer_sequence: u64,
     target: String,
@@ -1959,7 +1960,8 @@ impl Bridge {
     }
 
     fn launch_remote_offer(&self, stream: StreamUi) -> Response {
-        self.note_selected_playback_stream(&stream);
+        // Acceptance retained this receiver-owned source and queue identity.
+        // Detail's selection helpers belong to a separate browsing intent.
         self.play_remote_source(stream.source, &stream.display);
         let snapshot = self.playback_snapshot();
         if snapshot.session.is_none() {
@@ -2057,6 +2059,8 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.remote_playback.start_context = Some(offer.media);
             state.remote_playback.start_retry = retry;
+            state.remote_playback.start_stream =
+                Some(playback::SelectedStream::from_row(&offer.stream));
         }
         Ok(offer.stream)
     }
@@ -2094,6 +2098,7 @@ impl Bridge {
         let mut state = self.shared.lock().unwrap();
         state.remote_playback.start_context = None;
         state.remote_playback.start_retry = None;
+        state.remote_playback.start_stream = None;
     }
 
     pub(super) fn remote_disconnect(&self) {

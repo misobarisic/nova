@@ -2035,6 +2035,201 @@ fn cancelling_a_candidate_keeps_live_playback_timer_but_closing_loading_player_c
 }
 
 #[test]
+fn receiver_recovery_checks_replacement_runtime_and_cut_before_resuming() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::receiver_recovery_checks_replacement_runtime_and_cut_before_resuming"
+        ),
+        |Fixture { app, bridge }| {
+            let controller = peer("controller", 1, true);
+            for (same_source, position, old_duration, new_duration, asks) in [
+                (true, 97.25, 1200.0, 1200.0, false),
+                (false, 97.25, 1200.0, 1200.0, true),
+                (true, 6000.0, 7200.0, 3600.0, true),
+                (false, 97.25, 1200.0, 0.0, true),
+            ] {
+                bridge.finish_playback_request();
+                let initial_offer = retain_offer(&bridge);
+                bridge
+                    .accept_remote_offer(&controller, &initial_offer.id, None)
+                    .unwrap();
+                let initial = bridge.begin_playback_request();
+                app.set_player_open(true);
+                app.set_playback_started(true);
+                app.set_position(position);
+                app.set_duration(old_duration);
+                let session = bridge.playback_snapshot().session.unwrap();
+                let offer = retain_offer(&bridge);
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.cache_settings.episode_start_behavior = EpisodeStartBehavior::Ask;
+                    let retained = state.remote_playback.offers.get_mut(&offer.id).unwrap();
+                    retained.retry_session = Some((session, bridge.player.screenshot_session()));
+                    if !same_source {
+                        retained.stream.source =
+                            StreamSource::Url("https://example.invalid/another-cut".into());
+                    }
+                }
+                bridge
+                    .accept_remote_offer(&controller, &offer.id, Some(session))
+                    .unwrap();
+                assert!(!initial.is_current());
+                let replacement = bridge.begin_playback_request();
+                assert!(bridge.playback_request_is_current(&replacement));
+                assert!(bridge.remote_receiver_playback());
+                assert!(bridge.recovery_source_selected());
+                // Model the native paused load: no inherited playhead is applied
+                // until the replacement has published its own usable runtime.
+                app.set_player_open(true);
+                app.set_playback_started(false);
+                app.set_position(0.0);
+                app.set_duration(0.0);
+                bridge.note_player_progress_from_ui();
+                assert!(!app.get_resume_prompt_visible());
+                assert_eq!(app.get_position(), 0.0);
+                assert!(bridge.recovery_source_selected());
+                app.set_duration(new_duration);
+                app.set_playback_started(true);
+                bridge.note_player_progress_from_ui();
+                assert_eq!(app.get_resume_prompt_visible(), asks);
+                if asks {
+                    assert!(app.get_resume_source_changed());
+                    assert_eq!(app.get_position(), 0.0);
+                    let snapshot = bridge.playback_snapshot();
+                    assert!(snapshot.resume_prompt && snapshot.capabilities.resume);
+                    let fits = position < new_duration;
+                    assert_eq!(app.get_resume_source_can_resume(), fits);
+                    bridge
+                        .dispatch_playback_action(PlaybackAction::Resume(true))
+                        .unwrap();
+                    assert_eq!(app.get_resume_prompt_visible(), !fits);
+                    assert_eq!(app.get_position(), if fits { position } else { 0.0 });
+                    if !fits {
+                        bridge
+                            .dispatch_playback_action(PlaybackAction::Resume(false))
+                            .unwrap();
+                        assert!(!app.get_resume_prompt_visible());
+                        assert_eq!(app.get_position(), 0.0);
+                    }
+                } else {
+                    assert_eq!(app.get_position(), position);
+                    assert!(
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .pending_resume_stream
+                            .is_none()
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn restricted_online_receiver_start_keeps_the_accepted_source_through_validation() {
+    isolated_prepared(
+        concat!(
+            module_path!(),
+            "::restricted_online_receiver_start_keeps_the_accepted_source_through_validation"
+        ),
+        |_| {
+            profiles::initialize().unwrap();
+        },
+        |Fixture { app: _, bridge }| {
+            let owner = profiles::ProfileStore::capture();
+            owner
+                .write(
+                    "library",
+                    r#"[{"id":"movie-id","type_":"movie","name":"Movie"}]"#,
+                )
+                .unwrap();
+            owner
+                .write(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&profile_policy::ProfilePolicy {
+                        pin: "0012".into(),
+                        restricted: true,
+                        allowed_titles: vec![profile_policy::AllowedTitle {
+                            media_type: "movie".into(),
+                            title_id: "movie-id".into(),
+                        }],
+                        allowed_addons: vec!["https://approved.invalid".into()],
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            bridge.shared.lock().unwrap().installed.push(Installed {
+                url: "https://approved.invalid".into(),
+                label: "Approved".into(),
+                enabled: true,
+                configure_ok: None,
+                available: true,
+                generation: 7,
+                manifest: serde_json::from_value(serde_json::json!({
+                    "id": "approved", "name": "Approved", "version": "1.0.0",
+                    "resources": ["stream"], "types": ["movie"], "catalogs": []
+                }))
+                .unwrap(),
+            });
+            for resolver in [false, true] {
+                let offer = retain_offer(&bridge);
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    let retained = state.remote_playback.offers.get_mut(&offer.id).unwrap();
+                    retained.stream.owner_url = "https://approved.invalid".into();
+                    retained.addon_generation = 7;
+                    if resolver {
+                        retained.stream.source = StreamSource::Resolver {
+                            provider_url: "https://approved.invalid".into(),
+                            token: "opaque".into(),
+                            settings_generation:
+                                nova_providers::plugin_settings::settings_generation(),
+                            addon_generation: 7,
+                        };
+                    }
+                    // A Detail selection belongs to a different browsing intent.
+                    state.playback_tools.pending_stream_selection =
+                        Some(playback::SelectedStream::from_row(&StreamUi {
+                            id: "unrelated".into(),
+                            choice_id: None,
+                            owner_url: "https://blocked.invalid".into(),
+                            display: String::new(),
+                            card: Default::default(),
+                            source: StreamSource::Unsupported,
+                            addon: String::new(),
+                            download: None,
+                        }));
+                }
+                bridge
+                    .accept_remote_offer(&peer("controller", 1, true), &offer.id, None)
+                    .unwrap();
+                let request = bridge.begin_playback_request();
+                assert!(bridge.playback_request_is_current(&request));
+                assert!(bridge.playback_policy_source_allowed());
+                assert!(bridge.remote_receiver_playback());
+                assert!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .playback_intent
+                        .as_ref()
+                        .unwrap()
+                        .context
+                        .selected_stream
+                        .is_some()
+                );
+                bridge.finish_playback_request();
+            }
+        },
+    );
+}
+
+#[test]
 fn restricted_remote_offers_require_approved_title_and_local_provenance() {
     isolated_prepared(
         concat!(

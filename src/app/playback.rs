@@ -85,7 +85,7 @@ pub(super) struct SelectedStream {
     continuity: Option<String>,
 }
 impl SelectedStream {
-    fn from_row(row: &StreamUi) -> Self {
+    pub(super) fn from_row(row: &StreamUi) -> Self {
         Self {
             choice: row.choice_id.clone(),
             row: row.id.clone(),
@@ -420,6 +420,19 @@ impl Bridge {
         if position.is_finite() {
             context.history_resume = Some(position.max(0.0));
         }
+        if (app.get_playback_started() || context.recovery_timeline.is_none())
+            && position.is_finite()
+            && position > 0.0
+        {
+            context.recovery_timeline = Some(source_recovery::Timeline {
+                position,
+                duration: app.get_duration() as f64,
+                source: context
+                    .selected_stream
+                    .as_ref()
+                    .and_then(|selected| selected.continuity.clone()),
+            });
+        }
         if app.get_playback_started() || context.retry_preferences.is_none() {
             context.retry_preferences = Some(preferences);
         }
@@ -456,7 +469,7 @@ impl Bridge {
                         .take()
                         .map(|retry| retry.context),
                     None,
-                    None,
+                    state.remote_playback.start_stream.take(),
                 )
             } else {
                 let explicit_selection = state.playback_tools.pending_retry.is_none()
@@ -2161,7 +2174,7 @@ impl Bridge {
     /// Exact file evidence plus corresponding duration can retain the timeline;
     /// equal durations by themselves never identify a cut.
     fn check_recovery_timeline(&self) -> bool {
-        if self.party_active() || self.remote_receiver_playback() {
+        if self.party_active() {
             return false;
         }
         let Some(app) = self.app() else {
@@ -2692,6 +2705,8 @@ pub(crate) enum ResumeStep {
 
 /// Pure resume decision used by [`Bridge::note_player_progress_from_ui`]:
 /// `resume` is the saved position, `pos`/`dur` the live engine values,
+    /// The saved position cannot belong to this runtime: disarm without seeking.
+    Discarded,
 /// `started` whether frames are flowing, and `done` whether the resume point
 /// was already reached/handled. Within 5 s counts as landed (the same slack
 /// the tick uses elsewhere).
@@ -2702,7 +2717,7 @@ pub(crate) fn resume_step(
     started: bool,
     done: bool,
 ) -> ResumeStep {
-    if done || dur <= 0.0 || !started {
+    if done || !dur.is_finite() || dur <= 0.0 || !started {
         return ResumeStep::Idle;
     }
     if (resume - pos).abs() <= 5.0 {
@@ -2712,6 +2727,9 @@ pub(crate) fn resume_step(
     }
 }
 
+    if !resume.is_finite() || resume < 0.0 || resume >= dur {
+        return ResumeStep::Discarded;
+    }
 /// Read the whole progress map (empty when absent/corrupt).
 pub(crate) fn read_progress_map() -> HashMap<String, EpisodeProgress> {
     persistence::pending_progress().unwrap_or_else(|| {
@@ -4060,6 +4078,24 @@ mod retry_tests {
             episodes_loading: false,
             id: "show".into(),
             type_: "series".into(),
+    #[test]
+    fn resume_safety_seek_discards_invalid_and_out_of_runtime_checkpoints() {
+        for position in [f64::NAN, f64::INFINITY, -1.0, 3600.0, 6000.0] {
+            assert_eq!(
+                resume_step(position, 0.0, 3600.0, true, false),
+                ResumeStep::Discarded
+            );
+        }
+        assert_eq!(
+            resume_step(97.25, 0.0, 1200.0, true, false),
+            ResumeStep::Seek
+        );
+        assert_eq!(
+            resume_step(97.25, 0.0, f64::NAN, true, false),
+            ResumeStep::Idle
+        );
+    }
+
             request_id: "episode-2".into(),
             videos: Vec::new(),
             season_backdrops: HashMap::new(),
