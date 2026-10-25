@@ -113,6 +113,8 @@ cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regres
 - Stage only intended files. Do not add credentials or private production
   signing keys.
 - `android/keystore/debug.keystore` is the intentionally tracked public debug
-  key used by Cargo's `dev`, `release`, and `dev-release` Android signing
-  profiles. Preserve it for local/debug builds; never use it for published
-  releases.
+  key used by Cargo's Android signing profiles. Preserve it for local/debug
+  builds and explicitly authorized personal sideload releases that must update
+  existing installs. Store releases require a private signing-key override.
+  Changing an existing personal install's signing identity requires an explicit
+  migration plan; do not silently replace its key during a version bump.
