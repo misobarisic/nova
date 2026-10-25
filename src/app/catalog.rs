@@ -2201,7 +2201,7 @@ impl Bridge {
             state.search_loading_more = false;
         }
         if let Some(app) = self.app() {
-            app.set_search_scope(0);
+            app.set_search_scope(unified_search::DEFAULT_SCOPE);
             app.set_search_text(SharedString::default());
             app.set_search_loading(false);
             app.set_search_loading_more(false);

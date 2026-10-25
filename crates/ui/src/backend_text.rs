@@ -1507,11 +1507,9 @@ pub fn tr(english: &str) -> &str {
             "Raspored ove sezone promijenjen je. Otvorite Sve sezone ili ponovno odaberite karticu kataloga."
         }
         // ---- Catalog / addons ------------------------------------------
-        "Saved · Open title" => "Spremljeno · Otvori naslov",
-        "Episode · Find sources" => "Epizoda · Pronađi izvore",
+        "Saved" => "Spremljeno",
         "Available offline · Play" => "Dostupno izvan mreže · Reproduciraj",
-        "Bookmark · Resume here" => "Oznaka · Nastavi odavde",
-        "Catalog · Find sources" => "Katalog · Pronađi izvore",
+        "Bookmark" => "Oznaka",
         "Search your library, episodes and bookmarks." => "Pretražite zbirku, epizode i oznake.",
         "No results for this selection." => "Nema rezultata za ovaj odabir.",
         "More source pages are available. Continue browsing to load another batch." => {

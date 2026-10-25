@@ -51,6 +51,12 @@ fn home_entry_scopes_and_typed_result_actions_work_across_viewports() {
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    assert_eq!(
+        app.get_search_scope(),
+        1,
+        "fresh Home/Discover search starts in Catalogs"
+    );
+    assert_eq!(app.global::<nova::DiscoverBridge>().get_search_scope(), 1);
     app.global::<nova::Anim>().set_enabled(false);
     let opened = Rc::new(Cell::new(0));
     let count = opened.clone();
@@ -111,15 +117,15 @@ fn home_entry_scopes_and_typed_result_actions_work_across_viewports() {
                 .is_some()
         );
         app.set_discover_search_open(true);
-        app.set_search_scope(0);
+        app.set_search_scope(1);
         app.set_discover_kb_zone(2);
         app.set_discover_kb_ctl(3);
         app.global::<nova::DiscoverBridge>().invoke_focus_shell();
         key(&app, Key::RightArrow);
         assert_eq!(app.get_discover_kb_ctl(), 4);
         key(&app, Key::Return);
-        assert_eq!(app.get_search_scope(), 1);
-        assert_eq!(scopes.borrow().last(), Some(&1));
+        assert_eq!(app.get_search_scope(), 2);
+        assert_eq!(scopes.borrow().last(), Some(&2));
         // Backend publication includes exact target IDs, never a parent title
         // substituted by the page when the user activates an episode or note.
         app.set_search_scope(3);
@@ -127,19 +133,16 @@ fn home_entry_scopes_and_typed_result_actions_work_across_viewports() {
             Rc::new(VecModel::from(vec![nova::MediaCard {
                 id: "local:episode:exact".into(),
                 title: "S2 E4".into(),
-                badge: "Episode · Find sources".into(),
+                badge: "Episode".into(),
                 year: "Saved series".into(),
                 ..Default::default()
             }]))
             .into(),
         );
         settle(&app);
-        let card = ElementHandle::find_by_accessible_label(
-            &app,
-            "S2 E4, Episode · Find sources, Saved series",
-        )
-        .next()
-        .expect("typed local result");
+        let card = ElementHandle::find_by_accessible_label(&app, "S2 E4, Episode, Saved series")
+            .next()
+            .expect("typed local result");
         assert!(card.size().width > 0.0);
         app.set_discover_kb_zone(3);
         app.set_discover_kb_idx(0);
@@ -174,10 +177,10 @@ fn unified_scope_and_incremental_results_share_motion_switches_without_retaining
     let card = |id: &str, title: &str| nova::MediaCard {
         id: id.into(),
         title: title.into(),
-        badge: "Episode · Find sources".into(),
+        badge: "Episode".into(),
         ..Default::default()
     };
-    let label = |title: &str| format!("{title}, Episode · Find sources");
+    let label = |title: &str| format!("{title}, Episode");
     settle(&app);
     assert_eq!(app.get_catalog().row_count(), 0);
     assert_eq!(app.get_addon_names().row_count(), 0);

@@ -421,6 +421,7 @@ impl Bridge {
             app.set_categories_modal(false);
             app.set_discover_search_open(false);
             app.set_discover_search_focused(false);
+            app.set_search_scope(unified_search::DEFAULT_SCOPE);
             app.set_library_search_open(false);
             app.set_party_page_open(false);
             app.set_remote_controls_open(false);

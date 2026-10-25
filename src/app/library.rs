@@ -437,6 +437,7 @@ impl Bridge {
 
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
+        self.refresh_unified_search_library();
         self.enforce_profile_content_policy();
         self.refresh_smart_collections();
         self.migrate_viewing_activity();
@@ -1762,6 +1763,7 @@ impl Bridge {
                             id: snapshot.id.clone(),
                             type_: snapshot.type_.clone(),
                             poster_url: snapshot.poster_url.clone(),
+        self.refresh_unified_search_library();
                         });
                     }
                     if update_library_card_progress(&mut card, &snapshot) {

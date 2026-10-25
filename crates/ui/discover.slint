@@ -173,7 +173,7 @@ component DiscoverHeader {
     in property <string> searchable_hint;
     // Disabled only when no enabled source accepts a search query.
     in property <bool> searchable: true;
-    in-out property <int> search_scope: 0;
+    in-out property <int> search_scope: 1;
     callback search_scope_picked(int);
     in property <bool> results_open: false;
     private property <bool> search_mode: root.results_open || root.search_filters_open || root.search_focused;
@@ -818,7 +818,7 @@ export component DiscoverPage {
 
     in-out property <[MediaCard]> catalog: [];
     in-out property <[MediaCard]> search_results: [];
-    in-out property <int> search_scope: 0;
+    in-out property <int> search_scope: 1;
     callback search_scope_picked(int);
     in property <[string]> search_history: [];
     in property <[string]> search_history_contexts: [];
