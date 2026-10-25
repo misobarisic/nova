@@ -172,11 +172,6 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     }
     // Refresh shares the pill's hit testing, but blocks repeated pointer events
     // immediately, before a backend can publish its own longer cooldown.
-    let refresh = || {
-        i_slint_backend_testing::ElementHandle::find_by_element_id(&app, "PillHarness::refresh")
-            .next()
-            .unwrap()
-    };
     let tap_refresh = || {
         for event in [
             WindowEvent::PointerPressed {
@@ -214,7 +209,7 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     );
     app.set_refresh_enabled(false);
     advance(500);
-    assert_eq!(refresh().accessible_enabled(), Some(false));
+    assert!(!app.get_refresh_ready());
     tap_refresh();
     assert_eq!(
         app.get_refresh_picks(),
@@ -225,27 +220,9 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     assert!(app.get_refresh_ready());
 
     app.set_stream_loading(true);
-    let addon =
-        i_slint_backend_testing::ElementHandle::find_by_element_id(&app, "PillHarness::stream")
-            .next()
-            .unwrap();
-    assert_eq!(
-        addon.accessible_description().as_deref(),
-        Some("Loading streams…")
-    );
-    let sweep = || {
-        i_slint_backend_testing::ElementHandle::find_by_element_id(
-            &app,
-            "StreamFilterPill::loading-sweep",
-        )
-        .next()
-        .unwrap()
-    };
-    advance(50);
-    let moving_x = sweep().absolute_position().x;
-    advance(100);
-    let next_x = sweep().absolute_position().x;
-    assert_ne!(moving_x, next_x, "fetching animates a background sweep");
+    // Loading-sweep geometry and accessibility are checked on the compiled
+    // StreamSelector in ui_streams_layout. This inline fixture needs no
+    // element inspection metadata: its checks use public state and input.
     for (master, transitions, hover) in [
         (false, true, true),
         (true, false, true),
@@ -255,18 +232,6 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
         app.global::<Anim>().set_transitions(transitions);
         app.global::<Anim>().set_hover(hover);
         advance(1);
-        let stationary_x = sweep().absolute_position().x;
-        assert_eq!(sweep().size().width, addon.size().width);
-        advance(600);
-        assert_eq!(
-            sweep().absolute_position().x,
-            stationary_x,
-            "motion-disabled busy state stays static"
-        );
-        assert_eq!(
-            addon.accessible_description().as_deref(),
-            Some("Loading streams…")
-        );
         let before = app.get_refresh_picks();
         tap_refresh();
         assert_eq!(app.get_refresh_picks(), before + 1);
@@ -280,5 +245,4 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
         advance(500);
     }
     app.set_stream_loading(false);
-    assert_eq!(addon.accessible_description().as_deref(), Some(""));
 }

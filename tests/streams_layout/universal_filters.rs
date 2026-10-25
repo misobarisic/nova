@@ -811,7 +811,7 @@ fn render_universal_filter_previews() {
     nova_ui::apply_theme(&app, false);
     fixture(&app);
     app.show().unwrap();
-    let phase = Rc::new(Cell::new(0));
+    let phase = Rc::new(Cell::new(0usize));
     let step = phase.clone();
     let weak = app.as_weak();
     let timer = slint::Timer::default();
@@ -827,7 +827,7 @@ fn render_universal_filter_previews() {
                 (390, 844, 99, "filters-settings-phone-sort"),
                 (1280, 900, 99, "filters-settings-desktop-sort"),
             ];
-            if step.get() % 2 == 0 {
+            if step.get().is_multiple_of(2) {
                 let (w, h, row, _) = scenes[step.get() / 2];
                 app.set_is_android(w < 700);
                 app.window().set_size(slint::PhysicalSize::new(w, h));

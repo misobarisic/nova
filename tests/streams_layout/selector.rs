@@ -945,4 +945,66 @@ fn refresh_is_first_in_the_addon_rail_and_routes_pointer_keyboard_and_remote() {
     app.set_stream_addons(Default::default());
     idle();
     assert!(refresh().size().width > 0.0);
+
+    // Inspect the real compiled selector, whose debug metadata already
+    // exists, instead of enabling inspection for every inline test fixture.
+    app.set_stream_addons(Rc::new(VecModel::from(vec!["Torrentio".into()])).into());
+    app.set_stream_loading(Rc::new(VecModel::from(vec![true])).into());
+    let motion = app.global::<nova::Anim>();
+    motion.set_enabled(true);
+    motion.set_transitions(true);
+    motion.set_hover(true);
+    idle();
+    let addon = || {
+        ElementHandle::find_by_accessible_label(&app, "Torrentio")
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .unwrap()
+    };
+    let sweep = || {
+        ElementHandle::find_by_element_id(&app, "StreamFilterPill::loading-sweep")
+            .next()
+            .unwrap()
+    };
+    let advance = |milliseconds: u64| {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(milliseconds));
+    };
+    assert_eq!(
+        addon().accessible_description().as_deref(),
+        Some("Loading streams…")
+    );
+    advance(50);
+    let moving_x = sweep().absolute_position().x;
+    advance(100);
+    assert_ne!(
+        moving_x,
+        sweep().absolute_position().x,
+        "fetching animates a background sweep"
+    );
+    for (master, transitions, hover) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        motion.set_enabled(master);
+        motion.set_transitions(transitions);
+        motion.set_hover(hover);
+        advance(1);
+        let stationary_x = sweep().absolute_position().x;
+        assert_eq!(sweep().size().width, addon().size().width);
+        advance(600);
+        assert_eq!(
+            sweep().absolute_position().x,
+            stationary_x,
+            "motion-disabled busy state stays static"
+        );
+        assert_eq!(
+            addon().accessible_description().as_deref(),
+            Some("Loading streams…")
+        );
+    }
+    app.set_stream_loading(Rc::new(VecModel::from(vec![false])).into());
+    idle();
+    assert_eq!(addon().accessible_description().as_deref(), Some(""));
 }
