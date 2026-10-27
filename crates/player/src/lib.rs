@@ -773,8 +773,14 @@ fn readiness_buffered_ahead(
 }
 
 fn normalized_party_rate(rate: Option<f64>) -> Option<f64> {
-    rate.filter(|rate| rate.is_finite())
-        .map(|rate| rate.clamp(0.9, 1.1))
+    rate.filter(|rate| rate.is_finite()).map(|rate| {
+        // The selectable target stays within normal playback bounds; the
+        // temporary clock correction also needs headroom at either end.
+        rate.clamp(
+            nova_config::PLAYBACK_SPEED_MIN as f64 * 0.97,
+            nova_config::PLAYBACK_SPEED_MAX as f64 * 1.03,
+        )
+    })
 }
 
 fn apply_load_playback_options(
@@ -2072,7 +2078,7 @@ impl Player {
 
     /// Only the loaded RAM source can supply adaptive-buffer hints. A pending
     /// replacement never reuses the previous source's duration or cache state.
-    pub fn ram_torrent_telemetry(&self) -> Option<(String, f64, bool)> {
+    pub fn ram_torrent_telemetry(&self) -> Option<(String, f64, bool, f64)> {
         if self.state.pending.lock().unwrap().is_some()
             || !self.state.started.load(Ordering::SeqCst)
         {
@@ -2088,6 +2094,7 @@ impl Player {
             source,
             mpv.get_property("duration").ok()?,
             mpv.get_property("paused-for-cache").unwrap_or(false),
+            mpv.get_property("speed").unwrap_or(1.0),
         ))
     }
 
@@ -2778,10 +2785,16 @@ impl Player {
         }
     }
 
-    /// Apply a temporary absolute party clock rate (0.9–1.1). Clearing it
+    /// Apply a temporary absolute party clock rate, including ±3% correction
+    /// around the selectable target bounds. Clearing it
     /// restores the latest title/global speed, including edits made meanwhile.
     /// A queued source receives the correction when its load is submitted.
     pub fn set_party_playback_rate(&self, rate: Option<f64>) {
+        // Only an explicit None leaves party ownership. A malformed correction
+        // must not restore personal speed or enable ordinary local controls.
+        if rate.is_some_and(|rate| !rate.is_finite()) {
+            return;
+        }
         let rate = normalized_party_rate(rate);
         *self.state.party_playback_rate.lock().unwrap() = rate;
         let effective = self.effective_playback_speed();
@@ -4867,8 +4880,12 @@ mod tests {
 
     #[test]
     fn party_clock_rate_is_bounded_and_rejects_non_finite_values() {
-        assert_eq!(normalized_party_rate(Some(2.0)), Some(1.1));
-        assert_eq!(normalized_party_rate(Some(0.5)), Some(0.9));
+        assert_eq!(normalized_party_rate(Some(2.0)), Some(2.0));
+        assert_eq!(normalized_party_rate(Some(0.5)), Some(0.5));
+        assert_eq!(normalized_party_rate(Some(3.0)), Some(2.06));
+        assert_eq!(normalized_party_rate(Some(0.1)), Some(0.485));
+        assert_eq!(normalized_party_rate(Some(1.545)), Some(1.545));
+        assert_eq!(normalized_party_rate(Some(1.455)), Some(1.455));
         assert_eq!(normalized_party_rate(Some(1.03)), Some(1.03));
         assert_eq!(normalized_party_rate(Some(f64::NAN)), None);
         assert_eq!(normalized_party_rate(Some(f64::INFINITY)), None);
@@ -5721,6 +5738,17 @@ mod tests {
         };
         player.set_party_playback_rate(Some(1.03));
         assert!((native_rate() - 1.03).abs() < 0.00001);
+        for rate in [0.485, 1.455, 1.545, 2.06] {
+            player.set_party_playback_rate(Some(rate));
+            assert!((native_rate() - rate).abs() < 0.00001);
+        }
+        player.set_party_playback_rate(Some(f64::NAN));
+        player.set_party_playback_rate(Some(f64::INFINITY));
+        assert!(
+            (native_rate() - 2.06).abs() < 0.00001,
+            "invalid input must retain party ownership"
+        );
+        player.set_party_playback_rate(Some(1.03));
         player.set_title_speed(1.6);
         player.set_speed(2.0);
         assert!(

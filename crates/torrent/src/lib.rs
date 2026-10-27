@@ -92,6 +92,16 @@ pub struct StreamReady {
     pub ram_only: bool,
 }
 
+/// Adaptive buffering measures demand per wall second, including the player's
+/// temporary party correction rather than only its selected base speed.
+fn playback_byte_rate(file_len: u64, duration: f64, playback_rate: f64) -> u64 {
+    if duration.is_finite() && duration > 0.0 && playback_rate.is_finite() && playback_rate > 0.0 {
+        (file_len as f64 / duration * playback_rate) as u64
+    } else {
+        0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TorrentDownloadReady {
     pub path: PathBuf,
@@ -718,7 +728,13 @@ impl TorrentEngine {
 
     /// Source guarded by the current playback owner; byte demand remains HTTP's
     /// responsibility. Duration/bitrate are only adaptive-buffer hints.
-    pub fn note_playback(&self, source_url: &str, duration: f64, stalled: bool) {
+    pub fn note_playback(
+        &self,
+        source_url: &str,
+        duration: f64,
+        stalled: bool,
+        playback_rate: f64,
+    ) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -735,11 +751,7 @@ impl TorrentEngine {
                 .is_some_and(PlaybackRequest::is_current)
                 && let Some(memory) = &child.memory
             {
-                let rate = if duration.is_finite() && duration > 0.0 {
-                    (entry.file_len as f64 / duration) as u64
-                } else {
-                    0
-                };
+                let rate = playback_byte_rate(entry.file_len, duration, playback_rate);
                 memory.telemetry.consumption(rate, stalled);
             }
         }
@@ -2632,6 +2644,24 @@ pub fn engine() -> Option<Arc<TorrentEngine>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumption_hint_tracks_effective_speed_in_wall_time() {
+        // A 100 MB, 100 second source consumes 1 MB per media second.
+        for (rate, expected) in [
+            (0.5, 500_000),
+            (1.0, 1_000_000),
+            (1.5, 1_500_000),
+            (1.545, 1_545_000),
+            (2.06, 2_060_000),
+        ] {
+            assert_eq!(playback_byte_rate(100_000_000, 100.0, rate), expected);
+        }
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(playback_byte_rate(100_000_000, invalid, 1.5), 0);
+            assert_eq!(playback_byte_rate(100_000_000, 100.0, invalid), 0);
+        }
+    }
 
     const FIXTURE_HASH: &str = "e31fa81b9fb7a29e1999e1555b55cf7f34b99353";
 

@@ -945,6 +945,9 @@ pub fn tr(english: &str) -> &str {
         "Only the host controls the shared timeline." => {
             "Samo domaćin upravlja zajedničkom reprodukcijom."
         }
+        "Watch parties share playback speed; audio and subtitles remain your choice." => {
+            "Zajedničko gledanje dijeli brzinu reprodukcije; zvuk i titlove birate sami."
+        }
         "Watch parties use normal speed; audio and subtitles remain your choice." => {
             "Zajedničko gledanje koristi normalnu brzinu; zvuk i titlove birate sami."
         }

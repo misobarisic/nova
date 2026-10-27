@@ -911,7 +911,7 @@ for other episodes; guidance offers the current episode’s source picker or
 leaving the room. An empty host-only lobby waits for the creator’s first choice.
 Live permission changes cancel disallowed seek previews and restore TV focus to
 available current-episode actions. These temporary room permissions are not
-persisted or synced; the policy and its revision use `nova/party/5`.
+persisted or synced; the policy and its revision use `nova/party/6`.
 
 
 Manual Next episode in a watch party uses the same accepted control policy as
@@ -920,3 +920,19 @@ the current local source; acceptance opens this device’s source picker for tha
 episode. Rejected or stale proposals keep current playback intact unless another
 member’s newer accepted selection is followed. The Next banner, keyboard/TV action and native media key are disabled while waiting for
 acceptance or when the member lacks permission. Dismissing the offer stays local.
+
+
+The same room policy governs shared playback speed. The target starts at 1×,
+accepts 0.5–2× in 0.05 increments, and can be changed or reset to 1× in the lobby
+and during playback. It survives episode changes and returns to the lobby.
+Every member sees the accepted target in the room and player speed menus;
+host-only guests can open the submenu as a read-only view. Requests wait for an
+accepted room snapshot before changing the readout, and never save title/global
+speed preferences. Leaving restores ordinary local playback preferences.
+
+Drift correction runs around that shared target. For example, a room at 1.50×
+may briefly use a native 1.545× rate while catching up, while all room speed
+labels continue to show 1.50×. Native party rates allow 0.485–2.06× transient
+headroom around the target bounds. RAM buffering and torrent consumption budgets
+use this actual native rate, so faster shared playback reserves the appropriate
+wall-clock buffer without persisting a speed override.

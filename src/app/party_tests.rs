@@ -82,6 +82,7 @@ fn room(role: PartyRole) -> RoomSnapshot {
         generation: 1,
         revision: 1,
         timeline: nova_party::Timeline {
+            target_rate: 1.0,
             position: 20.0,
             anchor_ms: 0,
             paused: true,
@@ -1894,5 +1895,448 @@ fn old_next_offer_cannot_rebind_its_playing_source_after_room_aba() {
             assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
             assert!(app.get_player_open());
         },
+    );
+}
+
+#[test]
+fn shared_speed_callbacks_use_room_revision_and_preserve_local_preferences() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::shared_speed_callbacks_use_room_revision_and_preserve_local_preferences"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.cache_settings.playback_speed = 1.2;
+                state.party.choosing_media = true;
+                let room = state.party.snapshot.as_mut().unwrap();
+                room.media = None;
+                room.control_policy = ControlPolicy::Everyone;
+                room.control_revision = 9;
+                room.generation = 7;
+                room.timeline.target_rate = 1.5;
+            }
+            bridge.player.set_title_speed(1.4);
+            bridge.player.set_party_playback_rate(Some(1.545));
+            let local =
+                serde_json::to_value(&bridge.shared.lock().unwrap().cache_settings).unwrap();
+            let saved = storage::get_str(playback_preferences::PREFERENCES_KEY);
+            bridge.wire_party();
+            bridge.party_publish();
+            assert_eq!(app.get_party_target_speed(), 1.5);
+            assert!(
+                app.get_party_status().is_empty(),
+                "Everyone can choose in an empty lobby"
+            );
+            app.invoke_party_set_target_speed(1.25);
+            app.invoke_party_step_target_speed(1);
+            app.invoke_party_step_target_speed(-1);
+            app.invoke_party_reset_target_speed();
+            for action in [
+                PlaybackAction::SetSpeed(1.75),
+                PlaybackAction::SpeedStep(1),
+                PlaybackAction::ResetSpeed,
+                PlaybackAction::BeginSpeedPreview,
+                PlaybackAction::EndSpeedPreview,
+            ] {
+                bridge.dispatch_playback_action(action).unwrap();
+            }
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(
+                state.party.pending.len(),
+                7,
+                "Hold preview neither edits nor resets room speed"
+            );
+            assert!(
+                state
+                    .party
+                    .pending
+                    .iter()
+                    .all(|operation| matches!(operation, Operation::Command(7, 9, _)))
+            );
+            assert!(matches!(
+                state.party.pending[0],
+                Operation::Command(7, 9, HostCommand::SetRate(1.25))
+            ));
+            assert!(matches!(
+                state.party.pending[1],
+                Operation::Command(7, 9, HostCommand::StepRate(1))
+            ));
+            assert!(matches!(
+                state.party.pending[2],
+                Operation::Command(7, 9, HostCommand::StepRate(-1))
+            ));
+            assert!(matches!(
+                state.party.pending[3],
+                Operation::Command(7, 9, HostCommand::ResetRate)
+            ));
+            assert!(matches!(
+                state.party.pending[4],
+                Operation::Command(7, 9, HostCommand::SetRate(1.75))
+            ));
+            assert!(
+                matches!(
+                    state.party.pending[5],
+                    Operation::Command(7, 9, HostCommand::StepRate(1))
+                ),
+                "Steps must reach the host as direction, not a value derived from 1.545x correction"
+            );
+            assert!(matches!(
+                state.party.pending[6],
+                Operation::Command(7, 9, HostCommand::ResetRate)
+            ));
+            assert_eq!(serde_json::to_value(&state.cache_settings).unwrap(), local);
+            drop(state);
+            assert_eq!(
+                storage::get_str(playback_preferences::PREFERENCES_KEY),
+                saved
+            );
+            assert!(
+                (bridge.player.effective_playback_speed() - 1.545).abs() < 0.0001,
+                "Local native rate changes only after the accepted room target arrives"
+            );
+        },
+    );
+}
+
+#[test]
+fn host_only_guests_cannot_edit_shared_speed_or_local_speed_preferences() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::host_only_guests_cannot_edit_shared_speed_or_local_speed_preferences"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            bridge.player.set_title_speed(1.4);
+            bridge.player.set_party_playback_rate(Some(1.03));
+            let local =
+                serde_json::to_value(&bridge.shared.lock().unwrap().cache_settings).unwrap();
+            let saved = storage::get_str(playback_preferences::PREFERENCES_KEY);
+            bridge.wire_party();
+            app.invoke_party_set_target_speed(2.0);
+            app.invoke_party_step_target_speed(1);
+            app.invoke_party_reset_target_speed();
+            for action in [
+                PlaybackAction::SetSpeed(0.5),
+                PlaybackAction::SpeedStep(-1),
+                PlaybackAction::ResetSpeed,
+            ] {
+                bridge.dispatch_playback_action(action).unwrap();
+            }
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            assert!(!app.get_party_error().is_empty());
+            assert!((bridge.player.effective_playback_speed() - 1.03).abs() < 0.0001);
+            assert_eq!(
+                serde_json::to_value(&bridge.shared.lock().unwrap().cache_settings).unwrap(),
+                local
+            );
+            assert_eq!(
+                storage::get_str(playback_preferences::PREFERENCES_KEY),
+                saved
+            );
+            bridge.party_leave();
+            assert!(
+                (bridge.player.effective_playback_speed() - 1.4).abs() < 0.0001,
+                "Leave restores the saved per-title baseline"
+            );
+        },
+    );
+}
+
+#[test]
+fn shared_speed_presentation_stays_on_target_during_native_drift_correction() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::shared_speed_presentation_stays_on_target_during_native_drift_correction"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .timeline
+                .target_rate = 1.5;
+            bridge.player.set_title_speed(1.4);
+            for actual in [1.455, 1.5, 1.545] {
+                bridge.player.set_party_playback_rate(Some(actual));
+                bridge.party_publish();
+                assert_eq!(app.get_party_target_speed(), 1.5);
+                assert!(
+                    (f64::from(bridge.player.effective_playback_speed()) - actual).abs() < 0.0001
+                );
+            }
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .timeline
+                .target_rate = 2.0;
+            bridge.party_publish();
+            assert_eq!(app.get_party_target_speed(), 2.0);
+            bridge.party_leave();
+            assert_eq!(app.get_party_target_speed(), 1.0);
+            assert!((bridge.player.effective_playback_speed() - 1.4).abs() < 0.0001);
+        },
+    );
+}
+
+#[test]
+fn absolute_rate_queue_keeps_the_latest_value_without_crossing_command_barriers() {
+    let mut state = State::default();
+    for index in 0..120 {
+        assert!(state.push_operation(Operation::Command(
+            1,
+            3,
+            HostCommand::SetRate(0.5 + (index % 31) as f64 * 0.05)
+        )));
+    }
+    assert!(state.push_operation(Operation::Command(1, 3, HostCommand::SetRate(2.0))));
+    assert_eq!(state.pending.len(), 1);
+    assert!(matches!(
+        state.pending[0],
+        Operation::Command(1, 3, HostCommand::SetRate(2.0))
+    ));
+    for barrier in [
+        Operation::Command(1, 3, HostCommand::StepRate(1)),
+        Operation::Command(1, 3, HostCommand::ResetRate),
+        Operation::Command(1, 3, HostCommand::SeekAbsolute(20.0)),
+        Operation::PrepareMedia(1, 3, room(PartyRole::Guest).media.unwrap()),
+    ] {
+        state.pending.clear();
+        state.push_operation(Operation::Command(1, 3, HostCommand::SetRate(1.5)));
+        state.push_operation(barrier);
+        state.push_operation(Operation::Command(1, 3, HostCommand::SetRate(2.0)));
+        assert_eq!(
+            state.pending.len(),
+            3,
+            "Absolute moves never absorb a step, reset, seek or selection"
+        );
+    }
+    state.pending.clear();
+    for _ in 0..31 {
+        state.push_operation(Operation::Command(1, 3, HostCommand::StepRate(1)));
+    }
+    state.push_operation(Operation::Command(1, 3, HostCommand::SetRate(1.5)));
+    assert!(
+        state.push_operation(Operation::Command(1, 3, HostCommand::SetRate(2.0))),
+        "A full queue must still retain the final adjacent slider choice"
+    );
+    assert_eq!(state.pending.len(), 32);
+    assert!(matches!(
+        state.pending.back(),
+        Some(Operation::Command(1, 3, HostCommand::SetRate(2.0)))
+    ));
+    assert!(
+        !state.push_operation(Operation::Command(2, 3, HostCommand::SetRate(0.5))),
+        "Different generations cannot coalesce"
+    );
+    assert!(
+        !state.push_operation(Operation::Command(1, 4, HostCommand::SetRate(0.5))),
+        "Different permissions cannot coalesce"
+    );
+}
+
+#[test]
+fn guest_controls_wait_after_a_response_but_reports_and_host_controls_do_not() {
+    let now = Instant::now();
+    let mut state = State {
+        snapshot: Some(room(PartyRole::Guest)),
+        last_guest_control_finished: Some(now),
+        ..Default::default()
+    };
+    state
+        .pending
+        .push_back(Operation::Command(1, 0, HostCommand::SetRate(2.0)));
+    assert_eq!(
+        state.guest_control_wait(now),
+        Some(Duration::from_millis(50))
+    );
+    assert_eq!(
+        state.guest_control_wait(now + Duration::from_millis(49)),
+        Some(Duration::from_millis(1))
+    );
+    assert_eq!(
+        state.guest_control_wait(now + Duration::from_millis(50)),
+        None
+    );
+    // A completed rejection consumes the same host limiter budget; another
+    // response restarts the interval rather than letting the final value race.
+    state.last_guest_control_finished = Some(now + Duration::from_millis(60));
+    assert_eq!(
+        state.guest_control_wait(now + Duration::from_millis(70)),
+        Some(Duration::from_millis(40))
+    );
+    state.pending.clear();
+    state.pending.push_back(Operation::PrepareMedia(
+        1,
+        0,
+        room(PartyRole::Guest).media.unwrap(),
+    ));
+    assert!(
+        state
+            .guest_control_wait(now + Duration::from_millis(70))
+            .is_some()
+    );
+    state
+        .pending
+        .push_front(Operation::Report(LocalReport::default()));
+    assert_eq!(
+        state.guest_control_wait(now + Duration::from_millis(70)),
+        None,
+        "Heartbeat reports are never throttled with controls"
+    );
+    state.pending.pop_front();
+    state.snapshot.as_mut().unwrap().role = PartyRole::Host;
+    assert_eq!(
+        state.guest_control_wait(now + Duration::from_millis(70)),
+        None
+    );
+}
+
+#[test]
+fn control_wakeup_is_bound_to_room_generation_and_party_activation() {
+    let mut state = State {
+        snapshot: Some(room(PartyRole::Guest)),
+        generation: 4,
+        busy: true,
+        ..Default::default()
+    };
+    let wakeup = ControlWakeup {
+        activation: 4,
+        room_id: "test-room".into(),
+        generation: 1,
+    };
+    assert!(wakeup.current(&state));
+    state.snapshot.as_mut().unwrap().generation = 3;
+    assert!(
+        !wakeup.current(&state),
+        "A-B-A is a different wakeup generation"
+    );
+    state.snapshot.as_mut().unwrap().generation = 1;
+    state.generation = 5;
+    assert!(
+        !wakeup.current(&state),
+        "Leaving and rejoining invalidates old timers"
+    );
+    state.generation = 4;
+    state.snapshot.as_mut().unwrap().room_id = "another-room".into();
+    assert!(!wakeup.current(&state));
+}
+
+#[test]
+fn slider_callback_burst_preserves_its_final_rate_and_step_reset_order() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::slider_callback_burst_preserves_its_final_rate_and_step_reset_order"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                let room = state.party.snapshot.as_mut().unwrap();
+                room.media = None;
+                room.control_policy = ControlPolicy::Everyone;
+                room.control_revision = 7;
+            }
+            bridge.wire_party();
+            for index in 0..120 {
+                app.invoke_party_set_target_speed(0.5 + (index % 31) as f32 * 0.05);
+            }
+            app.invoke_party_set_target_speed(2.0);
+            assert_eq!(bridge.shared.lock().unwrap().party.pending.len(), 1);
+            assert!(matches!(
+                bridge.shared.lock().unwrap().party.pending.front(),
+                Some(Operation::Command(1, 7, HostCommand::SetRate(2.0)))
+            ));
+            app.invoke_party_step_target_speed(1);
+            app.invoke_party_set_target_speed(0.5);
+            app.invoke_party_reset_target_speed();
+            app.invoke_party_set_target_speed(1.25);
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.party.pending.len(), 5);
+            assert!(matches!(
+                state.party.pending[1],
+                Operation::Command(1, 7, HostCommand::StepRate(1))
+            ));
+            assert!(matches!(
+                state.party.pending[3],
+                Operation::Command(1, 7, HostCommand::ResetRate)
+            ));
+            assert!(matches!(
+                state.party.pending[4],
+                Operation::Command(1, 7, HostCommand::SetRate(1.25))
+            ));
+        },
+    );
+}
+
+#[test]
+fn slow_reports_allow_one_queued_control_before_the_next_overdue_heartbeat() {
+    let start = Instant::now();
+    let mut state = State::default();
+    state.pending.extend([
+        Operation::Command(1, 0, HostCommand::SetRate(1.5)),
+        Operation::PrepareMedia(1, 0, room(PartyRole::Guest).media.unwrap()),
+    ]);
+    let dispatch = |state: &mut State, at: Instant| {
+        let operation = if state.report_should_run(at) {
+            Operation::Report(LocalReport::default())
+        } else {
+            state.pending.pop_front().expect("queued work")
+        };
+        state.note_operation_dispatched(&operation, at);
+        operation
+    };
+    assert!(matches!(dispatch(&mut state, start), Operation::Report(_)));
+    // Each report takes 600ms, exceeding the 500ms dispatch deadline.
+    assert!(matches!(
+        dispatch(&mut state, start + Duration::from_millis(600)),
+        Operation::Command(1, 0, HostCommand::SetRate(1.5))
+    ));
+    assert!(matches!(
+        dispatch(&mut state, start + Duration::from_millis(601)),
+        Operation::Report(_)
+    ));
+    assert!(matches!(
+        dispatch(&mut state, start + Duration::from_millis(1201)),
+        Operation::PrepareMedia(1, 0, _)
+    ));
+    assert!(matches!(
+        dispatch(&mut state, start + Duration::from_millis(1202)),
+        Operation::Report(_)
+    ));
+    assert!(state.pending.is_empty());
+    assert!(
+        matches!(
+            dispatch(&mut state, start + Duration::from_millis(1802)),
+            Operation::Report(_)
+        ),
+        "Idle overdue heartbeats continue without waiting for a control"
+    );
+    assert!(!state.report_should_run(start + Duration::from_millis(2301)));
+    state
+        .pending
+        .push_back(Operation::Command(1, 0, HostCommand::StepRate(1)));
+    assert!(matches!(
+        dispatch(&mut state, start + Duration::from_millis(2301)),
+        Operation::Command(..)
+    ));
+    assert!(
+        state.report_should_run(start + Duration::from_millis(2302)),
+        "A control burst cannot displace the next deadline"
     );
 }

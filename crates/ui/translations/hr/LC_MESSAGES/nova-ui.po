@@ -5689,3 +5689,15 @@ msgstr "Odaberite izvor za trenutačnu epizodu ili napustite zajedničko gledanj
 #: party.slint
 msgid "Wait for the host to choose an episode, or leave the party to watch something else."
 msgstr "Pričekajte da domaćin odabere epizodu ili napustite zajedničko gledanje da biste gledali nešto drugo."
+
+#: party.slint player.slint
+msgid "Shared playback speed"
+msgstr "Zajednička brzina reprodukcije"
+
+#: party.slint player.slint
+msgid "Reset to normal speed"
+msgstr "Vratite normalnu brzinu"
+
+#: party.slint player.slint
+msgid "Only the host can change playback speed."
+msgstr "Samo domaćin može mijenjati brzinu reprodukcije."

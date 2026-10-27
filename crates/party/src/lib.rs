@@ -14,11 +14,15 @@ pub use service::PartyService;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-pub const ALPN: &[u8] = b"nova/party/5";
+pub const ALPN: &[u8] = b"nova/party/6";
 pub const MAX_MEMBERS: usize = 8;
 /// Opaque SHA-256 asset hint; contains no source URL, path, headers or provider token.
 pub type SourceFingerprint = [u8; 32];
 pub const BUFFER_READY_SECONDS: f64 = 2.0;
+pub const MIN_TARGET_RATE: f64 = 0.5;
+pub const MAX_TARGET_RATE: f64 = 2.0;
+pub const TARGET_RATE_STEP: f64 = 0.05;
+pub const CATCH_UP_MULTIPLIER: f64 = 1.03;
 pub const START_LEAD_MS: u64 = 1_000;
 pub const HOST_TIMEOUT_MS: u64 = 30_000;
 
@@ -66,6 +70,13 @@ pub struct Timeline {
     /// Host-monotonic anchor; a future anchor schedules coordinated resume.
     pub anchor_ms: u64,
     pub paused: bool,
+    /// Room-scoped base speed, independent of transient local drift correction.
+    #[serde(default = "default_target_rate")]
+    pub target_rate: f64,
+}
+
+fn default_target_rate() -> f64 {
+    1.0
 }
 
 impl Timeline {
@@ -74,7 +85,7 @@ impl Timeline {
             + if self.paused {
                 0.0
             } else {
-                ((host_now_ms - self.anchor_ms as f64) / 1_000.0).max(0.0)
+                ((host_now_ms - self.anchor_ms as f64) / 1_000.0).max(0.0) * self.target_rate
             }
     }
 }
@@ -180,6 +191,10 @@ pub enum HostCommand {
     SetPaused(bool),
     SeekAbsolute(f64),
     SeekRelative(f64),
+    SetRate(f64),
+    /// Exactly one 0.05 step in direction -1 or +1, resolved by the host.
+    StepRate(i32),
+    ResetRate,
 }
 
 /// Ephemeral player adjustments; callers must not persist `rate` as a preference.
@@ -196,7 +211,7 @@ pub fn drift_correction(room: &RoomSnapshot, local: &LocalReport, now_ms: u64) -
         return DriftCorrection {
             paused: true,
             seek_to: None,
-            rate: 1.0,
+            rate: room.timeline.target_rate,
         };
     };
     let host_now = now_ms as f64 + room.clock_offset_ms;
@@ -207,7 +222,7 @@ pub fn drift_correction(room: &RoomSnapshot, local: &LocalReport, now_ms: u64) -
     let paused = room.ended
         || !room.connected
         || !compatible
-        || !engine::ready_for_media(media, room.generation, local)
+        || !engine::ready_for_media(media, room.generation, room.timeline.target_rate, local)
         || room.timeline.paused
         || host_now < room.timeline.anchor_ms as f64;
     let target = room
@@ -215,19 +230,31 @@ pub fn drift_correction(room: &RoomSnapshot, local: &LocalReport, now_ms: u64) -
         .position_at(host_now)
         .clamp(0.0, media.duration);
     let delta = target - local.position;
+    let base = room.timeline.target_rate;
+    // Playing tolerances describe wall time at the agreed base speed. Using
+    // the temporary corrected native speed would make classification oscillate.
+    let gap = if paused {
+        delta.abs()
+    } else {
+        delta.abs() / base
+    };
+    // Subtracting two large positions can put an exact boundary a few ULPs
+    // beyond the limit. This only absorbs subtraction/normalization roundoff.
+    let rounding_tolerance = 4.0 * f64::EPSILON * (target.abs() + local.position.abs()).max(1.0)
+        / if paused { 1.0 } else { base };
     let seek_threshold = if paused { 0.15 } else { 1.25 };
     let seek_to = (compatible
         && local.loaded
         && !local.ended
         && local.seekable
-        && delta.abs() > seek_threshold)
+        && gap > seek_threshold + rounding_tolerance)
         .then_some(target);
-    let rate = if paused || seek_to.is_some() || delta.abs() <= 0.15 {
-        1.0
+    let rate = if paused || seek_to.is_some() || gap <= 0.15 + rounding_tolerance {
+        base
     } else if delta > 0.0 {
-        1.03
+        base * CATCH_UP_MULTIPLIER
     } else {
-        0.97
+        base * 0.97
     };
     DriftCorrection {
         paused,

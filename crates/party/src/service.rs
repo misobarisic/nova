@@ -597,7 +597,9 @@ async fn exchange(
                 );
             }
             ensure!(
-                snapshot.timeline.position.is_finite() && snapshot.timeline.position >= 0.0,
+                snapshot.timeline.position.is_finite()
+                    && snapshot.timeline.position >= 0.0
+                    && engine::valid_target_rate(snapshot.timeline.target_rate),
                 "invalid party timeline"
             );
         }
@@ -1082,6 +1084,111 @@ mod tests {
         .unwrap_err();
         assert!(revoked.downcast_ref::<TerminalError>().is_some());
         assert!(guest.connection.is_none());
+        endpoint.close().await;
+        router.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn guests_share_room_speed_and_step_replays_do_not_double_apply() {
+        let (_host, router, handler, ticket) = host().await;
+        let endpoint = endpoint().await;
+        let mut guest = guest(ticket);
+        let joined = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Join {
+                name: "Guest".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_control_policy(ControlPolicy::Everyone, local_now_ms())
+            .unwrap();
+        let mut current = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(engine::tests::report()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let operation = |snapshot: &RoomSnapshot, command| Operation::Control {
+            generation: snapshot.generation,
+            control_revision: snapshot.control_revision,
+            intent: ControlIntent::Playback(command),
+        };
+        current = exchange(
+            &endpoint,
+            &mut guest,
+            operation(&current, HostCommand::SetRate(1.5)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(current.timeline.target_rate, 1.5);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let before_step = current.clone();
+        current = exchange(
+            &endpoint,
+            &mut guest,
+            operation(&current, HostCommand::StepRate(1)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(current.timeline.target_rate, 1.55);
+        assert_eq!(current.control_revision, before_step.control_revision);
+        let replay = Request {
+            room_id: guest.ticket.room_id.clone(),
+            capability: guest.ticket.capability,
+            sequence: guest.next_control_sequence - 1,
+            operation: operation(&before_step, HostCommand::StepRate(1)),
+        };
+        let (mut send, mut recv) = guest.connection.as_ref().unwrap().open_bi().await.unwrap();
+        wire::write(&mut send, &replay).await.unwrap();
+        let response: Response = wire::read(&mut recv).await.unwrap();
+        assert_eq!(response.rejection, Some(ControlRejectionReason::Duplicate));
+        assert_eq!(response.snapshot.unwrap().timeline.target_rate, 1.55);
+        assert!(guest.connection.is_some());
+        assert_eq!(joined.timeline.target_rate, 1.0);
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .clear_media(local_now_ms())
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        current = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(LocalReport::default()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(current.media.is_none());
+        assert_eq!(current.timeline.target_rate, 1.55);
+        current = exchange(
+            &endpoint,
+            &mut guest,
+            operation(&current, HostCommand::ResetRate),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(current.timeline.target_rate, 1.0);
+        assert!(current.media.is_none() && current.timeline.paused);
         endpoint.close().await;
         router.shutdown().await.unwrap();
     }

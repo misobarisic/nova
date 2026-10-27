@@ -119,6 +119,7 @@ export component AppWindow inherits Window {
     in-out property <string> party_time_text <=> PartyBridge.time_text;
     in-out property <float> party_position <=> PartyBridge.position;
     in-out property <float> party_duration <=> PartyBridge.duration;
+    in-out property <float> party_target_speed <=> PartyBridge.target_speed;
     in-out property <bool> party_wait_for_guests <=> PartyBridge.wait_for_guests;
     in-out property <[PartyMemberRow]> party_participants <=> PartyBridge.participants;
     callback party_create();
@@ -143,6 +144,12 @@ export component AppWindow inherits Window {
     public function party_bridge_seek(value: float) { root.party_seek(value); }
     callback party_remove_member(string);
     public function party_bridge_remove_member(value: string) { root.party_remove_member(value); }
+    callback party_set_target_speed(float);
+    public function party_bridge_set_target_speed(value: float) { root.party_set_target_speed(value); }
+    callback party_step_target_speed(int);
+    public function party_bridge_step_target_speed(direction: int) { root.party_step_target_speed(direction); }
+    callback party_reset_target_speed();
+    public function party_bridge_reset_target_speed() { root.party_reset_target_speed(); }
     callback party_set_allow_everyone(bool);
     public function party_bridge_set_allow_everyone(value: bool) { root.party_set_allow_everyone(value); }
     callback party_set_wait_for_guests(bool);

@@ -2387,8 +2387,8 @@ impl Bridge {
         let Some(engine) = crate::torrent::engine() else {
             return;
         };
-        if let Some((source, duration, stalled)) = self.player.ram_torrent_telemetry() {
-            engine.note_playback(&source, duration, stalled);
+        if let Some((source, duration, stalled, rate)) = self.player.ram_torrent_telemetry() {
+            engine.note_playback(&source, duration, stalled, rate);
         }
         let stats = engine.stats(&hash);
         if stats.ram_limit_bytes > 0 {

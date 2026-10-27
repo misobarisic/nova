@@ -23,6 +23,7 @@ component SpeedStepButton inherits Rectangle {
     // locate the buttons by label).
     in property <string> name: "";
     in property <bool> roomy: false;
+    in property <bool> enabled: true;
     in-out property <bool> keyboard-mode: false;
     callback clicked();
 
@@ -34,6 +35,7 @@ component SpeedStepButton inherits Rectangle {
     border-color: focus.has-focus && root.keyboard-mode ? Theme.current.focus_ring : Theme.current.step_border;
     accessible-role: button;
     accessible-label: root.name;
+    accessible-enabled: root.enabled;
 
     Text {
         text: root.glyph;
@@ -45,12 +47,14 @@ component SpeedStepButton inherits Rectangle {
     }
 
     focus := FocusScope {
+        enabled: root.enabled;
         key-pressed(e) => {
             root.keyboard-mode = true;
             if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
         }
     }
     step_touch := ControlTouchArea {
+        enabled: root.enabled;
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
@@ -66,11 +70,15 @@ component SpeedPreset inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
     in property <bool> roomy: false;
+    in property <bool> enabled: true;
     in-out property <bool> keyboard-mode: false;
     callback clicked();
 
     horizontal-stretch: 1;
     height: root.roomy ? 44px : 28px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.selection_fill : (preset_touch.feedback-active ? Theme.current.control_hover : Theme.current.control);
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
@@ -86,12 +94,14 @@ component SpeedPreset inherits Rectangle {
     }
 
     focus := FocusScope {
+        enabled: root.enabled;
         key-pressed(e) => {
             root.keyboard-mode = true;
             if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
         }
     }
     preset_touch := ControlTouchArea {
+        enabled: root.enabled;
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
@@ -111,7 +121,11 @@ export component SpeedControl inherits Rectangle {
     /// Left/Right or Up/Down through `stepped`).
     in property <bool> focused: false;
     in property <bool> roomy: false;
+    in property <bool> enabled: true;
     in-out property <bool> keyboard-mode: false;
+
+    // Party controls wait for the accepted target before changing the readout.
+    in property <bool> optimistic: true;
 
     /// The rate changed (slider drag/tap, ± step or a preset): a raw value.
     callback changed(float);
@@ -121,12 +135,13 @@ export component SpeedControl inherits Rectangle {
     /// Host-side entry point for the keyboard steps, so arrow keys go through
     /// exactly the same path as the buttons.
     function request_step(d: int) {
-        root.stepped(d);
+        if root.enabled { root.stepped(d); }
     }
 
     /// Preset jump: an exact rate, so the host's normal change path applies it.
     function apply(v: float) {
-        root.speed = v;
+        if !root.enabled { return; }
+        if root.optimistic { root.speed = v; }
         root.changed(v);
     }
 
@@ -151,7 +166,7 @@ export component SpeedControl inherits Rectangle {
             spacing: 8px;
 
             SpeedStepButton {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 glyph: "−";
                 name: @tr("Slower");
                 clicked => { root.request_step(-1); }
@@ -195,12 +210,14 @@ export component SpeedControl inherits Rectangle {
 
                 forward-focus: slider_focus;
                 slider_focus := FocusScope {
+                    enabled: root.enabled;
                     key-pressed(e) => {
                         root.keyboard-mode = true;
                         if e.text == Key.LeftArrow || e.text == Key.RightArrow { root.request_step(e.text == Key.RightArrow ? 1 : -1); accept } else { reject }
                     }
                 }
                 track_touch := SliderTouchArea {
+                    enabled: root.enabled;
                     width: 100%;
                     height: 100%;
                     mouse-cursor: pointer;
@@ -213,19 +230,17 @@ export component SpeedControl inherits Rectangle {
                     moved => {
                         if (!self.pressed) { return; }
                         root.keyboard-mode = false;
-                        root.speed = value_at(self.mouse-x);
-                        root.changed(root.speed);
+                        root.apply(value_at(self.mouse-x));
                     }
                     clicked => {
                         root.keyboard-mode = false;
-                        root.speed = value_at(self.mouse-x);
-                        root.changed(root.speed);
+                        root.apply(value_at(self.mouse-x));
                     }
                 }
             }
 
             SpeedStepButton {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 glyph: "+";
                 name: @tr("Faster");
                 clicked => { root.request_step(1); }
@@ -249,25 +264,25 @@ export component SpeedControl inherits Rectangle {
             spacing: 8px;
 
             SpeedPreset {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 label: "1×";
                 selected: root.is_set(1.0);
                 clicked => { root.apply(1.0); }
             }
             SpeedPreset {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 label: "1.25×";
                 selected: root.is_set(1.25);
                 clicked => { root.apply(1.25); }
             }
             SpeedPreset {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 label: "1.5×";
                 selected: root.is_set(1.5);
                 clicked => { root.apply(1.5); }
             }
             SpeedPreset {
-                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
+                roomy: root.roomy; enabled: root.enabled; keyboard-mode <=> root.keyboard-mode;
                 label: "2×";
                 selected: root.is_set(2.0);
                 clicked => { root.apply(2.0); }

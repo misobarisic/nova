@@ -46,6 +46,9 @@ pub(super) struct State {
     busy: bool,
     pending: std::collections::VecDeque<Operation>,
     last_report: Option<Instant>,
+    last_operation_was_report: bool,
+    last_guest_control_finished: Option<Instant>,
+    control_wakeup: Option<ControlWakeup>,
     /// A user explicitly chose to find this room's episode in their own addons.
     choosing_source: bool,
     /// The creator must validate a source before activating pending media.
@@ -68,7 +71,69 @@ struct SourceChoice {
     fingerprint: nova_party::SourceFingerprint,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ControlWakeup {
+    activation: u64,
+    room_id: String,
+    generation: u64,
+}
+
+impl ControlWakeup {
+    fn current(&self, state: &State) -> bool {
+        state.active()
+            && state.generation == self.activation
+            && state.snapshot_for_sources().as_ref().is_some_and(|room| {
+                room.room_id == self.room_id && room.generation == self.generation
+            })
+    }
+}
+
 impl State {
+    fn push_operation(&mut self, operation: Operation) -> bool {
+        // Absolute slider moves supersede only an adjacent absolute move in
+        // the same room state. Steps, resets and other actions keep ordering.
+        if let Operation::Command(generation, revision, HostCommand::SetRate(_)) = &operation
+            && let Some(Operation::Command(old_generation, old_revision, HostCommand::SetRate(_))) =
+                self.pending.back()
+            && generation == old_generation
+            && revision == old_revision
+        {
+            *self.pending.back_mut().unwrap() = operation;
+            return true;
+        }
+        if self.pending.len() >= 32 {
+            return false;
+        }
+        self.pending.push_back(operation);
+        true
+    }
+
+    fn report_should_run(&self, now: Instant) -> bool {
+        self.last_report
+            .is_none_or(|at| now.saturating_duration_since(at) >= Duration::from_millis(500))
+            && (!self.last_operation_was_report || self.pending.is_empty())
+    }
+
+    fn note_operation_dispatched(&mut self, operation: &Operation, now: Instant) {
+        self.last_operation_was_report = matches!(operation, Operation::Report(_));
+        if self.last_operation_was_report {
+            self.last_report = Some(now);
+        }
+    }
+
+    fn guest_control_wait(&self, now: Instant) -> Option<Duration> {
+        if !self.pending.front().is_some_and(Operation::is_control)
+            || !self
+                .snapshot_for_sources()
+                .is_some_and(|room| room.role == PartyRole::Guest)
+        {
+            return None;
+        }
+        Duration::from_millis(50)
+            .checked_sub(now.saturating_duration_since(self.last_guest_control_finished?))
+            .filter(|wait| !wait.is_zero())
+    }
+
     pub(super) fn snapshot_for_sources(&self) -> Option<RoomSnapshot> {
         // A network reply can revoke permissions before its UI continuation
         // runs. Authorize from the service; retain the last read on contention.
@@ -197,6 +262,12 @@ enum Operation {
     Wait(bool),
     Continue,
     Report(LocalReport),
+}
+
+impl Operation {
+    fn is_control(&self) -> bool {
+        matches!(self, Self::Command(..) | Self::PrepareMedia(..))
+    }
 }
 
 fn normalized_title(value: &str) -> String {
@@ -445,6 +516,18 @@ impl Bridge {
                 app.set_party_allow_everyone(everyone);
             }
         });
+        let b = self.clone();
+        app.on_party_set_target_speed(move |rate| {
+            if rate.is_finite() {
+                b.party_command(HostCommand::SetRate(f64::from(rate)));
+            }
+        });
+        let b = self.clone();
+        app.on_party_step_target_speed(move |direction| {
+            b.party_command(HostCommand::StepRate(direction))
+        });
+        let b = self.clone();
+        app.on_party_reset_target_speed(move || b.party_command(HostCommand::ResetRate));
         let b = self.clone();
         app.on_party_set_paused(move |paused| b.party_command(HostCommand::SetPaused(paused)));
         let b = self.clone();
@@ -701,6 +784,7 @@ impl Bridge {
             app.set_party_can_control(false);
             app.set_party_can_choose_media(false);
             app.set_party_allow_everyone(false);
+            app.set_party_target_speed(1.0);
             app.set_party_has_media(false);
             app.set_party_can_return_to_player(false);
             app.set_party_busy(false);
@@ -1355,16 +1439,26 @@ impl Bridge {
     }
 
     fn party_command(&self, command: HostCommand) {
+        let rate_change = matches!(
+            command,
+            HostCommand::SetRate(_) | HostCommand::StepRate(_) | HostCommand::ResetRate
+        );
         let (generation, revision) = {
             let state = self.shared.lock().unwrap();
-            if state.party.choosing_media {
+            if state.party.choosing_media && !rate_change {
                 return;
             }
-            let Some(room) = state.party.snapshot.as_ref().filter(|r| r.media.is_some()) else {
+            let Some(room) = state
+                .party
+                .snapshot_for_sources()
+                .filter(|room| rate_change || room.media.is_some())
+            else {
                 return;
             };
             (room.generation, room.control_revision)
         };
+        // Rate edits are room settings even in the lobby; the host resolves
+        // steps against its accepted target, never this device's correction.
         self.party_enqueue(Operation::Command(generation, revision, command));
     }
 
@@ -1378,7 +1472,7 @@ impl Bridge {
             return;
         }
         let shared_control = matches!(operation, Operation::Command(..));
-        if !p.snapshot.as_ref().is_some_and(|room| {
+        if !p.snapshot_for_sources().as_ref().is_some_and(|room| {
             if shared_control {
                 can_control(room)
             } else {
@@ -1391,9 +1485,7 @@ impl Bridge {
             }
             return;
         }
-        if p.pending.len() < 32 {
-            p.pending.push_back(operation);
-        }
+        p.push_operation(operation);
         drop(state);
         self.party_tick();
     }
@@ -1422,14 +1514,12 @@ impl Bridge {
             PlaybackAction::SeekRelative(delta) if delta.is_finite() => {
                 Some(HostCommand::SeekRelative(*delta))
             }
-            PlaybackAction::SetSpeed(_)
-            | PlaybackAction::SpeedStep(_)
-            | PlaybackAction::ResetSpeed
-            | PlaybackAction::BeginSpeedPreview
-            | PlaybackAction::EndSpeedPreview => {
-                if let Some(app) = self.app() {
-                    app.set_party_warning(text::tr("Watch parties use normal speed; audio and subtitles remain your choice.").into());
-                }
+            PlaybackAction::SetSpeed(rate) if rate.is_finite() => Some(HostCommand::SetRate(*rate)),
+            PlaybackAction::SpeedStep(direction) => Some(HostCommand::StepRate(*direction)),
+            PlaybackAction::ResetSpeed => Some(HostCommand::ResetRate),
+            PlaybackAction::BeginSpeedPreview | PlaybackAction::EndSpeedPreview => {
+                // Press-and-hold preview remains disabled in a party. Neither
+                // its press nor its release may edit shared or saved speed.
                 return true;
             }
             PlaybackAction::Stop => {
@@ -1647,32 +1737,62 @@ impl Bridge {
             let Some(service) = p.service.clone() else {
                 return;
             };
-            // Heartbeats have a deadline even while shared controls keep
-            // arriving. Commands must never indefinitely starve readiness.
-            let operation = if p
-                .last_report
-                .is_none_or(|at| at.elapsed().as_millis() >= 500)
-            {
+            // Keep the heartbeat deadline under a control burst. A slow
+            // report gets one queued operation before another overdue report,
+            // so RTT >= the deadline cannot starve controls indefinitely.
+            let operation = if p.report_should_run(Instant::now()) {
                 Some(Operation::Report(report))
+            } else if let Some(wait) = p.guest_control_wait(Instant::now()) {
+                let Some(room) = p.snapshot_for_sources() else {
+                    return;
+                };
+                let wakeup = ControlWakeup {
+                    activation: p.generation,
+                    room_id: room.room_id,
+                    generation: room.generation,
+                };
+                let schedule = p.control_wakeup.as_ref() != Some(&wakeup);
+                if schedule {
+                    p.control_wakeup = Some(wakeup.clone());
+                }
+                drop(state);
+                if schedule {
+                    let bridge = self.clone();
+                    slint::Timer::single_shot(wait, move || {
+                        let mut state = bridge.shared.lock().unwrap();
+                        if state.party.control_wakeup.as_ref() != Some(&wakeup) {
+                            return;
+                        }
+                        state.party.control_wakeup = None;
+                        if !wakeup.current(&state.party) {
+                            return;
+                        }
+                        drop(state);
+                        bridge.party_tick();
+                    });
+                }
+                return;
             } else {
                 p.pending.pop_front()
             };
             let Some(operation) = operation else { return };
+            let guest_control = operation.is_control()
+                && p.snapshot_for_sources()
+                    .is_some_and(|room| room.role == PartyRole::Guest);
             p.busy = true;
-            if matches!(operation, Operation::Report(_)) {
-                p.last_report = Some(Instant::now());
-            }
+            p.note_operation_dispatched(&operation, Instant::now());
             (
                 service,
                 operation,
                 p.generation,
                 p.resume_guard,
                 p.selection_revision,
+                guest_control,
             )
         };
         let b = self.clone();
         thread::spawn(move || {
-            let (service, operation, generation, resumed, selection_revision) = work;
+            let (service, operation, generation, resumed, selection_revision, guest_control) = work;
             let browse = matches!(operation, Operation::ClearMedia { browse: true });
             let media_change = matches!(
                 operation,
@@ -1734,6 +1854,11 @@ impl Bridge {
                     let p = &mut state.party;
                     if p.generation != generation {
                         return;
+                    }
+                    if guest_control {
+                        // The host's limiter includes rejected controls. Waiting
+                        // after the reply also remains safe under RTT jitter.
+                        p.last_guest_control_finished = Some(Instant::now());
                     }
                     if media_change && p.selection_revision != selection_revision {
                         p.busy = false;
@@ -1865,6 +1990,7 @@ impl Bridge {
         app.set_party_waiting(!room.waiting.is_empty() || !room.connected);
         app.set_party_wait_for_guests(room.wait_for_guests);
         app.set_party_paused(room.timeline.paused);
+        app.set_party_target_speed(room.timeline.target_rate as f32);
         let media = room.selected_media();
         app.set_party_has_media(media.is_some());
         app.set_party_can_return_to_player(app.get_player_open());
@@ -1906,7 +2032,7 @@ impl Bridge {
         } else if room.pending_media.is_some() {
             "Choose a stream"
         } else if media.is_none() {
-            if room.role == PartyRole::Host {
+            if can_control(&room) {
                 // The lobby already presents this action as its primary button.
                 ""
             } else {

@@ -94,7 +94,37 @@ pub(crate) fn validate_report(report: &LocalReport) -> Result<()> {
     Ok(())
 }
 
-fn reason(media: &PartyMedia, generation: u64, report: &LocalReport) -> Option<String> {
+pub(crate) fn valid_target_rate(rate: f64) -> bool {
+    rate.is_finite() && (MIN_TARGET_RATE..=MAX_TARGET_RATE).contains(&rate)
+}
+
+fn commanded_rate(command: HostCommand, current: f64) -> Result<Option<f64>> {
+    let rate = match command {
+        HostCommand::SetRate(rate) => {
+            ensure!(valid_target_rate(rate), "invalid party playback speed");
+            rate
+        }
+        HostCommand::StepRate(direction) => {
+            ensure!(
+                matches!(direction, -1 | 1),
+                "invalid party playback speed step"
+            );
+            (current + f64::from(direction) * TARGET_RATE_STEP)
+                .clamp(MIN_TARGET_RATE, MAX_TARGET_RATE)
+        }
+        HostCommand::ResetRate => 1.0,
+        _ => return Ok(None),
+    };
+    // Keep repeated steps exact and make slider and button commands agree.
+    Ok(Some((rate * 20.0).round() / 20.0))
+}
+
+fn reason(
+    media: &PartyMedia,
+    generation: u64,
+    target_rate: f64,
+    report: &LocalReport,
+) -> Option<String> {
     if report.generation != generation {
         return Some("waiting for current media".into());
     }
@@ -120,16 +150,22 @@ fn reason(media: &PartyMedia, generation: u64, report: &LocalReport) -> Option<S
     }
     if report.buffering
         || !report.ready
-        || report.buffered_ahead + 0.05
-            < BUFFER_READY_SECONDS.min((report.duration - report.position).max(0.0))
+        || report.buffered_ahead
+            < (BUFFER_READY_SECONDS * target_rate * CATCH_UP_MULTIPLIER)
+                .min((report.duration - report.position).max(0.0))
     {
         return Some("buffering".into());
     }
     None
 }
 
-pub(crate) fn ready_for_media(media: &PartyMedia, generation: u64, report: &LocalReport) -> bool {
-    reason(media, generation, report).is_none()
+pub(crate) fn ready_for_media(
+    media: &PartyMedia,
+    generation: u64,
+    target_rate: f64,
+    report: &LocalReport,
+) -> bool {
+    reason(media, generation, target_rate, report).is_none()
 }
 
 impl Member {
@@ -220,6 +256,7 @@ impl HostRoom {
                     position: report.position,
                     anchor_ms: now + START_LEAD_MS,
                     paused,
+                    target_rate: 1.0,
                 },
                 participants: Vec::new(),
                 waiting: Vec::new(),
@@ -454,6 +491,7 @@ impl HostRoom {
                 .min(media.as_ref().map_or(0.0, |media| media.duration)),
             anchor_ms: now + START_LEAD_MS,
             paused: media.is_none(),
+            target_rate: self.snapshot.timeline.target_rate,
         };
         self.snapshot.media = media;
         self.snapshot.pending_media = None;
@@ -496,6 +534,16 @@ impl HostRoom {
     pub fn command(&mut self, command: HostCommand, now: u64) -> Result<()> {
         self.tick(now);
         ensure!(!self.snapshot.ended, "party has ended");
+        if let Some(rate) = commanded_rate(command, self.snapshot.timeline.target_rate)? {
+            let timeline = &mut self.snapshot.timeline;
+            timeline.position = timeline.position_at(now as f64);
+            // A scheduled start keeps its existing deadline. Active playback
+            // continues from the position reached under the previous base rate.
+            timeline.anchor_ms = timeline.anchor_ms.max(now);
+            timeline.target_rate = rate;
+            self.tick(now);
+            return Ok(());
+        }
         let duration = self
             .snapshot
             .media
@@ -510,6 +558,7 @@ impl HostRoom {
                     position: current,
                     anchor_ms: now + if paused { 0 } else { START_LEAD_MS },
                     paused: paused || self.held,
+                    target_rate: self.snapshot.timeline.target_rate,
                 };
             }
             HostCommand::SeekAbsolute(position) | HostCommand::SeekRelative(position) => {
@@ -526,7 +575,11 @@ impl HostRoom {
                     position: position.clamp(0.0, duration),
                     anchor_ms: now + START_LEAD_MS,
                     paused: self.intended_paused || self.held,
+                    target_rate: self.snapshot.timeline.target_rate,
                 };
+            }
+            HostCommand::SetRate(_) | HostCommand::StepRate(_) | HostCommand::ResetRate => {
+                unreachable!("rate commands handled before media validation");
             }
         }
         self.tick(now);
@@ -606,7 +659,9 @@ impl HostRoom {
         }
         match intent {
             crate::wire::ControlIntent::Playback(command) => {
-                if self.snapshot.media.is_none() {
+                let rate = commanded_rate(command, self.snapshot.timeline.target_rate)
+                    .map_err(|_| self.rejection(ControlRejectionReason::InvalidIntent))?;
+                if self.snapshot.media.is_none() && rate.is_none() {
                     return Err(self.rejection(ControlRejectionReason::NoMedia));
                 }
                 if let HostCommand::SeekAbsolute(value) | HostCommand::SeekRelative(value) = command
@@ -642,6 +697,7 @@ impl HostRoom {
             position: self.snapshot.timeline.position_at(now as f64),
             anchor_ms: now + START_LEAD_MS,
             paused: self.held,
+            target_rate: self.snapshot.timeline.target_rate,
         };
         self.tick(now);
     }
@@ -680,7 +736,14 @@ impl HostRoom {
             };
             let mut issue = self.snapshot.media.as_ref().map_or_else(
                 || Some("waiting for host to choose media".into()),
-                |media| reason(media, self.snapshot.generation, &member.report),
+                |media| {
+                    reason(
+                        media,
+                        self.snapshot.generation,
+                        self.snapshot.timeline.target_rate,
+                        &member.report,
+                    )
+                },
             );
             if !member.participant.connected {
                 issue = Some("disconnected".into());
@@ -726,6 +789,7 @@ impl HostRoom {
                 position,
                 anchor_ms: now + START_LEAD_MS,
                 paused: hold || self.intended_paused,
+                target_rate: self.snapshot.timeline.target_rate,
             };
             self.held = hold;
         }
@@ -1402,6 +1466,7 @@ pub(crate) mod tests {
             position: 40.0,
             anchor_ms: 6_000,
             paused: false,
+            target_rate: 1.0,
         };
         let local = report();
         let correction = drift_correction(&snapshot, &local, 500);
@@ -1488,7 +1553,7 @@ mod source_hint_tests {
 
     #[test]
     fn source_hint_wire_shape_is_fixed_and_versioned() {
-        assert_eq!(ALPN, b"nova/party/5");
+        assert_eq!(ALPN, b"nova/party/6");
         let report = LocalReport {
             source_fingerprint: Some([9; 32]),
             ..Default::default()
@@ -1497,5 +1562,370 @@ mod source_hint_tests {
         let decoded: LocalReport = crate::wire::decode(&bytes).unwrap();
         assert_eq!(decoded.source_fingerprint, Some([9; 32]));
         assert!(bytes.len() < 128);
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::tests::{media, report, room};
+    use super::*;
+    use crate::wire::ControlIntent;
+
+    fn close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn rate_changes_keep_position_pause_and_future_start_and_survive_media_resets() {
+        let mut room = room();
+        room.command(HostCommand::SetRate(1.5), 500).unwrap();
+        assert_eq!(room.snapshot.timeline.anchor_ms, 1_000);
+        close(room.snapshot.timeline.position_at(500.0), 10.0);
+        close(room.snapshot.timeline.position_at(2_000.0), 11.5);
+        room.command(HostCommand::SetRate(2.0), 2_000).unwrap();
+        close(room.snapshot.timeline.position, 11.5);
+        close(room.snapshot.timeline.position_at(2_500.0), 12.5);
+        assert!(!room.snapshot.timeline.paused);
+        room.command(HostCommand::SetPaused(true), 2_500).unwrap();
+        room.command(HostCommand::SetRate(0.5), 2_600).unwrap();
+        assert!(room.snapshot.timeline.paused);
+        close(room.snapshot.timeline.position_at(10_000.0), 12.5);
+        room.clear_media(2_700).unwrap();
+        close(room.snapshot.timeline.target_rate, 0.5);
+        room.command(HostCommand::StepRate(1), 2_800).unwrap();
+        assert!(room.snapshot.timeline.paused);
+        close(room.snapshot.timeline.target_rate, 0.55);
+        room.prepare_media(
+            PartyMedia {
+                duration: 0.0,
+                ..media()
+            },
+            2_900,
+        )
+        .unwrap();
+        close(room.snapshot.timeline.target_rate, 0.55);
+        room.select_media_for_generation(room.snapshot.generation, media(), report(), 3_000)
+            .unwrap();
+        close(room.snapshot.timeline.target_rate, 0.55);
+        room.command(HostCommand::ResetRate, 3_100).unwrap();
+        close(room.snapshot.timeline.target_rate, 1.0);
+        // A new room owns its own default; there is no process-wide speed state.
+        close(super::tests::room().snapshot.timeline.target_rate, 1.0);
+    }
+
+    #[test]
+    fn rate_steps_use_host_target_once_and_follow_permission_generation_and_bounds() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 10).unwrap();
+        let speed = |command| ControlIntent::Playback(command);
+        let denied = room
+            .control(
+                "guest",
+                1,
+                0,
+                Some(1),
+                speed(HostCommand::SetRate(1.5)),
+                100,
+            )
+            .unwrap_err();
+        assert_eq!(
+            denied.downcast_ref::<ControlRejection>().unwrap().reason,
+            ControlRejectionReason::PermissionDenied
+        );
+        room.set_control_policy(ControlPolicy::Everyone, 110)
+            .unwrap();
+        let revision = room.snapshot.control_revision;
+        room.control(
+            "guest",
+            1,
+            revision,
+            Some(2),
+            speed(HostCommand::SetRate(1.5)),
+            200,
+        )
+        .unwrap();
+        room.control(
+            "guest",
+            1,
+            revision,
+            Some(3),
+            speed(HostCommand::StepRate(1)),
+            300,
+        )
+        .unwrap();
+        close(room.snapshot.timeline.target_rate, 1.55);
+        assert!(
+            room.control(
+                "guest",
+                1,
+                revision,
+                Some(3),
+                speed(HostCommand::StepRate(1)),
+                400
+            )
+            .is_err()
+        );
+        close(room.snapshot.timeline.target_rate, 1.55);
+        room.control(
+            "guest",
+            1,
+            revision,
+            Some(4),
+            speed(HostCommand::StepRate(1)),
+            500,
+        )
+        .unwrap();
+        close(room.snapshot.timeline.target_rate, 1.6);
+        assert_eq!(
+            room.snapshot.control_revision, revision,
+            "rate changes do not invalidate concurrent authorized commands"
+        );
+        for (index, command) in [
+            HostCommand::SetRate(f64::NAN),
+            HostCommand::SetRate(f64::INFINITY),
+            HostCommand::SetRate(0.49),
+            HostCommand::SetRate(2.01),
+            HostCommand::StepRate(0),
+            HostCommand::StepRate(2),
+            HostCommand::StepRate(i32::MIN),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let rejected = room
+                .control(
+                    "guest",
+                    1,
+                    revision,
+                    Some(10 + index as u64),
+                    speed(command),
+                    600 + index as u64 * 100,
+                )
+                .unwrap_err();
+            assert_eq!(
+                rejected.downcast_ref::<ControlRejection>().unwrap().reason,
+                ControlRejectionReason::InvalidIntent
+            );
+            close(room.snapshot.timeline.target_rate, 1.6);
+        }
+        room.command(HostCommand::SetRate(2.0), 1_300).unwrap();
+        room.command(HostCommand::StepRate(1), 1_400).unwrap();
+        close(room.snapshot.timeline.target_rate, 2.0);
+        room.command(HostCommand::SetRate(0.5), 1_500).unwrap();
+        room.command(HostCommand::StepRate(-1), 1_600).unwrap();
+        close(room.snapshot.timeline.target_rate, 0.5);
+        room.clear_media(1_700).unwrap();
+        let stale = room
+            .control(
+                "guest",
+                1,
+                revision,
+                Some(30),
+                speed(HostCommand::ResetRate),
+                1_800,
+            )
+            .unwrap_err();
+        assert_eq!(
+            stale.downcast_ref::<ControlRejection>().unwrap().reason,
+            ControlRejectionReason::StaleGeneration
+        );
+        let generation = room.snapshot.generation;
+        room.control(
+            "guest",
+            generation,
+            revision,
+            Some(31),
+            speed(HostCommand::SetRate(1.5)),
+            1_900,
+        )
+        .unwrap();
+        assert!(
+            room.snapshot.media.is_none(),
+            "shared speed is editable in the lobby"
+        );
+        room.set_control_policy(ControlPolicy::HostOnly, 2_000)
+            .unwrap();
+        let revoked = room
+            .control(
+                "guest",
+                generation,
+                revision,
+                Some(32),
+                speed(HostCommand::ResetRate),
+                2_100,
+            )
+            .unwrap_err();
+        assert_eq!(
+            revoked.downcast_ref::<ControlRejection>().unwrap().reason,
+            ControlRejectionReason::StaleControlRevision
+        );
+        close(room.snapshot.timeline.target_rate, 1.5);
+        assert_eq!(ROOM_LIFETIME_MS, 4 * 60 * 60 * 1_000);
+        assert_eq!(HOST_TIMEOUT_MS, 30_000);
+    }
+
+    #[test]
+    fn ready_reserve_is_two_real_seconds_at_fastest_correction_capped_by_remaining() {
+        for base in [0.5, 1.0, 1.5, 2.0] {
+            let reserve = 2.0 * base * 1.03;
+            let mut local = report();
+            local.buffered_ahead = reserve - 1e-6;
+            assert!(!ready_for_media(&media(), 1, base, &local));
+            local.buffered_ahead = reserve;
+            assert!(ready_for_media(&media(), 1, base, &local));
+            local.position = 119.5;
+            local.buffered_ahead = 0.5;
+            assert!(ready_for_media(&media(), 1, base, &local));
+            local.buffered_ahead = 0.49;
+            assert!(!ready_for_media(&media(), 1, base, &local));
+        }
+        let mut room = room();
+        let reserve = LocalReport {
+            buffered_ahead: 2.1,
+            ..report()
+        };
+        room.local_report(reserve.clone(), 100).unwrap();
+        room.command(HostCommand::SetRate(1.5), 200).unwrap();
+        assert!(!room.members["host"].participant.ready);
+        room.local_report(reserve, 1_000).unwrap();
+        assert!(
+            room.snapshot.timeline.paused,
+            "a faster target respects the unchanged buffering debounce"
+        );
+        let held_position = room.snapshot.timeline.position;
+        room.command(HostCommand::SetRate(0.5), 1_100).unwrap();
+        assert!(room.snapshot.timeline.paused);
+        close(room.snapshot.timeline.position, held_position);
+        room.local_report(report(), 1_600).unwrap();
+        assert!(!room.snapshot.timeline.paused);
+        assert_eq!(room.snapshot.timeline.anchor_ms, 2_600);
+        close(room.snapshot.timeline.target_rate, 0.5);
+    }
+
+    #[test]
+    fn playing_drift_edges_are_symmetric_wall_time_at_every_target_rate() {
+        for base in [0.5, 1.0, 1.5, 2.0] {
+            for sign in [-1.0, 1.0] {
+                for (wall_gap, seek, corrected) in [
+                    (0.15 - 1e-6, false, false),
+                    (0.15, false, false),
+                    (0.15 + 1e-6, false, true),
+                    (1.25 - 1e-6, false, true),
+                    (1.25, false, true),
+                    (1.25 + 1e-6, true, false),
+                ] {
+                    let mut snapshot = room().snapshot;
+                    snapshot.timeline = Timeline {
+                        position: 20.0 + sign * wall_gap * base,
+                        anchor_ms: 0,
+                        paused: false,
+                        target_rate: base,
+                    };
+                    let local = LocalReport {
+                        position: 20.0,
+                        ..report()
+                    };
+                    let adjustment = drift_correction(&snapshot, &local, 0);
+                    assert!(!adjustment.paused);
+                    assert_eq!(
+                        adjustment.seek_to.is_some(),
+                        seek,
+                        "base={base} sign={sign} wall_gap={wall_gap}"
+                    );
+                    close(
+                        adjustment.rate,
+                        if corrected {
+                            base * if sign > 0.0 { 1.03 } else { 0.97 }
+                        } else {
+                            base
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stationary_alignment_uses_media_tolerance_and_scheduled_start_switches_to_wall_time() {
+        for base in [0.5, 1.0, 1.5, 2.0] {
+            for state in ["paused", "buffering", "scheduled", "disconnected", "ended"] {
+                for sign in [-1.0, 1.0] {
+                    for gap in [0.15 - 1e-6, 0.15, 0.15 + 1e-6] {
+                        let mut snapshot = room().snapshot;
+                        snapshot.timeline = Timeline {
+                            position: 20.0 + sign * gap,
+                            anchor_ms: if state == "scheduled" { 1_000 } else { 0 },
+                            paused: state == "paused",
+                            target_rate: base,
+                        };
+                        snapshot.connected = state != "disconnected";
+                        snapshot.ended = state == "ended";
+                        let local = LocalReport {
+                            position: 20.0,
+                            buffering: state == "buffering",
+                            ..report()
+                        };
+                        let adjustment = drift_correction(&snapshot, &local, 0);
+                        assert!(adjustment.paused);
+                        assert_eq!(
+                            adjustment.seek_to.is_some(),
+                            gap > 0.15,
+                            "base={base} state={state} sign={sign} gap={gap}"
+                        );
+                        close(adjustment.rate, base);
+                    }
+                }
+            }
+            let mut snapshot = room().snapshot;
+            snapshot.timeline = Timeline {
+                position: 20.2,
+                anchor_ms: 1_000,
+                paused: false,
+                target_rate: base,
+            };
+            let local = LocalReport {
+                position: 20.0,
+                ..report()
+            };
+            assert_eq!(drift_correction(&snapshot, &local, 999).seek_to, Some(20.2));
+            let at_start = drift_correction(&snapshot, &local, 1_000);
+            assert!(!at_start.paused);
+            assert_eq!(at_start.seek_to, None);
+            close(
+                at_start.rate,
+                if 0.2 / base > 0.15 { base * 1.03 } else { base },
+            );
+        }
+    }
+
+    #[test]
+    fn changing_target_reclassifies_drift_immediately_without_moving_the_position() {
+        let mut room = room();
+        room.snapshot.timeline = Timeline {
+            position: 20.2,
+            anchor_ms: 0,
+            paused: false,
+            target_rate: 2.0,
+        };
+        let local = LocalReport {
+            position: 20.0,
+            ..report()
+        };
+        close(drift_correction(&room.snapshot, &local, 0).rate, 2.0);
+        room.command(HostCommand::SetRate(0.5), 0).unwrap();
+        close(room.snapshot.timeline.position, 20.2);
+        close(drift_correction(&room.snapshot, &local, 0).rate, 0.515);
+        room.snapshot.timeline.position = 21.0;
+        room.command(HostCommand::SetRate(2.0), 0).unwrap();
+        assert!(
+            drift_correction(&room.snapshot, &local, 0)
+                .seek_to
+                .is_none()
+        );
+        room.command(HostCommand::SetRate(0.5), 0).unwrap();
+        assert_eq!(
+            drift_correction(&room.snapshot, &local, 0).seek_to,
+            Some(21.0)
+        );
     }
 }

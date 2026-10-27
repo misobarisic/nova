@@ -602,8 +602,8 @@ component SettingsMenu inherits Rectangle {
                             icon_kind: 3; submenu: true;
                             icon: @image-url("../../assets/icons/player/gauge.svg");
                             label: @tr("Playback speed");
-                            enabled: !(PartyBridge.active || PartyBridge.busy);
-                            value: (PartyBridge.active || PartyBridge.busy) ? @tr("Watch parties use normal speed.") : PlaybackSpeed.label(root.playback_speed);
+                            enabled: !PartyBridge.busy;
+                            value: PartyBridge.active ? PlaybackSpeed.label(PartyBridge.target_speed) : PlaybackSpeed.label(root.playback_speed);
                             focused: root.focused_idx == (root.decoder_available ? 3 : 2);
                             activate => { root.page = 4; }
                         }
@@ -982,6 +982,26 @@ component SettingsMenu inherits Rectangle {
                         }
                     }
 
+                    if root.page == 4 && (PartyBridge.active || PartyBridge.busy): VerticalLayout {
+                        width: 100%; spacing: 16px; padding-top: 8px; padding-bottom: 8px;
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Reset to normal speed");
+                            value: @tr("Shared playback speed");
+                            enabled: PartyBridge.can_control && !PartyBridge.busy;
+                            focused: root.focused_idx == 0;
+                            activate => { if PartyBridge.can_control && !PartyBridge.busy { PartyBridge.reset_target_speed(); } }
+                        }
+                        party_speed_readout := Text { text: PlaybackSpeed.label(PartyBridge.target_speed); color: Theme.current.text_bright; font-size: 28px; font-weight: 600; horizontal-alignment: center; }
+                        SpeedControl {
+                            speed: PartyBridge.target_speed; optimistic: false;
+                            enabled: PartyBridge.can_control && !PartyBridge.busy;
+                            roomy: true; show_readout: false; focused: root.focused_idx == 1;
+                            changed(v) => { if PartyBridge.can_control && !PartyBridge.busy { PartyBridge.set_target_speed(v); } }
+                            stepped(d) => { if PartyBridge.can_control && !PartyBridge.busy { PartyBridge.step_target_speed(d); } }
+                        }
+                        if !PartyBridge.can_control: Text { text: @tr("Only the host can change playback speed."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    }
                     // Playback rate: the shared slider + ± 0.05 step buttons
                     // (the same control Settings → Player shows).
                     if root.page == 4 && !(PartyBridge.active || PartyBridge.busy): VerticalLayout {
@@ -1555,7 +1575,7 @@ export component PlayerOverlay {
         if root.kb_idx == 1 && !root.chapter_shortcut_available { return CastBridge.available ? 15 : 0; }
         if root.kb_idx == 1 && root.chapter_shortcut_available { return 14; }
         if root.kb_idx == 13 { return 9; }
-        if root.kb_idx == 10 { return root.party_owns_playback ? 9 : 13; }
+        if root.kb_idx == 10 { return 13; }
         let raw = Math.max(0, root.kb_idx - 1);
         if root.is_android && raw == 8 { return 7; }
         if (root.is_android && raw == 2) {
@@ -1572,7 +1592,7 @@ export component PlayerOverlay {
         if root.kb_idx == 0 { return CastBridge.available ? 15 : root.chapter_shortcut_available ? 14 : 1; }
         if root.kb_idx == 15 { return root.chapter_shortcut_available ? 14 : 1; }
         if root.kb_idx == 11 { return 11; }
-        if root.kb_idx == 9 { return !root.party_owns_playback ? 13 : root.next_episode_shown || root.skip_segment_shown ? 10 : 9; }
+        if root.kb_idx == 9 { return 13; }
         if root.kb_idx == 13 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 13; }
         let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
         if root.is_android && raw == 8 { return 9; }
@@ -1599,14 +1619,19 @@ export component PlayerOverlay {
                 root.flash_show = false;
                 root.playback_speed_preview_end();
             }
-            if root.settings_page == 4 { root.settings_page = 0; root.kb_menu = 0; }
-            if root.kb_idx == 13 { root.kb_idx = 7; }
+
         }
     }
     function shortcut_seek(d: int) {
         // Unknown/live duration cannot provide a valid upper seek bound.
         if (!root.timeline_control_allowed || !root.playback_started || root.duration <= 0) { return; }
         root.seek_relative(d * 10);
+    }
+
+    function request_speed_step(d: int) {
+        if PartyBridge.active || PartyBridge.busy {
+            if root.timeline_control_allowed { PartyBridge.step_target_speed(d); }
+        } else { root.playback_speed_stepped(d); }
     }
 
     function shortcut_volume(d: int) {
@@ -1658,7 +1683,7 @@ export component PlayerOverlay {
             root.settings_opened();
             root.tracks_popup_opened(0);
             root.osd_mouse_moved();
-        } else if root.kb_idx == 13 && !root.party_owns_playback {
+        } else if root.kb_idx == 13 && !PartyBridge.busy {
             root.settings_page = 4; root.open_popup = 4; root.osd_mouse_moved();
         } else if (root.kb_idx == 8 && !root.is_android) {
             root.toggle_fullscreen();
@@ -1705,7 +1730,7 @@ export component PlayerOverlay {
                     root.settings_page = 10; root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0) {
                     root.settings_page = 11; root.kb_menu = 0;
-                } else if !(PartyBridge.active || PartyBridge.busy) {
+                } else if !PartyBridge.busy {
                     root.settings_page = 4;
                     root.kb_menu = 0;
                 }
@@ -1774,7 +1799,9 @@ export component PlayerOverlay {
             } else if root.settings_page == 5 && root.kb_menu == 7 {
                 root.subtitle_style_changed(6, root.subtitle_style[6] >= 0.5 ? 0 : 1);
             } else if (root.settings_page == 4 && root.kb_menu == 0) {
-                root.restore_playback_default(2);
+                if PartyBridge.active || PartyBridge.busy {
+                    if root.timeline_control_allowed { PartyBridge.reset_target_speed(); }
+                } else { root.restore_playback_default(2); }
             }
         }
     }
@@ -2183,7 +2210,7 @@ export component PlayerOverlay {
                             } else if root.settings_page == 9 && root.kb_menu >= 2 {
                                 if Math.mod(root.kb_menu - 2, 4) < 3 { root.kb_menu += 1; }
                             } else if (root.settings_page == 4 && root.kb_menu == 1) {
-                                root.playback_speed_stepped(1);
+                                root.request_speed_step(1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
                                 let i = root.kb_menu - 1;
                                 root.subtitle_style_changed(i, root.subtitle_style[i] + SubtitleStyle.step(i));
@@ -2198,7 +2225,7 @@ export component PlayerOverlay {
                             } else if root.settings_page == 9 && root.kb_menu >= 2 && Math.mod(root.kb_menu - 2, 4) > 0 {
                                 root.kb_menu -= 1;
                             } else if (root.settings_page == 4 && root.kb_menu == 1) {
-                                root.playback_speed_stepped(-1);
+                                root.request_speed_step(-1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
                                 let i = root.kb_menu - 1;
                                 root.subtitle_style_changed(i, root.subtitle_style[i] - SubtitleStyle.step(i));
@@ -3288,18 +3315,18 @@ export component PlayerOverlay {
                     }
 
                     if !InterfaceStyle.tv: speed_button := IconBtn {
-                        enabled: !root.party_owns_playback;
+                        enabled: !PartyBridge.busy;
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                         focused: root.kb_active && root.kb_idx == 13 && root.open_popup == 0;
-                        accessible-role: button; accessible-label: @tr("Playback speed") + ": " + PlaybackSpeed.label(root.playback_speed);
+                        accessible-role: button; accessible-label: @tr("Playback speed") + ": " + PlaybackSpeed.label(PartyBridge.active ? PartyBridge.target_speed : root.playback_speed);
                         clicked => {
-                            if !root.guard_osd_control() || root.party_owns_playback { return; }
+                            if !root.guard_osd_control() || PartyBridge.busy { return; }
                             root.kb_active = false; root.kb_idx = 13;
                             root.settings_page = 4; root.open_popup = 4;
                         }
-                        Text { text: Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: PartyBridge.active ? PlaybackSpeed.label(PartyBridge.target_speed) : Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     if !InterfaceStyle.tv: screenshot_button := Rectangle {
                         width: 40px; height: 40px; border-radius: 10px;

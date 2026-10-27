@@ -27,6 +27,7 @@ export global PartyBridge {
     in-out property <string> time_text;
     in-out property <float> position;
     in-out property <float> duration;
+    in-out property <float> target_speed: 1.0;
     in-out property <bool> wait_for_guests: true;
     in-out property <[PartyMemberRow]> participants;
     callback create();
@@ -42,5 +43,8 @@ export global PartyBridge {
     callback remove_member(string);
     callback set_wait_for_guests(bool);
     callback set_allow_everyone(bool);
+    callback set_target_speed(float);
+    callback step_target_speed(int);
+    callback reset_target_speed();
     callback continue_without_waiting();
 }

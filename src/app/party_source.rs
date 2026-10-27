@@ -220,6 +220,7 @@ mod tests {
             generation: 2,
             revision: 1,
             timeline: Timeline {
+                target_rate: 1.0,
                 position: 0.0,
                 anchor_ms: 0,
                 paused: true,

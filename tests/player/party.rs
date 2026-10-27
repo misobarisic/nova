@@ -886,3 +886,169 @@ fn live_policy_revocation_restores_tv_focus_to_current_episode_actions() {
     key(slint::platform::Key::Return);
     assert_eq!(&*actions.borrow(), &["pause", "return", "stream"]);
 }
+
+#[test]
+fn shared_speed_uses_accepted_target_and_never_saves_local_preferences() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::shared_speed_uses_accepted_target_and_never_saves_local_preferences"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_party_page_open(true);
+    app.set_party_active(true);
+    app.set_party_allow_everyone(true);
+    app.set_party_can_control(true);
+    app.set_party_can_choose_media(true);
+    app.set_party_target_speed(1.5);
+    app.set_playback_speed(1.545);
+    app.on_playback_speed_changed(|_| panic!("party speed saved a local title preference"));
+    app.on_playback_speed_stepped(|_| panic!("party speed stepped a local preference"));
+    app.on_restore_playback_default(|_| panic!("party reset changed a local preference"));
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_party_set_target_speed(move |rate| recorded.borrow_mut().push(format!("set:{rate:.2}")));
+    let recorded = actions.clone();
+    app.on_party_step_target_speed(move |direction| {
+        recorded.borrow_mut().push(format!("step:{direction}"))
+    });
+    let recorded = actions.clone();
+    app.on_party_reset_target_speed(move || recorded.borrow_mut().push("reset".into()));
+    app.window().show().unwrap();
+    for (language, slower, faster, reset) in [
+        ("en", "Slower", "Faster", "Reset to normal speed"),
+        ("hr", "Sporije", "Brže", "Vratite normalnu brzinu"),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        for (width, height, tv) in [(320, 1800, false), (1280, 900, false), (1280, 900, true)] {
+            app.global::<nova::InterfaceStyle>().set_tv(tv);
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            app.set_party_can_control(true);
+            settle();
+            actions.borrow_mut().clear();
+            for label in [slower, faster, "1.25×", reset] {
+                let control = button(&app, label);
+                assert_eq!(control.accessible_enabled(), Some(true));
+                control.mock_single_click(slint::platform::PointerEventButton::Left);
+            }
+            assert_eq!(
+                &*actions.borrow(),
+                &["step:-1", "step:1", "set:1.25", "reset"]
+            );
+            assert_eq!(
+                app.get_party_target_speed(),
+                1.5,
+                "requests wait for an accepted target"
+            );
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "1.50×")
+                    .next()
+                    .is_some()
+            );
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "1.55×")
+                    .next()
+                    .is_none(),
+                "native drift correction must not enter the shared readout"
+            );
+            app.set_party_can_control(false);
+            settle();
+            for label in [slower, faster, "1.25×", reset] {
+                let control = button(&app, label);
+                assert_eq!(control.accessible_enabled(), Some(false));
+                control.mock_single_click(slint::platform::PointerEventButton::Left);
+            }
+            assert_eq!(
+                actions.borrow().len(),
+                4,
+                "live revocation blocks all speed mutations"
+            );
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}
+
+#[test]
+fn party_player_speed_menu_is_read_only_until_live_policy_allows_edits() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::party_player_speed_menu_is_read_only_until_live_policy_allows_edits"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(600.0);
+    app.set_osd_visible(true);
+    app.set_party_active(true);
+    app.set_party_target_speed(1.5);
+    app.set_playback_speed(1.545);
+    app.on_playback_speed_changed(|_| panic!("party menu wrote a title preference"));
+    app.on_playback_speed_stepped(|_| panic!("party keyboard wrote a title preference"));
+    app.on_restore_playback_default(|_| panic!("party reset wrote a title preference"));
+    let steps = Rc::new(RefCell::new(Vec::new()));
+    let recorded = steps.clone();
+    app.on_party_step_target_speed(move |direction| recorded.borrow_mut().push(direction));
+    app.window().show().unwrap();
+    for (width, height, tv) in [(360, 720, false), (1280, 900, true)] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_party_can_control(false);
+        app.set_osd_visible(true);
+        settle();
+        ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")
+            .next()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle();
+        button(&app, "Playback speed").mock_single_click(slint::platform::PointerEventButton::Left);
+        settle();
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "1.50×")
+                .next()
+                .is_some()
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "1.55×")
+                .next()
+                .is_none()
+        );
+        assert_eq!(button(&app, "Faster").accessible_enabled(), Some(false));
+        assert_eq!(
+            button(&app, "Reset to normal speed").accessible_enabled(),
+            Some(false)
+        );
+        button(&app, "Faster").mock_single_click(slint::platform::PointerEventButton::Left);
+        let before = steps.borrow().len();
+        app.set_party_allow_everyone(true);
+        app.set_party_can_control(true);
+        settle();
+        button(&app, "Faster").mock_single_click(slint::platform::PointerEventButton::Left);
+        assert_eq!(steps.borrow().len(), before + 1);
+        assert_eq!(steps.borrow().last(), Some(&1));
+        app.set_party_can_control(false);
+        settle();
+        button(&app, "Faster").mock_single_click(slint::platform::PointerEventButton::Left);
+        assert_eq!(steps.borrow().len(), before + 1);
+        for _ in 0..2 {
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                    text: slint::platform::Key::Escape.into(),
+                });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                    text: slint::platform::Key::Escape.into(),
+                });
+            settle();
+        }
+    }
+}
