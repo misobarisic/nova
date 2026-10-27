@@ -662,16 +662,20 @@ component SettingsMenu inherits Rectangle {
                     }
 
                     if root.page == 11: VerticalLayout {
+                        width: 100%;
                         spacing: 8px;
                         Text {
+                            // Reserve the wrapped height before sizing the card and scroll range.
+                            width: 100%; height: self.preferred-height; min-width: 0px;
                             text: @tr("Saved on this device. Applies to built-in playback; external players and casting use their own audio settings.");
                             wrap: word-wrap; color: Theme.current.text_player_muted;
                             font-size: InterfaceStyle.tv ? 20px : 13px;
                         }
-                        for effect in [0, 1, 2]: VerticalLayout {
+                        for effect in [0, 1, 2]: listening_effect := VerticalLayout {
+                            width: 100%;
                             spacing: 4px;
                             MenuRow {
-                                reveal(y, h) => { root.reveal_row(y, h); }
+                                reveal(y, h) => { root.reveal_row(y, listening_effect.height); }
                                 label: SettingsBridge.listening_label(effect);
                                 value: SettingsBridge.listening_enabled(effect) ? @tr("On") : @tr("Off");
                                 selected: SettingsBridge.listening_enabled(effect);
@@ -679,12 +683,14 @@ component SettingsMenu inherits Rectangle {
                                 activate => { SettingsBridge.listening_set(effect, !SettingsBridge.listening_enabled(effect)); }
                             }
                             Text {
+                                width: 100%; height: self.preferred-height; min-width: 0px;
                                 text: SettingsBridge.listening_description(effect);
                                 wrap: word-wrap; color: Theme.current.text_player_muted;
                                 font-size: InterfaceStyle.tv ? 20px : 13px;
                             }
                         }
                         Text {
+                            width: 100%; height: self.preferred-height; min-width: 0px;
                             text: SettingsBridge.audio_processing_status;
                             wrap: word-wrap; color: Theme.current.text_player_secondary;
                             font-size: InterfaceStyle.tv ? 20px : 13px;
