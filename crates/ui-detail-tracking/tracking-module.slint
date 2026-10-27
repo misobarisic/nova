@@ -8,6 +8,14 @@ export component DetailTrackingModule inherits Window {
     public function validate_entry() { panel.validate_entry(); }
     public function focus_tracking() { panel.focus_panel(); }
     public function nested_back() { panel.nested_back(); }
+    // Picking a release replaces the linked/search body. Start its new review
+    // at the top instead of retaining the search result's old scroll position.
+    private property <string> candidate-title: DetailBridge.tracking_candidate_title;
+    private property <string> setup-revision: DetailBridge.tracking_setup_revision;
+    private property <int> selected-service: DetailBridge.tracking_service;
+    changed candidate-title => { tracking_scroll.content-y = 0px; }
+    changed setup-revision => { tracking_scroll.content-y = 0px; }
+    changed selected-service => { tracking_scroll.content-y = 0px; }
     private property <int> reveal_request: DetailContent.tracking_reveal_request;
     changed reveal_request => {
         if InterfaceStyle.tv && DetailBridge.tracking_open {

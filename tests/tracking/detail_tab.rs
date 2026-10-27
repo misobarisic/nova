@@ -1,7 +1,7 @@
 //! Full-screen Tracking navigation, responsive confirmation, and service changes.
 //! Set NOVA_TRACKING_PREVIEW_DIR to render the same fixture with a desktop backend.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use slint::{ComponentHandle, VecModel};
+use slint::{ComponentHandle, Model, VecModel};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -463,6 +463,152 @@ fn tracking_preserves_detail_tab_with_reachable_confirmation() {
             assert_eq!(app.get_detail_tab(), 0);
             assert!(!app.get_tracking_open());
             assert!(app.get_modal_visible());
+        }
+        slint::quit_event_loop().unwrap();
+    })
+    .unwrap();
+    slint::run_event_loop().unwrap();
+}
+
+#[test]
+fn release_pick_reveals_review_after_three_links_and_scrolled_search_results() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::release_pick_reveals_review_after_three_links_and_scrolled_search_results"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_system_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_in_library(true);
+    app.set_tracking_open(true);
+    app.set_selected_title("A show with three linked releases".into());
+    app.window().show().unwrap();
+    let weak = app.as_weak();
+    let review = Rc::new(Cell::new(false));
+    let recorded = review.clone();
+    app.on_tracking_pick(move |_| {
+        let app = weak.upgrade().unwrap();
+        // Match the worker's field order for a successful draft or a fallback
+        // manual alignment. Neither path should retain a deep result offset.
+        app.set_tracking_busy(false);
+        app.set_tracking_range_first("1".into());
+        app.set_tracking_range_last("12".into());
+        app.set_tracking_range_start("1".into());
+        app.set_tracking_candidate_title(
+            if recorded.get() {
+                ""
+            } else {
+                "Selected release alignment"
+            }
+            .into(),
+        );
+        app.set_tracking_can_confirm(false);
+        if recorded.get() {
+            app.set_tracking_setup(
+                Rc::new(VecModel::from(vec![nova::TrackingSetupRow {
+                    title: "Selected release review".into(),
+                    season: "Season 4".into(),
+                    source_range: "37–48".into(),
+                    target_range: "1–12".into(),
+                    ..Default::default()
+                }]))
+                .into(),
+            );
+            app.set_tracking_setup_active(true);
+            app.set_tracking_setup_revision("selected-review".into());
+        } else {
+            app.set_tracking_setup(Rc::new(VecModel::default()).into());
+            app.set_tracking_setup_active(false);
+            app.set_tracking_setup_revision("".into());
+        }
+    });
+    let weak = app.as_weak();
+    slint::spawn_local(async move {
+        let app = weak.upgrade().unwrap();
+        for (width, height) in [(360, 568), (840, 420), (1280, 900)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            for is_review in [false, true] {
+                review.set(is_review);
+                app.set_tracking_candidate_title("".into());
+                app.set_tracking_setup_active(false);
+                app.set_tracking_setup_revision("".into());
+                app.set_tracking_setup(Rc::new(VecModel::default()).into());
+                app.set_tracking_links(
+                    Rc::new(VecModel::from(
+                        (0..3)
+                            .map(|index| nova::TrackingLinkRow {
+                                id: format!("linked-{index}").into(),
+                                title: format!("Linked release {index}").into(),
+                                coverage: "Episodes 1–12 → tracker episodes 1–12".into(),
+                                ..Default::default()
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                );
+                app.set_tracking_candidates(Rc::new(VecModel::default()).into());
+                settle().await;
+                // Find the chooser by scrolling from the linked list's end.
+                scroll_to_end(&app).await;
+                let choose =
+                    ElementHandle::find_by_accessible_label(&app, "Choose another release")
+                        .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                        .expect("choose another release");
+                choose
+                    .single_click(slint::platform::PointerEventButton::Left)
+                    .await;
+                settle().await;
+                app.set_tracking_candidates(
+                    Rc::new(VecModel::from(
+                        (0..20)
+                            .map(|index| nova::TrackingCandidateRow {
+                                title: format!("Search release {index}").into(),
+                                detail: "TV · 12 episodes · 2026".into(),
+                                ..Default::default()
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                );
+                settle().await;
+                scroll_to_end(&app).await;
+                let selected = ElementHandle::find_by_accessible_label(&app, "Search release 19")
+                    .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                    .expect("deep search result");
+                selected
+                    .single_click(slint::platform::PointerEventButton::Left)
+                    .await;
+                settle().await;
+                // Do not invoke a reveal helper here: that would repair the
+                // regression before checking what the user sees after a pick.
+                let service = ElementHandle::find_by_accessible_label(&app, "MyAnimeList")
+                    .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                    .expect("service rail remains visible after selection");
+                let viewport = tracking_scroll(&app);
+                assert!(service.absolute_position().y >= viewport.absolute_position().y);
+                assert!(
+                    service.absolute_position().y + service.size().height
+                        <= viewport.absolute_position().y + viewport.size().height
+                );
+                let heading = if is_review {
+                    "Suggested matches"
+                } else {
+                    "Episode alignment"
+                };
+                assert!(
+                    ElementHandle::find_by_accessible_label(&app, heading)
+                        .next()
+                        .is_some(),
+                    "{width}×{height}: selected body heading is visible without scrolling"
+                );
+                assert!(app.get_tracking_open());
+                assert_eq!(app.get_tracking_links().row_count(), 3);
+            }
         }
         slint::quit_event_loop().unwrap();
     })
