@@ -750,7 +750,10 @@ to 256 (32–2048), Android to 64 (32–512). Older saved settings get the platf
 default; malformed values fall back safely and extreme values are clamped.
 This budget covers torrent pieces and their in-flight reservations, including
 reserved transport headroom; mpv's separate compressed packet buffer is
-additional. It is not a cap on total app RSS, decoded frames, or GPU memory.
+additional. RAM mode preserves mpv's normal packet limits and disables its disk
+cache. Reducing those packet queues can prematurely end interleaved audio/video
+tracks, so the torrent budget does not shrink them. It is not a cap on total app
+RSS, decoded frames, or GPU memory.
 A lower budget immediately stops new allocations above the new limit; existing
 readers release their reservations before usage falls to it. The player status
 reports actual RAM usage rather than disk cache size. Disk usage and Clear

@@ -315,6 +315,10 @@ impl TorrentStorage for MemoryStorage {
         Ok(())
     }
     fn pread_exact(&self, file: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
+        if buf.is_empty() {
+            ensure!(self.is_valid(), "RAM storage handle transferred");
+            return Ok(());
+        }
         let (id, pos) = self.access(file, offset, buf.len())?;
         let pieces = self.inner.pieces.lock();
         ensure!(self.is_valid(), "RAM storage handle transferred");
@@ -327,6 +331,13 @@ impl TorrentStorage for MemoryStorage {
         Ok(())
     }
     fn pwrite_all(&self, file: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
+        // The default vectored writer includes an empty trailing slice. At a
+        // piece/file boundary that offset belongs to the next piece (or EOF),
+        // but no bytes are written and no additional reservation is needed.
+        if buf.is_empty() {
+            ensure!(self.is_valid(), "RAM storage handle transferred");
+            return Ok(());
+        }
         let (id, pos) = self.access(file, offset, buf.len())?;
         let mut pieces = self.inner.pieces.lock();
         ensure!(self.is_valid(), "RAM storage handle transferred");
@@ -498,6 +509,67 @@ mod tests {
         );
         assert!(unstable > healthy);
         assert!(adaptive_target(u64::MAX / 2, 1.0, 1.0, 99, 65536, 1024) <= 65536 * 3 / 5);
+    }
+
+    #[test]
+    fn empty_io_at_piece_and_file_boundaries_never_requires_another_reservation() {
+        use std::io::IoSlice;
+
+        let piece = 16384usize;
+        let lengths = Lengths::new((piece * 2) as u64, piece as u32).unwrap();
+        let budget = MemoryBudget::new((piece * 2) as u64);
+        let storage = MemoryStorage {
+            valid: std::sync::atomic::AtomicBool::new(true),
+            inner: Arc::new(MemoryInner {
+                lengths,
+                files: (0..2)
+                    .map(|idx| crate::file_info::FileInfo {
+                        relative_filename: format!("video-{idx}").into(),
+                        offset_in_torrent: (idx * piece) as u64,
+                        piece_range: idx as u32..idx as u32 + 1,
+                        attrs: Default::default(),
+                        len: piece as u64,
+                    })
+                    .collect(),
+                budget: budget.clone(),
+                telemetry: Arc::new(MemoryTelemetry::default()),
+                pieces: Mutex::new(HashMap::new()),
+                adaptive: Mutex::new(Adaptive::default()),
+            }),
+        };
+        assert!(storage.reserve(lengths.validate_piece_index(0).unwrap()));
+        let payload = vec![42; piece];
+        // Contiguous peer messages supply an empty second IoSlice. Its offset
+        // is the next piece, which is deliberately not reserved here.
+        assert_eq!(
+            storage
+                .pwrite_all_vectored(0, 0, [IoSlice::new(&payload), IoSlice::new(&[])])
+                .unwrap(),
+            piece
+        );
+        assert_eq!(
+            storage
+                .pwrite_all_vectored(0, 0, [IoSlice::new(&[]), IoSlice::new(&payload)])
+                .unwrap(),
+            piece
+        );
+        storage.pwrite_all(0, piece as u64, &[]).unwrap();
+        storage.pread_exact(0, piece as u64, &mut []).unwrap();
+        storage.pwrite_all(1, 0, &[]).unwrap();
+        storage.pread_exact(1, 0, &mut []).unwrap();
+        // Exactly piece-aligned torrent EOF has no corresponding piece index.
+        storage.pwrite_all(1, piece as u64, &[]).unwrap();
+        storage.pread_exact(1, piece as u64, &mut []).unwrap();
+        assert!(storage.pwrite_all(1, 0, &[7]).is_err());
+        assert_eq!(storage.resident().len(), 1);
+        assert_eq!(budget.used(), piece as u64);
+        let mut actual = vec![0; piece];
+        storage.pread_exact(0, 0, &mut actual).unwrap();
+        assert_eq!(actual, payload);
+        let moved = storage.take().unwrap();
+        assert!(storage.pread_exact(0, 0, &mut []).is_err());
+        assert!(storage.pwrite_all(0, 0, &[]).is_err());
+        moved.pwrite_all(1, piece as u64, &[]).unwrap();
     }
 }
 
@@ -693,6 +765,14 @@ mod streaming_tests {
                 contents[..65536],
                 "evicted verified bytes must be fetched again"
             );
+            let mut remainder = Vec::new();
+            main.read_to_end(&mut remainder).await?;
+            assert_eq!(
+                remainder,
+                contents[65536..],
+                "stream must reach real, piece-aligned EOF"
+            );
+            assert!(budget.used() <= budget.limit());
             assert!(
                 !never_created.exists(),
                 "RAM session must never create its output path"

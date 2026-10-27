@@ -8,6 +8,8 @@ other rqbit packages, including Nova's separate upstream uTP fix, stay unchanged
 `src/storage/memory.rs` implements heap-only piece storage with shared admission
 accounting across sessions and outstanding read leases. Reservations cover full
 pieces before any block is requested, including partially downloaded pieces.
+Zero-length I/O is a no-op even at an unreserved piece boundary or aligned EOF;
+the default vectored writer includes empty trailing slices there.
 Four MiB per session is reserved for bounded peer/hash/HTTP staging; no payload,
 metainfo, resume bitmap, or DHT state is persisted by these sessions. The budget
 is not total process RSS (metadata, decoder surfaces and platform networking

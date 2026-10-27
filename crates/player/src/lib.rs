@@ -1136,14 +1136,12 @@ struct PreferenceSession {
     manual_subtitles: bool,
 }
 
-/// mpv packet buffering is separate from torrent piece RAM. Preserve the native
-/// defaults so a later HTTP/local source gets exactly its original policy.
+/// Torrent piece RAM and mpv's packet queues have separate budgets. Preserve
+/// the established demuxer limits: a tiny queue can mark an interleaved track
+/// EOF before its first packet arrives. RAM mode only disables disk caching.
 #[derive(Clone, Copy)]
 struct PacketCacheDefaults {
     disk: bool,
-    forward: i64,
-    backward: i64,
-    seconds: f64,
 }
 fn apply_torrent_packet_cache(
     mpv: &Mpv,
@@ -1154,20 +1152,11 @@ fn apply_torrent_packet_cache(
         if saved.is_none() {
             *saved = Some(PacketCacheDefaults {
                 disk: mpv.get_property("cache-on-disk")?,
-                forward: mpv.get_property("demuxer-max-bytes")?,
-                backward: mpv.get_property("demuxer-max-back-bytes")?,
-                seconds: mpv.get_property("demuxer-readahead-secs")?,
             });
         }
         mpv.set_property("cache-on-disk", false)?;
-        mpv.set_property("demuxer-max-bytes", 2 * 1024 * 1024i64)?;
-        mpv.set_property("demuxer-max-back-bytes", 512 * 1024i64)?;
-        mpv.set_property("demuxer-readahead-secs", 1.0)?;
     } else if let Some(defaults) = *saved {
         mpv.set_property("cache-on-disk", defaults.disk)?;
-        mpv.set_property("demuxer-max-bytes", defaults.forward)?;
-        mpv.set_property("demuxer-max-back-bytes", defaults.backward)?;
-        mpv.set_property("demuxer-readahead-secs", defaults.seconds)?;
         *saved = None;
     }
     Ok(())
@@ -4719,42 +4708,42 @@ mod tests {
     }
 
     #[test]
-    fn ram_torrent_packet_cache_is_bounded_and_restores_native_options() {
+    fn ram_torrent_cache_disables_disk_and_preserves_demuxer_limits() {
         let mpv = Mpv::with_initializer(|init| {
             init.set_property("config", false)?;
             init.set_property("vo", "null")?;
             init.set_property("ao", "null")
         })
         .unwrap();
-        let before: (bool, i64, i64, f64) = (
-            mpv.get_property("cache-on-disk").unwrap(),
-            mpv.get_property("demuxer-max-bytes").unwrap(),
-            mpv.get_property("demuxer-max-back-bytes").unwrap(),
-            mpv.get_property("demuxer-readahead-secs").unwrap(),
-        );
+        // Deliberately nondefault values catch both a fixed tiny replacement
+        // and a later restore which overwrites the established packet policy.
+        mpv.set_property("cache-on-disk", true).unwrap();
+        mpv.set_property("demuxer-max-bytes", 64 * 1024 * 1024i64)
+            .unwrap();
+        mpv.set_property("demuxer-max-back-bytes", 12 * 1024 * 1024i64)
+            .unwrap();
+        mpv.set_property("demuxer-readahead-secs", 7.0).unwrap();
+        mpv.set_property("cache-secs", 45.0).unwrap();
+        let packet_options = || {
+            (
+                mpv.get_property::<i64>("demuxer-max-bytes").unwrap(),
+                mpv.get_property::<i64>("demuxer-max-back-bytes").unwrap(),
+                mpv.get_property::<f64>("demuxer-readahead-secs").unwrap(),
+                mpv.get_property::<f64>("cache-secs").unwrap(),
+            )
+        };
+        let before = packet_options();
         let mut saved = None;
         apply_torrent_packet_cache(&mpv, true, &mut saved).unwrap();
         assert!(!mpv.get_property::<bool>("cache-on-disk").unwrap());
-        assert_eq!(
-            mpv.get_property::<i64>("demuxer-max-bytes").unwrap(),
-            2 * 1024 * 1024
-        );
-        assert_eq!(
-            mpv.get_property::<i64>("demuxer-max-back-bytes").unwrap(),
-            512 * 1024
-        );
+        assert_eq!(packet_options(), before);
         apply_torrent_packet_cache(&mpv, true, &mut saved).unwrap();
+        assert!(!mpv.get_property::<bool>("cache-on-disk").unwrap());
+        assert_eq!(packet_options(), before);
         apply_torrent_packet_cache(&mpv, false, &mut saved).unwrap();
         assert!(saved.is_none());
-        assert_eq!(
-            (
-                mpv.get_property::<bool>("cache-on-disk").unwrap(),
-                mpv.get_property::<i64>("demuxer-max-bytes").unwrap(),
-                mpv.get_property::<i64>("demuxer-max-back-bytes").unwrap(),
-                mpv.get_property::<f64>("demuxer-readahead-secs").unwrap()
-            ),
-            before
-        );
+        assert!(mpv.get_property::<bool>("cache-on-disk").unwrap());
+        assert_eq!(packet_options(), before);
     }
 
     #[cfg(not(target_os = "android"))]
