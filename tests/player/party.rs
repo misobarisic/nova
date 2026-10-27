@@ -8,6 +8,13 @@ fn settle() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
 }
 
+// App-level snapshot publication derives these capabilities from role and policy.
+fn set_host(app: &nova::AppWindow, host: bool) {
+    app.set_party_is_host(host);
+    app.set_party_can_control(host);
+    app.set_party_can_choose_media(host);
+}
+
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, label)
         .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
@@ -86,7 +93,7 @@ fn room_actions_are_guarded_and_guests_have_no_shared_timeline_controls() {
             .is_none()
     );
     button(&app, "Choose a stream").mock_single_click(slint::platform::PointerEventButton::Left);
-    app.set_party_is_host(true);
+    set_host(&app, true);
     settle();
     assert_eq!(timeline().accessible_enabled(), Some(true));
     button(&app, "Pause").mock_single_click(slint::platform::PointerEventButton::Left);
@@ -99,7 +106,7 @@ fn room_actions_are_guarded_and_guests_have_no_shared_timeline_controls() {
     assert!(app.get_party_active(), "Back keeps the party connected");
     app.set_player_open(true);
     app.set_playback_started(true);
-    app.set_party_is_host(false);
+    set_host(&app, false);
     settle();
     assert!(
         ElementHandle::find_by_accessible_label(&app, "Host controls playback")
@@ -133,7 +140,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
     app.global::<nova::Anim>().set_enabled(false);
     app.set_party_page_open(true);
     app.set_party_active(true);
-    app.set_party_is_host(true);
+    set_host(&app, true);
     app.set_party_has_media(true);
     app.set_party_can_return_to_player(true);
     app.set_party_waiting(true);
@@ -284,7 +291,7 @@ fn room_translates_and_keeps_long_participants_inside_portrait_and_landscape() {
         }
     }
     slint::select_bundled_translation("en").unwrap();
-    app.set_party_is_host(false);
+    set_host(&app, false);
     settle();
     assert!(
         ElementHandle::find_by_element_id(&app, "PartyPage::party_invite_qr")
@@ -355,7 +362,7 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
     app.window().set_size(slint::PhysicalSize::new(360, 1800));
     app.set_party_page_open(true);
     app.set_party_active(true);
-    app.set_party_is_host(true);
+    set_host(&app, true);
     app.set_party_invite("NVP1-lobby-invite".into());
     app.set_party_participants(
         Rc::new(slint::VecModel::from(vec![nova_ui::PartyMemberRow {
@@ -399,7 +406,7 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
         .mock_single_click(slint::platform::PointerEventButton::Left);
     assert_eq!(&*actions.borrow(), &["invite", "media"]);
 
-    app.set_party_is_host(false);
+    set_host(&app, false);
     settle();
     assert!(
         ElementHandle::find_by_accessible_label(
@@ -429,7 +436,7 @@ fn lobby_keeps_invites_and_people_while_host_chooses_or_changes_media() {
             .is_some()
     );
 
-    app.set_party_is_host(true);
+    set_host(&app, true);
     app.set_party_has_media(true);
     app.set_party_title("The next film".into());
     app.set_party_duration(7200.0);
@@ -496,7 +503,7 @@ fn room_places_people_beside_desktop_playback_and_below_phone_playback() {
     );
     app.window().show().unwrap();
     for host in [true, false] {
-        app.set_party_is_host(host);
+        set_host(&app, host);
         for width in [360, 840, 1280] {
             app.window().set_size(slint::PhysicalSize::new(width, 900));
             settle();
@@ -561,7 +568,7 @@ fn room_tv_focus_visits_return_before_stream_actions_for_hosts_and_guests() {
         app.window().set_size(slint::PhysicalSize::new(1280, 900));
         app.set_party_page_open(true);
         app.set_party_active(true);
-        app.set_party_is_host(host);
+        set_host(&app, host);
         app.set_party_has_media(true);
         app.set_party_can_return_to_player(true);
         app.set_party_duration(3600.0);
@@ -684,4 +691,198 @@ fn player_only_exposes_party_access_when_connected_or_connecting() {
         app.set_party_page_open(false);
         settle();
     }
+}
+
+#[test]
+fn unified_policy_is_live_creator_only_and_keeps_guest_sources_local() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::unified_policy_is_live_creator_only_and_keeps_guest_sources_local"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_party_page_open(true);
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let recorded = changes.clone();
+    app.on_party_set_allow_everyone(move |value| recorded.borrow_mut().push(value));
+    app.window().set_size(slint::PhysicalSize::new(360, 1800));
+    app.window().show().unwrap();
+    settle();
+    let policy_label = "Allow everyone to control playback and choose episodes";
+    let toggle = || {
+        ElementHandle::find_by_accessible_label(&app, policy_label)
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Checkbox))
+            .expect("creator policy toggle")
+    };
+    assert!(
+        !app.get_party_allow_everyone(),
+        "the default policy is host only"
+    );
+    toggle().mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(
+        &*changes.borrow(),
+        &[true],
+        "configure the room before creation"
+    );
+    app.set_party_active(true);
+    set_host(&app, true);
+    app.set_party_allow_everyone(true);
+    settle();
+    toggle().mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(
+        &*changes.borrow(),
+        &[true, false],
+        "creator can change a live room"
+    );
+    set_host(&app, false);
+    app.set_party_duration(3600.0);
+    for (language, everyone_status, host_status, choose, change, stream, pause) in [
+        (
+            "en",
+            "Everyone can control playback and choose episodes.",
+            "Only the host can control playback and choose episodes.",
+            "Choose what to watch",
+            "Change what to watch",
+            "Choose a stream",
+            "Pause",
+        ),
+        (
+            "hr",
+            "Svi mogu upravljati reprodukcijom i birati epizode.",
+            "Samo domaćin može upravljati reprodukcijom i birati epizode.",
+            "Odaberite što ćete gledati",
+            "Promijenite što ćete gledati",
+            "Odaberite izvor",
+            "Pauzirajte",
+        ),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        for (width, height, tv) in [(320, 1800, false), (1280, 900, false), (1280, 900, true)] {
+            app.global::<nova::InterfaceStyle>().set_tv(tv);
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            for everyone in [false, true, false] {
+                app.set_party_allow_everyone(everyone);
+                app.set_party_can_control(everyone);
+                app.set_party_can_choose_media(everyone);
+                for has_media in [false, true] {
+                    app.set_party_has_media(has_media);
+                    settle();
+                    assert!(
+                        ElementHandle::find_by_element_id(&app, "PartyPage::party_policy")
+                            .next()
+                            .is_none(),
+                        "guests cannot edit policy"
+                    );
+                    assert!(
+                        ElementHandle::find_by_accessible_label(
+                            &app,
+                            if everyone {
+                                everyone_status
+                            } else {
+                                host_status
+                            }
+                        )
+                        .next()
+                        .is_some()
+                    );
+                    let media_button = ElementHandle::find_by_accessible_label(
+                        &app,
+                        if has_media { change } else { choose },
+                    )
+                    .find(|item| item.accessible_role() == Some(AccessibleRole::Button));
+                    assert_eq!(
+                        media_button.is_some(),
+                        everyone,
+                        "{language}, {width}, TV={tv}, media={has_media}"
+                    );
+                    if let Some(item) = media_button {
+                        assert!(item.absolute_position().x >= 0.0);
+                        assert!(item.absolute_position().x + item.size().width <= width as f32);
+                    }
+                    assert_eq!(
+                        ElementHandle::find_by_accessible_label(&app, pause)
+                            .next()
+                            .is_some(),
+                        everyone && has_media
+                    );
+                    assert_eq!(
+                        ElementHandle::find_by_accessible_label(&app, stream)
+                            .next()
+                            .is_some(),
+                        has_media,
+                        "own sources require only the current accepted episode"
+                    );
+                    for admin in [
+                        "PartyPage::party_wait",
+                        "PartyPage::party_copy",
+                        "PartyPage::party_continue",
+                    ] {
+                        assert!(
+                            ElementHandle::find_by_element_id(&app, admin)
+                                .next()
+                                .is_none(),
+                            "guest must not acquire creator actions"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}
+
+#[test]
+fn live_policy_revocation_restores_tv_focus_to_current_episode_actions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::live_policy_revocation_restores_tv_focus_to_current_episode_actions"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.set_party_active(true);
+    app.set_party_page_open(true);
+    app.set_party_has_media(true);
+    app.set_party_can_return_to_player(true);
+    app.set_party_duration(3600.0);
+    app.set_party_allow_everyone(true);
+    app.set_party_can_control(true);
+    app.set_party_can_choose_media(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_party_set_paused(move |_| recorded.borrow_mut().push("pause"));
+    let recorded = actions.clone();
+    app.on_party_return_to_player(move || recorded.borrow_mut().push("return"));
+    let recorded = actions.clone();
+    app.on_party_choose_stream(move || recorded.borrow_mut().push("stream"));
+    app.window().show().unwrap();
+    settle();
+    let key = |key: slint::platform::Key| {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
+        settle();
+    };
+    key(slint::platform::Key::DownArrow); // timeline
+    key(slint::platform::Key::DownArrow); // pause
+    key(slint::platform::Key::Return);
+    assert_eq!(&*actions.borrow(), &["pause"]);
+    app.set_party_allow_everyone(false);
+    app.set_party_can_control(false);
+    app.set_party_can_choose_media(false);
+    settle();
+    key(slint::platform::Key::DownArrow);
+    key(slint::platform::Key::Return);
+    key(slint::platform::Key::DownArrow);
+    key(slint::platform::Key::Return);
+    assert_eq!(&*actions.borrow(), &["pause", "return", "stream"]);
 }

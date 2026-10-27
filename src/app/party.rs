@@ -2,7 +2,9 @@
 //! The UI thread owns player access. One worker operation at a time owns all
 //! room I/O, while local drift corrections use the latest immutable snapshot.
 use super::*;
-use nova_party::{HostCommand, LocalReport, PartyMedia, PartyRole, PartyService, RoomSnapshot};
+use nova_party::{
+    ControlPolicy, HostCommand, LocalReport, PartyMedia, PartyRole, PartyService, RoomSnapshot,
+};
 #[cfg(test)]
 use nova_playback_api::MediaIdentity;
 use nova_playback_api::PlaybackAction;
@@ -46,7 +48,7 @@ pub(super) struct State {
     last_report: Option<Instant>,
     /// A user explicitly chose to find this room's episode in their own addons.
     choosing_source: bool,
-    /// Only an explicit host selection may replace the shared title.
+    /// The creator must validate a source before activating pending media.
     choosing_media: bool,
     selection_epoch: u64,
     selection_revision: u64,
@@ -55,6 +57,7 @@ pub(super) struct State {
     resume_guard: bool,
     setup_restore: Option<(u64, bool)>,
     source_choice: Option<SourceChoice>,
+    selection: Option<Selection>,
 }
 
 #[derive(Clone)]
@@ -67,18 +70,96 @@ struct SourceChoice {
 
 impl State {
     pub(super) fn snapshot_for_sources(&self) -> Option<RoomSnapshot> {
-        self.snapshot.clone()
+        // A network reply can revoke permissions before its UI continuation
+        // runs. Authorize from the service; retain the last read on contention.
+        self.service
+            .as_ref()
+            .and_then(|service| service.snapshot())
+            .or_else(|| self.snapshot.clone())
+    }
+
+    fn retire_old_operations(&mut self, generation: u64) {
+        self.pending.retain(|operation| match operation {
+            Operation::Command(expected, ..)
+            | Operation::PrepareMedia(expected, ..)
+            | Operation::SelectMedia(expected, ..) => *expected == generation,
+            Operation::Report(report) => report.generation == generation,
+            _ => true,
+        });
+    }
+
+    fn prepared_selection_matches(&self, room: &RoomSnapshot, expected: u64) -> bool {
+        expected.checked_add(1) == Some(room.generation)
+            && self.selection.as_ref().is_some_and(|selection| {
+                selection.guard.generation == expected
+                    && selection.guard.room_id == room.room_id
+                    && room.selected_media().is_some_and(|media| {
+                        party_source::same_media(&media.identity, &selection.media.identity)
+                    })
+            })
+    }
+
+    fn reject_prepared_selection(&mut self) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| !selection.accepted)
+        {
+            self.selection = None;
+        }
     }
     pub(super) fn active(&self) -> bool {
         self.service.is_some() || self.busy
     }
 }
 
+/// Room identity and activation distinguish leaving/rejoining and A → B → A.
+#[derive(Clone)]
+pub(super) struct PlaybackGuard {
+    activation: u64,
+    room_id: String,
+    generation: u64,
+    media: nova_playback_api::MediaIdentity,
+}
+
+#[derive(Clone)]
+struct Selection {
+    guard: PlaybackGuard,
+    media: PartyMedia,
+    owner: Option<Arc<()>>,
+    request_id: String,
+    accepted: bool,
+    download: Option<String>,
+}
+
+fn can_control(room: &RoomSnapshot) -> bool {
+    room.connected
+        && !room.ended
+        && (room.role == PartyRole::Host || room.control_policy == ControlPolicy::Everyone)
+}
+
+impl PlaybackGuard {
+    pub(super) fn accepts(&self, state: &State) -> bool {
+        state.active()
+            && state.generation == self.activation
+            && state.snapshot_for_sources().as_ref().is_some_and(|room| {
+                room.room_id == self.room_id
+                    && room.generation == self.generation
+                    && room.connected
+                    && !room.ended
+                    && room
+                        .selected_media()
+                        .is_some_and(|media| party_source::same_media(&media.identity, &self.media))
+            })
+    }
+}
+
 enum Operation {
-    Command(u64, HostCommand),
+    Command(u64, u64, HostCommand),
+    Policy(ControlPolicy),
     ClearMedia { browse: bool },
-    PrepareMedia(PartyMedia),
-    SelectMedia(PartyMedia, LocalReport),
+    PrepareMedia(u64, u64, PartyMedia),
+    SelectMedia(u64, PartyMedia, LocalReport),
     Kick(String),
     Wait(bool),
     Continue,
@@ -128,6 +209,11 @@ fn compatible_media(local: &PartyMedia, expected: &PartyMedia, manual: bool) -> 
                 && local.episode == expected.episode))
 }
 
+fn bind_host_activation(media: &mut PartyMedia, report: &mut LocalReport, expected: &PartyMedia) {
+    media.identity = expected.identity.clone();
+    report.media = Some(expected.identity.clone());
+}
+
 impl Bridge {
     pub(super) fn party_active(&self) -> bool {
         let state = self.shared.lock().unwrap();
@@ -145,7 +231,7 @@ impl Bridge {
             }
             (party.snapshot.clone()?, party.choosing_source)
         };
-        if room.role == PartyRole::Host && self.shared.lock().unwrap().party.choosing_media {
+        if room.pending_media.is_some() && self.shared.lock().unwrap().party.choosing_media {
             return Some(0.0);
         }
         let media = room.selected_media()?;
@@ -313,6 +399,20 @@ impl Bridge {
             }
         });
         let b = self.clone();
+        app.on_party_set_allow_everyone(move |everyone| {
+            if b.party_active() {
+                b.party_enqueue(Operation::Policy(if everyone {
+                    ControlPolicy::Everyone
+                } else {
+                    ControlPolicy::HostOnly
+                }));
+            } else if let Some(app) = b.app() {
+                // Before Create this is only a draft for the new room. Joining
+                // always takes its policy from the creator's snapshot.
+                app.set_party_allow_everyone(everyone);
+            }
+        });
+        let b = self.clone();
         app.on_party_set_paused(move |paused| b.party_command(HostCommand::SetPaused(paused)));
         let b = self.clone();
         app.on_party_seek(move |position| {
@@ -399,6 +499,14 @@ impl Bridge {
         }
     }
 
+    fn party_creation_policy(&self, joining: bool) -> ControlPolicy {
+        if !joining && self.app().is_some_and(|app| app.get_party_allow_everyone()) {
+            ControlPolicy::Everyone
+        } else {
+            ControlPolicy::HostOnly
+        }
+    }
+
     fn party_begin(&self, invite: Option<String>) {
         if self.shared.lock().unwrap().casting.reserved() {
             if let Some(app) = self.app() {
@@ -427,6 +535,7 @@ impl Bridge {
             return;
         }
         let was_paused = app.get_is_paused();
+        let creation_policy = self.party_creation_policy(invite.is_some());
         let playback_epoch = self.player.screenshot_session();
         let generation = {
             let mut state = self.shared.lock().unwrap();
@@ -466,7 +575,11 @@ impl Bridge {
                     service.join(invite.trim(), name)?;
                     String::new()
                 } else {
-                    service.create_lobby(name)?
+                    let ticket = service.create_lobby(name)?;
+                    // Publish neither the invite nor the first snapshot until
+                    // the creator's selected initial permissions are applied.
+                    service.set_control_policy(creation_policy)?;
+                    ticket
                 };
                 Ok((service, ticket))
             });
@@ -552,6 +665,9 @@ impl Bridge {
         self.refresh_party_stream_recommendations();
         if let Some(app) = self.app() {
             app.set_party_active(false);
+            app.set_party_can_control(false);
+            app.set_party_can_choose_media(false);
+            app.set_party_allow_everyone(false);
             app.set_party_has_media(false);
             app.set_party_can_return_to_player(false);
             app.set_party_busy(false);
@@ -574,77 +690,290 @@ impl Bridge {
         }
     }
 
-    /// Stream-picker entry publishes identity before any host source is loaded.
-    pub(super) fn party_prepare_stream_selection(&self) {
-        if profile_policy::entry_blocked() {
-            return;
+    fn party_selection_error(&self, stale: bool) {
+        if let Some(app) = self.app() {
+            app.set_party_error(text::tr(if stale {
+                "This watch-party selection changed. Choose a stream again."
+            } else {
+                "The host chooses what to watch. Choose a stream for the current episode or leave the party."
+            }).into());
         }
-        let media = {
-            let state = self.shared.lock().unwrap();
-            let party = &state.party;
-            if !party
-                .snapshot
-                .as_ref()
-                .is_some_and(|room| room.role == PartyRole::Host)
-                || state.season_download.is_some()
-                || !self.app().is_some_and(|app| app.get_stream_selector_open())
-            {
-                return;
-            }
-            let Some(modal) = state.modal_item.as_ref() else {
-                return;
-            };
-            let video = modal
-                .videos
-                .iter()
-                .find(|video| video.id == modal.request_id);
-            if modal.type_ != "movie" && video.is_none() {
-                return;
-            }
-            let identity = party_source::canonical_media(
-                nova_playback_api::MediaIdentity {
-                    media_type: modal.type_.clone(),
-                    title_id: modal.id.clone(),
-                    episode_id: modal.request_id.clone(),
-                    title: modal.name.clone(),
-                    episode: video.map(|video| video.name.clone()).unwrap_or_default(),
-                },
-                &modal.videos,
-            );
-            if party.snapshot.as_ref().and_then(RoomSnapshot::selected_media)
-                .is_some_and(|media| party_source::same_media(&media.identity, &identity))
-                || party.pending.iter().any(|operation| matches!(operation, Operation::PrepareMedia(media) if party_source::same_media(&media.identity, &identity)))
-            { return; }
-            PartyMedia {
-                identity,
-                season: video.and_then(|v| v.season),
-                episode: video.and_then(|v| v.episode.or(v.number)),
-                duration: 0.0,
-            }
-        };
+    }
+
+    /// Run before changing playback targets, picker state or querying streams.
+    /// Browsing and download-only selectors never announce a room selection.
+    pub(super) fn party_preflight_media(&self, media: PartyMedia) -> bool {
+        let kind = media.identity.media_type.clone();
+        let title = media.identity.title_id.clone();
+        self.party_preflight_media_for_title(media, &kind, &title)
+    }
+
+    /// Authorization belongs to the original provider title. Its confirmed
+    /// canonical room identity need not be a separately allowlisted title.
+    pub(super) fn party_preflight_media_for_title(
+        &self,
+        media: PartyMedia,
+        kind: &str,
+        title: &str,
+    ) -> bool {
+        if self.party_active()
+            && !profile_policy::allows_browse_title(&profiles::ProfileStore::capture(), kind, title)
         {
-            let mut state = self.shared.lock().unwrap();
-            let party = &mut state.party;
+            return false;
+        }
+        let mut state = self.shared.lock().unwrap();
+        if state.season_download.is_some() || !state.party.active() {
+            return true;
+        }
+        let party = &mut state.party;
+        let Some(room) = party
+            .snapshot_for_sources()
+            .filter(|room| room.connected && !room.ended)
+        else {
+            drop(state);
+            self.party_selection_error(true);
+            return false;
+        };
+        let matching = room
+            .selected_media()
+            .is_some_and(|expected| compatible_media(&media, expected, party.choosing_source));
+        if !matching && !can_control(&room) {
+            drop(state);
+            self.party_selection_error(false);
+            return false;
+        }
+        // Repeated entry must not submit a second proposal against the
+        // generation its first proposal is in the process of replacing.
+        if party.selection.as_ref().is_some_and(|selection| {
+            !selection.accepted
+                && party_source::same_media(&selection.media.identity, &media.identity)
+                && selection.guard.activation == party.generation
+                && selection.guard.room_id == room.room_id
+                && selection.guard.generation == room.generation
+        }) {
+            return true;
+        }
+        let expected = if matching {
+            room.selected_media().unwrap()
+        } else {
+            &media
+        };
+        party.selection_revision = party.selection_revision.wrapping_add(1);
+        party.selection = Some(Selection {
+            guard: PlaybackGuard {
+                activation: party.generation,
+                room_id: room.room_id.clone(),
+                generation: room.generation,
+                media: expected.identity.clone(),
+            },
+            media: media.clone(),
+            owner: None,
+            request_id: media.identity.episode_id.clone(),
+            accepted: matching,
+            download: None,
+        });
+        party.followed_generation = Some(room.generation);
+        if matching && room.role == PartyRole::Host && room.pending_media.is_some() {
             party.choosing_media = true;
+            party.selection_epoch = self.player.screenshot_session();
+        }
+        if !matching {
+            party.choosing_media = room.role == PartyRole::Host;
             party.choosing_source = false;
             party.source_choice = None;
             party.selection_epoch = self.player.screenshot_session();
-            party.selection_revision = party.selection_revision.wrapping_add(1);
-            party
-                .pending
-                .retain(|op| matches!(op, Operation::Kick(_) | Operation::Wait(_)));
-            party.pending.push_front(Operation::PrepareMedia(media));
+            party.pending.retain(|op| {
+                matches!(
+                    op,
+                    Operation::Kick(_) | Operation::Wait(_) | Operation::Policy(_)
+                )
+            });
+            party.pending.push_front(Operation::PrepareMedia(
+                room.generation,
+                room.control_revision,
+                media,
+            ));
         }
+        drop(state);
         self.party_tick();
+        true
+    }
+
+    pub(super) fn party_modal_media(&self, request_id: &str) -> Option<PartyMedia> {
+        let state = self.shared.lock().unwrap();
+        let modal = state.modal_item.as_ref()?;
+        let video = modal.videos.iter().find(|video| video.id == request_id);
+        Some(PartyMedia {
+            identity: party_source::canonical_media(
+                nova_playback_api::MediaIdentity {
+                    media_type: modal.type_.clone(),
+                    title_id: modal.id.clone(),
+                    episode_id: request_id.into(),
+                    title: modal.name.clone(),
+                    episode: video.map(|v| v.name.clone()).unwrap_or_default(),
+                },
+                &modal.videos,
+            ),
+            season: video.and_then(|v| v.season),
+            episode: video.and_then(|v| v.episode.or(v.number)),
+            duration: 0.0,
+        })
+    }
+
+    pub(super) fn party_stream_lookup_allowed(&self, request_id: &str) -> bool {
+        let media = self.party_modal_media(request_id);
+        let state = self.shared.lock().unwrap();
+        if !state.party.active() || state.season_download.is_some() {
+            return true;
+        }
+        state
+            .party
+            .snapshot_for_sources()
+            .as_ref()
+            .is_some_and(|room| {
+                can_control(room)
+                    || (room.connected
+                        && !room.ended
+                        && media.as_ref().zip(room.selected_media()).is_some_and(
+                            |(local, expected)| {
+                                compatible_media(local, expected, state.party.choosing_source)
+                            },
+                        ))
+            })
+    }
+
+    pub(super) fn party_preflight_modal(&self, request_id: &str) -> bool {
+        if !self.party_active() {
+            return true;
+        }
+        let authority = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|modal| (modal.type_.clone(), modal.id.clone()));
+        authority
+            .zip(self.party_modal_media(request_id))
+            .is_some_and(|((kind, title), media)| {
+                self.party_preflight_media_for_title(media, &kind, &title)
+            })
+    }
+
+    /// Bind after navigation installs the modal. Equal IDs in a new opening
+    /// must not let an older resolver or proposal own that new opening.
+    pub(super) fn party_bind_picker(&self) {
+        let mut state = self.shared.lock().unwrap();
+        let Some(modal) = state.modal_item.as_ref() else {
+            return;
+        };
+        let token = modal.open_token.clone();
+        let request_id = modal.request_id.clone();
+        let identity = party_source::canonical_media(
+            nova_playback_api::MediaIdentity {
+                media_type: modal.type_.clone(),
+                title_id: modal.id.clone(),
+                episode_id: request_id.clone(),
+                ..Default::default()
+            },
+            &modal.videos,
+        );
+        if let Some(selection) = state.party.selection.as_mut()
+            && party_source::same_media(&selection.media.identity, &identity)
+        {
+            selection.owner = Some(token);
+            selection.request_id = request_id;
+        }
+    }
+
+    pub(super) fn party_playback_guard(&self) -> Result<Option<PlaybackGuard>, ()> {
+        let state = self.shared.lock().unwrap();
+        if !state.party.active() {
+            return Ok(None);
+        }
+        let selection = state.party.selection.as_ref().filter(|selection| {
+            selection.accepted
+                && selection.guard.accepts(&state.party)
+                && selection
+                    .owner
+                    .as_ref()
+                    .zip(state.modal_item.as_ref())
+                    .is_some_and(|(owner, modal)| {
+                        Arc::ptr_eq(owner, &modal.open_token)
+                            && selection.request_id == modal.request_id
+                    })
+        });
+        let guard = selection.map(|selection| selection.guard.clone());
+        drop(state);
+        if let Some(guard) = guard {
+            Ok(Some(guard))
+        } else {
+            self.party_selection_error(true);
+            Err(())
+        }
+    }
+
+    pub(super) fn party_cancel_pending_source(&self) {
+        if let Some(selection) = self.shared.lock().unwrap().party.selection.as_mut() {
+            selection.download = None;
+        }
+    }
+
+    pub(super) fn party_download_guard(
+        &self,
+        media: PartyMedia,
+        id: &str,
+        kind: &str,
+        title: &str,
+    ) -> Result<Option<PlaybackGuard>, ()> {
+        if !self.party_active() {
+            return Ok(None);
+        }
+        if !self.party_preflight_media_for_title(media, kind, title) {
+            return Err(());
+        }
+        let mut state = self.shared.lock().unwrap();
+        let accepted =
+            state.party.selection.as_ref().is_some_and(|selection| {
+                selection.accepted && selection.guard.accepts(&state.party)
+            });
+        let Some(selection) = state.party.selection.as_mut() else {
+            return Err(());
+        };
+        if !accepted {
+            // A download card can be the first selection too. Wait for room
+            // acceptance instead of loading a file under the old generation.
+            selection.download = Some(id.into());
+            return Err(());
+        }
+        let guard = selection.guard.clone();
+        drop(state);
+        // A download row can still belong to the retained source picker.
+        // Keep manual source replacement bound to that opening when it does.
+        self.party_bind_picker();
+        Ok(Some(guard))
+    }
+
+    /// Explicit entry retained for coordinator callers, never passive prefetch.
+    pub(super) fn party_prepare_stream_selection(&self) {
+        let request_id = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|m| m.request_id.clone());
+        if let Some(request_id) = request_id
+            && self.party_preflight_modal(&request_id)
+        {
+            self.party_bind_picker();
+        }
     }
 
     fn party_follow_selection(&self, room: Option<&RoomSnapshot>) {
-        let Some(room) = room.filter(|room| {
-            room.role == PartyRole::Guest
-                && room.connected
-                && !room.ended
-                && room.selected_media().is_some()
-        }) else {
+        let Some(room) =
+            room.filter(|room| room.connected && !room.ended && room.selected_media().is_some())
+        else {
             return;
         };
         {
@@ -655,6 +984,15 @@ impl Bridge {
             // Claim once before navigation; late replies and ordinary room
             // reports must not reopen a picker the guest deliberately left.
             state.party.followed_generation = Some(room.generation);
+            // The proposer already owns its matching picker. Never replace
+            // its opening token or reopen a picker it deliberately dismissed.
+            if state.party.selection.as_ref().is_some_and(|selection| {
+                selection.guard.generation == room.generation
+                    && selection.guard.room_id == room.room_id
+                    && selection.accepted
+            }) {
+                return;
+            }
         }
         self.party_choose_stream();
     }
@@ -672,6 +1010,7 @@ impl Bridge {
                 return;
             };
             state.party.choosing_source = true;
+            state.party.choosing_media = false;
             media
         };
         let owner = profiles::ProfileStore::capture();
@@ -757,6 +1096,24 @@ impl Bridge {
     }
 
     fn party_prepare_media_change(&self, browse: bool) {
+        if browse {
+            let permitted = self
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_ref()
+                .is_some_and(can_control);
+            if !permitted {
+                self.party_selection_error(false);
+                return;
+            }
+            // Opening the catalog is not media intent. Cancelling browsing
+            // keeps the accepted room selection and every participant intact.
+            self.party_browse(None);
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             let party = &mut state.party;
@@ -775,9 +1132,12 @@ impl Bridge {
             party.choosing_source = false;
             // Retire controls and reports for the old title before returning
             // the room to its lobby. Membership and the invite stay intact.
-            party
-                .pending
-                .retain(|op| matches!(op, Operation::Kick(_) | Operation::Wait(_)));
+            party.pending.retain(|op| {
+                matches!(
+                    op,
+                    Operation::Kick(_) | Operation::Wait(_) | Operation::Policy(_)
+                )
+            });
             party.pending.push_front(Operation::ClearMedia { browse });
         }
         self.player.set_paused(true);
@@ -789,7 +1149,7 @@ impl Bridge {
     }
 
     fn party_command(&self, command: HostCommand) {
-        let generation = {
+        let (generation, revision) = {
             let state = self.shared.lock().unwrap();
             if state.party.choosing_media {
                 return;
@@ -797,9 +1157,9 @@ impl Bridge {
             let Some(room) = state.party.snapshot.as_ref().filter(|r| r.media.is_some()) else {
                 return;
             };
-            room.generation
+            (room.generation, room.control_revision)
         };
-        self.party_enqueue(Operation::Command(generation, command));
+        self.party_enqueue(Operation::Command(generation, revision, command));
     }
 
     fn party_enqueue(&self, operation: Operation) {
@@ -811,11 +1171,14 @@ impl Bridge {
         if p.service.is_none() {
             return;
         }
-        if !p
-            .snapshot
-            .as_ref()
-            .is_some_and(|room| room.role == PartyRole::Host)
-        {
+        let shared_control = matches!(operation, Operation::Command(..));
+        if !p.snapshot.as_ref().is_some_and(|room| {
+            if shared_control {
+                can_control(room)
+            } else {
+                room.role == PartyRole::Host
+            }
+        }) {
             drop(state);
             if let Some(app) = self.app() {
                 app.set_party_error(text::tr("Only the host controls the shared timeline.").into());
@@ -920,7 +1283,9 @@ impl Bridge {
             p.pending.retain(|operation| {
                 matches!(
                     operation,
-                    Operation::ClearMedia { .. } | Operation::SelectMedia(..)
+                    Operation::ClearMedia { .. }
+                        | Operation::PrepareMedia(..)
+                        | Operation::SelectMedia(..)
                 )
             });
             if p.snapshot
@@ -929,6 +1294,7 @@ impl Bridge {
             {
                 p.pending.push_front(Operation::Command(
                     p.snapshot.as_ref().map_or(0, |r| r.generation),
+                    p.snapshot.as_ref().map_or(0, |r| r.control_revision),
                     HostCommand::SetPaused(true),
                 ));
             }
@@ -984,16 +1350,19 @@ impl Bridge {
                 && !state.party.pending.iter().any(|op| {
                     matches!(
                         op,
-                        Operation::PrepareMedia(_) | Operation::ClearMedia { .. }
+                        Operation::PrepareMedia(..) | Operation::ClearMedia { .. }
                     )
                 })
                 && state.party.selection_epoch != self.player.screenshot_session()
+                && state.party.selection.as_ref().is_some_and(|selection| {
+                    selection.accepted && selection.guard.accepts(&state.party)
+                })
                 && snapshot
                     .as_ref()
                     .is_some_and(|r| r.role == PartyRole::Host && r.media.is_none())
         };
         if selecting {
-            let candidate = self.party_report(None);
+            let mut candidate = self.party_report(None);
             if candidate.loaded && (!candidate.seekable || candidate.duration <= 0.0) {
                 app.set_party_error(text::tr("Choose a seekable stream to watch together.").into());
             }
@@ -1001,13 +1370,26 @@ impl Bridge {
                 && candidate.seekable
                 && !candidate.ended
                 && candidate.duration > 0.0
-                && let Some(media) = self.party_media()
+                && let Some(mut media) = self.party_media()
             {
                 let mut state = self.shared.lock().unwrap();
+                let Some(selection) = state.party.selection.as_ref().filter(|selection| {
+                    selection.accepted && selection.guard.accepts(&state.party)
+                }) else {
+                    return;
+                };
+                let generation = selection.guard.generation;
+                // Explicit private addon matching retains the shared identity;
+                // the native duration still goes through creator validation.
+                if let Some(expected) = snapshot.as_ref().and_then(RoomSnapshot::selected_media)
+                    && compatible_media(&media, expected, state.party.choosing_source)
+                {
+                    bind_host_activation(&mut media, &mut candidate, expected);
+                }
                 state
                     .party
                     .pending
-                    .push_front(Operation::SelectMedia(media, candidate));
+                    .push_front(Operation::SelectMedia(generation, media, candidate));
                 app.set_party_busy(true);
             }
         }
@@ -1063,14 +1445,21 @@ impl Bridge {
             let Some(service) = p.service.clone() else {
                 return;
             };
-            let operation = p.pending.pop_front().or_else(|| {
-                p.last_report
-                    .is_none_or(|at| at.elapsed().as_millis() >= 500)
-                    .then_some(Operation::Report(report))
-            });
+            // Heartbeats have a deadline even while shared controls keep
+            // arriving. Commands must never indefinitely starve readiness.
+            let operation = if p
+                .last_report
+                .is_none_or(|at| at.elapsed().as_millis() >= 500)
+            {
+                Some(Operation::Report(report))
+            } else {
+                p.pending.pop_front()
+            };
             let Some(operation) = operation else { return };
             p.busy = true;
-            p.last_report = Some(Instant::now());
+            if matches!(operation, Operation::Report(_)) {
+                p.last_report = Some(Instant::now());
+            }
             (
                 service,
                 operation,
@@ -1086,36 +1475,45 @@ impl Bridge {
             let media_change = matches!(
                 operation,
                 Operation::ClearMedia { .. }
-                    | Operation::PrepareMedia(_)
+                    | Operation::PrepareMedia(..)
                     | Operation::SelectMedia(..)
             );
             let selecting_media = matches!(operation, Operation::SelectMedia(..));
-            let preparing_media = matches!(operation, Operation::PrepareMedia(_));
+            let preparing_media = matches!(operation, Operation::PrepareMedia(..));
+            let operation_media_generation = match &operation {
+                Operation::PrepareMedia(expected, ..) | Operation::SelectMedia(expected, ..) => {
+                    Some(*expected)
+                }
+                _ => None,
+            };
             let report_only = matches!(operation, Operation::Report(_));
             let result = if !remote_playback::is_foreground() && report_only {
                 Ok(())
             } else {
                 match operation {
-                    Operation::Command(media_generation, command) => {
-                        service.command_for_generation(media_generation, command)
+                    Operation::Command(media_generation, revision, command) => {
+                        service.command_for_state(media_generation, revision, command)
                     }
                     Operation::ClearMedia { .. } => service.clear_media(),
-                    Operation::PrepareMedia(media) => service.prepare_media(media),
-                    Operation::SelectMedia(media, report) => {
-                        service.select_media(media, report).and_then(|()| {
-                            // A load can finish after Android suspends. A prior
-                            // generation's pause must not let its replacement
-                            // start playing for the other participants.
-                            if !remote_playback::is_foreground()
-                                && let Some(room) = service.snapshot()
-                            {
-                                service.command_for_generation(
-                                    room.generation,
-                                    HostCommand::SetPaused(true),
-                                )?;
-                            }
-                            Ok(())
-                        })
+                    Operation::PrepareMedia(media_generation, revision, media) => {
+                        service.propose_media(media_generation, revision, media)
+                    }
+                    Operation::Policy(policy) => service.set_control_policy(policy),
+                    Operation::SelectMedia(media_generation, media, report) => {
+                        service
+                            .select_media_for_generation(media_generation, media, report)
+                            .and_then(|()| {
+                                // A load can finish after Android suspends. A prior
+                                // generation's pause must not let its replacement
+                                // start playing for the other participants.
+                                if !remote_playback::is_foreground() {
+                                    service.command_for_generation(
+                                        media_generation,
+                                        HostCommand::SetPaused(true),
+                                    )?;
+                                }
+                                Ok(())
+                            })
                     }
                     Operation::Kick(id) => service.kick(&id),
                     Operation::Wait(enabled) => service.set_wait_for_guests(enabled),
@@ -1127,6 +1525,7 @@ impl Bridge {
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 let current_media = b.current_playback_identity();
                 let reopen_room;
+                let mut download = None;
                 {
                     let mut state = b.shared.lock().unwrap();
                     let p = &mut state.party;
@@ -1149,17 +1548,42 @@ impl Bridge {
                     if selecting_media || (media_change && result.is_err()) {
                         p.choosing_media = false;
                     }
+                    if preparing_media && result.is_err() {
+                        // Rejection can retain the same generation. Retire the
+                        // failed dedup marker so choosing it again can retry.
+                        p.reject_prepared_selection();
+                    }
                     if let Some(room) = snapshot.as_ref() {
                         let changed =
                             p.snapshot.as_ref().map(|r| r.generation) != Some(room.generation);
+                        let accepted_proposal = preparing_media
+                            && result.is_ok()
+                            && operation_media_generation.is_some_and(|expected| {
+                                p.prepared_selection_matches(room, expected)
+                            });
+                        let accepted_activation = selecting_media
+                            && result.is_ok()
+                            && operation_media_generation == Some(room.generation);
+                        if accepted_proposal && let Some(selection) = p.selection.as_mut() {
+                            selection.guard.generation = room.generation;
+                            selection.accepted = true;
+                            download = selection.download.take();
+                        } else if preparing_media {
+                            // A later A → B → A snapshot cannot adopt this
+                            // earlier proposal's local resolver or download.
+                            p.reject_prepared_selection();
+                            p.choosing_media = false;
+                        }
                         if changed {
+                            // A late rejected proposal must not clear the
+                            // creator's new source-follow/activation intent.
+                            p.retire_old_operations(room.generation);
                             p.last_seek = None;
                             p.choosing_source = false;
                             // A host source can finish while its episode
                             // announcement is in flight. Both host selection
                             // stages bind that same local asset to this generation.
-                            if (selecting_media || preparing_media)
-                                && result.is_ok()
+                            if (accepted_activation || accepted_proposal)
                                 && p.source_choice.as_ref().is_some_and(|choice| {
                                     current_media.as_ref().is_some_and(|media| {
                                         party_source::same_media(&choice.media, media)
@@ -1191,9 +1615,15 @@ impl Bridge {
                     if media_change {
                         app.set_party_busy(false);
                     }
-                    if result.is_err() {
+                    if let Err(error) = &result {
                         app.set_party_error(
-                            text::tr("Could not connect to the watch party. Try again.").into(),
+                            if let Some(rejection) =
+                                error.downcast_ref::<nova_party::ControlRejection>()
+                            {
+                                text::tr(&rejection.to_string()).into()
+                            } else {
+                                text::tr("Could not connect to the watch party. Try again.").into()
+                            },
                         );
                     } else if !report_only {
                         app.set_party_error("".into());
@@ -1201,6 +1631,9 @@ impl Bridge {
                 }
                 if browse && result.is_ok() {
                     b.party_browse(None);
+                }
+                if let Some(id) = download {
+                    b.play_download(&id);
                 }
                 if remote_playback::is_foreground() {
                     b.party_publish();
@@ -1220,6 +1653,9 @@ impl Bridge {
         let room = self.shared.lock().unwrap().party.snapshot.clone();
         let Some(room) = room else { return };
         app.set_party_is_host(room.role == PartyRole::Host);
+        app.set_party_allow_everyone(room.control_policy == ControlPolicy::Everyone);
+        app.set_party_can_control(can_control(&room));
+        app.set_party_can_choose_media(can_control(&room));
         app.set_party_active(!room.ended);
         app.set_party_waiting(!room.waiting.is_empty() || !room.connected);
         app.set_party_wait_for_guests(room.wait_for_guests);
@@ -1388,6 +1824,50 @@ mod tests {
         second.season = None;
         second.episode = None;
         assert_eq!(party_episode_caption(&state, &second), "Episode");
+    }
+
+    #[test]
+    fn private_host_source_activation_binds_media_and_report_together() {
+        let expected = media("tt123", 2);
+        let mut local = media("private-addon:blue-box", 2);
+        assert!(compatible_media(&local, &expected, true));
+        let mut report = LocalReport {
+            media: Some(local.identity.clone()),
+            loaded: true,
+            seekable: true,
+            duration: 1_400.0,
+            ..Default::default()
+        };
+        bind_host_activation(&mut local, &mut report, &expected);
+        assert_eq!(local.identity, expected.identity);
+        assert_eq!(report.media.as_ref(), Some(&local.identity));
+        assert_eq!(report.duration, 1_400.0);
+    }
+
+    #[test]
+    fn room_change_retires_old_controls_without_losing_new_activation_or_admin_operations() {
+        let mut state = State::default();
+        state.pending.extend([
+            Operation::PrepareMedia(1, 0, media("tt123", 1)),
+            Operation::SelectMedia(1, media("tt123", 1), LocalReport::default()),
+            Operation::Command(1, 0, HostCommand::SeekAbsolute(50.0)),
+            Operation::Report(LocalReport {
+                generation: 1,
+                ..Default::default()
+            }),
+            Operation::SelectMedia(2, media("tt123", 2), LocalReport::default()),
+            Operation::Command(2, 0, HostCommand::SetPaused(true)),
+            Operation::Kick("guest".into()),
+            Operation::Wait(false),
+            Operation::Policy(ControlPolicy::HostOnly),
+        ]);
+        state.retire_old_operations(2);
+        assert_eq!(state.pending.len(), 5);
+        assert!(matches!(state.pending[0], Operation::SelectMedia(2, ..)));
+        assert!(matches!(state.pending[1], Operation::Command(2, ..)));
+        assert!(matches!(state.pending[2], Operation::Kick(_)));
+        assert!(matches!(state.pending[3], Operation::Wait(false)));
+        assert!(matches!(state.pending[4], Operation::Policy(_)));
     }
 
     fn media(id: &str, episode: u32) -> PartyMedia {

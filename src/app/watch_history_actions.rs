@@ -40,6 +40,31 @@ impl Bridge {
     }
 
     fn open_history_entry(&self, entry: watch_history::HistoryEntry) {
+        if self.party_active() {
+            let videos =
+                read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
+            if !self.party_preflight_media_for_title(
+                nova_party::PartyMedia {
+                    identity: party_source::canonical_media(
+                        nova_playback_api::MediaIdentity {
+                            media_type: entry.type_.clone(),
+                            title_id: entry.series_id.clone(),
+                            episode_id: entry.episode_id.clone(),
+                            title: entry.title.clone(),
+                            episode: entry.episode_label.clone(),
+                        },
+                        &videos,
+                    ),
+                    season: entry.season,
+                    episode: entry.episode,
+                    duration: 0.0,
+                },
+                &entry.type_,
+                &entry.series_id,
+            ) {
+                return;
+            }
+        }
         let preview = MetaPreview {
             id: entry.series_id.clone(),
             type_: entry.type_.clone(),

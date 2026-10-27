@@ -204,6 +204,8 @@ mod tests {
     }
     fn room(fingerprint: SourceFingerprint) -> RoomSnapshot {
         RoomSnapshot {
+            control_policy: nova_party::ControlPolicy::HostOnly,
+            control_revision: 0,
             pending_media: None,
             role: PartyRole::Guest,
             room_id: "room".into(),

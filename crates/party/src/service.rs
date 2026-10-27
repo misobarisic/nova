@@ -1,7 +1,7 @@
 //! Blocking foreground-worker API around an independent, lazily bound endpoint.
 use crate::engine::{self, HostRoom};
 use crate::ticket::{self, Ticket};
-use crate::wire::{self, Operation, Request, Response};
+use crate::wire::{self, ControlIntent, Operation, Request, Response};
 use crate::*;
 use anyhow::{Context, Result, ensure};
 use iroh::Endpoint;
@@ -17,6 +17,20 @@ const EXCHANGE_TIMEOUT: Duration = Duration::from_millis(2_500);
 
 #[derive(Debug)]
 struct TerminalError(String);
+
+#[derive(Debug)]
+struct NonterminalError {
+    message: String,
+    snapshot: Option<Box<RoomSnapshot>>,
+}
+
+impl fmt::Display for NonterminalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NonterminalError {}
 
 impl fmt::Display for TerminalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -59,6 +73,7 @@ struct Guest {
     ticket: Ticket,
     connection: Option<Connection>,
     next_sequence: u64,
+    next_control_sequence: u64,
     last_success: u64,
     best_rtt: f64,
     best_sample_at: u64,
@@ -215,6 +230,7 @@ impl PartyService {
             ticket,
             connection: None,
             next_sequence: 1,
+            next_control_sequence: 1,
             last_success: local_now_ms(),
             best_rtt: f64::INFINITY,
             best_sample_at: 0,
@@ -275,6 +291,11 @@ impl PartyService {
                     Ok(())
                 }
                 result => {
+                    if let Err(error) = &result
+                        && self.publish_rejection(error)
+                    {
+                        return result.map(|_| ());
+                    }
                     if let Some(mut snapshot) = self.snapshot() {
                         pause_disconnected(&mut snapshot, local_now_ms());
                         snapshot.ended |=
@@ -323,13 +344,94 @@ impl PartyService {
 
     /// Apply a queued intent only to the media it was captured for.
     pub fn command_for_generation(&self, generation: u64, command: HostCommand) -> Result<()> {
-        self.with_host(|room| {
-            ensure!(
-                room.snapshot.generation == generation,
-                "party media changed"
-            );
-            room.command(command, local_now_ms())
-        })
+        let revision = self.snapshot().context("not in a party")?.control_revision;
+        self.command_for_state(generation, revision, command)
+    }
+
+    /// Playback and media selection use the same live room policy and guards.
+    pub fn command_for_state(
+        &self,
+        generation: u64,
+        control_revision: u64,
+        command: HostCommand,
+    ) -> Result<()> {
+        self.control(
+            generation,
+            control_revision,
+            ControlIntent::Playback(command),
+        )
+    }
+
+    pub fn propose_media(
+        &self,
+        generation: u64,
+        control_revision: u64,
+        mut media: PartyMedia,
+    ) -> Result<()> {
+        media.duration = 0.0;
+        self.control(
+            generation,
+            control_revision,
+            ControlIntent::ProposeMedia(media),
+        )
+    }
+
+    fn publish_rejection(&self, error: &anyhow::Error) -> bool {
+        if let Some(rejection) = error.downcast_ref::<ControlRejection>() {
+            self.shared.publish(*rejection.snapshot.clone());
+            true
+        } else if let Some(rejection) = error.downcast_ref::<NonterminalError>() {
+            if let Some(snapshot) = &rejection.snapshot {
+                self.shared.publish(*snapshot.clone());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn control(&self, generation: u64, control_revision: u64, intent: ControlIntent) -> Result<()> {
+        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let Session { network, guest } = &mut *session;
+        if let Some(guest) = guest {
+            let network = network.as_ref().context("not in a party")?;
+            let result = self.runtime()?.block_on(exchange(
+                &network.endpoint,
+                guest,
+                Operation::Control {
+                    generation,
+                    control_revision,
+                    intent,
+                },
+            ));
+            match result {
+                Ok(Some(snapshot)) => {
+                    self.shared.publish(snapshot);
+                    Ok(())
+                }
+                Ok(None) => anyhow::bail!("missing party snapshot"),
+                Err(error) => {
+                    self.publish_rejection(&error);
+                    Err(error)
+                }
+            }
+        } else {
+            self.with_host(|room| {
+                let id = room.snapshot.host_id.clone();
+                room.control(
+                    &id,
+                    generation,
+                    control_revision,
+                    None,
+                    intent,
+                    local_now_ms(),
+                )
+            })
+        }
+    }
+
+    pub fn set_control_policy(&self, policy: ControlPolicy) -> Result<()> {
+        self.with_host(|room| room.set_control_policy(policy, local_now_ms()))
     }
 
     /// Replace the shared selection without changing invites or membership.
@@ -340,6 +442,18 @@ impl PartyService {
     /// Validate the host source and begin the selected episode's readiness barrier.
     pub fn select_media(&self, media: PartyMedia, report: LocalReport) -> Result<()> {
         self.with_host(|room| room.select_media(media, report, local_now_ms()))
+    }
+
+    /// Bind validation to the accepted selection, including repeated A–B–A identities.
+    pub fn select_media_for_generation(
+        &self,
+        generation: u64,
+        media: PartyMedia,
+        report: LocalReport,
+    ) -> Result<()> {
+        self.with_host(|room| {
+            room.select_media_for_generation(generation, media, report, local_now_ms())
+        })
     }
 
     /// Keep the room open while the host browses for its next selection.
@@ -406,8 +520,13 @@ async fn exchange(
             report.error = Some("local source unavailable".into());
         }
     }
-    let sequence = guest.next_sequence;
-    guest.next_sequence = sequence
+    let counter = if matches!(operation, Operation::Control { .. }) {
+        &mut guest.next_control_sequence
+    } else {
+        &mut guest.next_sequence
+    };
+    let sequence = *counter;
+    *counter = sequence
         .checked_add(1)
         .context("party sequence exhausted")?;
     let request = Request {
@@ -430,11 +549,10 @@ async fn exchange(
         wire::write(&mut send, &request).await?;
         let response: Response = wire::read(&mut recv).await?;
         ensure!(response.sequence == sequence, "mismatched party response");
-        if let Some(error) = response.error {
-            if response.terminal {
-                return Err(TerminalError(error).into());
-            }
-            anyhow::bail!("{error}");
+        if response.terminal {
+            return Err(
+                TerminalError(response.error.unwrap_or_else(|| "party has ended".into())).into(),
+            );
         }
         let finished = local_now_ms();
         let rtt = finished.saturating_sub(started) as f64;
@@ -470,19 +588,43 @@ async fn exchange(
                     "invalid party lobby"
                 );
             }
+            if let Some(pending) = &snapshot.pending_media {
+                ensure!(
+                    engine::valid_identity(&pending.identity)
+                        && pending.duration == 0.0
+                        && snapshot.media.is_none(),
+                    "invalid pending party media"
+                );
+            }
             ensure!(
                 snapshot.timeline.position.is_finite() && snapshot.timeline.position >= 0.0,
                 "invalid party timeline"
             );
         }
         guest.last_success = finished;
+        if let Some(reason) = response.rejection {
+            return Err(ControlRejection {
+                reason,
+                snapshot: Box::new(snapshot.context("missing rejected party snapshot")?),
+            }
+            .into());
+        }
+        if let Some(message) = response.error {
+            return Err(NonterminalError {
+                message,
+                snapshot: snapshot.map(Box::new),
+            }
+            .into());
+        }
         Ok(snapshot)
     })
     .await
     .context("party request timed out")
     .and_then(|result| result);
-    if result.is_err()
-        && let Some(connection) = guest.connection.take()
+    if result.as_ref().err().is_some_and(|error| {
+        error.downcast_ref::<ControlRejection>().is_none()
+            && error.downcast_ref::<NonterminalError>().is_none()
+    }) && let Some(connection) = guest.connection.take()
     {
         connection.close(0u32.into(), b"party request failed");
     }
@@ -532,6 +674,20 @@ impl Handler {
                     room.join(peer, name, request.sequence, now)?;
                 }
                 Operation::Report(report) => room.report(peer, report, request.sequence, now)?,
+                Operation::Control {
+                    generation,
+                    control_revision,
+                    intent,
+                } => {
+                    room.control(
+                        peer,
+                        generation,
+                        control_revision,
+                        Some(request.sequence),
+                        intent,
+                        now,
+                    )?;
+                }
                 Operation::Leave => {
                     ensure!(
                         room.members
@@ -555,14 +711,28 @@ impl Handler {
                 snapshot,
                 error: None,
                 terminal: false,
+                rejection: None,
             },
-            Err(error) => Response {
-                sequence: request.sequence,
-                host_now_ms: local_now_ms(),
-                snapshot: None,
-                error: Some(error.to_string().chars().take(256).collect()),
-                terminal,
-            },
+            Err(error) => {
+                let snapshot = if terminal {
+                    None
+                } else {
+                    host.as_ref().map(|room| room.snapshot.clone())
+                };
+                if let Some(snapshot) = &snapshot {
+                    self.shared.publish(snapshot.clone());
+                }
+                Response {
+                    sequence: request.sequence,
+                    host_now_ms: local_now_ms(),
+                    snapshot,
+                    error: Some(error.to_string().chars().take(256).collect()),
+                    terminal,
+                    rejection: error
+                        .downcast_ref::<ControlRejection>()
+                        .map(|rejection| rejection.reason),
+                }
+            }
         }
     }
 }
@@ -641,6 +811,7 @@ mod tests {
             ticket,
             connection: None,
             next_sequence: 1,
+            next_control_sequence: 1,
             last_success: local_now_ms(),
             best_rtt: f64::INFINITY,
             best_sample_at: 0,
@@ -707,6 +878,212 @@ mod tests {
         host.command_for_generation(current, HostCommand::SeekAbsolute(20.0))
             .unwrap();
         assert_eq!(host.snapshot().unwrap().timeline.position, 20.0);
+    }
+
+    #[tokio::test]
+    async fn guest_controls_share_policy_and_business_rejections_keep_the_connection() {
+        let (_host, router, handler, ticket) = host().await;
+        let endpoint = endpoint().await;
+        let mut guest = guest(ticket);
+        let joined = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Join {
+                name: "Guest".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let control = |snapshot: &RoomSnapshot, intent| Operation::Control {
+            generation: snapshot.generation,
+            control_revision: snapshot.control_revision,
+            intent,
+        };
+        let denied = exchange(
+            &endpoint,
+            &mut guest,
+            control(
+                &joined,
+                ControlIntent::Playback(HostCommand::SeekAbsolute(40.0)),
+            ),
+        )
+        .await
+        .unwrap_err();
+        let denied = denied.downcast_ref::<ControlRejection>().unwrap();
+        assert_eq!(denied.reason, ControlRejectionReason::PermissionDenied);
+        assert_eq!(denied.snapshot.role, PartyRole::Guest);
+        assert!(denied.snapshot.connected && !denied.snapshot.ended);
+        assert!(guest.connection.is_some());
+        assert_eq!(denied.snapshot.participants.len(), 2);
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_control_policy(ControlPolicy::Everyone, local_now_ms())
+            .unwrap();
+        let fresh = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(engine::tests::report()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(fresh.control_policy, ControlPolicy::Everyone);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let moved = exchange(
+            &endpoint,
+            &mut guest,
+            control(
+                &fresh,
+                ControlIntent::Playback(HostCommand::SeekAbsolute(40.0)),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(moved.timeline.position, 40.0);
+        // A duplicate request can arrive over another stream, including after
+        // a response was lost. A relative command must never apply twice.
+        let replay = Request {
+            room_id: guest.ticket.room_id.clone(),
+            capability: guest.ticket.capability,
+            sequence: guest.next_control_sequence - 1,
+            operation: control(
+                &fresh,
+                ControlIntent::Playback(HostCommand::SeekRelative(10.0)),
+            ),
+        };
+        let (mut send, mut recv) = guest.connection.as_ref().unwrap().open_bi().await.unwrap();
+        wire::write(&mut send, &replay).await.unwrap();
+        let replayed: Response = wire::read(&mut recv).await.unwrap();
+        assert_eq!(replayed.rejection, Some(ControlRejectionReason::Duplicate));
+        assert!(!replayed.terminal);
+        assert_eq!(replayed.snapshot.unwrap().timeline.position, 40.0);
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_control_policy(ControlPolicy::HostOnly, local_now_ms())
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let stale = exchange(
+            &endpoint,
+            &mut guest,
+            control(
+                &fresh,
+                ControlIntent::Playback(HostCommand::SeekRelative(10.0)),
+            ),
+        )
+        .await
+        .unwrap_err();
+        let stale = stale.downcast_ref::<ControlRejection>().unwrap();
+        assert_eq!(stale.reason, ControlRejectionReason::StaleControlRevision);
+        assert_eq!(stale.snapshot.control_policy, ControlPolicy::HostOnly);
+        assert!(guest.connection.is_some());
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_control_policy(ControlPolicy::Everyone, local_now_ms())
+            .unwrap();
+        let current = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(engine::tests::report()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let pending = exchange(
+            &endpoint,
+            &mut guest,
+            control(
+                &current,
+                ControlIntent::ProposeMedia(PartyMedia {
+                    duration: 0.0,
+                    ..engine::tests::media()
+                }),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(pending.generation, current.generation + 1);
+        assert!(pending.media.is_none() && pending.pending_media.is_some());
+        assert_eq!(pending.pending_media.as_ref().unwrap().duration, 0.0);
+        // A proposal publishes identity only; the host must independently load
+        // and validate a local source before any shared playback can start.
+        let ready = LocalReport {
+            generation: pending.generation,
+            ..engine::tests::report()
+        };
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        exchange(&endpoint, &mut guest, Operation::Report(ready.clone()))
+            .await
+            .unwrap();
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .select_media_for_generation(
+                pending.generation,
+                engine::tests::media(),
+                ready.clone(),
+                local_now_ms(),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let active = exchange(&endpoint, &mut guest, Operation::Report(ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.generation, pending.generation);
+        assert!(
+            active
+                .participants
+                .iter()
+                .find(|p| p.id == endpoint.id().to_string())
+                .unwrap()
+                .ready
+        );
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .remove(&endpoint.id().to_string(), local_now_ms())
+            .unwrap();
+        let revoked = exchange(
+            &endpoint,
+            &mut guest,
+            control(
+                &active,
+                ControlIntent::Playback(HostCommand::SetPaused(true)),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(revoked.downcast_ref::<TerminalError>().is_some());
+        assert!(guest.connection.is_none());
+        endpoint.close().await;
+        router.shutdown().await.unwrap();
     }
 
     #[tokio::test]

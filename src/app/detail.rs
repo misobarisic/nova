@@ -218,6 +218,23 @@ impl Bridge {
         ) {
             return;
         }
+        if watch_now
+            && preview.type_ == "movie"
+            && !self.party_preflight_media(nova_party::PartyMedia {
+                identity: nova_playback_api::MediaIdentity {
+                    media_type: preview.type_.clone(),
+                    title_id: preview.id.clone(),
+                    episode_id: preview.id.clone(),
+                    title: preview.title(),
+                    ..Default::default()
+                },
+                season: None,
+                episode: None,
+                duration: 0.0,
+            })
+        {
+            return;
+        }
         let catalog_opening = self.begin_catalog_detail_open();
         self.cancel_season_download();
         let _ = (generation, searching);
@@ -397,6 +414,7 @@ impl Bridge {
             if watch_now {
                 app.set_stream_selector_open(true);
                 app.set_detail_deep_stream(true);
+                self.party_bind_picker();
             }
         } else {
             // Series-like: list seasons/episodes first and only fetch
@@ -477,12 +495,14 @@ impl Bridge {
     /// installed addon that provides streams for the modal item's type.
     pub(super) fn start_stream_search(&self, request_id: String) {
         self.start_stream_search_inner(request_id, false);
-        self.party_prepare_stream_selection();
     }
 
     /// Explicit refresh preserves the selected addon while replacing every
     /// source response. Navigation continues to start from All.
     pub(super) fn start_stream_search_inner(&self, request_id: String, preserve_filter: bool) {
+        if !self.party_stream_lookup_allowed(&request_id) {
+            return;
+        }
         if profile_policy::entry_blocked() {
             return;
         }
@@ -2723,6 +2743,18 @@ impl Bridge {
 
     /// Select by stable ID, independent of the current filter/season/page.
     pub(super) fn episode_streams_by_id(&self, series_id: &str, episode_id: &str) {
+        let valid = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .is_some_and(|m| {
+                m.id == series_id && m.videos.iter().any(|video| video.id == episode_id)
+            });
+        if !valid || !self.party_preflight_modal(episode_id) {
+            return;
+        }
         self.cancel_watch_now();
         let selection = {
             let mut state = self.shared.lock().unwrap();
@@ -2779,6 +2811,9 @@ impl Bridge {
         video: Video,
         index: usize,
     ) {
+        if !self.party_preflight_modal(&request_id) {
+            return;
+        }
         if self.party_active() && self.app().is_some_and(|app| app.get_player_open()) {
             // Finalize the previous episode before installing the next one's
             // progress target or opening its stream selector.
@@ -2863,6 +2898,7 @@ impl Bridge {
             }
         }
         self.start_stream_search(request_id);
+        self.party_bind_picker();
         if let Some((pixels, settings, revision)) = preview_work {
             self.resize_player_episode_preview(pixels, settings, revision);
         }
@@ -3120,6 +3156,20 @@ impl Bridge {
     /// Movie and episode actions open the same selector; streams remain a
     /// manual choice so quality/addon preferences are respected.
     pub(super) fn watch_now(&self) {
+        if self.party_active() {
+            let request_id = {
+                let state = self.shared.lock().unwrap();
+                state.modal_item.as_ref().map(|modal| {
+                    let videos = catalog_detail::view_videos(&state, modal);
+                    watch_now_episode(&modal.id, &videos, &state.progress)
+                        .map(|video| video.id.clone())
+                        .unwrap_or_else(|| modal.id.clone())
+                })
+            };
+            if request_id.is_none_or(|id| !self.party_preflight_modal(&id)) {
+                return;
+            }
+        }
         self.publish_catalog_detail_scope();
         {
             let state = self.shared.lock().unwrap();
@@ -3157,6 +3207,18 @@ impl Bridge {
             app.set_detail_kb_s(0);
             app.set_stream_selector_open(true);
             self.party_prepare_stream_selection();
+            if self.party_active() {
+                let request_id = self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .map(|m| m.request_id.clone());
+                if let Some(id) = request_id {
+                    self.start_stream_search(id);
+                }
+            }
             return;
         }
         app.set_detail_tab(3);
@@ -3231,11 +3293,22 @@ impl Bridge {
             }
         };
         if let Some(origin) = direct_origin {
+            let request_id = self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .map(|m| m.id.clone());
+            if request_id.is_none_or(|id| !self.party_preflight_modal(&id)) {
+                return;
+            }
             if let Some(app) = self.app() {
                 app.set_detail_kb_s(0);
                 app.set_stream_selector_open(true);
                 app.set_detail_deep_stream(matches!(origin, WatchNowOrigin::Featured));
             }
+            self.party_bind_picker();
             return;
         }
         let selected = {
@@ -3856,6 +3929,9 @@ impl Bridge {
         if self.season_download_pick(index) {
             return;
         }
+        if self.party_playback_guard().is_err() {
+            return;
+        }
         let browser_url = {
             let state = self.shared.lock().unwrap();
             state.streams.get(index).and_then(|row| match &row.source {
@@ -3864,6 +3940,12 @@ impl Bridge {
             })
         };
         if let Some(url) = browser_url {
+            if self.party_active() {
+                self.set_stream_hint(Some(StreamHint::Fixed(
+                    "This stream requires the in-app player, which is unavailable.",
+                )));
+                return;
+            }
             if self.last_time_replay_selected() {
                 self.set_stream_hint(Some(StreamHint::Fixed(
                     "Ending replays require an in-app source.",
@@ -3980,6 +4062,7 @@ impl Bridge {
                 // Android can hand the URL to another video app; desktop
                 // always uses the built-in player, including saved preferences.
                 if nova_config::active_cache_settings().uses_external_player()
+                    && !self.party_active()
                     && !self.recovery_source_selected()
                     && !self.last_time_replay_selected()
                 {
@@ -3987,7 +4070,8 @@ impl Bridge {
                     let _ = crate::player::open_external(&url);
                 } else if !self.open_player(url.clone())
                     && (self.recovery_source_selected()
-                        || (!self.last_time_replay_selected()
+                        || (!self.party_active()
+                            && !self.last_time_replay_selected()
                             && crate::player::open_external(&url).is_err()))
                 {
                     self.set_stream_hint(Some(StreamHint::Fixed(

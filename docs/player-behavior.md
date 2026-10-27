@@ -233,7 +233,7 @@ and total duration sit at opposite ends of the safe-area-aligned seek bar.
 Dragging the timeline previews the target position and timestamp locally, then
 seeks once on release. Native playback continues during the preview; cancellation
 discards it. A hidden timeline only wakes the controls on its first press, and
-loading/live streams or party guests cannot scrub. Held previews keep controls awake.
+loading/live streams or party members without control permission cannot scrub. Held previews keep controls awake.
 Android enters immersive playback automatically and has no fullscreen button;
 desktop retains its fullscreen control.
 Badges use mpv's actual resolution, video codec, HDR transfer and selected audio
@@ -321,7 +321,7 @@ With controls visible, Left/Right moves between bottom buttons; Up focuses the
 timeline and Down returns to the originating button. Left/Right on the timeline
 previews a seek and commits on release. Down from the button row or Up from the
 timeline hides controls. Back closes a menu, cancels a pending seek, hides the OSD,
-then leaves playback. Loading/live streams and party guests cannot seek; previews
+then leaves playback. Loading/live streams and party members without control permission cannot seek; previews
 are discarded if focus, control permission or the current source disappears. A held
 seek keeps visible controls awake. Android's mobile center transport is replaced
 by the TV bottom row, which also contains screenshots; TV volume uses the remote's
@@ -352,7 +352,7 @@ running process owns `org.mpris.MediaPlayer2.nova.instance<PID>` so multiple
 instances do not replace each other's service.
 
 Commands use the same UI-thread dispatcher as the player controls. Resume
-confirmation, watch-party host restrictions and local/remote playback ownership
+confirmation, watch-party control permissions and local/remote playback ownership
 still apply; queued commands are discarded if their source has changed. Next and
 Previous are unavailable because Nova does not expose an MPRIS playlist. Opening
 arbitrary URIs and quitting the application are unavailable. Stopping closes the
@@ -893,3 +893,22 @@ it without persisting signed URLs, request headers or provenance in preferences.
 
 This corrects a demonstrated metadata-loss path. It does not establish the cause
 of any particular caption timing report or apply a numeric subtitle delay.
+
+
+## Watch-party control and episode permissions
+
+Watch parties default to host-only playback and episode selection. The creator
+can enable “Allow everyone to control playback and choose episodes” before
+creating the room or change it live. Everyone permits all members to pause,
+resume, seek and choose the first or any other episode, season or title. The
+creator still serializes the shared timeline and media generations; invites,
+removal, wait-for-everyone, continue-without-waiting and ending the room remain
+creator-only. Guests see the accepted policy as read-only status.
+
+In both modes every member chooses their own stream for the current accepted
+episode. Host-only guests can browse metadata but cannot open playback pickers
+for other episodes; guidance offers the current episode’s source picker or
+leaving the room. An empty host-only lobby waits for the creator’s first choice.
+Live permission changes cancel disallowed seek previews and restore TV focus to
+available current-episode actions. These temporary room permissions are not
+persisted or synced; the policy and its revision use `nova/party/5`.

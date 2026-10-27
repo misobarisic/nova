@@ -98,6 +98,9 @@ export component AppWindow inherits Window {
     }
     in-out property <bool> party_active <=> PartyBridge.active;
     in-out property <bool> party_is_host <=> PartyBridge.is_host;
+    in-out property <bool> party_allow_everyone <=> PartyBridge.allow_everyone;
+    in-out property <bool> party_can_control <=> PartyBridge.can_control;
+    in-out property <bool> party_can_choose_media <=> PartyBridge.can_choose_media;
     in-out property <bool> party_can_host <=> PartyBridge.can_host;
     in-out property <bool> party_has_media <=> PartyBridge.has_media;
     in-out property <bool> party_can_return_to_player <=> PartyBridge.can_return_to_player;
@@ -140,6 +143,8 @@ export component AppWindow inherits Window {
     public function party_bridge_seek(value: float) { root.party_seek(value); }
     callback party_remove_member(string);
     public function party_bridge_remove_member(value: string) { root.party_remove_member(value); }
+    callback party_set_allow_everyone(bool);
+    public function party_bridge_set_allow_everyone(value: bool) { root.party_set_allow_everyone(value); }
     callback party_set_wait_for_guests(bool);
     public function party_bridge_set_wait_for_guests(value: bool) { root.party_set_wait_for_guests(value); }
     callback party_continue_without_waiting();

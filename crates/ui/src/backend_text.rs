@@ -923,6 +923,25 @@ pub fn tr(english: &str) -> &str {
         "Could not connect to the watch party. Try again." => {
             "Povezivanje sa zajedničkim gledanjem nije uspjelo. Pokušajte ponovno."
         }
+        "The host chooses what to watch. Choose a stream for the current episode or leave the party." => {
+            "Domaćin bira što ćete gledati. Odaberite izvor za trenutačnu epizodu ili napustite zajedničko gledanje."
+        }
+        "This watch-party selection changed. Choose a stream again." => {
+            "Odabir zajedničkog gledanja se promijenio. Ponovno odaberite izvor."
+        }
+        "Watch-party controls changed. Try again." => {
+            "Ovlasti za zajedničko gledanje su se promijenile. Pokušajte ponovno."
+        }
+        "only the party creator can control playback" => {
+            "Samo domaćin može upravljati reprodukcijom."
+        }
+        "party media changed" => "Sadržaj zajedničkog gledanja se promijenio.",
+        "party control permissions changed" => "Ovlasti za zajedničko gledanje su se promijenile.",
+        "party command already handled" => "Naredba za zajedničko gledanje već je obrađena.",
+        "party commands too frequent" => "Naredbe za zajedničko gledanje šalju se prečesto.",
+        "invalid party command" => "Nevaljana naredba za zajedničko gledanje.",
+        "choose party media first" => "Najprije odaberite sadržaj za zajedničko gledanje.",
+        "party has ended" => "Zajedničko gledanje je završilo.",
         "Only the host controls the shared timeline." => {
             "Samo domaćin upravlja zajedničkom reprodukcijom."
         }

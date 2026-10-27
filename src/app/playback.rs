@@ -73,6 +73,7 @@ pub(super) struct PlaybackIntent {
     // Credential-bearing resolver links stay inside the in-app player, including
     // a delayed resume prompt. Never pass them through OS process arguments.
     private_playback: bool,
+    party_guard: Option<party::PlaybackGuard>,
     pub(super) context: PlaybackContext,
     detached: bool,
 }
@@ -441,6 +442,18 @@ impl Bridge {
     }
 
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
+        let Ok(guard) = self.party_playback_guard() else {
+            let rejected = crate::torrent::PlaybackRequest::default();
+            rejected.cancel();
+            return rejected;
+        };
+        self.begin_playback_request_with_party_guard(guard)
+    }
+
+    fn begin_playback_request_with_party_guard(
+        &self,
+        party_guard: Option<party::PlaybackGuard>,
+    ) -> crate::torrent::PlaybackRequest {
         if profile_policy::entry_blocked() {
             let rejected = crate::torrent::PlaybackRequest::default();
             rejected.cancel();
@@ -560,6 +573,7 @@ impl Bridge {
             pending: true,
             in_app: false,
             private_playback: false,
+            party_guard,
             detached: remote_context.is_some(),
             context: remote_context
                 .map(|media| PlaybackContext {
@@ -969,6 +983,16 @@ impl Bridge {
         let state = self.shared.lock().unwrap();
         if state.playback_intent.as_ref().is_some_and(|intent| {
             intent.pending
+                && match intent.party_guard.as_ref() {
+                    Some(guard) => !guard.accepts(&state.party),
+                    None => state.party.active(),
+                }
+        }) {
+            token.cancel();
+            return false;
+        }
+        if state.playback_intent.as_ref().is_some_and(|intent| {
+            intent.pending
                 && intent.context.automatic_source_selection
                 && (!remote_playback::is_foreground()
                     || intent.context.retry_budget.cancelled
@@ -1044,6 +1068,7 @@ impl Bridge {
 
     /// Host browsing must not cancel a receiver-owned loading request.
     pub(super) fn cancel_pending_for_navigation(&self) {
+        self.party_cancel_pending_source();
         self.cancel_automatic_source_retry();
         if !self.remote_receiver_playback() {
             self.cancel_pending_playback();
@@ -1225,6 +1250,10 @@ impl Bridge {
         self.set_stream_hint(Some(StreamHint::Fixed("Connecting to peers…")));
         let bridge = self.clone();
         let active_hash = info_hash.clone();
+        if !self.playback_request_is_current(&request) {
+            request.cancel();
+            return;
+        }
         engine.resolve(
             request.clone(),
             info_hash,
@@ -1545,7 +1574,27 @@ impl Bridge {
         let Some(path) = job.artifact_path.as_ref().filter(|path| path.is_file()) else {
             return;
         };
-        let request = self.begin_playback_request();
+        let videos = read_episodes_cache_for(&job.media_type, &job.media_id).unwrap_or_default();
+        let video = videos.iter().find(|video| video.id == job.request_id);
+        let media = nova_party::PartyMedia {
+            identity: party_source::canonical_media(
+                nova_playback_api::MediaIdentity {
+                    media_type: job.media_type.clone(),
+                    title_id: job.media_id.clone(),
+                    episode_id: job.request_id.clone(),
+                    title: job.title.clone(),
+                    episode: video.map(|v| v.name.clone()).unwrap_or_default(),
+                },
+                &videos,
+            ),
+            season: video.and_then(|v| v.season),
+            episode: video.and_then(|v| v.episode.or(v.number)),
+            duration: 0.0,
+        };
+        let Ok(guard) = self.party_download_guard(media, id, &job.media_type, &job.media_id) else {
+            return;
+        };
+        let request = self.begin_playback_request_with_party_guard(guard);
         if !request.is_current() {
             return;
         }
@@ -1653,6 +1702,10 @@ impl Bridge {
         headers: Vec<(String, String)>,
         subtitles: Vec<crate::player::SourceSubtitle>,
     ) -> bool {
+        if !self.playback_request_is_current(&request) {
+            request.cancel();
+            return false;
+        }
         let path = std::path::Path::new(&url);
         if path.is_file()
             && let Some(engine) = crate::torrent::engine()
@@ -3547,6 +3600,7 @@ mod preference_tests {
                 pending: false,
                 in_app: true,
                 private_playback: false,
+                party_guard: None,
                 detached: false,
                 context: PlaybackContext {
                     media_type: "series".into(),

@@ -2751,6 +2751,40 @@ impl Bridge {
     }
 
     fn episode_home_picked(&self, c: ContinueEntry) {
+        if self.party_active() {
+            let videos = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
+            let video = videos.iter().find(|v| v.id == c.episode_id);
+            let title = self
+                .shared
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .find(|e| e.id == c.series_id && e.type_ == c.type_)
+                .map(|e| e.name.clone())
+                .unwrap_or_default();
+            if !self.party_preflight_media_for_title(
+                nova_party::PartyMedia {
+                    identity: party_source::canonical_media(
+                        nova_playback_api::MediaIdentity {
+                            media_type: c.type_.clone(),
+                            title_id: c.series_id.clone(),
+                            episode_id: c.episode_id.clone(),
+                            title,
+                            episode: video.map(|v| v.name.clone()).unwrap_or_default(),
+                        },
+                        &videos,
+                    ),
+                    season: video.and_then(|v| v.season),
+                    episode: video.and_then(|v| v.episode.or(v.number)),
+                    duration: 0.0,
+                },
+                &c.type_,
+                &c.series_id,
+            ) {
+                return;
+            }
+        }
         if !self.episode_home_enter(&c.type_, &c.series_id) {
             return;
         }

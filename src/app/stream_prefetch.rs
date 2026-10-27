@@ -115,6 +115,9 @@ fn cacheable(bytes: &[u8]) -> bool {
 
 impl Bridge {
     pub(super) fn prefetch_episode_streams(&self, request_id: String, session: u64) {
+        if !self.party_stream_lookup_allowed(&request_id) {
+            return;
+        }
         let urls = {
             let state = self.shared.lock().unwrap();
             if !state.cache_settings.prefetch_next_episode_streams
@@ -285,7 +288,19 @@ impl Bridge {
                         return;
                     };
                     let playback_valid = pending.session.is_none_or(|session| {
-                        state.cache_settings.prefetch_next_episode_streams
+                        let party_allowed =
+                            !state.party.active()
+                                || state.party.snapshot_for_sources().as_ref().is_some_and(
+                                    |room| {
+                                        room.connected
+                                            && !room.ended
+                                            && (room.role == nova_party::PartyRole::Host
+                                                || room.control_policy
+                                                    == nova_party::ControlPolicy::Everyone)
+                                    },
+                                );
+                        party_allowed
+                            && state.cache_settings.prefetch_next_episode_streams
                             && state.stream_prefetch_live_session == Some(session)
                             && state.playback.as_ref().is_some_and(|p| {
                                 p.session == session

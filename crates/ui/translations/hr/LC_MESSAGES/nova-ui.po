@@ -5669,3 +5669,23 @@ msgstr "RAM međuspremnik za torrente"
 
 msgid "Maximum RAM for torrent buffering with No caching, not total app memory. Slow or unstable torrents buffer more; healthy torrents start sooner. Targets stay within this budget."
 msgstr "Najviše RAM-a za međuspremnik torrenta uz opciju Bez predmemoriranja, a ne ukupna memorija aplikacije. Spori ili nestabilni torrenti pune veći međuspremnik; zdravi torrenti kreću ranije. Ciljevi ostaju unutar ograničenja."
+
+#: party.slint
+msgid "Allow everyone to control playback and choose episodes"
+msgstr "Dopustite svima upravljanje reprodukcijom i odabir epizoda"
+
+#: party.slint
+msgid "Everyone can control playback and choose episodes."
+msgstr "Svi mogu upravljati reprodukcijom i birati epizode."
+
+#: party.slint
+msgid "Only the host can control playback and choose episodes."
+msgstr "Samo domaćin može upravljati reprodukcijom i birati epizode."
+
+#: party.slint
+msgid "Choose a stream for the current episode, or leave the party to watch something else."
+msgstr "Odaberite izvor za trenutačnu epizodu ili napustite zajedničko gledanje da biste gledali nešto drugo."
+
+#: party.slint
+msgid "Wait for the host to choose an episode, or leave the party to watch something else."
+msgstr "Pričekajte da domaćin odabere epizodu ili napustite zajedničko gledanje da biste gledali nešto drugo."

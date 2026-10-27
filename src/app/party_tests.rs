@@ -55,6 +55,8 @@ fn isolated(name: &str, body: impl FnOnce(Fixture)) {
 
 fn room(role: PartyRole) -> RoomSnapshot {
     RoomSnapshot {
+        control_policy: nova_party::ControlPolicy::HostOnly,
+        control_revision: 0,
         pending_media: None,
         role,
         room_id: "test-room".into(),
@@ -136,6 +138,21 @@ fn select_local_media(bridge: &Bridge, media: &PartyMedia) {
         description: String::new(),
         genres: Vec::new(),
     });
+    let selected = bridge
+        .shared
+        .lock()
+        .unwrap()
+        .party
+        .snapshot
+        .as_ref()
+        .and_then(RoomSnapshot::selected_media)
+        .cloned();
+    if selected
+        .as_ref()
+        .is_some_and(|expected| compatible_media(media, expected, false))
+    {
+        bridge.party_prepare_stream_selection();
+    }
 }
 
 #[test]
@@ -199,6 +216,9 @@ fn party_sources_ignore_history_and_ask_without_changing_the_saved_preference() 
                         };
                     }
 
+                    if snapshot_kind == "compatible" {
+                        bridge.party_prepare_stream_selection();
+                    }
                     // Arming the load is observable even on a headless backend
                     // without mpv; no decoder or network is needed here.
                     let _ = bridge.open_player("https://example.invalid/party".into());
@@ -206,6 +226,15 @@ fn party_sources_ignore_history_and_ask_without_changing_the_saved_preference() 
                     assert!(!app.get_resume_prompt_visible());
                     let state = bridge.shared.lock().unwrap();
                     assert!(state.pending_resume_stream.is_none());
+                    if snapshot_kind != "compatible" {
+                        assert!(
+                            state.playback.is_none(),
+                            "Unaccepted media must not arm playback"
+                        );
+                        drop(state);
+                        bridge.player.close();
+                        continue;
+                    }
                     let target = state.playback.as_ref().unwrap();
                     assert_eq!(
                         target.resume_pos,
@@ -382,10 +411,11 @@ fn leaving_retires_pending_work_and_temporary_rate_without_changing_sync_setting
                 state.party.choosing_source = true;
                 state.party.choosing_media = true;
                 state.party.resume_guard = true;
-                state
-                    .party
-                    .pending
-                    .push_back(Operation::Command(1, HostCommand::SeekAbsolute(80.0)));
+                state.party.pending.push_back(Operation::Command(
+                    1,
+                    0,
+                    HostCommand::SeekAbsolute(80.0),
+                ));
                 state.party.generation
             };
             app.set_party_busy(true);
@@ -481,6 +511,10 @@ fn semantic_chapter_and_bookmark_seeks_use_the_host_timeline_and_reject_guests()
             );
             app.set_position(20.0);
             let _service = install_room(&bridge, &app, PartyRole::Host);
+            // This fixture already presents the accepted episode. Claim its
+            // picker before dispatch so the first report does not perform the
+            // normal once-per-generation source-follow navigation.
+            bridge.party_prepare_stream_selection();
             let actions = [
                 PlaybackAction::SeekChapter {
                     id: format!("c{:016x}", 35.0f64.to_bits()),
@@ -500,11 +534,11 @@ fn semantic_chapter_and_bookmark_seeks_use_the_host_timeline_and_reject_guests()
                 assert_eq!(state.party.pending.len(), 2);
                 assert!(matches!(
                     state.party.pending[0],
-                    Operation::Command(1, HostCommand::SeekAbsolute(35.0))
+                    Operation::Command(1, 0, HostCommand::SeekAbsolute(35.0))
                 ));
                 assert!(matches!(
                     state.party.pending[1],
-                    Operation::Command(1, HostCommand::SeekAbsolute(80.0))
+                    Operation::Command(1, 0, HostCommand::SeekAbsolute(80.0))
                 ));
                 state.party.pending.clear();
                 state.party.snapshot = Some(room(PartyRole::Guest));
@@ -684,80 +718,26 @@ fn host_title_changes_preserve_membership_and_retire_the_old_timeline() {
         |Fixture { app, bridge }| {
             let service = install_room(&bridge, &app, PartyRole::Host);
             app.set_party_invite("same-invite".into());
-            app.set_player_open(true);
-            app.set_playback_started(true);
-            app.set_duration(120.0);
-            select_local_media(&bridge, room(PartyRole::Host).media.as_ref().unwrap());
-            let _request = bridge.begin_playback_request();
-            let epoch = bridge.player.screenshot_session();
-            let (generation, snapshot) =
-                {
-                    let mut state = bridge.shared.lock().unwrap();
-                    state.party.choosing_source = true;
-                    state.party.snapshot.as_mut().unwrap().participants.push(
-                        nova_party::Participant {
-                            source_fingerprint: None,
-                            id: "guest".into(),
-                            name: "Guest device".into(),
-                            is_host: false,
-                            connected: true,
-                            ready: true,
-                            buffering: false,
-                            position: 20.0,
-                            buffered_ahead: 60.0,
-                            reason: None,
-                        },
-                    );
-                    state.party.pending.extend([
-                        Operation::Command(1, HostCommand::SeekAbsolute(80.0)),
-                        Operation::Report(LocalReport::default()),
-                        Operation::Continue,
-                        Operation::Kick("guest".into()),
-                        Operation::Wait(false),
-                    ]);
-                    (state.party.generation, state.party.snapshot.clone())
-                };
-
+            let before = bridge.shared.lock().unwrap().party.snapshot.clone();
             bridge.party_prepare_media_change(true);
-
+            assert_eq!(bridge.shared.lock().unwrap().party.snapshot, before);
+            assert!(
+                bridge.shared.lock().unwrap().party.pending.is_empty(),
+                "Browsing has no media intent"
+            );
+            let mut other = before.as_ref().unwrap().media.clone().unwrap();
+            other.identity.title_id = "tt456".into();
+            other.identity.episode_id = "tt456".into();
+            assert!(bridge.party_preflight_media(other));
             let state = bridge.shared.lock().unwrap();
             assert!(Arc::ptr_eq(state.party.service.as_ref().unwrap(), &service));
-            assert_eq!(state.party.generation, generation);
-            assert_eq!(state.party.snapshot, snapshot);
+            assert_eq!(state.party.snapshot, before);
             assert!(state.party.choosing_media);
-            assert!(!state.party.choosing_source);
-            assert_eq!(state.party.selection_epoch, epoch);
-            assert_eq!(state.party.pending.len(), 3);
-            assert!(matches!(
-                state.party.pending[0],
-                Operation::ClearMedia { browse: true }
-            ));
-            assert!(matches!(state.party.pending[1], Operation::Kick(_)));
-            assert!(matches!(state.party.pending[2], Operation::Wait(false)));
-            drop(state);
+            assert!(
+                matches!(state.party.pending.front(), Some(Operation::PrepareMedia(1, 0, media)) if media.identity.title_id == "tt456")
+            );
             assert_eq!(app.get_party_invite(), "same-invite");
             assert!(app.get_party_active());
-            assert!(app.get_party_busy());
-            assert!(app.get_is_paused());
-            assert_eq!(bridge.party_start_position(), Some(0.0));
-
-            // Explicit title choice returns to the current page. It must not
-            // force Discover or clear the user's retained browsing filters.
-            app.invoke_navigate_section(5);
-            app.set_search_text("keep this query".into());
-            bridge.party_browse(None);
-            assert!(app.get_show_downloads());
-            assert!(!app.get_show_calendar());
-            assert!(!app.get_more_open());
-            assert!(!app.get_player_open());
-            assert_eq!(app.get_search_text(), "keep this query");
-            assert!(!app.get_discover_search_open());
-            assert!(bridge.party_active());
-            app.invoke_navigate_section(3);
-            app.set_party_page_open(true);
-            bridge.party_browse(None);
-            assert!(app.get_more_open(), "manual browsing also retains More");
-            assert!(!app.get_party_page_open());
         },
     );
 }
@@ -904,6 +884,7 @@ fn host_next_episode_reaches_the_source_picker_without_leaving_the_room() {
                     .collect();
                 state.cache_settings.prefetch_next_episode_streams = false;
             }
+            bridge.party_prepare_stream_selection();
             let request = bridge.begin_playback_request();
             let session = crate::app::next_episode::new_session();
             bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
@@ -952,7 +933,7 @@ fn host_next_episode_reaches_the_source_picker_without_leaving_the_room() {
             assert!(state.party.choosing_media);
             assert!(matches!(
                 state.party.pending.front(),
-                Some(Operation::PrepareMedia(media)) if media.identity.episode_id == "tt123:1:2"
+                Some(Operation::PrepareMedia(_, _, media)) if media.identity.episode_id == "tt123:1:2"
             ));
             assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:1:2");
             assert_eq!(state.playback.as_ref().unwrap().episode_id, "tt123:1:2");
@@ -1104,6 +1085,497 @@ fn participant_updates_repaint_only_existing_own_results_without_order_or_focus_
             assert_eq!(app.get_detail_kb_s(), 1);
             assert_eq!(bridge.shared.lock().unwrap().streams.len(), 2);
             bridge.party_leave();
+        },
+    );
+}
+
+#[test]
+fn shared_policy_grants_guest_controls_with_captured_revision_but_keeps_admin_private() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::shared_policy_grants_guest_controls_with_captured_revision_but_keeps_admin_private"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                let room = state.party.snapshot.as_mut().unwrap();
+                room.control_policy = ControlPolicy::Everyone;
+                room.control_revision = 7;
+            }
+            bridge.party_publish();
+            assert!(app.get_party_can_control());
+            assert!(app.get_party_can_choose_media());
+            assert!(!app.get_party_is_host());
+            for action in [
+                PlaybackAction::TogglePause,
+                PlaybackAction::SeekAbsolute(45.0),
+                PlaybackAction::SeekRelative(-5.0),
+            ] {
+                bridge.dispatch_playback_action(action).unwrap();
+            }
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                assert_eq!(state.party.pending.len(), 3);
+                assert!(
+                    state
+                        .party
+                        .pending
+                        .iter()
+                        .all(|operation| matches!(operation, Operation::Command(1, 7, _)))
+                );
+                state.party.pending.clear();
+            }
+            for operation in [
+                Operation::Kick("host".into()),
+                Operation::Wait(false),
+                Operation::Continue,
+                Operation::Policy(ControlPolicy::HostOnly),
+            ] {
+                bridge.party_enqueue(operation);
+            }
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .control_policy = ControlPolicy::HostOnly;
+            bridge
+                .dispatch_playback_action(PlaybackAction::SeekAbsolute(99.0))
+                .unwrap();
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+        },
+    );
+}
+
+#[test]
+fn guest_stream_preflight_blocks_empty_lobby_and_other_episode_before_mutating_picker() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::guest_stream_preflight_blocks_empty_lobby_and_other_episode_before_mutating_picker"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let mut local = room(PartyRole::Guest).media.unwrap();
+            local.identity.media_type = "series".into();
+            local.identity.episode_id = "tt123:1:31".into();
+            local.season = Some(1);
+            local.episode = Some(31);
+            select_local_media(&bridge, &local);
+            for empty in [true, false] {
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .media = (!empty).then(|| room(PartyRole::Guest).media.unwrap());
+                app.set_stream_selector_open(false);
+                let token = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .open_token
+                    .clone();
+                bridge.select_episode_streams(
+                    "tt123".into(),
+                    "tt123:1:31".into(),
+                    Video {
+                        id: "tt123:1:31".into(),
+                        season: Some(1),
+                        episode: Some(31),
+                        ..Default::default()
+                    },
+                    0,
+                );
+                assert!(!app.get_stream_selector_open());
+                let state = bridge.shared.lock().unwrap();
+                assert!(state.playback.is_none());
+                assert!(state.party.pending.is_empty());
+                assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:1:31");
+                assert!(Arc::ptr_eq(
+                    &token,
+                    &state.modal_item.as_ref().unwrap().open_token
+                ));
+                drop(state);
+                assert!(!bridge.party_stream_lookup_allowed("tt123:1:31"));
+                assert!(!bridge.begin_playback_request().is_current());
+            }
+        },
+    );
+}
+
+#[test]
+fn everyone_can_propose_any_episode_and_passive_lookup_never_proposes() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::everyone_can_propose_any_episode_and_passive_lookup_never_proposes"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .control_policy = ControlPolicy::Everyone;
+            let mut media = room(PartyRole::Guest).media.unwrap();
+            media.identity.media_type = "series".into();
+            media.identity.episode_id = "tt123:7:31".into();
+            media.season = Some(7);
+            media.episode = Some(31);
+            select_local_media(&bridge, &media);
+            assert!(bridge.party_stream_lookup_allowed("tt123:7:31"));
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            assert!(bridge.party_preflight_media(media.clone()));
+            let state = bridge.shared.lock().unwrap();
+            assert!(
+                matches!(state.party.pending.front(), Some(Operation::PrepareMedia(1, 0, proposed)) if proposed.identity.episode_id == "tt123:7:31")
+            );
+            assert!(!state.party.selection.as_ref().unwrap().accepted);
+            drop(state);
+            assert!(
+                !bridge.begin_playback_request().is_current(),
+                "Only accepted pending media may load"
+            );
+        },
+    );
+}
+
+#[test]
+fn pending_source_guard_rejects_room_changes_aba_and_reopened_picker() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::pending_source_guard_rejects_room_changes_aba_and_reopened_picker"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let media = room(PartyRole::Guest).media.unwrap();
+            select_local_media(&bridge, &media);
+            let guard = bridge.party_playback_guard().unwrap().unwrap();
+            let request = bridge.begin_playback_request();
+            assert!(bridge.playback_request_is_current(&request));
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .generation += 2;
+            assert!(
+                !bridge.playback_request_is_current(&request),
+                "Same identity in A-B-A is a different room generation"
+            );
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.snapshot.as_mut().unwrap().generation = 1;
+                state.party.snapshot.as_mut().unwrap().room_id = "another-room".into();
+                assert!(!guard.accepts(&state.party));
+                state.party.snapshot.as_mut().unwrap().room_id = "test-room".into();
+                state.modal_item.as_mut().unwrap().open_token = Arc::new(());
+            }
+            assert!(
+                bridge.party_playback_guard().is_err(),
+                "A matching ID never owns a reopened picker"
+            );
+            bridge.party_leave();
+            assert!(!guard.accepts(&bridge.shared.lock().unwrap().party));
+        },
+    );
+}
+
+#[test]
+fn host_follows_guest_selection_once_and_matching_picker_keeps_its_owner() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::host_follows_guest_selection_once_and_matching_picker_keeps_its_owner"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            let selected = room(PartyRole::Host);
+            bridge.party_follow_selection(Some(&selected));
+            assert!(app.get_stream_selector_open());
+            let owner = bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .open_token
+                .clone();
+            bridge.party_follow_selection(Some(&selected));
+            assert!(Arc::ptr_eq(
+                &owner,
+                &bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .open_token
+            ));
+            bridge.stream_selector_back();
+            assert!(!app.get_stream_selector_open());
+            bridge.party_follow_selection(Some(&selected));
+            assert!(
+                !app.get_stream_selector_open(),
+                "Reports cannot reopen a dismissed picker"
+            );
+        },
+    );
+}
+
+#[test]
+fn creation_policy_uses_the_local_draft_and_joining_ignores_it() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::creation_policy_uses_the_local_draft_and_joining_ignores_it"
+        ),
+        |Fixture { app, bridge }| {
+            bridge.wire_party();
+            assert_eq!(bridge.party_creation_policy(false), ControlPolicy::HostOnly);
+            let settings = storage::get_str("settings");
+            app.invoke_party_set_allow_everyone(true);
+            assert!(app.get_party_allow_everyone());
+            assert_eq!(bridge.party_creation_policy(false), ControlPolicy::Everyone);
+            assert_eq!(
+                bridge.party_creation_policy(true),
+                ControlPolicy::HostOnly,
+                "Joining never applies an unrelated local draft"
+            );
+            app.invoke_party_set_allow_everyone(false);
+            assert!(!app.get_party_allow_everyone());
+            assert_eq!(bridge.party_creation_policy(false), ControlPolicy::HostOnly);
+            assert_eq!(
+                storage::get_str("settings"),
+                settings,
+                "The draft is session-only"
+            );
+        },
+    );
+}
+
+#[test]
+fn policy_revocation_blocks_passive_lookup_before_clearing_retained_results() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::policy_revocation_blocks_passive_lookup_before_clearing_retained_results"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let mut other = room(PartyRole::Guest).media.unwrap();
+            other.identity.title_id = "tt456".into();
+            other.identity.episode_id = "tt456".into();
+            select_local_media(&bridge, &other);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.snapshot.as_mut().unwrap().control_policy = ControlPolicy::Everyone;
+            }
+            assert!(bridge.party_stream_lookup_allowed("tt456"));
+            let generation = bridge.shared.lock().unwrap().stream_generation;
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .control_policy = ControlPolicy::HostOnly;
+            bridge.start_stream_search("tt456".into());
+            assert_eq!(
+                bridge.shared.lock().unwrap().stream_generation,
+                generation,
+                "Rejected lookup must not replace stream ownership or query addons"
+            );
+            assert!(
+                bridge.shared.lock().unwrap().party.pending.is_empty(),
+                "Passive lookup never proposes media"
+            );
+        },
+    );
+}
+
+#[test]
+fn rejected_media_proposals_can_retry_the_same_episode() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::rejected_media_proposals_can_retry_the_same_episode"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            let mut next = room(PartyRole::Host).media.unwrap();
+            next.identity.title_id = "tt456".into();
+            next.identity.episode_id = "tt456".into();
+            assert!(bridge.party_preflight_media(next.clone()));
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.pending.clear();
+                state.party.reject_prepared_selection();
+                assert!(state.party.selection.is_none());
+            }
+            assert!(bridge.party_preflight_media(next));
+            assert!(matches!(
+                bridge.shared.lock().unwrap().party.pending.front(),
+                Some(Operation::PrepareMedia(1, 0, _))
+            ));
+            bridge.shared.lock().unwrap().party.pending.clear();
+            select_local_media(&bridge, room(PartyRole::Host).media.as_ref().unwrap());
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .reject_prepared_selection();
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .accepted,
+                "A failure cannot erase an accepted selection"
+            );
+        },
+    );
+}
+
+#[test]
+fn proposal_acceptance_never_rebinds_a_source_across_an_aba_generation() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::proposal_acceptance_never_rebinds_a_source_across_an_aba_generation"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            let mut next = room(PartyRole::Host).media.unwrap();
+            next.identity.title_id = "tt456".into();
+            next.identity.episode_id = "tt456".into();
+            assert!(bridge.party_preflight_media(next.clone()));
+            let mut accepted = room(PartyRole::Host);
+            accepted.generation = 2;
+            accepted.media = None;
+            accepted.pending_media = Some(next);
+            let state = bridge.shared.lock().unwrap();
+            assert!(state.party.prepared_selection_matches(&accepted, 1));
+            accepted.generation = 4;
+            assert!(
+                !state.party.prepared_selection_matches(&accepted, 1),
+                "Matching media in A-B-A must not promote the original request to the later generation"
+            );
+            accepted.generation = 2;
+            accepted.room_id = "replacement-room".into();
+            assert!(!state.party.prepared_selection_matches(&accepted, 1));
+        },
+    );
+}
+
+#[test]
+fn featured_title_stream_fallback_obeys_party_permissions_and_binds_its_picker() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::featured_title_stream_fallback_obeys_party_permissions_and_binds_its_picker"
+        ),
+        |Fixture { app, bridge }| {
+            for (role, policy, allowed) in [
+                (PartyRole::Guest, ControlPolicy::HostOnly, false),
+                (PartyRole::Guest, ControlPolicy::Everyone, true),
+                (PartyRole::Host, ControlPolicy::HostOnly, true),
+            ] {
+                bridge.shared.lock().unwrap().party = State::default();
+                let _service = install_room(&bridge, &app, role);
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    let room = state.party.snapshot.as_mut().unwrap();
+                    room.media = None;
+                    room.control_policy = policy;
+                }
+                let mut media = room(role).media.unwrap();
+                media.identity.media_type = "series".into();
+                select_local_media(&bridge, &media);
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    let modal = state.modal_item.as_mut().unwrap();
+                    modal.seasons.clear();
+                    modal.pending_watch_now = Some(WatchNowOrigin::Featured);
+                }
+                app.set_stream_selector_open(false);
+                bridge.show_episode_picker("tt123".into(), Vec::new());
+                assert_eq!(app.get_stream_selector_open(), allowed);
+                let state = bridge.shared.lock().unwrap();
+                if allowed {
+                    let selection = state.party.selection.as_ref().unwrap();
+                    assert!(
+                        selection.owner.is_some(),
+                        "The fallback source belongs to its actual picker opening"
+                    );
+                    assert!(
+                        !selection.accepted,
+                        "Wait for room acceptance before launching"
+                    );
+                    assert!(
+                        matches!(state.party.pending.front(), Some(Operation::PrepareMedia(1, 0, media)) if media.identity.episode_id == "tt123")
+                    );
+                } else {
+                    assert!(state.party.selection.is_none());
+                    assert!(state.party.pending.is_empty());
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn locked_profile_preflight_cannot_announce_or_replace_party_media() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::locked_profile_preflight_cannot_announce_or_replace_party_media"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Host);
+            let before = bridge.shared.lock().unwrap().party.snapshot.clone();
+            let mut other = room(PartyRole::Host).media.unwrap();
+            other.identity.title_id = "tt456".into();
+            other.identity.episode_id = "tt456".into();
+            profile_policy::set_entry_blocked(true);
+            assert!(!bridge.party_preflight_media(other.clone()));
+            assert!(!bridge.party_preflight_media_for_title(other, "movie", "provider:allowed"));
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.party.snapshot, before);
+            assert!(state.party.selection.is_none());
+            assert!(state.party.pending.is_empty());
+            drop(state);
+            profile_policy::set_entry_blocked(false);
         },
     );
 }

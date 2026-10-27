@@ -1,5 +1,5 @@
 //! One bounded postcard frame and FIN per bidirectional request stream.
-use crate::{LocalReport, RoomSnapshot};
+use crate::{ControlRejectionReason, HostCommand, LocalReport, PartyMedia, RoomSnapshot};
 use anyhow::{Context, Result, ensure};
 use iroh::endpoint::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -16,9 +16,22 @@ pub(crate) struct Request {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Operation {
-    Join { name: String },
+    Join {
+        name: String,
+    },
     Report(LocalReport),
     Leave,
+    Control {
+        generation: u64,
+        control_revision: u64,
+        intent: ControlIntent,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) enum ControlIntent {
+    Playback(HostCommand),
+    ProposeMedia(PartyMedia),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -28,6 +41,7 @@ pub(crate) struct Response {
     pub snapshot: Option<RoomSnapshot>,
     pub error: Option<String>,
     pub terminal: bool,
+    pub rejection: Option<ControlRejectionReason>,
 }
 
 pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
@@ -69,6 +83,7 @@ mod tests {
             snapshot: None,
             error: None,
             terminal: false,
+            rejection: None,
         };
         let mut bytes = postcard::to_allocvec(&value).unwrap();
         assert!(decode::<Response>(&bytes).is_ok());

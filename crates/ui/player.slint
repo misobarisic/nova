@@ -1580,7 +1580,7 @@ export component PlayerOverlay {
         return raw;
     }
 
-    private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.is_host);
+    private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.can_control);
     changed timeline_control_allowed => {
         if !root.timeline_control_allowed { root.tv_cancel_seek(); root.pointer_scrubbing = false; }
         if InterfaceStyle.tv { root.kb_clamp_focus(); }

@@ -6,6 +6,9 @@ export global PartyBridge {
     in-out property <bool> page_open;
     in-out property <bool> active;
     in-out property <bool> is_host;
+    in-out property <bool> allow_everyone;
+    in-out property <bool> can_control;
+    in-out property <bool> can_choose_media;
     in-out property <bool> can_host;
     in-out property <bool> has_media;
     in-out property <bool> can_return_to_player;
@@ -38,5 +41,6 @@ export global PartyBridge {
     callback seek(float);
     callback remove_member(string);
     callback set_wait_for_guests(bool);
+    callback set_allow_everyone(bool);
     callback continue_without_waiting();
 }

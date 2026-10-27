@@ -16,6 +16,9 @@ pub(crate) struct Member {
     report: LocalReport,
     last_seen: u64,
     pub last_sequence: u64,
+    last_control_sequence: u64,
+    last_control_at: Option<u64>,
+    last_report_at: Option<u64>,
     admitted: bool,
     stalled: bool,
     bad_since: Option<u64>,
@@ -147,6 +150,9 @@ impl Member {
             report: LocalReport::default(),
             last_seen: now,
             last_sequence: 0,
+            last_control_sequence: 0,
+            last_control_at: None,
+            last_report_at: None,
             admitted: is_host,
             stalled: false,
             bad_since: None,
@@ -208,6 +214,8 @@ impl HostRoom {
                 pending_media: None,
                 generation: 1,
                 revision: 1,
+                control_policy: ControlPolicy::HostOnly,
+                control_revision: 0,
                 timeline: Timeline {
                     position: report.position,
                     anchor_ms: now + START_LEAD_MS,
@@ -296,11 +304,14 @@ impl HostRoom {
             return Ok(());
         }
         ensure!(
-            now.saturating_sub(member.last_seen) >= 50 || member.last_sequence == 0,
+            member
+                .last_report_at
+                .is_none_or(|last| now.saturating_sub(last) >= 50),
             "party reports too frequent"
         );
         member.last_sequence = sequence;
         member.last_seen = now;
+        member.last_report_at = Some(now);
         // Out-of-order reports must not replace readiness for the active media.
         if report.generation == self.snapshot.generation && self.snapshot.selected_media().is_some()
         {
@@ -359,12 +370,21 @@ impl HostRoom {
         Ok(())
     }
 
-    pub fn select_media(
+    pub fn select_media(&mut self, media: PartyMedia, report: LocalReport, now: u64) -> Result<()> {
+        self.select_media_for_generation(self.snapshot.generation, media, report, now)
+    }
+
+    pub fn select_media_for_generation(
         &mut self,
+        generation: u64,
         media: PartyMedia,
         mut report: LocalReport,
         now: u64,
     ) -> Result<()> {
+        self.tick(now);
+        if generation != self.snapshot.generation {
+            return Err(self.rejection(ControlRejectionReason::StaleGeneration));
+        }
         validate_media(&media)?;
         validate_report(&report)?;
         ensure!(
@@ -493,7 +513,10 @@ impl HostRoom {
                 };
             }
             HostCommand::SeekAbsolute(position) | HostCommand::SeekRelative(position) => {
-                ensure!(position.is_finite(), "invalid seek");
+                ensure!(
+                    position.is_finite() && position.abs() <= 604_800.0,
+                    "invalid seek"
+                );
                 let position = if matches!(command, HostCommand::SeekRelative(_)) {
                     current + position
                 } else {
@@ -508,6 +531,98 @@ impl HostRoom {
         }
         self.tick(now);
         Ok(())
+    }
+
+    fn rejection(&self, reason: ControlRejectionReason) -> anyhow::Error {
+        ControlRejection {
+            reason,
+            snapshot: Box::new(self.snapshot.clone()),
+        }
+        .into()
+    }
+
+    pub fn set_control_policy(&mut self, policy: ControlPolicy, now: u64) -> Result<()> {
+        self.tick(now);
+        if self.snapshot.ended {
+            return Err(self.rejection(ControlRejectionReason::Ended));
+        }
+        if self.snapshot.control_policy != policy {
+            self.snapshot.control_revision = self
+                .snapshot
+                .control_revision
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("party control revision exhausted"))?;
+            self.snapshot.control_policy = policy;
+        }
+        Ok(())
+    }
+
+    /// The transport supplies member identity; intents never carry an actor ID.
+    /// Command bookkeeping cannot refresh heartbeat or consume report sequence.
+    pub fn control(
+        &mut self,
+        id: &str,
+        generation: u64,
+        control_revision: u64,
+        sequence: Option<u64>,
+        intent: crate::wire::ControlIntent,
+        now: u64,
+    ) -> Result<()> {
+        self.tick(now);
+        if !self.members.contains_key(id) || self.revoked.contains(id) {
+            return Err(self.rejection(ControlRejectionReason::PermissionDenied));
+        }
+        if let Some(sequence) = sequence {
+            let member = self.members.get_mut(id).expect("member checked");
+            if sequence == 0 || sequence <= member.last_control_sequence {
+                return Err(self.rejection(ControlRejectionReason::Duplicate));
+            }
+            // Consume even rejected commands so replaying one after permissions
+            // change cannot turn a rejected relative seek into an accepted one.
+            member.last_control_sequence = sequence;
+            let too_fast = member
+                .last_control_at
+                .is_some_and(|last| now.saturating_sub(last) < 50);
+            member.last_control_at = Some(now);
+            if too_fast {
+                return Err(self.rejection(ControlRejectionReason::RateLimited));
+            }
+        }
+        let reason = if self.snapshot.ended {
+            Some(ControlRejectionReason::Ended)
+        } else if generation != self.snapshot.generation {
+            Some(ControlRejectionReason::StaleGeneration)
+        } else if control_revision != self.snapshot.control_revision {
+            Some(ControlRejectionReason::StaleControlRevision)
+        } else if id != self.snapshot.host_id
+            && self.snapshot.control_policy != ControlPolicy::Everyone
+        {
+            Some(ControlRejectionReason::PermissionDenied)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(self.rejection(reason));
+        }
+        match intent {
+            crate::wire::ControlIntent::Playback(command) => {
+                if self.snapshot.media.is_none() {
+                    return Err(self.rejection(ControlRejectionReason::NoMedia));
+                }
+                if let HostCommand::SeekAbsolute(value) | HostCommand::SeekRelative(value) = command
+                    && (!value.is_finite() || value.abs() > 604_800.0)
+                {
+                    return Err(self.rejection(ControlRejectionReason::InvalidIntent));
+                }
+                self.command(command, now)
+            }
+            crate::wire::ControlIntent::ProposeMedia(media) => {
+                if !valid_identity(&media.identity) || media.duration != 0.0 {
+                    return Err(self.rejection(ControlRejectionReason::InvalidIntent));
+                }
+                self.prepare_media(media, now)
+            }
+        }
     }
 
     pub fn continue_without_waiting(&mut self, now: u64) {
@@ -669,6 +784,223 @@ pub(crate) mod tests {
             "Host".into(),
             0,
         )
+    }
+
+    fn rejected(result: Result<()>, expected: ControlRejectionReason) {
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ControlRejection>().unwrap().reason,
+            expected
+        );
+    }
+
+    #[test]
+    fn unified_policy_is_live_and_old_permission_revisions_never_revive() {
+        use crate::wire::ControlIntent;
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 10).unwrap();
+        assert_eq!(room.snapshot.control_policy, ControlPolicy::HostOnly);
+        for (sequence, intent) in [
+            ControlIntent::Playback(HostCommand::SetPaused(true)),
+            ControlIntent::Playback(HostCommand::SeekAbsolute(50.0)),
+            ControlIntent::ProposeMedia(PartyMedia {
+                duration: 0.0,
+                ..media()
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            rejected(
+                room.control(
+                    "guest",
+                    1,
+                    0,
+                    Some(sequence as u64 + 1),
+                    intent,
+                    100 + sequence as u64 * 100,
+                ),
+                ControlRejectionReason::PermissionDenied,
+            );
+        }
+        room.set_control_policy(ControlPolicy::Everyone, 400)
+            .unwrap();
+        let revision = room.snapshot.control_revision;
+        room.control(
+            "guest",
+            1,
+            revision,
+            Some(4),
+            ControlIntent::Playback(HostCommand::SetPaused(true)),
+            500,
+        )
+        .unwrap();
+        assert!(room.snapshot.timeline.paused);
+        room.control(
+            "guest",
+            1,
+            revision,
+            Some(5),
+            ControlIntent::Playback(HostCommand::SeekAbsolute(50.0)),
+            600,
+        )
+        .unwrap();
+        assert_eq!(room.snapshot.timeline.position, 50.0);
+        room.set_control_policy(ControlPolicy::HostOnly, 700)
+            .unwrap();
+        room.set_control_policy(ControlPolicy::Everyone, 800)
+            .unwrap();
+        rejected(
+            room.control(
+                "guest",
+                1,
+                revision,
+                Some(6),
+                ControlIntent::Playback(HostCommand::SeekRelative(10.0)),
+                900,
+            ),
+            ControlRejectionReason::StaleControlRevision,
+        );
+        assert_eq!(room.snapshot.timeline.position, 50.0);
+        let current_revision = room.snapshot.control_revision;
+        room.tick(950);
+        room.set_control_policy(ControlPolicy::Everyone, 960)
+            .unwrap();
+        assert_eq!(room.snapshot.control_revision, current_revision);
+    }
+
+    #[test]
+    fn commands_are_replay_safe_bounded_and_do_not_starve_reports_or_heartbeat() {
+        use crate::wire::ControlIntent;
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 10).unwrap();
+        room.set_control_policy(ControlPolicy::Everyone, 20)
+            .unwrap();
+        let revision = room.snapshot.control_revision;
+        let seek = ControlIntent::Playback(HostCommand::SeekRelative(10.0));
+        room.control("guest", 1, revision, Some(1), seek.clone(), 100)
+            .unwrap();
+        assert_eq!(room.snapshot.timeline.position, 20.0);
+        rejected(
+            room.control("guest", 1, revision, Some(1), seek.clone(), 200),
+            ControlRejectionReason::Duplicate,
+        );
+        assert_eq!(room.snapshot.timeline.position, 20.0);
+        room.report("guest", report(), 2, 200).unwrap();
+        room.control("guest", 1, revision, Some(2), seek.clone(), 201)
+            .unwrap();
+        rejected(
+            room.control("guest", 1, revision, Some(3), seek.clone(), 202),
+            ControlRejectionReason::RateLimited,
+        );
+        // Command sequence numbers, even arbitrarily large ones, cannot
+        // invalidate the next report or consume its independent rate budget.
+        room.control("guest", 1, revision, Some(999), seek.clone(), 300)
+            .unwrap();
+        room.report("guest", report(), 3, 300).unwrap();
+        for (index, value) in [f64::NAN, f64::INFINITY, -f64::INFINITY, 604_801.0]
+            .into_iter()
+            .enumerate()
+        {
+            rejected(
+                room.control(
+                    "guest",
+                    1,
+                    revision,
+                    Some(1000 + index as u64),
+                    ControlIntent::Playback(HostCommand::SeekAbsolute(value)),
+                    400 + index as u64 * 100,
+                ),
+                ControlRejectionReason::InvalidIntent,
+            );
+        }
+        room.control("guest", 1, revision, Some(2000), seek, 3_000)
+            .unwrap();
+        assert!(
+            !room.members["guest"].participant.connected,
+            "controls cannot fake readiness heartbeats"
+        );
+        room.report("guest", report(), 4, 3_000).unwrap();
+        assert!(room.members["guest"].participant.connected);
+    }
+
+    #[test]
+    fn media_proposals_are_first_wins_and_activation_has_an_aba_guard() {
+        use crate::wire::ControlIntent;
+        let mut room = room();
+        room.join("a", "Alice".into(), 1, 10).unwrap();
+        room.join("b", "Bob".into(), 1, 10).unwrap();
+        room.set_control_policy(ControlPolicy::Everyone, 20)
+            .unwrap();
+        let revision = room.snapshot.control_revision;
+        let proposal = PartyMedia {
+            duration: 0.0,
+            ..media()
+        };
+        room.control(
+            "a",
+            1,
+            revision,
+            Some(1),
+            ControlIntent::ProposeMedia(proposal.clone()),
+            100,
+        )
+        .unwrap();
+        let accepted = room.snapshot.generation;
+        rejected(
+            room.control(
+                "b",
+                1,
+                revision,
+                Some(1),
+                ControlIntent::ProposeMedia(proposal.clone()),
+                100,
+            ),
+            ControlRejectionReason::StaleGeneration,
+        );
+        assert_eq!(room.snapshot.generation, accepted);
+        assert!(room.snapshot.media.is_none());
+        assert_eq!(room.snapshot.pending_media.as_ref().unwrap().duration, 0.0);
+        let ready = LocalReport {
+            generation: accepted,
+            ..report()
+        };
+        room.report("a", ready.clone(), 2, 200).unwrap();
+        room.select_media_for_generation(accepted, media(), ready, 300)
+            .unwrap();
+        assert_eq!(room.snapshot.generation, accepted);
+        assert!(room.members["a"].participant.ready);
+        let mut other = proposal.clone();
+        other.identity.episode_id = "other".into();
+        room.control(
+            "b",
+            accepted,
+            revision,
+            Some(2),
+            ControlIntent::ProposeMedia(other),
+            400,
+        )
+        .unwrap();
+        let other_generation = room.snapshot.generation;
+        room.control(
+            "a",
+            other_generation,
+            revision,
+            Some(2),
+            ControlIntent::ProposeMedia(proposal),
+            500,
+        )
+        .unwrap();
+        let latest_generation = room.snapshot.generation;
+        rejected(
+            room.select_media_for_generation(accepted, media(), report(), 600),
+            ControlRejectionReason::StaleGeneration,
+        );
+        assert_eq!(room.snapshot.generation, latest_generation);
+        assert!(room.snapshot.media.is_none());
+        room.select_media_for_generation(latest_generation, media(), report(), 700)
+            .unwrap();
+        assert_eq!(room.snapshot.generation, latest_generation);
     }
 
     #[test]
@@ -1156,7 +1488,7 @@ mod source_hint_tests {
 
     #[test]
     fn source_hint_wire_shape_is_fixed_and_versioned() {
-        assert_eq!(ALPN, b"nova/party/4");
+        assert_eq!(ALPN, b"nova/party/5");
         let report = LocalReport {
             source_fingerprint: Some([9; 32]),
             ..Default::default()

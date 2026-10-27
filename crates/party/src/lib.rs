@@ -14,7 +14,7 @@ pub use service::PartyService;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-pub const ALPN: &[u8] = b"nova/party/4";
+pub const ALPN: &[u8] = b"nova/party/5";
 pub const MAX_MEMBERS: usize = 8;
 /// Opaque SHA-256 asset hint; contains no source URL, path, headers or provider token.
 pub type SourceFingerprint = [u8; 32];
@@ -94,6 +94,52 @@ pub struct Participant {
     pub reason: Option<String>,
 }
 
+/// The creator alone can change this live room-wide policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlPolicy {
+    #[default]
+    HostOnly,
+    Everyone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlRejectionReason {
+    PermissionDenied,
+    StaleGeneration,
+    StaleControlRevision,
+    Duplicate,
+    RateLimited,
+    InvalidIntent,
+    NoMedia,
+    Ended,
+}
+
+/// A business rejection refreshes room state and keeps membership alive.
+#[derive(Clone, Debug)]
+pub struct ControlRejection {
+    pub reason: ControlRejectionReason,
+    pub snapshot: Box<RoomSnapshot>,
+}
+
+impl std::fmt::Display for ControlRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.reason {
+            ControlRejectionReason::PermissionDenied => {
+                "only the party creator can control playback"
+            }
+            ControlRejectionReason::StaleGeneration => "party media changed",
+            ControlRejectionReason::StaleControlRevision => "party control permissions changed",
+            ControlRejectionReason::Duplicate => "party command already handled",
+            ControlRejectionReason::RateLimited => "party commands too frequent",
+            ControlRejectionReason::InvalidIntent => "invalid party command",
+            ControlRejectionReason::NoMedia => "choose party media first",
+            ControlRejectionReason::Ended => "party has ended",
+        })
+    }
+}
+
+impl std::error::Error for ControlRejection {}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoomSnapshot {
     pub role: PartyRole,
@@ -107,6 +153,11 @@ pub struct RoomSnapshot {
     pub pending_media: Option<PartyMedia>,
     pub generation: u64,
     pub revision: u64,
+    #[serde(default)]
+    pub control_policy: ControlPolicy,
+    /// Changes only with policy, independently of clock/report ticks.
+    #[serde(default)]
+    pub control_revision: u64,
     pub timeline: Timeline,
     pub participants: Vec<Participant>,
     pub waiting: Vec<String>,
@@ -124,7 +175,7 @@ impl RoomSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HostCommand {
     SetPaused(bool),
     SeekAbsolute(f64),
