@@ -73,6 +73,7 @@ export global SettingsContent {
     out property <int> radius_preset_index: SettingsBridge.card_corner_radius == 0 ? 0 : SettingsBridge.card_corner_radius == 4 ? 1 : SettingsBridge.card_corner_radius == 10 ? 2 : SettingsBridge.card_corner_radius == 16 ? 3 : SettingsBridge.card_corner_radius == 24 ? 4 : -1;
     out property <int> spacing_preset_index: SettingsBridge.card_spacing == 0 ? 0 : SettingsBridge.card_spacing == 4 ? 1 : SettingsBridge.card_spacing == 8 ? 2 : SettingsBridge.card_spacing == 16 ? 3 : SettingsBridge.card_spacing == 32 ? 4 : -1;
     out property <string> torrent_rate_label: SettingsBridge.torrent_down_limit <= 0 ? @tr("Unlimited") : Math.round(SettingsBridge.torrent_down_limit) + " KB/s";
+    out property <string> torrent_ram_label: Math.round(SettingsBridge.torrent_ram_buffer_mb) + " MiB";
     out property <string> torrent_size_label: Math.round(SettingsBridge.torrent_max_mb) + " MB";
     pure callback kb_player_audio_language_row() -> int;
     pure callback kb_player_speed_row() -> int;

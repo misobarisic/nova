@@ -1256,8 +1256,10 @@ impl Bridge {
         }
         match result {
             Ok(ready) => {
+                self.player
+                    .set_ram_torrent_source(&ready.url, ready.ram_only);
                 self.set_stream_hint(Some(StreamHint::Playing(ready.display_name)));
-                if self.external_playback_allowed() {
+                if !ready.ram_only && self.external_playback_allowed() {
                     // User choice (Settings → Player): external player,
                     // always. Not tracked: there is no close event.
                     self.mark_playback_opened(false);
@@ -1282,11 +1284,12 @@ impl Bridge {
                     // Android can use an external app as a fallback.
                     // Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    if !self.remote_receiver_playback()
-                        && !self.party_active()
-                        && !self.last_time_replay_selected()
-                        && !self.last_time_replay_active()
-                        && crate::player::open_external(&ready.url).is_err()
+                    if ready.ram_only
+                        || (!self.remote_receiver_playback()
+                            && !self.party_active()
+                            && !self.last_time_replay_selected()
+                            && !self.last_time_replay_active()
+                            && crate::player::open_external(&ready.url).is_err())
                     {
                         self.set_stream_hint(Some(StreamHint::Fixed(
                             "This stream requires the in-app player, which is unavailable.",
@@ -2316,7 +2319,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        if !app.get_player_open() || app.get_playback_started() || self.player.playback_failed() {
+        if !app.get_player_open() || self.player.playback_failed() {
             return;
         }
         let hash = match self.shared.lock().unwrap().active_torrent.clone() {
@@ -2326,7 +2329,25 @@ impl Bridge {
         let Some(engine) = crate::torrent::engine() else {
             return;
         };
+        if let Some((source, duration, stalled)) = self.player.ram_torrent_telemetry() {
+            engine.note_playback(&source, duration, stalled);
+        }
         let stats = engine.stats(&hash);
+        if stats.ram_limit_bytes > 0 {
+            self.player.note_ram_torrent_progress(stats.received_bytes);
+        }
+        if app.get_playback_started() {
+            return;
+        }
+        if stats.ram_limit_bytes > 0 {
+            app.set_player_status(SharedString::from(&text::torrent_ram_buffer(
+                stats.ram_used_bytes,
+                stats.ram_limit_bytes,
+                stats.down_bps,
+                stats.peers,
+            )));
+            return;
+        }
         // Before any peer connects there is nothing useful to show; keep the
         // player's own "Loading stream…" line instead of "↓ 0 B/s · 0 peers".
         if stats.peers == 0 && stats.down_bps == 0 && stats.progress <= 0.0 {
@@ -3149,6 +3170,7 @@ mod home_return_tests {
             Ok(crate::torrent::StreamReady {
                 url: "http://127.0.0.1/stale".into(),
                 display_name: "stale".into(),
+                ram_only: false,
             }),
         );
         bridge.complete_torrent_resolution(old, "old".into(), Err("stale failure".into()));

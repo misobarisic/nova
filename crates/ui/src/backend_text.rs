@@ -1664,6 +1664,18 @@ pub fn peers(count: usize) -> String {
     }
 }
 
+/// RAM usage describes the torrent buffer only, never disk usage or total RSS.
+pub fn torrent_ram_buffer(used: u64, limit: u64, down_bps: u64, peer_count: usize) -> String {
+    let mib = 1024.0 * 1024.0;
+    format!(
+        "RAM {:.0} / {:.0} MiB · ↓ {:.1} MiB/s · {}",
+        used as f64 / mib,
+        limit as f64 / mib,
+        down_bps as f64 / mib,
+        peers(peer_count)
+    )
+}
+
 /// Settings hint after a metadata prefetch finished:
 /// `"Prefetch done — cached 12 items."`.
 pub fn prefetch_done(cached: usize) -> String {
@@ -2583,6 +2595,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             _ => tr("Medium").into(),
         },
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
+        "torrent_ram_buffer_mb" => format!("{number} MiB"),
         "detail_poster_max_side"
         | "detail_backdrop_max_side"
         | "episode_thumbnail_max_side"
@@ -2839,6 +2852,26 @@ pub fn calendar_week_title(first: (i64, u32, u32), last: (i64, u32, u32)) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn torrent_ram_status_reports_memory_and_localized_peers() {
+        with_language(Language::English, || {
+            assert_eq!(
+                torrent_ram_buffer(12 * 1024 * 1024, 64 * 1024 * 1024, 1024 * 1024, 4),
+                "RAM 12 / 64 MiB · ↓ 1.0 MiB/s · 4 peers"
+            );
+            assert_eq!(
+                setting_sync_value("torrent_ram_buffer_mb", &serde_json::json!(128)),
+                "128 MiB"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                torrent_ram_buffer(0, 32 * 1024 * 1024, 0, 1),
+                "RAM 0 / 32 MiB · ↓ 0.0 MiB/s · 1 čvor"
+            );
+        });
+    }
 
     #[test]
     fn resolution_scope_values_keep_exact_order_validate_shapes_and_translate_empty_lists() {

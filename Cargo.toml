@@ -1,4 +1,6 @@
 [workspace]
+# Patched dependency retains a standalone focused test suite.
+exclude = ["vendor/librqbit"]
 members = [
     "crates/addons",
     "crates/providers",
@@ -52,6 +54,8 @@ resolver = "3"
 license = "GPL-3.0-or-later"
 
 [patch.crates-io]
+# Bounded, nonpersistent torrent streaming; see vendor/librqbit/NOVA_PATCH.md.
+librqbit = { path = "vendor/librqbit" }
 # Keep Cast transport closure side-effect free and support scoped IPv6 hosts.
 # The pinned upstream source and narrow patch are recorded beside its license.
 oxicast = { path = "vendor/oxicast" }

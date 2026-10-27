@@ -1136,7 +1136,67 @@ struct PreferenceSession {
     manual_subtitles: bool,
 }
 
+/// mpv packet buffering is separate from torrent piece RAM. Preserve the native
+/// defaults so a later HTTP/local source gets exactly its original policy.
+#[derive(Clone, Copy)]
+struct PacketCacheDefaults {
+    disk: bool,
+    forward: i64,
+    backward: i64,
+    seconds: f64,
+}
+fn apply_torrent_packet_cache(
+    mpv: &Mpv,
+    ram: bool,
+    saved: &mut Option<PacketCacheDefaults>,
+) -> libmpv2::Result<()> {
+    if ram {
+        if saved.is_none() {
+            *saved = Some(PacketCacheDefaults {
+                disk: mpv.get_property("cache-on-disk")?,
+                forward: mpv.get_property("demuxer-max-bytes")?,
+                backward: mpv.get_property("demuxer-max-back-bytes")?,
+                seconds: mpv.get_property("demuxer-readahead-secs")?,
+            });
+        }
+        mpv.set_property("cache-on-disk", false)?;
+        mpv.set_property("demuxer-max-bytes", 2 * 1024 * 1024i64)?;
+        mpv.set_property("demuxer-max-back-bytes", 512 * 1024i64)?;
+        mpv.set_property("demuxer-readahead-secs", 1.0)?;
+    } else if let Some(defaults) = *saved {
+        mpv.set_property("cache-on-disk", defaults.disk)?;
+        mpv.set_property("demuxer-max-bytes", defaults.forward)?;
+        mpv.set_property("demuxer-max-back-bytes", defaults.backward)?;
+        mpv.set_property("demuxer-readahead-secs", defaults.seconds)?;
+        *saved = None;
+    }
+    Ok(())
+}
+
+/// A received-chunk counter keeps slow first pieces alive without extending
+/// startup for unchanged/decreasing counters or a swarm which stopped sending.
+#[derive(Default)]
+struct RamStartupProgress {
+    received: u64,
+    advanced_at: Option<Instant>,
+}
+impl RamStartupProgress {
+    fn observe(&mut self, received: u64, now: Instant) {
+        if received > self.received {
+            self.received = received;
+            self.advanced_at = Some(now);
+        }
+    }
+    fn recent(&self, now: Instant) -> bool {
+        self.advanced_at
+            .is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(30))
+    }
+}
+
 struct State {
+    ram_torrent_source: Mutex<Option<String>>,
+    packet_cache_defaults: Mutex<Option<PacketCacheDefaults>>,
+    ram_buffer_progress: Mutex<RamStartupProgress>,
     sleep_deadline: Mutex<sleep_timer::Deadline>,
     #[cfg(not(target_os = "android"))]
     playback_fullscreen: AtomicBool,
@@ -1487,6 +1547,9 @@ impl Player {
             .map(native_subtitle_defaults)
             .unwrap_or_default();
         let state = Arc::new(State {
+            ram_torrent_source: Mutex::new(None),
+            packet_cache_defaults: Mutex::new(None),
+            ram_buffer_progress: Mutex::new(Default::default()),
             sleep_deadline: Mutex::new(Default::default()),
             native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
@@ -1802,6 +1865,9 @@ impl Player {
                                         apply_preference_options(mpv, &session.preferences, &notifier_state.native_subtitle_defaults);
                                     }
                                     notifier_state.audio_processing.lock().unwrap().reset();
+                                    apply_torrent_packet_cache(mpv,
+                                        notifier_state.ram_torrent_source.lock().unwrap().as_deref() == Some(url.as_str()),
+                                        &mut notifier_state.packet_cache_defaults.lock().unwrap())?;
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
                                     apply_load_playback_options(mpv, paused, *notifier_state.party_playback_rate.lock().unwrap())?;
@@ -2001,6 +2067,47 @@ impl Player {
         Self { state }
     }
 
+    /// Extend startup only while this RAM source is making measured progress.
+    /// No-progress swarms and a decoder which never opens still reach the
+    /// native error path; active prebuffering does not trigger decoder retries.
+    pub fn note_ram_torrent_progress(&self, bytes: u64) {
+        if self.state.ram_torrent_source.lock().unwrap().is_none() {
+            return;
+        }
+        self.state
+            .ram_buffer_progress
+            .lock()
+            .unwrap()
+            .observe(bytes, Instant::now());
+    }
+
+    /// Only the loaded RAM source can supply adaptive-buffer hints. A pending
+    /// replacement never reuses the previous source's duration or cache state.
+    pub fn ram_torrent_telemetry(&self) -> Option<(String, f64, bool)> {
+        if self.state.pending.lock().unwrap().is_some()
+            || !self.state.started.load(Ordering::SeqCst)
+        {
+            return None;
+        }
+        let source = self.state.ram_torrent_source.lock().unwrap().clone()?;
+        let mpv = self.state.mpv.lock().ok()?;
+        let mpv = mpv.as_ref()?;
+        if mpv.get_property::<String>("path").ok().as_deref() != Some(source.as_str()) {
+            return None;
+        }
+        Some((
+            source,
+            mpv.get_property("duration").ok()?,
+            mpv.get_property("paused-for-cache").unwrap_or(false),
+        ))
+    }
+
+    /// Bind the cache policy to this exact source, including Android reloads.
+    pub fn set_ram_torrent_source(&self, url: &str, enabled: bool) {
+        *self.state.ram_torrent_source.lock().unwrap() = enabled.then(|| url.to_owned());
+        *self.state.ram_buffer_progress.lock().unwrap() = Default::default();
+    }
+
     /// Open `url` in the player overlay (replacing any current playback),
     /// starting at `start_pos_secs` (0 = from the beginning: pass the resume
     /// position so playback opens in a single backend session instead of
@@ -2125,7 +2232,8 @@ impl Player {
         self.state
             .start_pause_hold
             .store(policy.paused, Ordering::SeqCst);
-        let allow_external = policy.allow_external && !policy.paused;
+        let ram_torrent = self.state.ram_torrent_source.lock().unwrap().as_deref() == Some(url);
+        let allow_external = policy.allow_external && !policy.paused && !ram_torrent;
         #[cfg(target_os = "android")]
         external::update_picture_in_picture(false, true, 16, 9);
         {
@@ -4147,6 +4255,14 @@ impl Player {
             }
         } else if !self.state.reported.load(Ordering::SeqCst)
             && self.state.opened_at.lock().unwrap().elapsed() > Duration::from_secs(20)
+            && !(self.state.ram_torrent_source.lock().unwrap().as_deref()
+                == Some(buffer_source.as_str())
+                && self
+                    .state
+                    .ram_buffer_progress
+                    .lock()
+                    .unwrap()
+                    .recent(Instant::now()))
         {
             // Android: the requested decoder produced no frames at all — step
             // down the fallback chain and reload the stream with the next one
@@ -4577,6 +4693,69 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ram_startup_tracks_partial_piece_chunks_and_expires_without_new_data() {
+        let now = Instant::now();
+        let mut progress = RamStartupProgress::default();
+        progress.observe(0, now);
+        assert!(!progress.recent(now));
+        // A first 16 MiB piece may take much longer than the native startup
+        // deadline to verify; each received chunk is still useful progress.
+        progress.observe(16384, now);
+        assert!(progress.recent(now + Duration::from_secs(29)));
+        progress.observe(16384, now + Duration::from_secs(29));
+        progress.observe(0, now + Duration::from_secs(29));
+        assert!(
+            !progress.recent(now + Duration::from_secs(31)),
+            "unchanged/stale stats cannot extend startup"
+        );
+        progress.observe(32768, now + Duration::from_secs(32));
+        assert!(progress.recent(now + Duration::from_secs(32)));
+        assert!(
+            !progress.recent(now + Duration::from_secs(62)),
+            "no-progress startup must eventually fail"
+        );
+    }
+
+    #[test]
+    fn ram_torrent_packet_cache_is_bounded_and_restores_native_options() {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        let before: (bool, i64, i64, f64) = (
+            mpv.get_property("cache-on-disk").unwrap(),
+            mpv.get_property("demuxer-max-bytes").unwrap(),
+            mpv.get_property("demuxer-max-back-bytes").unwrap(),
+            mpv.get_property("demuxer-readahead-secs").unwrap(),
+        );
+        let mut saved = None;
+        apply_torrent_packet_cache(&mpv, true, &mut saved).unwrap();
+        assert!(!mpv.get_property::<bool>("cache-on-disk").unwrap());
+        assert_eq!(
+            mpv.get_property::<i64>("demuxer-max-bytes").unwrap(),
+            2 * 1024 * 1024
+        );
+        assert_eq!(
+            mpv.get_property::<i64>("demuxer-max-back-bytes").unwrap(),
+            512 * 1024
+        );
+        apply_torrent_packet_cache(&mpv, true, &mut saved).unwrap();
+        apply_torrent_packet_cache(&mpv, false, &mut saved).unwrap();
+        assert!(saved.is_none());
+        assert_eq!(
+            (
+                mpv.get_property::<bool>("cache-on-disk").unwrap(),
+                mpv.get_property::<i64>("demuxer-max-bytes").unwrap(),
+                mpv.get_property::<i64>("demuxer-max-back-bytes").unwrap(),
+                mpv.get_property::<f64>("demuxer-readahead-secs").unwrap()
+            ),
+            before
+        );
+    }
 
     #[cfg(not(target_os = "android"))]
     #[test]

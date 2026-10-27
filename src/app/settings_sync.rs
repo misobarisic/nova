@@ -95,6 +95,10 @@ impl Bridge {
                 Value::from(app.get_torrent_down_limit()),
             ),
             ("torrent_no_cache", Value::Bool(app.get_torrent_no_cache())),
+            (
+                "torrent_ram_buffer_mb",
+                Value::from(app.get_torrent_ram_buffer_mb()),
+            ),
             ("sync_enabled", Value::Bool(app.get_sync_enabled())),
             (
                 "sync_device_name",

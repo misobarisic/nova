@@ -1472,6 +1472,7 @@ mod settings_tests {
             max_mb: 4096,
             down_limit_kbps: 2048,
             no_cache: true,
+            ram_buffer_mb: 128,
         };
         let json = serde_json::to_string(&custom).unwrap();
         let back: TorrentSettings = serde_json::from_str(&json).unwrap();

@@ -730,6 +730,41 @@ a stale stream or update the current hint. Engine activation and cleanup share
 an operation lock; cancellation is checked after discovery and initialization,
 before committing ownership or evicting other cached torrents.
 
+Settings → P2P → No caching uses an isolated RAM-only torrent session. It never
+writes torrent payload, metainfo, resume state or DHT state to disk, and does not
+spill to disk when memory fills. It also never adopts a same-hash disk session.
+Metadata discovery reuses the process-lived session's nonpersistent warm DHT,
+then passes validated metainfo and discovered peers to an isolated RAM payload
+session without reusing disk handles or payload.
+The storage mode applies to new streams: already-playing streams keep their
+chosen storage until replaced. A pending resolution rechecks the current mode
+before activation, so enabling No caching cannot activate an older disk-backed
+resolution. Turning it off selects ordinary disk caching for new streams.
+Explicit Download jobs always use the separate guarded disk path, including
+when No caching is enabled. RAM budget and download-rate changes apply live.
+RAM-only torrents use the embedded player; external handoff is disabled so
+Nova retains control of packet caching and prevents disk spill.
+
+Torrent RAM buffer is a device-local buffering budget in MiB: desktop defaults
+to 256 (32–2048), Android to 64 (32–512). Older saved settings get the platform
+default; malformed values fall back safely and extreme values are clamped.
+This budget covers torrent pieces and their in-flight reservations, including
+reserved transport headroom; mpv's separate compressed packet buffer is
+additional. It is not a cap on total app RSS, decoded frames, or GPU memory.
+A lower budget immediately stops new allocations above the new limit; existing
+readers release their reservations before usage falls to it. The player status
+reports actual RAM usage rather than disk cache size. Disk usage and Clear
+continue to describe existing disk data.
+
+RAM playback verifies pieces, prioritizes pending HTTP Range reads, evicts
+unneeded pieces and refetches them when seeking. Startup and refill targets
+adapt within the budget: healthy torrents start sooner, while slow or unstable
+torrents build a larger reserve. Playback cannot overcome a sustained download
+rate below the media bitrate. Memory pressure waits or fails visibly instead of
+falling back to disk. RAM sessions do not upload or advertise HAVE: BitTorrent
+v1 cannot retract advertised pieces after eviction. Oversized torrent pieces
+may require a larger buffer budget to keep concurrent reads bounded.
+
 Offline torrent downloads have stable job owners independent of worker retries.
 Their actual bundle directory and resolved file index are saved in the local
 manifest and restored before cache sweeping. Multiple episode jobs can share a

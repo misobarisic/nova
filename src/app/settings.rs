@@ -448,6 +448,7 @@ impl Bridge {
             app.set_torrent_max_mb(settings.max_mb as f32);
             app.set_torrent_down_limit(settings.down_limit_kbps as f32);
             app.set_torrent_no_cache(settings.no_cache);
+            app.set_torrent_ram_buffer_mb((settings.ram_buffer_bytes() / (1024 * 1024)) as f32);
             if app.get_stream_selector_open() {
                 self.apply_stream_filter();
             }
@@ -466,6 +467,7 @@ impl Bridge {
     pub(super) fn update_torrent_settings(&self, f: impl FnOnce(&mut TorrentSettings)) {
         let mut settings = active_torrent_settings();
         f(&mut settings);
+        settings.ram_buffer_mb = settings.ram_buffer_bytes() / (1024 * 1024);
         write_torrent_settings(&settings);
         sync_torrent_engine(&settings);
         self.torrent_settings_to_ui();
@@ -741,6 +743,10 @@ impl Bridge {
             max_mb: app.get_torrent_max_mb().max(0.0).round() as u64,
             down_limit_kbps: app.get_torrent_down_limit().max(0.0).round() as u32,
             no_cache: app.get_torrent_no_cache(),
+            ram_buffer_mb: (app.get_torrent_ram_buffer_mb().max(0.0).round() as u64).clamp(
+                nova_config::TORRENT_RAM_MIN_MB,
+                nova_config::TORRENT_RAM_MAX_MB,
+            ),
         };
         *CURRENT_TORRENT_SETTINGS.lock().unwrap() = torrent.clone();
         sync_torrent_engine(&torrent);
@@ -1999,6 +2005,8 @@ mod tests {
         );
         app.set_discover_min_cols(6);
         app.set_torrent_dir("pending-torrent-dir".into());
+        app.set_torrent_no_cache(true);
+        app.set_torrent_ram_buffer_mb(128.0);
         app.invoke_save_settings();
         assert_eq!(
             bridge
@@ -2010,6 +2018,8 @@ mod tests {
             6,
         );
         assert_eq!(active_torrent_settings().dir, "pending-torrent-dir");
+        assert_eq!(active_torrent_settings().ram_buffer_mb, 128);
+        assert!(active_torrent_settings().no_cache);
         assert_eq!(read_settings().discover_min_cols, initial.discover_min_cols);
 
         // Destroy the page before its old 600 ms timer would have fired.
@@ -2019,6 +2029,8 @@ mod tests {
         bridge.torrent_settings_to_ui();
         assert_eq!(app.get_discover_min_cols(), 6);
         assert_eq!(app.get_torrent_dir(), "pending-torrent-dir");
+        assert_eq!(app.get_torrent_ram_buffer_mb(), 128.0);
+        assert!(app.get_torrent_no_cache());
 
         // Simulate the remote projection path updating an unrelated field.
         // The timer must persist the latest backend state, not its old snapshot
@@ -2042,6 +2054,8 @@ mod tests {
         assert_eq!(saved.episode_thumbnail_max_side, Some(480));
         assert_eq!(saved.player_episode_backdrop_max_side, Some(2560));
         assert_eq!(read_torrent_settings().dir, "pending-torrent-dir");
+        assert_eq!(read_torrent_settings().ram_buffer_mb, 128);
+        assert!(read_torrent_settings().no_cache);
         // A queued save must not replay stale values over a newer projection.
         app.set_show_settings(true);
         app.set_show_home(false);

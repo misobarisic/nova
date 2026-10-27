@@ -661,8 +661,8 @@ msgstr "Ograničite brzinu preuzimanja. 0 znači neograničeno."
 msgid "No caching"
 msgstr "Bez predmemoriranja"
 
-msgid "Delete a stream's downloaded data as soon as its playback stops. Overrides keep-for-replay."
-msgstr "Izbrišite preuzete podatke zapisa odmah nakon završetka reprodukcije. Nadjačava čuvanje za ponovnu reprodukciju."
+msgid "Buffer torrent playback in RAM only. No torrent data is written to disk and there is no disk spill. Explicit downloads still use disk. Applies to new streams."
+msgstr "Međuspremnik za reprodukciju torrenta koristi samo RAM. Podaci torrenta ne zapisuju se na disk niti se tamo prelijevaju. Izričita preuzimanja i dalje koriste disk. Vrijedi za nove prijenose."
 
 msgid "Total size of downloaded P2P data on disk."
 msgstr "Ukupna veličina preuzetih P2P podataka na disku."
@@ -5663,3 +5663,9 @@ msgstr "Ponovno pogledaj završetak…"
 
 msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
 msgstr "Ovaj izvor ne može nastaviti na prethodnom položaju. Počnite ispočetka ili odustanite i odaberite drugi izvor."
+
+msgid "Torrent RAM buffer"
+msgstr "RAM međuspremnik za torrente"
+
+msgid "Maximum RAM for torrent buffering with No caching, not total app memory. Slow or unstable torrents buffer more; healthy torrents start sooner. Targets stay within this budget."
+msgstr "Najviše RAM-a za međuspremnik torrenta uz opciju Bez predmemoriranja, a ne ukupna memorija aplikacije. Spori ili nestabilni torrenti pune veći međuspremnik; zdravi torrenti kreću ranije. Ciljevi ostaju unutar ograničenja."

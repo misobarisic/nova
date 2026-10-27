@@ -402,13 +402,46 @@ export component SettingsP2pModule inherits Window {
                             tinted: true;
                             setting-key: "torrent_no_cache";
                             row-title: @tr("No caching");
-                            row-desc: @tr("Delete a stream's downloaded data as soon as its playback stops. Overrides keep-for-replay.");
+                            row-desc: @tr("Buffer torrent playback in RAM only. No torrent data is written to disk and there is no disk spill. Explicit downloads still use disk. Applies to new streams.");
 
                             ToggleSwitch {
                                 name: @tr("No caching");
                                 checked <=> SettingsBridge.torrent_no_cache;
                                 focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 4 && SettingsBridge.kb_active;
                                 toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 7; SettingsContent.kb_tr = 4; SettingsContent.schedule_save(); }
+                            }
+                        }
+
+                        SettingsRow {
+                            setting-key: "torrent_ram_buffer_mb";
+                            row-title: @tr("Torrent RAM buffer");
+                            row-desc: @tr("Maximum RAM for torrent buffering with No caching, not total app memory. Slow or unstable torrents buffer more; healthy torrents start sooner. Targets stay within this budget.");
+                            row-min-height: 112px;
+
+                            VerticalLayout {
+                                width: Math.min(240px, SettingsContent.slot_width - 64px);
+                                spacing: 8px;
+                                MiniSlider {
+                                    name: @tr("Torrent RAM buffer");
+                                    width: 100%;
+                                    minimum: 32;
+                                    maximum: SettingsBridge.is_android ? 512 : 2048;
+                                    step: 32;
+                                    enabled: SettingsBridge.torrent_no_cache;
+                                    value: SettingsBridge.torrent_ram_buffer_mb;
+                                    focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 5 && SettingsBridge.kb_active;
+                                    changed(v) => {
+                                        SettingsBridge.torrent_ram_buffer_mb = Math.round(v);
+                                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                        SettingsBridge.kb_zone = 7;
+                                        SettingsContent.kb_tr = 5;
+                                        SettingsContent.schedule_save();
+                                    }
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    ValueBox { width: 150px; text: SettingsContent.torrent_ram_label; }
+                                }
                             }
                         }
 
@@ -431,8 +464,8 @@ export component SettingsP2pModule inherits Window {
                                     label: @tr("Clear");
                                     destructive: true;
                                     btn_min_width: 92px;
-                                    focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 5 && SettingsBridge.kb_active;
-                                    clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 7; SettingsContent.kb_tr = 5; SettingsBridge.clear_torrent_cache(); }
+                                    focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 6 && SettingsBridge.kb_active;
+                                    clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 7; SettingsContent.kb_tr = 6; SettingsBridge.clear_torrent_cache(); }
                                 }
                             }
                         }
@@ -481,8 +514,8 @@ export component SettingsP2pModule inherits Window {
                                         label: @tr("Clear");
                                         destructive: true;
                                         btn_min_width: 92px;
-                                        focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 5 && SettingsBridge.kb_active;
-                                        clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 7; SettingsContent.kb_tr = 5; SettingsBridge.clear_torrent_cache(); }
+                                        focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 6 && SettingsBridge.kb_active;
+                                        clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 7; SettingsContent.kb_tr = 6; SettingsBridge.clear_torrent_cache(); }
                                     }
                                 }
                             }

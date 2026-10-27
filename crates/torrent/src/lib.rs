@@ -2,8 +2,8 @@
 //!
 //! Stremio addons (Torrentio and friends) return torrent streams as an
 //! `infoHash` (+ optional `fileIdx`) instead of a direct URL. This module runs
-//! one [`librqbit::Session`] inside the app and turns such a row into a
-//! loopback HTTP URL that the existing mpv player can load unchanged:
+//! a process-lived discovery/disk [`librqbit::Session`] and isolated RAM
+//! sessions, turning such a row into a loopback HTTP URL that the existing mpv player can load unchanged:
 //!
 //! 1. [`TorrentEngine::resolve`] adds the torrent list-only to enumerate its
 //!    files (seeding the magnet with [`PUBLIC_TRACKERS`] so metadata does not
@@ -14,14 +14,14 @@
 //!    missing pieces. That URL goes straight to `Player::play`.
 //!
 //! One engine lives for the whole process (like the mpv [`Player`]). It owns
-//! its tokio runtime (not just a `Handle`, which would leave the runtime shut
+//! its tokio runtimes (not just `Handle`s, which would leave them shut
 //! down); the public API stays fire-and-continue, mirroring `crate::net` —
 //! callers pass a continuation and hop back to the UI thread with
 //! `slint::invoke_from_event_loop`.
 //!
 //! Files are kept between plays for instant replay and trimmed least-recently
 //! used once the configured cache cap is exceeded; when the user enables
-//! "no caching", a torrent's data is deleted as soon as its playback stops.
+//! "no caching", isolated sessions keep bounded verified pieces in heap memory.
 //!
 
 use std::collections::{HashMap, HashSet};
@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use librqbit::api::TorrentIdOrHash;
 mod storage_guard;
 use librqbit::storage::StorageFactoryExt;
+use librqbit::storage::memory::{MemoryBudget, MemoryStorageFactory, MemoryTelemetry};
 use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse, Session, SessionOptions};
 use serde::{Deserialize, Serialize};
 pub use storage_guard::{WriteGuard, physical_bytes, register as register_write_guard};
@@ -43,6 +44,15 @@ pub use storage_guard::{WriteGuard, physical_bytes, register as register_write_g
 type TorrentId = usize;
 
 use nova_config::TorrentSettings;
+
+async fn wait_cancelled(cancel: &AtomicBool) {
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
 
 /// Extensions treated as playable video when choosing the file inside a
 /// torrent (lower-case, without the dot).
@@ -79,6 +89,7 @@ const PUBLIC_TRACKERS: &[&str] = &[
 pub struct StreamReady {
     pub url: String,
     pub display_name: String,
+    pub ram_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,9 +211,16 @@ pub struct TorrentStats {
     /// Exact byte counts for the selected file (or selected torrent files).
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
+    /// Cumulative received peer chunk bytes, including unverified partial
+    /// pieces. Startup activity must not wait for a whole piece to hash.
+    pub received_bytes: u64,
+    pub ram_used_bytes: u64,
+    pub ram_limit_bytes: u64,
+    pub buffer_target_bytes: u64,
 }
 
 /// One torrent this session is (or was) streaming.
+#[derive(Clone)]
 struct Entry {
     /// librqbit session id, or [`UNMANAGED`] for entries adopted from a
     /// previous process (the new session never managed them).
@@ -269,21 +287,39 @@ impl Drop for RetainedWorker {
 struct SelectedTorrent {
     candidate: FileCandidate,
     torrent_bytes: Option<Vec<u8>>,
+    seen_peers: Vec<std::net::SocketAddr>,
 }
 
 /// Session id for adopted entries: never passed to librqbit (lookups miss),
 /// only used for dir-based accounting and deletion.
 const UNMANAGED: TorrentId = usize::MAX;
 
-/// The process-wide torrent session.
+/// The process-wide torrent controller.
 pub struct TorrentEngine {
     /// `None` when the session could not be created (no network stack, bad
     /// output folder): every resolve then fails fast and the UI degrades.
     inner: Option<Arc<EngineInner>>,
 }
 
+// A replacement engine may coexist with old authorized read leases. Keep one
+// physical admission pool for the process instead of multiplying the cap.
+static RAM_BUDGET: Mutex<std::sync::Weak<MemoryBudget>> = Mutex::new(std::sync::Weak::new());
+fn shared_ram_budget(initial_limit: u64) -> Arc<MemoryBudget> {
+    let mut shared = RAM_BUDGET.lock().unwrap();
+    if let Some(budget) = shared.upgrade() {
+        return budget;
+    }
+    let budget = MemoryBudget::new(initial_limit);
+    *shared = Arc::downgrade(&budget);
+    budget
+}
+
 struct EngineInner {
     session: Arc<Session>,
+    memory: Option<MemoryStorageFactory>,
+    ram_children: Mutex<Vec<Arc<EngineInner>>>,
+    ram_resolving: AtomicBool,
+    ram_budget: Arc<MemoryBudget>,
     /// Serialize handle selection, activation, removal and cache cleanup.
     operations: Mutex<()>,
     playback_requests: Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -311,6 +347,14 @@ impl TorrentEngine {
     /// setup yields an inert engine whose resolves report an error, so the
     /// catalog keeps working.
     pub fn setup(dir: PathBuf, settings: &TorrentSettings) -> Self {
+        Self::setup_with_storage(dir, settings, None)
+    }
+
+    fn setup_with_storage(
+        dir: PathBuf,
+        settings: &TorrentSettings,
+        memory: Option<MemoryStorageFactory>,
+    ) -> Self {
         let rt = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
@@ -326,20 +370,9 @@ impl TorrentEngine {
         // `tokio::spawn`; the owned `rt` is moved into the engine afterwards.
         let handle = rt.handle().clone();
         let built = handle.block_on(async {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("nova torrent: cannot create {}: {e}", dir.display());
-                return None;
-            }
-
-            // librqbit's default DHT persistence derives its file path from
-            // `directories::ProjectDirs`, which needs `$HOME`. Android app
-            // processes have no `HOME` (and `dirs-sys` has no Android
-            // fallback), so `Session::new_with_opts` fails with "cannot
-            // determine project directory for com.rqbit.dht" and the engine
-            // never starts. Point the DHT state at our own writable folder
-            // instead, which also keeps it out of librqbit's OS-default cache.
-            let dht_file = dir.join("dht.json");
-
+            // Storage creates disk directories only for deliberate disk transfers.
+            // DHT/session state stays process-local, including the idle engine
+            // created before a RAM-only playback request.
             // Session options for one listener flavor. A listener with uTP
             // enabled is what unlocks *outgoing* uTP too: librqbit only builds
             // its uTP socket when a listener requests it, and without it the
@@ -347,14 +380,16 @@ impl TorrentEngine {
             // ports, leaving metadata unresolvable. The listener also lets the
             // session announce a reachable port to DHT/trackers.
             let make_opts = |ipv4_only: bool| SessionOptions {
-                default_storage_factory: Some(storage_guard::GuardedFactory.boxed()),
+                default_storage_factory: Some(match &memory {
+                    Some(factory) => factory.clone().boxed(),
+                    None => storage_guard::GuardedFactory.boxed(),
+                }),
+                disable_upload: memory.is_some(),
+                peer_limit: memory.as_ref().map(|_| 16),
                 client_name_and_version: Some("nova/0.1".to_string()),
                 persistence: None,
                 dht: Some(librqbit::DhtSessionConfig {
-                    persistence: Some(librqbit::dht::DhtPersistenceConfig {
-                        config_filename: Some(dht_file.clone()),
-                        ..Default::default()
-                    }),
+                    persistence: None,
                     ..Default::default()
                 }),
                 ipv4_only,
@@ -418,6 +453,13 @@ impl TorrentEngine {
                 eprintln!("nova torrent: session ready (loopback API on port {port})");
                 let inner = Arc::new(EngineInner {
                     session,
+                    ram_budget: memory
+                        .as_ref()
+                        .map(|m| m.budget.clone())
+                        .unwrap_or_else(|| shared_ram_budget(settings.ram_buffer_bytes())),
+                    ram_resolving: AtomicBool::new(memory.is_some()),
+                    memory,
+                    ram_children: Mutex::new(Vec::new()),
                     operations: Mutex::new(()),
                     playback_requests: Mutex::new(Vec::new()),
                     read_leases: Mutex::new(HashMap::new()),
@@ -437,7 +479,9 @@ impl TorrentEngine {
                 // Adopt last run's downloads (durable tracked set) and sweep
                 // whatever it doesn't own, so restarts never leak cache that
                 // trimming and clearing can no longer see.
-                inner.adopt_persisted();
+                if inner.memory.is_none() && !settings.no_cache {
+                    inner.adopt_persisted();
+                }
                 // Download owners must be restored before sweeping (see restore_downloads).
                 Self { inner: Some(inner) }
             }
@@ -631,6 +675,26 @@ impl TorrentEngine {
         let Some(inner) = &self.inner else {
             return TorrentStats::default();
         };
+        if let Some(child) = inner
+            .ram_children
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|child| {
+                child
+                    .active
+                    .lock()
+                    .unwrap()
+                    .get(&canonical_hash(info_hash))
+                    .is_some_and(|e| {
+                        e.playing && e.owner.as_ref().is_some_and(PlaybackRequest::is_current)
+                    })
+            })
+            .cloned()
+        {
+            return TorrentEngine { inner: Some(child) }.stats(info_hash);
+        }
         let id = {
             let active = inner.active.lock().unwrap();
             match active.get(&canonical_hash(info_hash)) {
@@ -643,7 +707,42 @@ impl TorrentEngine {
             return TorrentStats::default();
         };
         let stats = handle.stats();
-        to_torrent_stats(&stats, None)
+        let mut stats = to_torrent_stats(&stats, None);
+        if let Some(memory) = &inner.memory {
+            stats.ram_used_bytes = memory.budget.used();
+            stats.ram_limit_bytes = memory.budget.limit();
+            stats.buffer_target_bytes = memory.telemetry.target.load(Ordering::Relaxed);
+        }
+        stats
+    }
+
+    /// Source guarded by the current playback owner; byte demand remains HTTP's
+    /// responsibility. Duration/bitrate are only adaptive-buffer hints.
+    pub fn note_playback(&self, source_url: &str, duration: f64, stalled: bool) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        for child in inner.ram_children.lock().unwrap().iter() {
+            if let Some(entry) = child.active.lock().unwrap().values().find(|entry| {
+                source_url
+                    == format!(
+                        "http://127.0.0.1:{}/torrents/{}/stream/{}",
+                        child.port, entry.torrent_id, entry.file_idx
+                    )
+            }) && entry
+                .owner
+                .as_ref()
+                .is_some_and(PlaybackRequest::is_current)
+                && let Some(memory) = &child.memory
+            {
+                let rate = if duration.is_finite() && duration > 0.0 {
+                    (entry.file_len as f64 / duration) as u64
+                } else {
+                    0
+                };
+                memory.telemetry.consumption(rate, stalled);
+            }
+        }
     }
 
     /// Retain the exact file/session resolved for this current request, independently
@@ -654,6 +753,24 @@ impl TorrentEngine {
         loopback_url: &str,
     ) -> Result<PlaybackLease, String> {
         let inner = self.inner.as_ref().ok_or("torrent engine unavailable")?;
+        let child = {
+            inner
+                .ram_children
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|child| {
+                    child.active.lock().unwrap().values().any(|e| {
+                        e.owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.same_request(request))
+                    })
+                })
+                .cloned()
+        };
+        if let Some(child) = child {
+            return TorrentEngine { inner: Some(child) }.lease_playback(request, loopback_url);
+        }
         let _operation = inner.operations.lock().unwrap();
         if !request.is_current() {
             return Err("playback superseded".into());
@@ -676,7 +793,11 @@ impl TorrentEngine {
             })
             .ok_or("torrent source is not owned by this playback request")?;
         let id = inner.next_read_lease_id.fetch_add(1, Ordering::Relaxed);
-        let directory = std::fs::canonicalize(&entry.dir).unwrap_or_else(|_| entry.dir.clone());
+        let directory = if inner.memory.is_some() {
+            entry.dir.clone()
+        } else {
+            std::fs::canonicalize(&entry.dir).unwrap_or_else(|_| entry.dir.clone())
+        };
         inner.read_leases.lock().unwrap().insert(
             id,
             ReadLeaseEntry {
@@ -686,7 +807,9 @@ impl TorrentEngine {
                 dir: entry.dir.clone(),
             },
         );
-        READ_LEASE_DIRS.lock().unwrap().push(directory.clone());
+        if inner.memory.is_none() {
+            READ_LEASE_DIRS.lock().unwrap().push(directory.clone());
+        }
         Ok(PlaybackLease {
             _owner: Arc::new(PlaybackLeaseOwner {
                 inner: Some(inner.clone()),
@@ -698,7 +821,8 @@ impl TorrentEngine {
 
     /// Release cancelled playback owners after any in-flight activation.
     /// A newer playback request and retained downloads keep their files and
-    /// selections. Otherwise pause for replay, or delete when `no_cache` is set.
+    /// selections. Disk transfers follow replay/cache cleanup policy; RAM
+    /// sessions release their pieces after the final authorized reader leaves.
     pub fn on_playback_stopped(&self, settings: &TorrentSettings) {
         let Some(inner) = self.inner.clone() else {
             return;
@@ -707,6 +831,7 @@ impl TorrentEngine {
         std::thread::spawn(move || {
             let _operation = inner.operations.lock().unwrap();
             inner.stop_cancelled_playback(&settings);
+            inner.clean_ram_children(&settings);
         });
     }
 
@@ -719,7 +844,9 @@ impl TorrentEngine {
         for download in downloads {
             inner.retain_download(download);
         }
-        inner.sweep_current_dir();
+        if !inner.cache_policy.lock().unwrap().no_cache {
+            inner.sweep_current_dir();
+        }
     }
 
     pub fn retain_download(&self, download: RetainedDownload) {
@@ -798,11 +925,17 @@ impl TorrentEngine {
         let Some(inner) = &self.inner else {
             return;
         };
+        let _operation = inner.operations.lock().unwrap();
+        *inner.cache_policy.lock().unwrap() = settings.clone();
         inner.session.ratelimits.set_download_bps(NonZeroU32::new(
             settings.down_limit_kbps.saturating_mul(1024),
         ));
-        let _operation = inner.operations.lock().unwrap();
-        *inner.cache_policy.lock().unwrap() = settings.clone();
+        inner.ram_budget.set_limit(settings.ram_buffer_bytes());
+        for child in inner.ram_children.lock().unwrap().iter() {
+            child.session.ratelimits.set_download_bps(NonZeroU32::new(
+                settings.down_limit_kbps.saturating_mul(1024),
+            ));
+        }
         if settings.no_cache {
             // Turning "no caching" on must also clear what earlier plays left
             // behind. The torrent that is playing (if any) is deleted when it
@@ -813,6 +946,58 @@ impl TorrentEngine {
 }
 
 impl EngineInner {
+    fn clean_ram_children(&self, settings: &TorrentSettings) {
+        self.ram_children.lock().unwrap().retain(|child| {
+            let _operation = child.operations.lock().unwrap();
+            child.stop_cancelled_playback(settings);
+            let resolving = child.ram_resolving.load(Ordering::Acquire)
+                && child
+                    .playback_requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .any(|r| !r.load(Ordering::Acquire));
+            let keep = resolving
+                || !child.active.lock().unwrap().is_empty()
+                || !child.read_leases.lock().unwrap().is_empty();
+            if !keep {
+                child.session.cancellation_token().cancel();
+            }
+            keep
+        });
+    }
+
+    fn rollback_activation(&self, hash: &str, request: &PlaybackRequest, previous: Option<Entry>) {
+        let mut active = self.active.lock().unwrap();
+        if active
+            .get(hash)
+            .is_some_and(|e| e.owner.as_ref().is_some_and(|r| r.same_request(request)))
+        {
+            active.remove(hash);
+            if let Some(mut previous) = previous {
+                if previous.owner.as_ref().is_some_and(|r| !r.is_current()) {
+                    previous.playing = false;
+                    previous.owner = None;
+                }
+                active.insert(hash.to_owned(), previous);
+            }
+        }
+    }
+
+    fn wait_initialized(
+        &self,
+        handle: &librqbit::ManagedTorrent,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        self.rt.block_on(async {
+            tokio::select! {
+                _ = wait_cancelled(cancel) => Err("torrent request cancelled".into()),
+                result = tokio::time::timeout(Duration::from_secs(30), handle.wait_until_initialized()) => result.map_err(|_| "timed out initializing torrent".to_string())?.map_err(|e| format!("initializing torrent: {e:#}")),
+            }
+        })
+    }
+
     fn has_read_transfer(&self, id: TorrentId, dir: &Path) -> bool {
         self.read_leases
             .lock()
@@ -824,11 +1009,20 @@ impl EngineInner {
         {
             let _operation = self.operations.lock().unwrap();
             let lease = self.read_leases.lock().unwrap().remove(&id);
-            {
+            if self.memory.is_none() {
                 let mut paths = READ_LEASE_DIRS.lock().unwrap();
                 if let Some(index) = paths.iter().position(|path| path == directory) {
                     paths.swap_remove(index);
                 }
+            }
+            if self.memory.is_some() {
+                self.stop_cancelled_playback(&self.cache_policy.lock().unwrap().clone());
+                if self.active.lock().unwrap().is_empty()
+                    && !self.ram_resolving.load(Ordering::Acquire)
+                {
+                    self.session.cancellation_token().cancel();
+                }
+                return;
             }
             if let Some(lease) = lease {
                 self.refresh_transfer(lease.torrent_id, &lease.info_hash, &lease.dir);
@@ -860,7 +1054,27 @@ impl EngineInner {
     }
 
     fn stop_cancelled_playback(&self, settings: &TorrentSettings) {
-        *self.cache_policy.lock().unwrap() = settings.clone();
+        if self.memory.is_some() {
+            let removed: Vec<_> = {
+                let mut active = self.active.lock().unwrap();
+                let keys: Vec<_> = active
+                    .iter()
+                    .filter(|(_, e)| {
+                        e.owner.as_ref().is_none_or(|r| !r.is_current())
+                            && !self.has_read_transfer(e.torrent_id, &e.dir)
+                    })
+                    .map(|(h, _)| h.clone())
+                    .collect();
+                keys.into_iter().filter_map(|h| active.remove(&h)).collect()
+            };
+            for entry in removed {
+                let _ = self.rt.block_on(
+                    self.session
+                        .delete(TorrentIdOrHash::Id(entry.torrent_id), false),
+                );
+            }
+            return;
+        }
         let stopped: Vec<_> = {
             let mut active = self.active.lock().unwrap();
             active
@@ -950,78 +1164,94 @@ impl EngineInner {
         file_idx: Option<u32>,
         requested_name: &str,
         output_dir: &Path,
+        cancel: &AtomicBool,
     ) -> Result<SelectedTorrent, String> {
-        let (files, torrent_bytes) = if let Some(handle) = self.managed_handle(info_hash) {
-            handle
-                .with_metadata(|metadata| {
-                    let files = metadata
-                        .info
-                        .iter_file_details_ext()
-                        .enumerate()
-                        .map(|(idx, details)| {
-                            (
-                                idx,
-                                details
-                                    .details
-                                    .filename
-                                    .to_pathbuf()
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                details.details.len,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    (files, metadata.torrent_bytes.to_vec())
-                })
-                .map_err(|e| format!("{e:#}"))?
-        } else {
-            let list = tokio::time::timeout(
-                METADATA_TIMEOUT,
-                self.session.add_torrent(
-                    AddTorrent::from_url(magnet_for(info_hash)),
-                    Some(AddTorrentOptions {
-                        list_only: true,
-                        overwrite: true,
-                        trackers: Some(public_trackers()),
-                        output_folder: Some(output_dir.to_string_lossy().into_owned()),
-                        ..Default::default()
-                    }),
-                ),
-            )
-            .await
-            .map_err(|_| "timed out fetching torrent metadata".to_string())?
-            .map_err(|e| format!("{e:#}"))?;
-            match list {
-                AddTorrentResponse::ListOnly(list) => {
-                    let files = list
-                        .info
-                        .iter_file_details_ext()
-                        .enumerate()
-                        .map(|(idx, details)| {
-                            (
-                                idx,
-                                details
-                                    .details
-                                    .filename
-                                    .to_pathbuf()
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                details.details.len,
-                            )
-                        })
-                        .collect();
-                    (files, list.torrent_bytes.to_vec())
+        let (files, torrent_bytes, seen_peers) =
+            if let Some(handle) = self.managed_handle(info_hash) {
+                let seen_peers = handle
+                    .live()
+                    .map(|live| {
+                        live.per_peer_stats_snapshot(
+                            librqbit::http_api_types::PeerStatsFilter::default(),
+                        )
+                        .peers
+                        .keys()
+                        .filter_map(|addr| addr.parse().ok())
+                        .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                handle
+                    .with_metadata(|metadata| {
+                        let files = metadata
+                            .info
+                            .iter_file_details_ext()
+                            .enumerate()
+                            .map(|(idx, details)| {
+                                (
+                                    idx,
+                                    details
+                                        .details
+                                        .filename
+                                        .to_pathbuf()
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                    details.details.len,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        (files, metadata.torrent_bytes.to_vec(), seen_peers.clone())
+                    })
+                    .map_err(|e| format!("{e:#}"))?
+            } else {
+                let list = tokio::select! {
+                    _ = wait_cancelled(cancel) => return Err("torrent request cancelled".into()),
+                    result = tokio::time::timeout(
+                    METADATA_TIMEOUT,
+                    self.session.add_torrent(
+                        AddTorrent::from_url(magnet_for(info_hash)),
+                        Some(AddTorrentOptions {
+                            list_only: true,
+                            overwrite: true,
+                            trackers: Some(public_trackers()),
+                            output_folder: Some(output_dir.to_string_lossy().into_owned()),
+                            ..Default::default()
+                        }),
+                    ),
+                ) => result }
+                .map_err(|_| "timed out fetching torrent metadata".to_string())?
+                .map_err(|e| format!("{e:#}"))?;
+                match list {
+                    AddTorrentResponse::ListOnly(list) => {
+                        let files = list
+                            .info
+                            .iter_file_details_ext()
+                            .enumerate()
+                            .map(|(idx, details)| {
+                                (
+                                    idx,
+                                    details
+                                        .details
+                                        .filename
+                                        .to_pathbuf()
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                    details.details.len,
+                                )
+                            })
+                            .collect();
+                        (files, list.torrent_bytes.to_vec(), list.seen_peers)
+                    }
+                    AddTorrentResponse::Added(_, _) | AddTorrentResponse::AlreadyManaged(_, _) => {
+                        return Err("unexpected non-list metadata response".into());
+                    }
                 }
-                AddTorrentResponse::Added(_, _) | AddTorrentResponse::AlreadyManaged(_, _) => {
-                    return Err("unexpected non-list metadata response".into());
-                }
-            }
-        };
+            };
         let candidate = pick_video_file(&files, file_idx, requested_name)
             .ok_or_else(|| "no video file in torrent".to_string())?;
         Ok(SelectedTorrent {
             candidate,
             torrent_bytes: Some(torrent_bytes),
+            seen_peers,
         })
     }
 
@@ -1089,6 +1319,7 @@ impl EngineInner {
             .add_torrent(
                 add,
                 Some(AddTorrentOptions {
+                    initial_peers: Some(selected.seen_peers),
                     only_files: Some(
                         self.only_files_for(UNMANAGED, info_hash, selected.candidate.idx)
                             .into_iter()
@@ -1105,14 +1336,6 @@ impl EngineInner {
         match response {
             AddTorrentResponse::Added(id, handle) => Ok((id, handle, true)),
             AddTorrentResponse::AlreadyManaged(id, handle) => {
-                let _ =
-                    tokio::time::timeout(Duration::from_secs(30), handle.wait_until_initialized())
-                        .await;
-                let only = self.only_files_for(id, info_hash, selected.candidate.idx);
-                self.session
-                    .update_only_files(&handle, &only)
-                    .await
-                    .map_err(|e| format!("{e:#}"))?;
                 // librqbit's Error state is not necessarily paused; start()
                 // (through unpause) reinitializes it for an explicit retry.
                 if handle.is_paused() || handle.stats().error.is_some() {
@@ -1158,6 +1381,7 @@ impl EngineInner {
             file_idx,
             &requested_name,
             &output_dir,
+            &cancel,
         )) {
             Ok(selected) => selected,
             Err(e) => {
@@ -1199,6 +1423,22 @@ impl EngineInner {
             file_idx: candidate.idx,
         });
         drop(operation);
+        if let Err(error) = self.wait_initialized(&handle, &cancel) {
+            if cancel.load(Ordering::Acquire) {
+                self.stop_cancelled_transfer(&key, job_id, id);
+            }
+            return Err(error);
+        }
+        {
+            let _operation = self.operations.lock().unwrap();
+            if cancel.load(Ordering::Acquire) || !self.retained_job_is_current(&key, job_id) {
+                return Err("torrent download cancelled".into());
+            }
+            let only = self.only_files_for(id, &info_hash, candidate.idx);
+            self.rt
+                .block_on(self.session.update_only_files(&handle, &only))
+                .map_err(|e| format!("{e:#}"))?;
+        }
         loop {
             if cancel.load(Ordering::Acquire) {
                 self.stop_cancelled_transfer(&key, job_id, id);
@@ -1331,7 +1571,9 @@ impl EngineInner {
         let _ = self
             .rt
             .block_on(async move { session.delete(TorrentIdOrHash::Id(id), false).await });
-        let _ = std::fs::remove_dir_all(dir);
+        if self.memory.is_none() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     fn resolve_blocking(
@@ -1345,11 +1587,77 @@ impl EngineInner {
         if !request.is_current() {
             return Err("playback superseded".into());
         }
+        if settings.no_cache && self.memory.is_none() {
+            self.clean_ram_children(&settings);
+            // The base session's DHT is already warm and is nonpersistent.
+            // Metadata-only discovery never creates a storage backend. Only
+            // validated bytes and peers cross into the isolated RAM session.
+            let hash = canonical_hash(&info_hash);
+            let selected = self.rt.block_on(self.select_video(
+                &hash,
+                file_idx,
+                &requested_name,
+                &self.dir.join(&hash),
+                &request.0,
+            ))?;
+            if !request.is_current() {
+                return Err("playback superseded".into());
+            }
+            // Reserve 4 MiB for sixteen peer message buffers, hashing and bounded
+            // HTTP copies. Piece payload (including in-flight reservations) uses
+            // the remaining shared cap across all overlapping read leases.
+            let transport = self
+                .ram_budget
+                .reserve_transport()
+                .map_err(|e| e.to_string())?;
+            let factory = MemoryStorageFactory {
+                budget: self.ram_budget.clone(),
+                telemetry: Arc::new(MemoryTelemetry::default()),
+                transport,
+            };
+            let child = TorrentEngine::setup_with_storage(
+                PathBuf::from("nova-ram-only"),
+                &settings,
+                Some(factory),
+            )
+            .inner
+            .ok_or("could not create RAM torrent session")?;
+            child
+                .playback_requests
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&request.0));
+            self.ram_children.lock().unwrap().push(child.clone());
+            child.session.ratelimits.set_download_bps(NonZeroU32::new(
+                self.cache_policy
+                    .lock()
+                    .unwrap()
+                    .down_limit_kbps
+                    .saturating_mul(1024),
+            ));
+            let result = child.activate_playback(
+                request,
+                hash,
+                requested_name,
+                settings.clone(),
+                selected,
+                || {},
+            );
+            child.ram_resolving.store(false, Ordering::Release);
+            if result.is_err() {
+                self.clean_ram_children(&settings);
+            }
+            return result;
+        }
         let info_hash = canonical_hash(&info_hash);
         let subdir = self.dir.join(&info_hash);
-        let selected =
-            self.rt
-                .block_on(self.select_video(&info_hash, file_idx, &requested_name, &subdir))?;
+        let selected = self.rt.block_on(self.select_video(
+            &info_hash,
+            file_idx,
+            &requested_name,
+            &subdir,
+            &request.0,
+        ))?;
         self.activate_playback(
             request,
             info_hash,
@@ -1369,9 +1677,24 @@ impl EngineInner {
         selected: SelectedTorrent,
         initialized: impl FnOnce(),
     ) -> Result<StreamReady, String> {
-        let _operation = self.operations.lock().unwrap();
+        let operation = self.operations.lock().unwrap();
         if !request.is_current() {
             return Err("playback superseded".into());
+        }
+        let current_policy = self.cache_policy.lock().unwrap().clone();
+        if self.memory.is_none() && current_policy.no_cache {
+            // A settings edit may overtake slow metadata discovery. Recheck
+            // before filesystem storage can be created; the rare toggle race
+            // restarts discovery in the isolated, nonpersistent RAM session.
+            let file_idx = selected.candidate.idx.try_into().ok();
+            drop(operation);
+            return self.clone().resolve_blocking(
+                request,
+                info_hash,
+                file_idx,
+                requested_name,
+                current_policy,
+            );
         }
         let subdir = self.dir.join(&info_hash);
         self.stop_cancelled_playback(&settings);
@@ -1394,38 +1717,8 @@ impl EngineInner {
             }
         }
 
-        // 3b. Wait for storage initialization. The HTTP stream endpoint
-        // rejects requests while the torrent is still Initializing
-        // ("with_storage_and_file: invalid state: initializing"), and mpv
-        // issues its first Range request as soon as the player opens, so
-        // returning the URL too early would fail playback.
-        self.rt.block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(30), handle.wait_until_initialized())
-                .await;
-        });
-
-        initialized();
-        if !request.is_current() {
-            if added {
-                self.delete_unclaimed_transfer(id, handle.output_folder());
-            }
-            self.refresh_transfer(id, &info_hash, handle.output_folder());
-            return Err("playback superseded".into());
-        }
-
-        // 4. Record it for LRU / stats / cleanup.
         let dir = handle.output_folder().to_path_buf();
-        // `requested_name` is the full (possibly multi-line) stream row text;
-        // fall back to its longest line so the status line stays one line.
-        let display_name = handle.name().filter(|n| !n.is_empty()).unwrap_or_else(|| {
-            requested_name
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .max_by_key(|l| l.len())
-                .unwrap_or("")
-                .to_string()
-        });
+        let previous_entry = self.active.lock().unwrap().get(&info_hash).cloned();
         {
             let mut active = self.active.lock().unwrap();
             let entry = active.entry(info_hash.clone()).or_insert_with(|| Entry {
@@ -1445,12 +1738,67 @@ impl EngineInner {
             entry.playing = true;
             entry.owner = Some(request.clone());
         }
-        self.save_tracked();
+        drop(operation);
+        let initialization = self.wait_initialized(&handle, &request.0);
+        let _operation = self.operations.lock().unwrap();
+        if let Err(error) = initialization {
+            self.rollback_activation(&info_hash, &request, previous_entry);
+            if added {
+                self.delete_unclaimed_transfer(id, &dir);
+            }
+            self.stop_cancelled_playback(&settings);
+            self.refresh_transfer(id, &info_hash, &dir);
+            return Err(error);
+        }
+        // 3b. Wait for storage initialization. The HTTP stream endpoint
+        // rejects requests while the torrent is still Initializing
+        // ("with_storage_and_file: invalid state: initializing"), and mpv
+        // issues its first Range request as soon as the player opens, so
+        // returning the URL too early would fail playback.
+        initialized();
+        if !request.is_current()
+            || !self
+                .active
+                .lock()
+                .unwrap()
+                .get(&info_hash)
+                .is_some_and(|e| e.owner.as_ref().is_some_and(|r| r.same_request(&request)))
+        {
+            self.rollback_activation(&info_hash, &request, previous_entry);
+            if added {
+                self.delete_unclaimed_transfer(id, handle.output_folder());
+            }
+            self.refresh_transfer(id, &info_hash, handle.output_folder());
+            return Err("playback superseded".into());
+        }
+
+        let only = self.only_files_for(id, &info_hash, picked.idx);
+        self.rt
+            .block_on(self.session.update_only_files(&handle, &only))
+            .map_err(|e| format!("{e:#}"))?;
+
+        // 4. Record it for LRU / stats / cleanup.
+        // `requested_name` is the full (possibly multi-line) stream row text;
+        // fall back to its longest line so the status line stays one line.
+        let display_name = handle.name().filter(|n| !n.is_empty()).unwrap_or_else(|| {
+            requested_name
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .max_by_key(|l| l.len())
+                .unwrap_or("")
+                .to_string()
+        });
+        if self.memory.is_none() {
+            self.save_tracked();
+        }
 
         // 5. Enforce the cache cap (never evicting the just-started torrent).
         // With no-cache, drop everything else first so switching streams can't
         // leave the previous torrent's data on disk.
-        if settings.no_cache {
+        if self.memory.is_some() {
+            // Heap pieces are reclaimed by the streaming scheduler.
+        } else if settings.no_cache {
             self.purge_cache(Some(&info_hash), true);
         } else {
             self.trim_to_cap(settings.max_mb, &info_hash);
@@ -1462,6 +1810,7 @@ impl EngineInner {
                 self.port, id, picked.idx
             ),
             display_name,
+            ram_only: self.memory.is_some(),
         })
     }
 
@@ -1508,6 +1857,9 @@ impl EngineInner {
 
     /// Persist the live tracked set.
     fn save_tracked(&self) {
+        if self.memory.is_some() {
+            return;
+        }
         let active = self.active.lock().unwrap();
         save_tracked(&active);
     }
@@ -1516,6 +1868,9 @@ impl EngineInner {
     /// own (crash-mid-resolve leftovers, pre-tracking layouts, failed deletes
     /// from before).
     fn sweep_current_dir(&self) {
+        if self.memory.is_some() {
+            return;
+        }
         let owned: HashSet<PathBuf> = {
             let active = self.active.lock().unwrap();
             let retained = self.retained.lock().unwrap();
@@ -1580,6 +1935,9 @@ impl EngineInner {
     }
 
     fn total_cache_bytes(&self) -> u64 {
+        if self.memory.is_some() {
+            return 0;
+        }
         let dirs: Vec<PathBuf> = {
             let active = self.active.lock().unwrap();
             let retained = self.retained.lock().unwrap();
@@ -1635,7 +1993,8 @@ impl EngineInner {
                 .rt
                 .block_on(async move { session.delete(TorrentIdOrHash::Id(id), false).await });
         }
-        if let Err(e) = std::fs::remove_dir_all(&dir)
+        if self.memory.is_none()
+            && let Err(e) = std::fs::remove_dir_all(&dir)
             && e.kind() != std::io::ErrorKind::NotFound
         {
             eprintln!(
@@ -1652,6 +2011,9 @@ impl EngineInner {
     /// also removes torrents still marked as playing (the no-cache path calls
     /// this once playback has stopped, so nothing is left behind).
     fn purge_cache(&self, keep: Option<&str>, include_playing: bool) {
+        if self.memory.is_some() {
+            return;
+        }
         let victims: Vec<(String, TorrentId)> = {
             let active = self.active.lock().unwrap();
             let retained = self.retained.lock().unwrap();
@@ -1810,22 +2172,25 @@ fn to_torrent_stats(
     } else {
         (progress_bytes as f64 / total_bytes as f64) as f32
     };
-    let (down_bps, peers) = stats
+    let (down_bps, peers, received_bytes) = stats
         .live
         .as_ref()
         .map(|live| {
             (
                 live.download_speed.as_bytes(),
                 live.snapshot.peer_stats.live as usize,
+                live.snapshot.fetched_bytes,
             )
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0));
     TorrentStats {
         down_bps,
         peers,
         progress,
         downloaded_bytes: progress_bytes,
         total_bytes,
+        received_bytes,
+        ..Default::default()
     }
 }
 
@@ -2036,7 +2401,8 @@ pub fn cache_bytes(dir: &Path) -> u64 {
 }
 
 /// Delete a torrent's on-disk folder after playback when caching is disabled.
-/// Exposed for the app layer's no-cache path.
+/// Delete explicitly owned disk artifacts after read-lease checks. RAM
+/// playback never calls this helper.
 pub fn delete_dir(dir: &Path) {
     let leased = READ_LEASE_DIRS.lock().unwrap();
     if directory_read_leased(dir, &leased) {
@@ -2045,8 +2411,8 @@ pub fn delete_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Helper used by the app's no-cache path: true when a torrent's data should
-/// be deleted once playback stops.
+/// Cleanup policy for disk cache created before enabling RAM-only playback.
+/// Playback itself uses isolated memory storage; this never selects a backend.
 pub fn should_delete_after_playback(settings: &TorrentSettings) -> bool {
     settings.no_cache
 }
@@ -2238,6 +2604,11 @@ static ENGINE: Mutex<Option<Arc<TorrentEngine>>> = Mutex::new(None);
 
 /// Install (or replace) the process-wide engine.
 pub fn install(engine: TorrentEngine) {
+    if let Some(inner) = &engine.inner {
+        inner
+            .ram_budget
+            .set_limit(inner.cache_policy.lock().unwrap().ram_buffer_bytes());
+    }
     *ENGINE.lock().unwrap() = Some(Arc::new(engine));
 }
 
@@ -2292,6 +2663,10 @@ mod tests {
             .unwrap();
         Arc::new(EngineInner {
             session,
+            memory: None,
+            ram_resolving: AtomicBool::new(false),
+            ram_children: Mutex::new(Vec::new()),
+            ram_budget: MemoryBudget::new(64 * 1024 * 1024),
             operations: Mutex::new(()),
             playback_requests: Mutex::new(Vec::new()),
             read_leases: Mutex::new(HashMap::new()),
@@ -2307,6 +2682,173 @@ mod tests {
         })
     }
 
+    #[test]
+    fn process_ram_pool_survives_engine_replacement_without_snapshot_widening() {
+        let old_reader_pool = shared_ram_budget(32 * 1024 * 1024);
+        let limit = old_reader_pool.limit();
+        let replacement_pool = shared_ram_budget(1024 * 1024 * 1024);
+        assert!(Arc::ptr_eq(&old_reader_pool, &replacement_pool));
+        assert_eq!(replacement_pool.limit(), limit);
+    }
+
+    fn offline_memory_engine(label: &str) -> Arc<EngineInner> {
+        let mut inner = Arc::try_unwrap(offline_engine(label)).ok().unwrap();
+        let budget = MemoryBudget::new(32 * 1024 * 1024);
+        let factory = MemoryStorageFactory {
+            transport: budget.reserve_transport().unwrap(),
+            budget: budget.clone(),
+            telemetry: Arc::new(MemoryTelemetry::default()),
+        };
+        inner.dir = inner.dir.join("RAM-must-not-touch");
+        inner.port = 2;
+        inner.session = inner
+            .rt
+            .block_on(Session::new_with_opts(
+                inner.dir.clone(),
+                SessionOptions {
+                    dht: None,
+                    listen: None,
+                    persistence: None,
+                    disable_trackers: true,
+                    disable_local_service_discovery: true,
+                    disable_upload: true,
+                    default_storage_factory: Some(factory.clone().boxed()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        inner.memory = Some(factory);
+        inner.ram_budget = budget;
+        Arc::new(inner)
+    }
+
+    #[test]
+    fn ram_resolution_uses_warm_metadata_but_never_the_retained_disk_handle() {
+        let disk = offline_engine("ram-warm-metadata");
+        let disk_request = PlaybackRequest::default();
+        disk.activate_playback(
+            disk_request.clone(),
+            FIXTURE_HASH.into(),
+            "video".into(),
+            TorrentSettings::default(),
+            fixture_selection(0),
+            || {},
+        )
+        .unwrap();
+        let disk_handle = disk.managed_handle(FIXTURE_HASH).unwrap();
+        let request = PlaybackRequest::default();
+        let settings = TorrentSettings {
+            no_cache: true,
+            ..Default::default()
+        };
+        // No DHT/trackers exist in the base fixture. This succeeds only by
+        // reusing resolved metainfo; a second magnet lookup would time out.
+        let ready = disk
+            .clone()
+            .resolve_blocking(
+                request.clone(),
+                FIXTURE_HASH.into(),
+                Some(0),
+                "video".into(),
+                settings.clone(),
+            )
+            .unwrap();
+        assert!(ready.ram_only);
+        let child = disk.ram_children.lock().unwrap()[0].clone();
+        assert!(child.memory.is_some());
+        assert!(!Arc::ptr_eq(
+            &disk_handle,
+            &child.managed_handle(FIXTURE_HASH).unwrap()
+        ));
+        assert!(!child.dir.join(FIXTURE_HASH).exists());
+        request.cancel();
+        disk.clean_ram_children(&settings);
+        assert!(disk.ram_children.lock().unwrap().is_empty());
+        assert!(disk_request.is_current());
+        assert!(disk.managed_handle(FIXTURE_HASH).is_some());
+    }
+
+    #[test]
+    fn ram_same_hash_is_isolated_and_read_lease_survives_cancel_and_cache_clear() {
+        let disk = offline_engine("ram-disk-isolation");
+        let disk_request = PlaybackRequest::default();
+        let disk_ready = disk
+            .activate_playback(
+                disk_request.clone(),
+                FIXTURE_HASH.into(),
+                "video".into(),
+                TorrentSettings::default(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        let memory = offline_memory_engine("ram-lease");
+        // A real path matching the virtual output name must never be removed.
+        let sentinel = memory.dir.join(FIXTURE_HASH);
+        std::fs::create_dir_all(&sentinel).unwrap();
+        std::fs::write(sentinel.join("private.txt"), b"preserve").unwrap();
+        let request = PlaybackRequest::default();
+        let settings = TorrentSettings {
+            no_cache: true,
+            ..Default::default()
+        };
+        let ready = memory
+            .activate_playback(
+                request.clone(),
+                FIXTURE_HASH.into(),
+                "video".into(),
+                settings.clone(),
+                fixture_selection(0),
+                || {},
+            )
+            .unwrap();
+        assert!(ready.ram_only);
+        assert!(!disk_ready.ram_only);
+        assert!(!Arc::ptr_eq(
+            &disk.managed_handle(FIXTURE_HASH).unwrap(),
+            &memory.managed_handle(FIXTURE_HASH).unwrap()
+        ));
+        disk.ram_children.lock().unwrap().push(memory.clone());
+        let engine = TorrentEngine {
+            inner: Some(disk.clone()),
+        };
+        let lease = engine.lease_playback(&request, &ready.url).unwrap();
+        assert!(
+            !READ_LEASE_DIRS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p == &sentinel)
+        );
+        request.cancel();
+        {
+            let _operation = disk.operations.lock().unwrap();
+            disk.clean_ram_children(&settings);
+        }
+        engine.clear_cache();
+        assert!(memory.managed_handle(FIXTURE_HASH).is_some());
+        assert!(disk_request.is_current());
+        assert!(disk.managed_handle(FIXTURE_HASH).is_some());
+        assert_eq!(
+            std::fs::read(sentinel.join("private.txt")).unwrap(),
+            b"preserve"
+        );
+        drop(lease);
+        await_read_leases(&memory, 0);
+        for _ in 0..100 {
+            if memory.managed_handle(FIXTURE_HASH).is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(memory.managed_handle(FIXTURE_HASH).is_none());
+        assert!(disk.managed_handle(FIXTURE_HASH).is_some());
+        assert_eq!(
+            std::fs::read(sentinel.join("private.txt")).unwrap(),
+            b"preserve"
+        );
+    }
+
     fn fixture_selection(idx: usize) -> SelectedTorrent {
         let mut bytes = b"d4:infod5:filesld6:lengthi1e4:pathl5:a.mkveed6:lengthi1e4:pathl5:b.mkveee4:name6:bundle12:piece lengthi16384e6:pieces20:".to_vec();
         bytes.extend([
@@ -2320,6 +2862,7 @@ mod tests {
                 len: 1,
             },
             torrent_bytes: Some(bytes),
+            seen_peers: Vec::new(),
         }
     }
 
@@ -3033,6 +3576,31 @@ mod tests {
         let full = magnet_for("magnet:?xt=urn:btih:abcdef&dn=x");
         assert!(full.starts_with("magnet:?xt=urn:btih:abcdef&dn=x"));
         assert!(full.contains("&tr=udp://tracker.opentrackr.org:1337/announce"));
+    }
+
+    #[test]
+    fn partial_first_piece_reports_received_activity_before_verified_progress() {
+        let mut raw = librqbit::TorrentStats {
+            state: librqbit::TorrentStatsState::Live,
+            file_progress: vec![0],
+            error: None,
+            progress_bytes: 0,
+            uploaded_bytes: 0,
+            total_bytes: 16 * 1024 * 1024,
+            finished: false,
+            live: Some(Default::default()),
+        };
+        raw.live.as_mut().unwrap().snapshot.fetched_bytes = 16384;
+        let stats = to_torrent_stats(&raw, Some((0, raw.total_bytes)));
+        assert_eq!(stats.downloaded_bytes, 0, "no whole piece verified yet");
+        assert_eq!(
+            stats.received_bytes, 16384,
+            "partial chunks keep startup alive"
+        );
+        raw.live.as_mut().unwrap().snapshot.fetched_bytes += 16384;
+        let next = to_torrent_stats(&raw, Some((0, raw.total_bytes)));
+        assert!(next.received_bytes > stats.received_bytes);
+        assert_eq!(next.downloaded_bytes, 0);
     }
 
     #[test]

@@ -80,6 +80,16 @@ export global SettingsSearch {
                     if self.matches(external) { return external; }
                 }
             }
+            if section == 4 && SettingsBridge.show_torrents {
+                let enabled = self.candidate("torrent_enabled", @tr("Stream P2P"), "Stream P2P torrents enabled", 7, 0);
+                if self.matches(enabled) { return enabled; }
+                if SettingsBridge.torrent_enabled {
+                    let memory = self.candidate("torrent_ram_buffer_mb", @tr("Torrent RAM buffer"), "Torrent RAM buffer memory buffering budget MiB", 7, 5);
+                    if self.matches(memory) { return memory; }
+                    let no_cache = self.candidate("torrent_no_cache", @tr("No caching"), "No caching RAM only no disk", 7, 4);
+                    if self.matches(no_cache) { return no_cache; }
+                }
+            }
             if section == 3 {
                 let language = self.candidate("language", @tr("Language"), "Language English Hrvatski", 6, 5);
                 if self.matches(language) { return language; }

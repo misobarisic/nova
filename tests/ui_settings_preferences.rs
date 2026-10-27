@@ -65,3 +65,6 @@ mod source_recovery;
 
 #[path = "settings_preferences/spoiler.rs"]
 mod spoiler;
+
+#[path = "settings_preferences/torrent_ram.rs"]
+mod torrent_ram;

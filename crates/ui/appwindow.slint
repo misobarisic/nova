@@ -739,6 +739,7 @@ export component AppWindow inherits Window {
         torrent_max_mb <=> root.torrent_max_mb;
         torrent_down_limit <=> root.torrent_down_limit;
         torrent_no_cache <=> root.torrent_no_cache;
+        torrent_ram_buffer_mb <=> root.torrent_ram_buffer_mb;
         torrent_disk_usage <=> root.torrent_disk_usage;
         download_auto_delete_watched <=> root.download_auto_delete_watched;
         downloads_rows <=> root.downloads_rows;
@@ -1673,6 +1674,7 @@ export component AppWindow inherits Window {
     in-out property <float> torrent_max_mb: 20480.0;
     in-out property <float> torrent_down_limit: 0.0;
     in-out property <bool> torrent_no_cache: false;
+    in-out property <float> torrent_ram_buffer_mb: 256.0;
     in-out property <string> torrent_disk_usage: "";
     // Settings → Downloads.
     in-out property <bool> download_auto_delete_watched: false;

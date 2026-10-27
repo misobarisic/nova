@@ -1024,6 +1024,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             s.max_mb = app.get_torrent_max_mb().max(0.0).round() as u64;
             s.down_limit_kbps = app.get_torrent_down_limit().max(0.0).round() as u32;
             s.no_cache = app.get_torrent_no_cache();
+            s.ram_buffer_mb = app.get_torrent_ram_buffer_mb().max(0.0).round() as u64;
         });
     });
 

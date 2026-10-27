@@ -314,6 +314,30 @@ fn default_torrent_max_mb() -> u64 {
 // Torrent / P2P settings
 // ---------------------------------------------------------------------------
 
+/// Minimum torrent buffering budget, in MiB.
+pub const TORRENT_RAM_MIN_MB: u64 = 32;
+/// Android reserves a smaller maximum to leave room for decoding and the UI.
+pub const TORRENT_RAM_MAX_MB: u64 = if cfg!(target_os = "android") {
+    512
+} else {
+    2048
+};
+
+fn default_torrent_ram_buffer_mb() -> u64 {
+    if cfg!(target_os = "android") { 64 } else { 256 }
+}
+
+fn deserialize_torrent_ram_buffer_mb<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
+    // A bad optional budget must not discard the user's other torrent settings.
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .unwrap_or_else(default_torrent_ram_buffer_mb)
+        .clamp(TORRENT_RAM_MIN_MB, TORRENT_RAM_MAX_MB))
+}
+
 /// Torrent streaming settings (Settings → P2P), persisted as JSON in the
 /// `torrent_settings` KV entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -332,10 +356,27 @@ pub struct TorrentSettings {
     /// Download rate limit in KB/s (0 = unlimited).
     #[serde(default)]
     pub down_limit_kbps: u32,
-    /// When true, a torrent's downloaded data is deleted as soon as its
-    /// playback stops (no caching for replay). Overrides keep-for-replay.
+    /// Stream using bounded RAM only, with no torrent payload, metadata or
+    /// resume data written to disk. Explicit Download jobs still use disk.
     #[serde(default)]
     pub no_cache: bool,
+    /// Device-local torrent buffering budget in MiB, independent of total app
+    /// memory and the player's separate packet/decoder buffers.
+    #[serde(
+        default = "default_torrent_ram_buffer_mb",
+        deserialize_with = "deserialize_torrent_ram_buffer_mb"
+    )]
+    pub ram_buffer_mb: u64,
+}
+
+impl TorrentSettings {
+    /// Clamp before multiplication so even an extreme in-memory value is safe.
+    pub fn ram_buffer_bytes(&self) -> u64 {
+        self.ram_buffer_mb
+            .clamp(TORRENT_RAM_MIN_MB, TORRENT_RAM_MAX_MB)
+            * 1024
+            * 1024
+    }
 }
 
 impl Default for TorrentSettings {
@@ -346,6 +387,7 @@ impl Default for TorrentSettings {
             max_mb: default_torrent_max_mb(),
             down_limit_kbps: 0,
             no_cache: false,
+            ram_buffer_mb: default_torrent_ram_buffer_mb(),
         }
     }
 }
@@ -2306,6 +2348,44 @@ mod listening_tests {
             let restored: CacheSettings =
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored, settings);
+        }
+    }
+}
+
+#[cfg(test)]
+mod torrent_ram_tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_and_malformed_budgets_keep_platform_default() {
+        for value in [
+            serde_json::json!({"enabled": false, "dir": "saved"}),
+            serde_json::json!({"enabled": false, "dir": "saved", "ram_buffer_mb": null}),
+            serde_json::json!({"enabled": false, "dir": "saved", "ram_buffer_mb": "huge"}),
+            serde_json::json!({"enabled": false, "dir": "saved", "ram_buffer_mb": -1}),
+            serde_json::json!({"enabled": false, "dir": "saved", "ram_buffer_mb": 64.5}),
+        ] {
+            let settings: TorrentSettings = serde_json::from_value(value).unwrap();
+            assert_eq!(settings.ram_buffer_mb, default_torrent_ram_buffer_mb());
+            assert!(!settings.enabled);
+            assert_eq!(settings.dir, "saved");
+        }
+    }
+
+    #[test]
+    fn ram_budgets_clamp_and_roundtrip_without_overflow() {
+        for raw in [0, 31, 32, 64, 256, 512, 2048, u64::MAX] {
+            let expected = raw.clamp(TORRENT_RAM_MIN_MB, TORRENT_RAM_MAX_MB);
+            let settings = TorrentSettings {
+                ram_buffer_mb: raw,
+                no_cache: true,
+                ..Default::default()
+            };
+            assert_eq!(settings.ram_buffer_bytes(), expected * 1024 * 1024);
+            let restored: TorrentSettings =
+                serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+            assert_eq!(restored.ram_buffer_mb, expected);
+            assert!(restored.no_cache);
         }
     }
 }

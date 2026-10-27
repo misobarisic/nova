@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 nova-config = { path = "../config" }
 nova-storage = { path = "../storage" }
-librqbit = { version = "9", default-features = false, features = ["http-api", "rust-tls", "tracing-subscriber-utils"] }
+librqbit = { version = "9", default-features = false, features = ["http-api", "disable-upload", "rust-tls", "tracing-subscriber-utils"] }
 librqbit-dualstack-sockets = { version = "0.7", features = ["axum"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

@@ -195,6 +195,7 @@ export component SettingsPage {
     in-out property <float> torrent_max_mb: 20480.0;
     in-out property <float> torrent_down_limit: 0.0;
     in-out property <bool> torrent_no_cache: false;
+    in-out property <float> torrent_ram_buffer_mb: 256.0;
     in-out property <string> torrent_disk_usage: "";
     in-out property <bool> download_auto_delete_watched: false;
     // Settings → Downloads → Downloaded episodes: completed episode files.
@@ -552,7 +553,7 @@ export component SettingsPage {
     property <int> kb_ccol <=> SettingsContent.kb_ccol; // one Remove action
     property <int> kb_hr <=> SettingsContent.kb_hr; // cache rows 0..7 (only 0 when disk cache or re-encode is off)
     property <int> kb_dr <=> SettingsContent.kb_dr;
-    property <int> kb_tr <=> SettingsContent.kb_tr; // torrent rows 0..5 (only 0 when streaming is off)
+    property <int> kb_tr <=> SettingsContent.kb_tr; // torrent rows 0..6 (only 0 when streaming is off)
     property <int> kb_pr <=> SettingsContent.kb_pr; // player rows (see kb_player_n)
     property <bool> player_language_input_focused <=> SettingsContent.player_language_input_focused;
     property <int> kb_anr <=> SettingsContent.kb_anr; // look-and-feel rows 0..4
@@ -748,6 +749,7 @@ export component SettingsPage {
             else if target.zone == 6 { root.kb_dr = target.row; }
             else if target.zone == 10 { root.kb_anr = target.row; }
             else if target.zone == 5 { root.kb_hr = target.row; }
+            else if target.zone == 7 { root.kb_tr = target.row; }
             SettingsContent.search_target_section = id;
             SettingsContent.search_target_key = target.key;
             SettingsContent.search_target_pending = true;
@@ -887,9 +889,9 @@ export component SettingsPage {
     }
 
     // Torrent rows: 0 enable, 1 folder field, 2 size cap, 3 rate limit,
-    // 4 no-cache, 5 clear. Only row 0 when streaming is off. Row 5 activates
+    // 4 no-cache, 5 RAM budget, 6 clear. Only row 0 when streaming is off. Row 6 activates
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
-    function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
+    function kb_torrent_n() -> int { return root.torrent_enabled ? 7 : 1; }
 
     // Four actions per Home catalog, followed by add, artwork, devices, and featured.
     function kb_home_n() -> int { return root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 4; }
@@ -934,6 +936,9 @@ export component SettingsPage {
         if (!root.animations && root.kb_anr > 0) { root.kb_anr = 0; }
         if (root.kb_hr >= root.kb_cache_n()) {
             root.kb_hr = root.kb_cache_n() - 1;
+        }
+        if (root.kb_tr >= root.kb_torrent_n()) {
+            root.kb_tr = root.kb_torrent_n() - 1;
         }
         // Downloads subpage: 2 rows (delete-after-watched, episodes).
         if (root.kb_dl > 1) {
@@ -1388,6 +1393,9 @@ export component SettingsPage {
             root.schedule_save();
         } else if (r == 3) {
             root.torrent_down_limit = Math.max(0, Math.min(102400, root.torrent_down_limit + d * 64));
+            root.schedule_save();
+        } else if (r == 5 && root.torrent_no_cache) {
+            root.torrent_ram_buffer_mb = Math.max(32, Math.min(root.is_android ? 512 : 2048, root.torrent_ram_buffer_mb + d * 32));
             root.schedule_save();
         }
     }
@@ -1878,7 +1886,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 7) {
             if (root.kb_tr == 1) {
                 root.kb_edit = 3;
-            } else if (root.kb_tr == 5) {
+            } else if (root.kb_tr == 6) {
                 root.clear_torrent_cache();
             } else {
                 root.kb_torrent_flip(root.kb_tr);
