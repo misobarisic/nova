@@ -418,6 +418,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     bridge.wire_remote_playback();
     bridge.wire_party();
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    let mpris = mpris::install(&bridge);
     bridge.wire_completion_prompts();
     backup::install(&app);
     bridge.setup_viewing_journal();
@@ -1664,6 +1666,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.refresh_playback_tools();
             tick_bridge.refresh_playback_end_menu();
+            #[cfg(all(feature = "desktop", target_os = "linux"))]
+            if let Some(service) = &mpris {
+                service.publish(tick_bridge.mpris_snapshot());
+            }
             tick_bridge.refresh_intro_skip();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();

@@ -139,7 +139,7 @@ component ContinueCard inherits Rectangle {
                 activated => { root.action_requested(root.popup_new, root.popup_entry, 3); }
             }
             MenuItem {
-                title: @tr("Last time…");
+                title: @tr("Last time");
                 enabled: !root.popup_new && root.popup_entry.media_type != "movie";
                 activated => { root.action_requested(root.popup_new, root.popup_entry, 4); }
             }
@@ -305,7 +305,7 @@ component ContinueCard inherits Rectangle {
                     }
                 }
                 if root.entry.last_time && !root.new_episode: PillButton {
-                    label: @tr("Last time…");
+                    label: @tr("Last time");
                     height: InterfaceStyle.tv ? 64px : 48px;
                     clicked => { root.action_requested(root.new_episode, root.entry, 4); }
                 }
@@ -3264,7 +3264,7 @@ export component HomePage {
                 { label: @tr("Enter series"), enabled: true },
                 { label: root.menu_history ? @tr("Remove from watch history") : root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
                 { label: @tr("Reveal episode spoilers"), enabled: !root.menu_history },
-                { label: @tr("Last time…"), enabled: !root.menu_history && !root.menu_new && root.menu_episode.media_type != "movie" },
+                { label: @tr("Last time"), enabled: !root.menu_history && !root.menu_new && root.menu_episode.media_type != "movie" },
             ];
             picked(a) => {
                 // Closing can synchronously restore focus or rebuild rows.

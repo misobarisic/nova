@@ -832,6 +832,8 @@ mod intro_skip;
 mod last_stream;
 mod library;
 mod media_identity;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod mpris;
 mod next_episode;
 mod onboarding;
 mod page_artwork;
@@ -874,6 +876,8 @@ mod smart_collections;
 mod smart_offline;
 #[cfg(target_os = "android")]
 mod smart_offline_android;
+#[cfg(target_os = "windows")]
+mod smart_offline_windows;
 mod source_recovery;
 mod spoiler;
 mod stream_filters;

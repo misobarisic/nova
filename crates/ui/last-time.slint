@@ -149,7 +149,7 @@ export component LastTimeSheet inherits Rectangle {
             x: 20px; y: 20px; width: parent.width - 40px; height: Math.max(0px,parent.height - 40px - root.safe-bottom);
             content := VerticalLayout {
                 spacing: 16px; alignment: start;
-                Text { text: root.painted-confirmation ? @tr("Replay this version’s ending?") : @tr("Last time…"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 30px : 24px; font-weight: 700; wrap: word-wrap; }
+                Text { text: root.painted-confirmation ? @tr("Replay this version’s ending?") : @tr("Last time"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 30px : 24px; font-weight: 700; wrap: word-wrap; }
                 Text { text: root.painted-title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; wrap: word-wrap; }
                 if root.painted-date != "": Text { text: root.painted-confirmation ? root.painted-date : @tr("Last watched: {}", root.painted-date); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 22px : 14px; wrap: word-wrap; }
                 if !root.painted-confirmation && root.painted-episode != "": Text { text: @tr("Last completed: {}", root.painted-episode); color: Theme.current.accent; font-size: InterfaceStyle.tv ? 22px : 16px; wrap: word-wrap; }

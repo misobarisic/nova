@@ -141,7 +141,7 @@ fn optional_reminder_and_replay_confirmation_fit_phone_desktop_and_tv() {
             app.window().dispatch_event(event);
         }
         settle(&app);
-        let menu_action = ElementHandle::find_by_accessible_label(&app, "Last time…")
+        let menu_action = ElementHandle::find_by_accessible_label(&app, "Last time")
             .filter(|e| e.accessible_role() == Some(AccessibleRole::Button))
             .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
             .unwrap();
@@ -164,7 +164,7 @@ fn optional_reminder_and_replay_confirmation_fit_phone_desktop_and_tv() {
         );
         key(&app, slint::platform::Key::Back);
         assert!(!sheet.get_open());
-        let reminder = button(&app, "Last time…");
+        let reminder = button(&app, "Last time");
         let p = reminder.absolute_position();
         let size = reminder.size();
         assert!(size.height >= 44.0 && p.x >= 0.0 && p.x + size.width <= width as f32 + 1.0);

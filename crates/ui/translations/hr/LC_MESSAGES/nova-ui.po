@@ -5630,8 +5630,8 @@ msgid "Search scope"
 msgstr "Opseg pretraživanja"
 
 
-msgid "Last time…"
-msgstr "Prošli put…"
+msgid "Last time"
+msgstr "Prošli put"
 
 
 msgid "Replay this version’s ending?"

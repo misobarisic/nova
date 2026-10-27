@@ -55,6 +55,7 @@ fn isolated(name: &str, body: impl FnOnce(Fixture)) {
 
 fn room(role: PartyRole) -> RoomSnapshot {
     RoomSnapshot {
+        pending_media: None,
         role,
         room_id: "test-room".into(),
         host_id: "host".into(),
@@ -339,8 +340,8 @@ fn choosing_another_source_closes_the_player_without_leaving_the_room() {
             assert!(!app.get_party_page_open());
             assert!(app.get_party_active());
             assert!(!app.get_party_busy());
-            assert!(app.get_discover_search_open());
-            assert_eq!(app.get_search_text(), "Example Movie");
+            assert!(app.get_modal_visible());
+            assert!(app.get_stream_selector_open());
             let state = bridge.shared.lock().unwrap();
             assert!(Arc::ptr_eq(state.party.service.as_ref().unwrap(), &service));
             assert!(state.party.choosing_source);
@@ -780,8 +781,8 @@ fn host_local_source_replacement_does_not_replace_the_shared_title() {
 
             assert!(!app.get_player_open());
             assert!(!request.is_current());
-            assert_eq!(app.get_search_text(), "Example Movie");
-            assert!(app.get_discover_search_open());
+            assert!(app.get_modal_visible());
+            assert!(app.get_stream_selector_open());
             let state = bridge.shared.lock().unwrap();
             assert!(Arc::ptr_eq(state.party.service.as_ref().unwrap(), &service));
             assert_eq!(state.party.snapshot, snapshot);
@@ -951,7 +952,7 @@ fn host_next_episode_reaches_the_source_picker_without_leaving_the_room() {
             assert!(state.party.choosing_media);
             assert!(matches!(
                 state.party.pending.front(),
-                Some(Operation::ClearMedia { browse: false })
+                Some(Operation::PrepareMedia(media)) if media.identity.episode_id == "tt123:1:2"
             ));
             assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:1:2");
             assert_eq!(state.playback.as_ref().unwrap().episode_id, "tt123:1:2");

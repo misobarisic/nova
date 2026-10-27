@@ -912,6 +912,7 @@ pub fn tr(english: &str) -> &str {
             "Prekinite daljinsko upravljanje prije pridruživanja zajedničkom gledanju."
         }
         "Choose what to watch" => "Odaberite što ćete gledati",
+        "Choose a stream" => "Odaberite izvor",
         "Waiting for the host to choose" => "Čekanje odabira domaćina",
         "Choose a seekable stream to watch together." => {
             "Za zajedničko gledanje odaberite prijenos koji podržava premotavanje."

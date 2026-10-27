@@ -59,7 +59,7 @@ export component PartyPage inherits Rectangle {
             if root.tv-index < 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
             if root.tv-index < 3 && PartyBridge.active && PartyBridge.has_media && PartyBridge.spoilers_hidden && !PartyBridge.busy { root.tv-index = 3; return; }
             if root.tv-index < 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
-            if root.tv-index < 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
+            if root.tv-index < 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 5; return; }
             if root.tv-index < 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
             if root.tv-index < 7 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 7; return; }
             if root.tv-index < 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 8; return; }
@@ -79,7 +79,7 @@ export component PartyPage inherits Rectangle {
             if root.tv-index > 8 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 8; return; }
             if root.tv-index > 7 && (PartyBridge.active && PartyBridge.has_media && !PartyBridge.busy) { root.tv-index = 7; return; }
             if root.tv-index > 6 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.can_return_to_player && !PartyBridge.busy) { root.tv-index = 6; return; }
-            if root.tv-index > 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 5; return; }
+            if root.tv-index > 5 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 5; return; }
             if root.tv-index > 4 && (PartyBridge.active && PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy && PartyBridge.duration > 0) { root.tv-index = 4; return; }
             if root.tv-index > 3 && PartyBridge.active && PartyBridge.has_media && PartyBridge.spoilers_hidden && !PartyBridge.busy { root.tv-index = 3; return; }
             if root.tv-index > 3 && (PartyBridge.active && !PartyBridge.has_media && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 3; return; }
@@ -183,7 +183,7 @@ export component PartyPage inherits Rectangle {
                     diameter: 80px; x: (parent.width - self.width) / 2; y: 0px; paused: PartyBridge.paused;
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: PartyBridge.paused ? @tr("Play") : @tr("Pause"); primary: false; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 5; } PartyBridge.set_paused(!PartyBridge.paused); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: PartyBridge.paused ? @tr("Play") : @tr("Pause"); primary: false; enabled: !PartyBridge.busy && PartyBridge.duration > 0; clicked => { if InterfaceStyle.tv { root.tv-index = 5; } PartyBridge.set_paused(!PartyBridge.paused); } }
                     if !InterfaceStyle.tv: SessionTransportButton { kind: 1; caption: @tr("+10 s"); x: parent.width / 2 + 52px; y: 14px; enabled: !PartyBridge.busy && PartyBridge.duration > 0; clicked => { PartyBridge.seek(Math.clamp(PartyBridge.position + 10, 0, PartyBridge.duration)); } }
                     }
                     if !PartyBridge.is_host: Text { text: @tr("The host controls the timeline. Audio and subtitles stay yours."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }

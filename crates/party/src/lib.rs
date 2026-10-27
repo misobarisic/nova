@@ -14,7 +14,7 @@ pub use service::PartyService;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-pub const ALPN: &[u8] = b"nova/party/3";
+pub const ALPN: &[u8] = b"nova/party/4";
 pub const MAX_MEMBERS: usize = 8;
 /// Opaque SHA-256 asset hint; contains no source URL, path, headers or provider token.
 pub type SourceFingerprint = [u8; 32];
@@ -102,6 +102,9 @@ pub struct RoomSnapshot {
     pub member_id: String,
     /// No shared selection while the host is choosing what to watch.
     pub media: Option<PartyMedia>,
+    /// Episode announced while everyone independently chooses a source.
+    /// Duration is zero until the host loads and validates its stream.
+    pub pending_media: Option<PartyMedia>,
     pub generation: u64,
     pub revision: u64,
     pub timeline: Timeline,
@@ -113,6 +116,12 @@ pub struct RoomSnapshot {
     pub error: Option<String>,
     /// host clock minus local clock, estimated at the RTT midpoint.
     pub clock_offset_ms: f64,
+}
+
+impl RoomSnapshot {
+    pub fn selected_media(&self) -> Option<&PartyMedia> {
+        self.pending_media.as_ref().or(self.media.as_ref())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

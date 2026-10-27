@@ -20,6 +20,10 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static NEXT_CHECK: AtomicU64 = AtomicU64::new(0);
 static LAST_CHECK: AtomicU64 = AtomicU64::new(0);
 static DIRTY: AtomicBool = AtomicBool::new(true);
+#[cfg(not(target_os = "android"))]
+static ENVIRONMENT_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(target_os = "android"))]
+static ENVIRONMENT_THREAD: Mutex<Option<std::thread::Thread>> = Mutex::new(None);
 static NOTICES: LazyLock<Mutex<BTreeMap<String, String>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 #[derive(Clone, Serialize, Deserialize)]
@@ -109,6 +113,8 @@ fn save_device(device: &DevicePolicy) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     trigger();
+    #[cfg(not(target_os = "android"))]
+    configure_environment_monitor(device);
     #[cfg(target_os = "android")]
     super::smart_offline_android::schedule(device);
     Ok(())
@@ -765,7 +771,7 @@ impl Bridge {
         global.on_action(move |key, action| b.offline_action(&key, action));
         self.refresh_smart_offline();
         #[cfg(not(target_os = "android"))]
-        start_environment_monitor();
+        configure_environment_monitor(&read_device().unwrap_or_default());
         #[cfg(target_os = "android")]
         if let Ok(device) = read_device() {
             super::smart_offline_android::schedule(&device);
@@ -993,6 +999,8 @@ impl Bridge {
         let owner = profiles::ProfileStore::capture();
         let policies = read_policies(&owner).unwrap_or_default();
         let device = read_device().unwrap_or_default();
+        #[cfg(not(target_os = "android"))]
+        configure_environment_monitor(&device);
         let jobs = self.downloads.jobs();
         let ledger = Ledger::from_jobs(&jobs);
         global.set_profiles(
@@ -1123,17 +1131,74 @@ impl Bridge {
 }
 
 #[cfg(not(target_os = "android"))]
-fn start_environment_monitor() {
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::AcqRel) {
-        return;
+fn configure_environment_monitor(device: &DevicePolicy) {
+    let enabled = !device.enabled_profiles.is_empty();
+    let mut worker = ENVIRONMENT_THREAD.lock().unwrap();
+    let changed = ENVIRONMENT_ENABLED.swap(enabled, Ordering::AcqRel) != enabled;
+    if !enabled {
+        set_environment(Environment::default());
     }
-    std::thread::spawn(|| {
-        loop {
-            set_environment(probe_desktop_environment());
-            std::thread::park_timeout(Duration::from_secs(5));
+    if let Some(worker) = worker.as_ref() {
+        if changed {
+            worker.unpark();
         }
-    });
+    } else if enabled {
+        match std::thread::Builder::new()
+            .name("nova-offline-environment".into())
+            .spawn(monitor_environment)
+        {
+            Ok(handle) => *worker = Some(handle.thread().clone()),
+            Err(error) => {
+                ENVIRONMENT_ENABLED.store(false, Ordering::Release);
+                tracing::warn!(%error, "Could not monitor smart-download environment");
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn monitor_environment() {
+    #[cfg(target_os = "windows")]
+    let mut native = None;
+    loop {
+        if !ENVIRONMENT_ENABLED.load(Ordering::Acquire) {
+            // Release native subscriptions as well as stopping queries while
+            // the feature is disabled. No idle polling or child processes.
+            #[cfg(target_os = "windows")]
+            {
+                native = None;
+            }
+            std::thread::park();
+            continue;
+        }
+        #[cfg(target_os = "windows")]
+        let environment = {
+            if native.is_none() {
+                match super::smart_offline_windows::Monitor::new() {
+                    Ok(monitor) => native = Some(monitor),
+                    Err(error) => {
+                        tracing::warn!(%error, "Windows environment monitoring unavailable")
+                    }
+                }
+            }
+            native
+                .as_ref()
+                .map(|monitor| monitor.probe())
+                .unwrap_or_default()
+        };
+        #[cfg(not(target_os = "windows"))]
+        let environment = probe_desktop_environment();
+        if ENVIRONMENT_ENABLED.load(Ordering::Acquire) {
+            set_environment(environment);
+        }
+        // Windows changes wake the worker immediately. A slower fallback also
+        // covers missed notifications or systems without an event source.
+        std::thread::park_timeout(Duration::from_secs(if cfg!(target_os = "windows") {
+            30
+        } else {
+            5
+        }));
+    }
 }
 /// Only the actual Internet route interfaces may authorize unattended bytes.
 /// All routable families must have known allowed cost/type; a local-only free
@@ -1160,7 +1225,7 @@ fn default_route_environment(
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "windows")))]
 fn probe_desktop_environment() -> Environment {
     // Unknown OS cost information fails closed. NetworkManager supplies the
     // active link's explicit metering status; never equate all Wi-Fi with free.
@@ -1264,27 +1329,6 @@ fn probe_desktop_environment() -> Environment {
                 });
         }
         env
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"$ErrorActionPreference='Stop'; [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime] > $null; $p=[Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile(); if($null -eq $p){exit}; $t=$p.NetworkAdapter.IanaInterfaceType; $free=$p.GetConnectionCost().NetworkCostType -eq 'Unrestricted'; $b=@(Get-CimInstance Win32_Battery); $ac=$b.Count -eq 0 -or @($b | Where-Object {$_.BatteryStatus -ne 2}).Count -eq 0; Write-Output "$t,$free,$ac""#;
-        let Ok(output) = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-        else {
-            return Environment::default();
-        };
-        let result = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<_> = result.trim().split(',').collect();
-        if parts.len() != 3 {
-            return Environment::default();
-        }
-        Environment {
-            connected: output.status.success(),
-            wifi_or_ethernet: matches!(parts[0], "6" | "71"),
-            unmetered: parts[1] == "True",
-            charging: parts[2] == "True",
-        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {

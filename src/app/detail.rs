@@ -477,6 +477,7 @@ impl Bridge {
     /// installed addon that provides streams for the modal item's type.
     pub(super) fn start_stream_search(&self, request_id: String) {
         self.start_stream_search_inner(request_id, false);
+        self.party_prepare_stream_selection();
     }
 
     /// Explicit refresh preserves the selected addon while replacing every
@@ -2778,6 +2779,11 @@ impl Bridge {
         video: Video,
         index: usize,
     ) {
+        if self.party_active() && self.app().is_some_and(|app| app.get_player_open()) {
+            // Finalize the previous episode before installing the next one's
+            // progress target or opening its stream selector.
+            let _ = self.execute_playback_action(nova_playback_api::PlaybackAction::Stop);
+        }
         self.persist_outgoing_playback();
         // Arm playback tracking for this episode, resolving a resume point
         // from history (fresh when watched / no saved position).
@@ -3150,6 +3156,7 @@ impl Bridge {
             app.set_detail_deep_stream(false);
             app.set_detail_kb_s(0);
             app.set_stream_selector_open(true);
+            self.party_prepare_stream_selection();
             return;
         }
         app.set_detail_tab(3);

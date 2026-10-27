@@ -10,6 +10,27 @@ room timeline, so every participant moves together. Guests cannot use either
 control to change the shared position; their audio, subtitles and volume remain
 local choices.
 
+## Choosing the episode together
+
+When the host opens an episode's stream selector, the room announces that
+episode immediately. Connected guests open their own stream selectors for the
+same title and episode using their installed addons and profile permissions.
+Everyone can choose a source in parallel; no stream URL or provider credentials
+are shared and no source is picked automatically.
+
+The episode stays pending until the host has loaded a seekable source with a
+known duration. Guests can load their own sources meanwhile and remain paused.
+Validating the host source keeps the same media generation, retaining sources
+guests have already chosen; the normal edition checks and buffering barrier then
+control coordinated playback. A different host episode retires the previous
+selection and opens the new picker once per guest. Ordinary reports, reconnects
+and host-source readiness do not repeatedly reopen a dismissed picker. Joining
+a room that already has a selection also opens that episode's source picker.
+
+Guests whose addons cannot resolve the shared identity can still browse for a
+compatible local title/episode; the existing explicit-choice and edition checks
+remain in force. Profile restrictions continue to gate automatic navigation.
+
 ## Recommendations from participants
 
 A source card can show **Watch party recommended** when another connected
@@ -50,7 +71,8 @@ recommend sources. A new process restores no party or live recommendation state.
 Reports and participant snapshots carry only an optional fixed 32-byte digest.
 Raw source URLs, signed queries, headers, credentials, provider capabilities and
 local file paths are never added to party messages. These postcard schema changes
-use `nova/party/3`; all participants need a version supporting that protocol. The
+use `nova/party/4`, including the pending episode selection; all participants need
+a version supporting that protocol. The
 `NVP2` invite-ticket envelope is unchanged because its address/capability shape
 has not changed.
 

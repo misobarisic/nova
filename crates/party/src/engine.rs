@@ -205,6 +205,7 @@ impl HostRoom {
                 host_id: host_id.clone(),
                 member_id: host_id.clone(),
                 media,
+                pending_media: None,
                 generation: 1,
                 revision: 1,
                 timeline: Timeline {
@@ -301,7 +302,8 @@ impl HostRoom {
         member.last_sequence = sequence;
         member.last_seen = now;
         // Out-of-order reports must not replace readiness for the active media.
-        if report.generation == self.snapshot.generation && self.snapshot.media.is_some() {
+        if report.generation == self.snapshot.generation && self.snapshot.selected_media().is_some()
+        {
             member.report = report;
         }
         self.tick(now);
@@ -333,10 +335,26 @@ impl HostRoom {
             .members
             .get_mut(&self.snapshot.host_id)
             .expect("host exists");
-        if report.generation == self.snapshot.generation && self.snapshot.media.is_some() {
+        if report.generation == self.snapshot.generation && self.snapshot.selected_media().is_some()
+        {
             host.report = report;
         }
         host.last_seen = now;
+        self.tick(now);
+        Ok(())
+    }
+
+    /// Publish the episode before the host has picked a playable asset.
+    pub fn prepare_media(&mut self, mut media: PartyMedia, now: u64) -> Result<()> {
+        ensure!(
+            valid_identity(&media.identity),
+            "invalid party media identity"
+        );
+        self.tick(now);
+        ensure!(!self.snapshot.ended, "party has ended");
+        media.duration = 0.0;
+        self.reset_media(None, LocalReport::default(), now)?;
+        self.snapshot.pending_media = Some(media);
         self.tick(now);
         Ok(())
     }
@@ -366,7 +384,17 @@ impl HostRoom {
         );
         self.tick(now);
         ensure!(!self.snapshot.ended, "party has ended");
-        self.reset_media(Some(media), report, now)
+        if let Some(pending) = self.snapshot.pending_media.as_ref() {
+            ensure!(
+                media_matches(&pending.identity, Some(&media.identity)),
+                "host selection changed"
+            );
+            // Keep the selection generation and guest sources they have
+            // already resolved while the host was choosing its own stream.
+            self.reset_media_generation(Some(media), report, now, false)
+        } else {
+            self.reset_media(Some(media), report, now)
+        }
     }
 
     pub fn clear_media(&mut self, now: u64) -> Result<()> {
@@ -378,14 +406,27 @@ impl HostRoom {
     fn reset_media(
         &mut self,
         media: Option<PartyMedia>,
-        mut report: LocalReport,
+        report: LocalReport,
         now: u64,
     ) -> Result<()> {
-        let generation = self
-            .snapshot
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("party generation exhausted"))?;
+        self.reset_media_generation(media, report, now, true)
+    }
+
+    fn reset_media_generation(
+        &mut self,
+        media: Option<PartyMedia>,
+        mut report: LocalReport,
+        now: u64,
+        advance: bool,
+    ) -> Result<()> {
+        let generation = if advance {
+            self.snapshot
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("party generation exhausted"))?
+        } else {
+            self.snapshot.generation
+        };
         report.generation = generation;
         self.snapshot.timeline = Timeline {
             position: report
@@ -395,6 +436,7 @@ impl HostRoom {
             paused: media.is_none(),
         };
         self.snapshot.media = media;
+        self.snapshot.pending_media = None;
         self.snapshot.generation = generation;
         self.snapshot.error = None;
         self.intended_paused = false;
@@ -404,7 +446,9 @@ impl HostRoom {
         // arrivals during playback still join the barrier only once ready.
         // Transport sequence numbers and membership remain room-scoped.
         for member in self.members.values_mut() {
-            member.report = LocalReport::default();
+            if advance || member.report.generation != generation {
+                member.report = LocalReport::default();
+            }
             let waiting_for_selection = self.snapshot.media.is_some()
                 && !member.participant.is_host
                 && now.saturating_sub(member.last_seen) <= DISCONNECTED_MS;
@@ -1112,7 +1156,7 @@ mod source_hint_tests {
 
     #[test]
     fn source_hint_wire_shape_is_fixed_and_versioned() {
-        assert_eq!(ALPN, b"nova/party/3");
+        assert_eq!(ALPN, b"nova/party/4");
         let report = LocalReport {
             source_fingerprint: Some([9; 32]),
             ..Default::default()

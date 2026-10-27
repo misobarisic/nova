@@ -342,6 +342,32 @@ stay readable in the player, with Close returning to the selector. The existing
 which begins only after a media URL is queued. External-player preferences still
 resolve before handing off; credential-bearing streams retain in-app playback.
 
+## Linux system media controls
+
+Linux desktop builds expose the built-in player's current title and episode,
+duration, position, playback state, volume and speed through MPRIS on the session
+bus. Desktop media widgets and tools such as `playerctl --player=nova play-pause`
+can pause/resume, stop, seek, adjust volume/speed and raise Nova's window. Each
+running process owns `org.mpris.MediaPlayer2.nova.instance<PID>` so multiple
+instances do not replace each other's service.
+
+Commands use the same UI-thread dispatcher as the player controls. Resume
+confirmation, watch-party host restrictions and local/remote playback ownership
+still apply; queued commands are discarded if their source has changed. Next and
+Previous are unavailable because Nova does not expose an MPRIS playlist. Opening
+arbitrary URIs and quitting the application are unavailable. Stopping closes the
+local player through the usual progress-save path. Playback on a paired receiver
+is not exposed as a local media session.
+
+Metadata contains display titles and an opaque per-source track path, without
+stream URLs, authorization headers or local filenames. No setting or stored data
+is added. D-Bus registration and signals run on a worker, with coalesced state
+updates from the existing 250 ms UI timer; ordinary position progression does not
+emit property changes, while successful seeks and nonzero playback starts emit
+`Seeked`. The reported speed follows title overrides and temporary speed holds.
+A missing session bus disables this integration without interrupting playback.
+Windows and Android do not register the service.
+
 ## Buffered progress
 
 The seek bar keeps its played portion purple and shows an estimated forward

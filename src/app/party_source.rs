@@ -204,6 +204,7 @@ mod tests {
     }
     fn room(fingerprint: SourceFingerprint) -> RoomSnapshot {
         RoomSnapshot {
+            pending_media: None,
             role: PartyRole::Guest,
             room_id: "room".into(),
             host_id: "host".into(),

@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "nova"
-version = "0.0.47"
+version = "0.0.48"
 dependencies = [
  "addons",
  "chrono",
@@ -5346,6 +5346,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "url",
+ "windows",
  "zip",
  "zstd",
 ]

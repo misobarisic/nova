@@ -333,6 +333,11 @@ impl PartyService {
     }
 
     /// Replace the shared selection without changing invites or membership.
+    pub fn prepare_media(&self, media: PartyMedia) -> Result<()> {
+        self.with_host(|room| room.prepare_media(media, local_now_ms()))
+    }
+
+    /// Validate the host source and begin the selected episode's readiness barrier.
     pub fn select_media(&self, media: PartyMedia, report: LocalReport) -> Result<()> {
         self.with_host(|room| room.select_media(media, report, local_now_ms()))
     }

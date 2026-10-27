@@ -2002,8 +2002,8 @@ msgid "Episodes"
 msgstr "Episodes"
 
 
-msgid "Last time…"
-msgstr "Last time…"
+msgid "Last time"
+msgstr "Last time"
 
 
 msgid "Replay this version’s ending?"
