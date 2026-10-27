@@ -167,6 +167,54 @@ pub fn release_chain(seed: NonZeroU32, details: &[ReleaseDetails]) -> Vec<Releas
 pub fn propose_coverage(episodes: &[EpisodeInfo], chain: &[ReleaseDetails]) -> MappingProposal {
     propose_coverage_at(episodes, chain, chrono::Utc::now().date_naive())
 }
+
+/// Retain a proven source-start release when a standalone season/cour has
+/// franchise prequels. The caller must establish that the release identifies
+/// the source's first regular episode, rather than merely a search result.
+/// Counts, numbering and conflicting air dates still use the ordinary checks.
+pub fn propose_coverage_from_release(
+    episodes: &[EpisodeInfo],
+    chain: &[ReleaseDetails],
+    source_start: Option<NonZeroU32>,
+) -> MappingProposal {
+    let chain = match source_start {
+        Some(id) => {
+            let Some(index) = chain.iter().position(|release| release.media.id == id) else {
+                return MappingProposal {
+                    releases: vec![],
+                    unresolved: episodes.iter().map(|episode| episode.id.clone()).collect(),
+                };
+            };
+            let first_date = episodes
+                .iter()
+                .filter(|episode| {
+                    episode.season.is_some_and(|season| season > 0)
+                        && episode.number.is_some_and(|number| number > 0)
+                })
+                .min_by_key(|episode| (episode.season, episode.number))
+                .and_then(|episode| full_date(episode.released));
+            if let Some(day) = first_date {
+                let matches_start = |release: &ReleaseDetails| {
+                    full_date(release.start)
+                        .is_some_and(|start| (day - start).num_days().abs() <= 14)
+                };
+                // A source ID and a dated sequel conflict. Do not let the
+                // ordinary date-anchor rule silently substitute that sequel,
+                // including when the selected release has no known end date.
+                if !matches_start(&chain[index]) && chain.iter().any(matches_start) {
+                    return MappingProposal {
+                        releases: vec![],
+                        unresolved: episodes.iter().map(|episode| episode.id.clone()).collect(),
+                    };
+                }
+            }
+            &chain[index..=index]
+        }
+        None => chain,
+    };
+    propose_coverage(episodes, chain)
+}
+
 pub fn propose_coverage_at(
     episodes: &[EpisodeInfo],
     chain: &[ReleaseDetails],
@@ -197,7 +245,16 @@ pub fn propose_coverage_at(
             .iter()
             .enumerate()
             .all(|(i, e)| e.number == Some(i as u32 + 1));
-        if blocked || !contiguous {
+        let mut previous_date = None;
+        let chronological = rows
+            .iter()
+            .filter_map(|episode| full_date(episode.released))
+            .all(|day| {
+                let ordered = previous_date.is_none_or(|previous| previous <= day);
+                previous_date = Some(day);
+                ordered
+            });
+        if blocked || !contiguous || !chronological {
             result.unresolved.extend(rows.iter().map(|e| e.id.clone()));
             blocked = true;
             continue;
@@ -222,6 +279,8 @@ pub fn propose_coverage_at(
         let mut next_index = release_index;
         let mut drafts = vec![];
         let mut aired_prefix = false;
+        let mut completed_prefix = true;
+        let mut completed_end = None;
         while cursor < rows.len() {
             let Some(release) = chain.get(next_index) else {
                 break;
@@ -252,6 +311,24 @@ pub fn propose_coverage_at(
             let slice = &rows[cursor..cursor + length];
             if !slice.iter().all(|e| compatible(e, release)) {
                 break;
+            }
+            completed_prefix &= release.media.finished
+                && count == Some(length)
+                && full_date(release.start)
+                    .zip(full_date(release.end))
+                    .is_some_and(|(start, end)| {
+                        start <= end
+                            && end <= today
+                            && full_date(slice[0].released)
+                                .is_some_and(|day| (day - start).num_days().abs() <= 14)
+                            && full_date(slice[length - 1].released)
+                                .is_some_and(|day| (day - end).num_days().abs() <= 14)
+                    })
+                && slice
+                    .iter()
+                    .all(|episode| full_date(episode.released).is_some_and(|day| day <= today));
+            if completed_prefix {
+                completed_end = full_date(release.end);
             }
             // An ongoing count-unknown release must not swallow a dated sequel.
             if count.is_none()
@@ -292,7 +369,22 @@ pub fn propose_coverage_at(
         if cursor == rows.len() {
             result.releases.extend(drafts);
             release_index = next_index;
-        } else if aired_prefix && cursor > 0 {
+        } else if cursor > 0
+            && (aired_prefix
+                || (completed_prefix
+                    && completed_end
+                        .zip(full_date(rows[cursor - 1].released))
+                        .is_some_and(|(end, last)| {
+                            let boundary = end.max(last);
+                            rows[cursor..].iter().all(|episode| {
+                                full_date(episode.released).is_some_and(|day| day > boundary)
+                            })
+                        })))
+        {
+            // Catalogs can append forecast episodes for an unlisted next
+            // cour. Preserve a fully dated, finished release's exact coverage
+            // independently of those later rows, even after forecast dates
+            // pass, without assigning them or guessing the next release.
             result.releases.extend(drafts);
             result
                 .unresolved
@@ -561,6 +653,363 @@ mod tests {
         second.end = date(2020);
         assert!(propose_coverage(&episodes, &[second]).releases.is_empty());
     }
+
+    #[test]
+    fn proven_standalone_cour_keeps_its_release_after_prequel_discovery() {
+        let mut first = release(1, 24);
+        let mut second = release(2, 12);
+        let mut third_part1 = release(3, 11);
+        let mut third_part2 = release(4, 11);
+        relate(&mut first, 2, ReleaseRelation::Sequel);
+        relate(&mut second, 1, ReleaseRelation::Prequel);
+        relate(&mut second, 3, ReleaseRelation::Sequel);
+        relate(&mut third_part1, 2, ReleaseRelation::Prequel);
+        relate(&mut third_part1, 4, ReleaseRelation::Sequel);
+        relate(&mut third_part2, 3, ReleaseRelation::Prequel);
+        let chain = release_chain(n(3), &[first, second, third_part1, third_part2]);
+        assert_eq!(chain[0].media.id, n(1), "discovery keeps franchise context");
+        let episodes = rows(1, 11);
+        assert!(propose_coverage(&episodes, &chain).releases.is_empty());
+        let proposal = propose_coverage_from_release(&episodes, &chain, Some(n(3)));
+        assert!(proposal.unresolved.is_empty());
+        assert_eq!(proposal.releases.len(), 1);
+        assert_eq!(proposal.releases[0].details.media.id, n(3));
+        assert_eq!(proposal.releases[0].assignments[0].episode_id, "s1e1");
+        assert_eq!(proposal.releases[0].assignments[10].target_episode, n(11));
+        assert!(proposal.releases[0].check_split);
+        // Equal counts cannot move an already proven source release to S1.
+        let mut same_counts = chain;
+        same_counts[0].media.episodes = Some(n(11));
+        assert_eq!(
+            propose_coverage(&episodes, &same_counts).releases[0]
+                .details
+                .media
+                .id,
+            n(1)
+        );
+        assert_eq!(
+            propose_coverage_from_release(&episodes, &same_counts, Some(n(3))).releases[0]
+                .details
+                .media
+                .id,
+            n(3)
+        );
+    }
+
+    #[test]
+    fn contextual_anchor_preserves_whole_series_and_existing_alignment_guards() {
+        let mut chain = vec![
+            release(1, 24),
+            release(2, 12),
+            release(3, 11),
+            release(4, 11),
+        ];
+        let mut franchise = rows(1, 24);
+        franchise.extend(rows(2, 12));
+        franchise.extend(rows(3, 22));
+        let full = propose_coverage_from_release(&franchise, &chain, None);
+        assert!(full.unresolved.is_empty());
+        assert_eq!(full.releases.len(), 4);
+        assert_eq!(full.releases[3].assignments[0].episode_id, "s3e12");
+        assert_eq!(full.releases[3].assignments[0].target_episode, n(1));
+        let episodes = rows(3, 11);
+        assert!(
+            propose_coverage_from_release(&episodes, &chain, Some(n(99)))
+                .releases
+                .is_empty()
+        );
+        let mut gap = episodes.clone();
+        gap[4].number = Some(9);
+        assert!(
+            propose_coverage_from_release(&gap, &chain, Some(n(3)))
+                .releases
+                .is_empty()
+        );
+        let mut duplicates = episodes.clone();
+        duplicates[1].id = duplicates[0].id.clone();
+        assert!(
+            propose_coverage_from_release(&duplicates, &chain, Some(n(3)))
+                .releases
+                .is_empty()
+        );
+        chain[2].start = ListDate {
+            year: Some(2023),
+            month: Some(1),
+            day: Some(1),
+        };
+        let mut conflicting = episodes;
+        for episode in &mut conflicting {
+            episode.released = ListDate {
+                year: Some(2020),
+                month: Some(1),
+                day: Some(1),
+            };
+        }
+        assert!(
+            propose_coverage_from_release(&conflicting, &chain, Some(n(3)))
+                .releases
+                .is_empty()
+        );
+        // An absent end date must not let source rows dated to Part 2
+        // override an otherwise proven Part 1 identity.
+        chain[3].start = ListDate {
+            year: Some(2024),
+            month: Some(1),
+            day: Some(1),
+        };
+        for episode in &mut conflicting {
+            episode.released = chain[3].start;
+        }
+        assert!(
+            propose_coverage_from_release(&conflicting, &chain, Some(n(3)))
+                .releases
+                .is_empty()
+        );
+        chain[2].media.episodes = None;
+        chain[2].media.finished = false;
+        assert!(
+            propose_coverage_from_release(&rows(3, 11), &chain, Some(n(3)))
+                .releases
+                .is_empty()
+        );
+    }
+    fn link_click_fixture(mal: bool) -> (Vec<EpisodeInfo>, Vec<ReleaseDetails>, chrono::NaiveDate) {
+        use chrono::Datelike;
+        fn date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
+            chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap()
+        }
+        fn list_date(day: chrono::NaiveDate) -> ListDate {
+            ListDate {
+                year: Some(day.year() as u16),
+                month: Some(day.month() as u8),
+                day: Some(day.day() as u8),
+            }
+        }
+        // Reduced public metadata fetched 2026-10-27, without local Nova data:
+        // AniList GraphQL ids/idMal and MAL's public 61607 details agree on
+        // 11 -> 12 -> Bridon 6 -> S3 Part 1 12, with no known sequel to Part 1.
+        // https://anilist.co/anime/191832/Shiguang-Dailiren-III-Part-1/
+        // https://myanimelist.net/anime/61607/Shiguang_Dailiren_III
+        // Cinemeta's tt14976292 has local seasons 11, 12, 6 and 24; the last
+        // season's rows 13..24 forecast 2026-10-30 through 2027-01-15.
+        // https://v3-cinemeta.strem.io/meta/series/tt14976292.json
+        let ids = if mal {
+            [44074, 49413, 56752, 61607]
+        } else {
+            [126403, 136484, 170166, 191832]
+        };
+        let starts = [
+            date(2021, 4, 30),
+            date(2023, 7, 14),
+            date(2024, 12, 27),
+            date(2026, 8, 14),
+        ];
+        let ends = [
+            date(2021, 7, 9),
+            date(2023, 9, 22),
+            date(2025, 1, 31),
+            date(2026, 10, 23),
+        ];
+        let titles = [
+            "Link Click",
+            "Link Click Season 2",
+            "Link Click: Bridon Arc",
+            "Link Click Season 3 Part 1",
+        ];
+        let mut chain: Vec<_> = [11, 12, 6, 12]
+            .into_iter()
+            .enumerate()
+            .map(|(index, count)| {
+                let mut details = release(ids[index], count);
+                details.media.mal_id = Some(n([44074, 49413, 56752, 61607][index]));
+                details.media.format = "ONA".into();
+                details.media.title = titles[index].into();
+                details.media.year = mal.then_some(starts[index].year() as u16);
+                details.start = list_date(starts[index]);
+                details.end = list_date(ends[index]);
+                details
+            })
+            .collect();
+        for index in 0..chain.len() - 1 {
+            relate(&mut chain[index], ids[index + 1], ReleaseRelation::Sequel);
+            relate(&mut chain[index + 1], ids[index], ReleaseRelation::Prequel);
+        }
+        let mut episodes = Vec::new();
+        for (index, count) in [11, 12, 6, 24].into_iter().enumerate() {
+            let mut season = rows(index as u32 + 1, count);
+            for (episode_index, episode) in season.iter_mut().enumerate() {
+                let week = if matches!(index, 1 | 3) {
+                    episode_index.saturating_sub(1)
+                } else {
+                    episode_index
+                };
+                episode.id = format!("tt14976292:{}:{}", index + 1, episode_index + 1);
+                episode.released = list_date(starts[index] + chrono::Duration::weeks(week as i64));
+            }
+            episodes.extend(season);
+        }
+        (episodes, chain, date(2026, 10, 27))
+    }
+
+    #[test]
+    fn link_click_finished_part1_survives_full_franchise_forecast_tail_for_both_services() {
+        for mal in [false, true] {
+            let (episodes, details, today) = link_click_fixture(mal);
+            let part1 = details[3].media.id;
+            let chain = release_chain(part1, &details);
+            let proposal = propose_coverage_at(&episodes, &chain, today);
+            // Existing-link filtering can remove the first three releases;
+            // the newly completed Part 1 still has its own complete draft.
+            assert_eq!(proposal.releases.len(), 4);
+            assert_eq!(proposal.releases[3].details.media.id, part1);
+            assert_eq!(proposal.releases[3].assignments.len(), 12);
+            assert_eq!(
+                proposal.releases[3].assignments[0].episode_id,
+                "tt14976292:4:1"
+            );
+            assert_eq!(proposal.releases[3].assignments[11].target_episode, n(12));
+            assert!(!proposal.releases[3].check_split);
+            assert_eq!(
+                proposal.unresolved,
+                (13..=24)
+                    .map(|episode| format!("tt14976292:4:{episode}"))
+                    .collect::<Vec<_>>()
+            );
+            for later in [
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2027, 2, 1).unwrap(),
+            ] {
+                assert_eq!(
+                    propose_coverage_at(&episodes, &chain, later),
+                    proposal,
+                    "passing unresolved forecast dates cannot erase proven Part 1 coverage"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn finished_prefix_requires_known_counts_complete_aired_dates_and_a_later_chronological_tail() {
+        let (episodes, chain, today) = link_click_fixture(false);
+        let prefix = |rows: &[EpisodeInfo], releases: &[ReleaseDetails], at| {
+            propose_coverage_at(rows, releases, at)
+                .releases
+                .iter()
+                .any(|release| release.details.media.id == n(191832))
+        };
+        let final_air_day = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        assert!(
+            prefix(&episodes, &chain, final_air_day),
+            "completed source rows may air today"
+        );
+        assert!(
+            !prefix(
+                &episodes,
+                &chain,
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 16).unwrap()
+            ),
+            "a future completion date cannot prove a finished source prefix"
+        );
+        for missing_prefix_date in [false, true] {
+            let mut incomplete = episodes.clone();
+            let index = incomplete
+                .iter()
+                .position(|episode| {
+                    episode.id
+                        == if missing_prefix_date {
+                            "tt14976292:4:1"
+                        } else {
+                            "tt14976292:4:13"
+                        }
+                })
+                .unwrap();
+            incomplete[index].released.day = None;
+            assert!(!prefix(&incomplete, &chain, today));
+        }
+        for unknown in [false, true] {
+            let mut incomplete = chain.clone();
+            if unknown {
+                incomplete[3].media.episodes = None;
+            } else {
+                incomplete[3].end.day = None;
+            }
+            assert!(!prefix(&episodes, &incomplete, today));
+        }
+        let mut ongoing = chain.clone();
+        ongoing[3].media.finished = false;
+        assert!(!prefix(&episodes, &ongoing, today));
+        let mut gap = episodes.clone();
+        gap.iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:13")
+            .unwrap()
+            .number = Some(14);
+        assert!(!prefix(&gap, &chain, today));
+        let mut conflict = episodes.clone();
+        conflict
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:12")
+            .unwrap()
+            .released
+            .month = Some(12);
+        assert!(!prefix(&conflict, &chain, today));
+        let mut overlaps_official_end = episodes.clone();
+        overlaps_official_end
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:12")
+            .unwrap()
+            .released
+            .day = Some(16);
+        overlaps_official_end
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:13")
+            .unwrap()
+            .released
+            .day = Some(23);
+        assert!(
+            !prefix(&overlaps_official_end, &chain, today),
+            "the tail must also follow the official end, even when source dates differ within tolerance"
+        );
+        let mut same_day_tail = episodes.clone();
+        same_day_tail
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:13")
+            .unwrap()
+            .released
+            .day = Some(23);
+        assert!(
+            !prefix(&same_day_tail, &chain, today),
+            "a tail on the prefix boundary is ambiguous"
+        );
+        let mut reversed_tail = episodes.clone();
+        reversed_tail
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:14")
+            .unwrap()
+            .released = ListDate {
+            year: Some(2026),
+            month: Some(10),
+            day: Some(29),
+        };
+        assert!(
+            !prefix(&reversed_tail, &chain, today),
+            "unresolved tail chronology still must be consistent"
+        );
+        let mut reversed_prefix = episodes;
+        reversed_prefix
+            .iter_mut()
+            .find(|episode| episode.id == "tt14976292:4:5")
+            .unwrap()
+            .released = ListDate {
+            year: Some(2026),
+            month: Some(8),
+            day: Some(15),
+        };
+        assert!(
+            !prefix(&reversed_prefix, &chain, today),
+            "prefix dates must follow episode numbering"
+        );
+    }
+
     #[test]
     fn ongoing_unknown_counts_need_dates_and_never_swallow_a_sequel() {
         let mut ongoing = release(1, 0);

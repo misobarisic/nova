@@ -1,5 +1,5 @@
 //! Search evidence ranks candidates but never activates a writable binding.
-use crate::Media;
+use crate::{Media, ReleaseDetails};
 fn normalized(value: &str) -> String {
     value
         .chars()
@@ -32,11 +32,48 @@ pub enum TitleMatch {
     SearchResult,
 }
 pub fn title_match(media: &Media, titles: &[String], year: Option<u16>, movie: bool) -> TitleMatch {
-    let title = normalized(&media.title);
-    let exact = !title.is_empty()
-        && titles
-            .iter()
-            .any(|candidate| normalized(candidate) == title);
+    match_titles(
+        media,
+        std::iter::once(media.title.as_str()),
+        titles,
+        year,
+        movie,
+    )
+}
+
+impl ReleaseDetails {
+    /// Search results carry one display title; release details also contain
+    /// official translated titles and synonyms that can identify a later cour.
+    pub fn source_title_match(
+        &self,
+        titles: &[String],
+        year: Option<u16>,
+        movie: bool,
+    ) -> TitleMatch {
+        match_titles(
+            &self.media,
+            std::iter::once(self.media.title.as_str())
+                .chain(self.aliases.iter().map(String::as_str)),
+            titles,
+            year,
+            movie,
+        )
+    }
+}
+
+fn match_titles<'a>(
+    media: &Media,
+    release_titles: impl Iterator<Item = &'a str>,
+    titles: &[String],
+    year: Option<u16>,
+    movie: bool,
+) -> TitleMatch {
+    let exact = release_titles.map(normalized).any(|title| {
+        !title.is_empty()
+            && titles
+                .iter()
+                .any(|candidate| normalized(candidate) == title)
+    });
     if !exact {
         return TitleMatch::SearchResult;
     }
@@ -80,6 +117,47 @@ pub fn rank_candidates(
 mod tests {
     use super::*;
     use std::num::NonZeroU32;
+
+    #[test]
+    fn release_details_match_official_aliases_without_weakening_year_or_format_evidence() {
+        let mut release = ReleaseDetails {
+            media: Media {
+                id: NonZeroU32::MIN,
+                mal_id: None,
+                title: "Example: Third Season Part 1".into(),
+                format: "TV".into(),
+                year: Some(2023),
+                episodes: NonZeroU32::new(11),
+                finished: true,
+            },
+            aliases: vec!["Translated Example 3rd Season Part 1".into()],
+            start: Default::default(),
+            end: Default::default(),
+            relations: vec![],
+        };
+        let titles = vec!["Translated Example 3rd Season: Part 1".into()];
+        assert_eq!(
+            release.source_title_match(&titles, Some(2023), false),
+            TitleMatch::TitleAndYear
+        );
+        assert_eq!(
+            release.source_title_match(&titles, None, false),
+            TitleMatch::Title
+        );
+        assert_eq!(
+            release.source_title_match(&titles, Some(2024), false),
+            TitleMatch::Title
+        );
+        assert_eq!(
+            release.source_title_match(&["Translated Example".into()], Some(2023), false),
+            TitleMatch::SearchResult
+        );
+        release.media.format.clear();
+        assert_eq!(
+            release.source_title_match(&titles, Some(2023), false),
+            TitleMatch::Title
+        );
+    }
     #[test]
     fn announced_format_cannot_claim_movie_or_series_agreement() {
         let mut announced = Media {

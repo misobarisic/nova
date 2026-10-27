@@ -1,5 +1,89 @@
 //! Automatic drafts and explicit batch acceptance share the existing delivery guards.
 use super::*;
+
+/// A single complete local cour can identify its own first release even when
+/// the relationship graph includes earlier seasons. Multiple local seasons
+/// keep the full chain; counts alone never choose a later release.
+fn source_start_release(
+    context: &SourceContext,
+    service: Service,
+    release: &ReleaseDetails,
+    chain: &[ReleaseDetails],
+) -> Option<NonZeroU32> {
+    if context.source.media_type == "movie" || !episodic_format(&release.media.format) {
+        return None;
+    }
+    let regular: Vec<_> = context
+        .episode_info
+        .iter()
+        .filter(|episode| {
+            episode.season.is_some_and(|season| season > 0)
+                && episode.number.is_some_and(|number| number > 0)
+        })
+        .collect();
+    let season = regular.first()?.season;
+    if regular.iter().any(|episode| episode.season != season)
+        || release.media.episodes?.get() as usize != regular.len()
+    {
+        return None;
+    }
+    match context.ids.resolve_id(tracker_namespace(service)) {
+        providers::IdResolution::Unique(id) => {
+            return (numeric(id) == Some(release.media.id)).then_some(release.media.id);
+        }
+        // Neither a conflicting current ID nor its historical predecessors
+        // may establish a source-start anchor through a title coincidence.
+        providers::IdResolution::Conflict(_) => return None,
+        providers::IdResolution::Missing => {}
+    }
+    if service == Service::AniList {
+        match context.ids.resolve_id(providers::IdNamespace::MalAnime) {
+            providers::IdResolution::Unique(providers::ExternalId::MalAnime(id)) => {
+                return (release.media.mal_id == Some(id)).then_some(release.media.id);
+            }
+            providers::IdResolution::Conflict(_) => return None,
+            _ => {}
+        }
+    }
+    let titles: Vec<_> = std::iter::once(context.title.clone())
+        .chain(context.aliases.iter().cloned())
+        .collect();
+    // A generic franchise synonym shared by several same-year releases is
+    // not a standalone-cour identity, even if their episode counts coincide.
+    (release.source_title_match(&titles, context.year, false) == TitleMatch::TitleAndYear
+        && chain
+            .iter()
+            .filter(|candidate| {
+                candidate.source_title_match(&titles, context.year, false)
+                    == TitleMatch::TitleAndYear
+            })
+            .count()
+            == 1)
+        .then_some(release.media.id)
+}
+
+fn setup_coverage(
+    context: &SourceContext,
+    service: Service,
+    seed: NonZeroU32,
+    chain: &[ReleaseDetails],
+) -> MappingProposal {
+    let Some(release) = chain.iter().find(|release| release.media.id == seed) else {
+        // Rewinding through prequels can reach a fork whose forward chain
+        // never returns to the selected release. That is not its coverage.
+        return MappingProposal {
+            releases: vec![],
+            unresolved: context
+                .episode_info
+                .iter()
+                .map(|episode| episode.id.clone())
+                .collect(),
+        };
+    };
+    let source_start = source_start_release(context, service, release, chain);
+    propose_coverage_from_release(&context.episode_info, chain, source_start)
+}
+
 impl Coordinator {
     pub(super) fn service_result<T>(
         &mut self,
@@ -129,7 +213,7 @@ impl Coordinator {
                         .filter(|r| r.relation == ReleaseRelation::Prequel)
                         .all(|r| details.iter().any(|known| known.media.id == r.id))
                 });
-                let proposal = propose_coverage(&context.episode_info, &chain);
+                let proposal = setup_coverage(&context, service, seed, &chain);
                 let regular = context
                     .episode_info
                     .iter()
@@ -196,7 +280,7 @@ impl Coordinator {
             let chain = anchor_id
                 .map(|id| release_chain(id, &details))
                 .unwrap_or_default();
-            propose_coverage(&context.episode_info, &chain)
+            setup_coverage(&context, service, anchor_id.unwrap_or(seed), &chain)
         };
         let session = self.session(service)?;
         let mut draft = SetupDraft {
@@ -442,5 +526,230 @@ impl Coordinator {
         self.setup = None;
         self.busy = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod source_start_tests {
+    use super::*;
+
+    fn n(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).unwrap()
+    }
+    fn rows(season: u32, count: u32) -> Vec<EpisodeInfo> {
+        (1..=count)
+            .map(|number| EpisodeInfo {
+                id: format!("s{season}e{number}"),
+                season: Some(season),
+                number: Some(number),
+                title: format!("Episode {number}"),
+                released: ListDate::default(),
+            })
+            .collect()
+    }
+    fn release(id: u32, count: u32) -> ReleaseDetails {
+        ReleaseDetails {
+            media: Media {
+                id: n(id),
+                mal_id: Some(n(id + 100)),
+                title: format!("Release {id}"),
+                format: "TV".into(),
+                year: Some(2023),
+                episodes: NonZeroU32::new(count),
+                finished: true,
+            },
+            aliases: vec![],
+            start: ListDate::default(),
+            end: ListDate::default(),
+            relations: vec![],
+        }
+    }
+    fn context(claims: &[&str]) -> SourceContext {
+        SourceContext {
+            source: SourceRef {
+                provider_id: "nova".into(),
+                source_id: "standalone-third-cour".into(),
+                media_type: "series".into(),
+            },
+            title: "Translated Example Season 3 Part 1".into(),
+            aliases: vec![],
+            year: Some(2023),
+            episodes: vec![],
+            episode_info: rows(1, 11),
+            ids: providers::ExternalIds {
+                typed: claims
+                    .iter()
+                    .map(|id| providers::ExternalId::parse(id).unwrap())
+                    .collect(),
+                ..Default::default()
+            },
+            historical_ids: vec![],
+        }
+    }
+
+    #[test]
+    fn both_services_keep_verified_standalone_release_even_when_prequel_counts_match() {
+        let chain = vec![
+            release(1, 11),
+            release(2, 12),
+            release(3, 11),
+            release(4, 11),
+        ];
+        for (service, claim) in [
+            (Service::MyAnimeList, "mal:3"),
+            (Service::AniList, "anilist:3"),
+        ] {
+            let mut context = context(&[claim]);
+            context.year = None;
+            let proposal = setup_coverage(&context, service, n(3), &chain);
+            assert_eq!(proposal.releases.len(), 1);
+            assert!(proposal.unresolved.is_empty());
+            assert_eq!(proposal.releases[0].details.media.id, n(3));
+            assert_eq!(proposal.releases[0].assignments[0].episode_id, "s1e1");
+            assert_eq!(proposal.releases[0].assignments[10].target_episode, n(11));
+        }
+        let crossed = context(&["mal:103"]);
+        assert_eq!(
+            source_start_release(&crossed, Service::AniList, &chain[2], &chain),
+            Some(n(3))
+        );
+    }
+
+    #[test]
+    fn full_franchise_source_keeps_full_chain_even_when_seed_is_later_cour() {
+        let mut context = context(&["anilist:3"]);
+        context.episode_info = rows(1, 24);
+        context.episode_info.extend(rows(2, 12));
+        context.episode_info.extend(rows(3, 22));
+        let chain = vec![
+            release(1, 24),
+            release(2, 12),
+            release(3, 11),
+            release(4, 11),
+        ];
+        assert_eq!(
+            source_start_release(&context, Service::AniList, &chain[2], &chain),
+            None
+        );
+        let proposal = setup_coverage(&context, Service::AniList, n(3), &chain);
+        assert!(proposal.unresolved.is_empty());
+        assert_eq!(proposal.releases.len(), 4);
+        assert_eq!(proposal.releases[3].assignments[0].episode_id, "s3e12");
+    }
+
+    #[test]
+    fn prequel_branch_excluding_selected_release_cannot_draft_an_earlier_equal_count_release() {
+        let context = context(&["anilist:3"]);
+        let proposal = setup_coverage(&context, Service::AniList, n(3), &[release(1, 11)]);
+        assert!(proposal.releases.is_empty());
+        assert_eq!(proposal.unresolved.len(), 11);
+    }
+
+    #[test]
+    fn title_alias_anchor_requires_exact_release_context_and_never_overrides_conflicting_ids() {
+        let mut release = release(3, 11);
+        release
+            .aliases
+            .push("Translated Example Season 3 Part 1".into());
+        let mut context = context(&[]);
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            Some(n(3))
+        );
+        let mut ambiguous = release.clone();
+        ambiguous.media.id = n(9);
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                &[release.clone(), ambiguous]
+            ),
+            None
+        );
+        context.year = None;
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context
+            .historical_ids
+            .push(providers::ExternalId::AnilistAnime(n(3)));
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context.year = Some(2023);
+        context.ids.typed = vec![
+            providers::ExternalId::AnilistAnime(n(1)),
+            providers::ExternalId::AnilistAnime(n(3)),
+        ];
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context.ids.typed = vec![providers::ExternalId::AnilistAnime(n(1))];
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context.ids.typed.clear();
+        context.episode_info.push(rows(2, 1).remove(0));
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context.episode_info = rows(1, 10);
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
+        context.episode_info = rows(1, 11);
+        release.media.episodes = None;
+        release.media.finished = false;
+        assert_eq!(
+            source_start_release(
+                &context,
+                Service::AniList,
+                &release,
+                std::slice::from_ref(&release)
+            ),
+            None
+        );
     }
 }

@@ -191,6 +191,13 @@ special can connect related main releases without consuming a regular episode.
 MAL's partial release dates (year or year/month) are supported, including upcoming
 Mushoku Tensei and The Apothecary Diaries entries.
 
+A standalone season or cour retains its selected release when one local regular
+season has the same known episode total and current tracker identity, official
+MAL cross-reference, or unique exact title/alias and year evidence establishes the
+match. Franchise prequels do not move that source back to the first season.
+Whole-show sources retain the full release chain. Conflicting IDs, dates or an
+ambiguous relationship path do not establish a standalone anchor.
+
 Known episode totals, structured numbering and air dates guide the proposed
 splits. An exact count fit without full dates is marked **Check this split** for
 your review. Unknown-count ongoing releases only propose identifiable aired
@@ -200,6 +207,16 @@ and episode zero are excluded from automatic coverage. Discovery stops once the
 regular episodes are covered, with a maximum of 32 release-detail lookups per
 proposal; metadata is reused from the bounded local cache. There is no external
 mapping dataset or silent linking.
+
+A fully dated finished release can also keep its independently proven complete
+prefix when later source rows cannot yet be assigned. Its known total and full
+start/end dates must match the already aired source range. Source dates must
+follow episode order, and every unassigned row must be fully dated strictly
+after both the last prefix row and the official release end. Missing dates,
+unknown totals, numbering gaps or conflicting chronology do not qualify. This
+handles Link Click's finished Season 3 Part 1 when the source's fourth season
+includes 12 later forecast rows: the first 12 episodes remain a separate draft
+and those later rows stay unresolved, even after their forecast dates pass.
 
 Use **Adjust** to review or change an individual range. The range fields are
 prefilled from the proposal; **Edit individual episodes** reveals stable-ID
