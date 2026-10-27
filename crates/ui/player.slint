@@ -1019,6 +1019,7 @@ component SettingsMenu inherits Rectangle {
 
 component NextEpisodeAction inherits Rectangle {
     in property <bool> focused;
+    in property <bool> enabled: true;
     callback activate();
     height: Math.max(44px, action_text.preferred-height + 8px);
     border-radius: 8px;
@@ -1027,6 +1028,8 @@ component NextEpisodeAction inherits Rectangle {
     border-color: Theme.current.focus_ring;
     accessible-role: button;
     accessible-label: @tr("Choose streams");
+    accessible-enabled: root.enabled;
+    opacity: root.enabled ? 1 : 0.45;
     HorizontalLayout {
         padding-left: 4px; padding-right: 4px; spacing: 4px; alignment: center;
         action_text := Text {
@@ -1045,12 +1048,13 @@ component NextEpisodeAction inherits Rectangle {
             }
         }
     }
-    action_touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+    action_touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { if root.enabled { root.activate(); } } }
 }
 
 // A text-only corner strip keeps the end of the episode visible. Elide long
 // titles instead of growing the card, while retaining full-size touch targets.
 component NextEpisodeBanner inherits Rectangle {
+    in property <bool> choose_enabled: true;
     in property <string> title;
     in property <string> context;
     in property <int> focused_action: 0;
@@ -1080,7 +1084,8 @@ component NextEpisodeBanner inherits Rectangle {
         next_streams := NextEpisodeAction {
             width: InterfaceStyle.tv ? 160px : 108px;
             focused: root.focused_action == 1;
-            activate => { root.choose(); }
+            enabled: root.choose_enabled;
+            activate => { if root.choose_enabled { root.choose(); } }
         }
         next_dismiss := IconBtn {
             width: 44px; height: 44px;
@@ -1617,7 +1622,7 @@ export component PlayerOverlay {
         } else if (root.kb_idx == 11 && root.skip_segment_shown) {
             root.dismiss_skip_segment();
         } else if (root.kb_idx == 10 && root.next_episode_shown) {
-            root.next_episode_streams(root.next_episode_token);
+            if root.timeline_control_allowed { root.next_episode_streams(root.next_episode_token); }
         } else if (root.kb_idx == 11 && root.next_episode_shown) {
             root.next_episode_dismiss(root.next_episode_token);
         } else if (root.kb_idx == 9) {
@@ -3423,7 +3428,8 @@ export component PlayerOverlay {
             title: root.next_episode_title;
             context: root.next_episode_context;
             focused_action: root.kb_active ? (root.kb_idx == 10 ? 1 : root.kb_idx == 11 ? 2 : 0) : 0;
-            choose => { root.next_episode_streams(root.next_episode_token); }
+            choose_enabled: root.timeline_control_allowed;
+            choose => { if root.timeline_control_allowed { root.next_episode_streams(root.next_episode_token); } }
             dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }
 

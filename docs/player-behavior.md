@@ -912,3 +912,11 @@ leaving the room. An empty host-only lobby waits for the creator’s first choic
 Live permission changes cancel disallowed seek previews and restore TV focus to
 available current-episode actions. These temporary room permissions are not
 persisted or synced; the policy and its revision use `nova/party/5`.
+
+
+Manual Next episode in a watch party uses the same accepted control policy as
+pause and episode selection. It proposes the released successor before closing
+the current local source; acceptance opens this device’s source picker for that
+episode. Rejected or stale proposals keep current playback intact unless another
+member’s newer accepted selection is followed. The Next banner, keyboard/TV action and native media key are disabled while waiting for
+acceptance or when the member lacks permission. Dismissing the offer stays local.

@@ -108,6 +108,28 @@ impl State {
             self.selection = None;
         }
     }
+    fn accept_prepared_selection(
+        &mut self,
+        room: &RoomSnapshot,
+        expected: u64,
+    ) -> (Option<String>, Option<(NextSelection, PlaybackGuard)>) {
+        if !self.prepared_selection_matches(room, expected) {
+            return (None, None);
+        }
+        let Some(selection) = self.selection.as_mut() else {
+            return (None, None);
+        };
+        selection.guard.generation = room.generation;
+        selection.accepted = true;
+        (
+            selection.download.take(),
+            selection
+                .next
+                .take()
+                .map(|next| (next, selection.guard.clone())),
+        )
+    }
+
     pub(super) fn active(&self) -> bool {
         self.service.is_some() || self.busy
     }
@@ -130,6 +152,17 @@ struct Selection {
     request_id: String,
     accepted: bool,
     download: Option<String>,
+    next: Option<NextSelection>,
+}
+
+#[derive(Clone)]
+struct NextSelection {
+    owner: Arc<()>,
+    local_session: u64,
+    native_session: u64,
+    series: String,
+    current: String,
+    episode: String,
 }
 
 fn can_control(room: &RoomSnapshot) -> bool {
@@ -716,6 +749,16 @@ impl Bridge {
         kind: &str,
         title: &str,
     ) -> bool {
+        self.party_preflight_media_inner(media, kind, title, None)
+    }
+
+    fn party_preflight_media_inner(
+        &self,
+        media: PartyMedia,
+        kind: &str,
+        title: &str,
+        expected: Option<&PlaybackGuard>,
+    ) -> bool {
         if self.party_active()
             && !profile_policy::allows_browse_title(&profiles::ProfileStore::capture(), kind, title)
         {
@@ -734,6 +777,15 @@ impl Bridge {
             self.party_selection_error(true);
             return false;
         };
+        if expected.is_some_and(|expected| {
+            expected.activation != party.generation
+                || expected.room_id != room.room_id
+                || expected.generation != room.generation
+        }) {
+            drop(state);
+            self.party_selection_error(true);
+            return false;
+        }
         let matching = room
             .selected_media()
             .is_some_and(|expected| compatible_media(&media, expected, party.choosing_source));
@@ -758,6 +810,10 @@ impl Bridge {
         } else {
             &media
         };
+        let cancelled_next = party
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.next.is_some());
         party.selection_revision = party.selection_revision.wrapping_add(1);
         party.selection = Some(Selection {
             guard: PlaybackGuard {
@@ -771,6 +827,7 @@ impl Bridge {
             request_id: media.identity.episode_id.clone(),
             accepted: matching,
             download: None,
+            next: None,
         });
         party.followed_generation = Some(room.generation);
         if matching && room.role == PartyRole::Host && room.pending_media.is_some() {
@@ -795,6 +852,9 @@ impl Bridge {
             ));
         }
         drop(state);
+        if cancelled_next && let Some(app) = self.app() {
+            app.set_party_busy(false);
+        }
         self.party_tick();
         true
     }
@@ -913,9 +973,153 @@ impl Bridge {
         }
     }
 
-    pub(super) fn party_cancel_pending_source(&self) {
+    pub(super) fn party_next_episode(&self, series: &str, episode: &str) {
+        let Some(current) = self.current_playback_identity() else {
+            return;
+        };
+        let Some(local) = self.party_modal_media(&current.episode_id) else {
+            return;
+        };
+        let Some(next) = self.party_modal_media(episode) else {
+            return;
+        };
+        let captured = {
+            let state = self.shared.lock().unwrap();
+            let party = &state.party;
+            if party
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.next.is_some())
+            {
+                return;
+            }
+            let Some(room) = party.snapshot_for_sources().filter(can_control) else {
+                drop(state);
+                self.party_selection_error(false);
+                return;
+            };
+            if !state
+                .playback_intent
+                .as_ref()
+                .is_some_and(|intent| intent.party_bound_to(party))
+            {
+                drop(state);
+                self.party_selection_error(true);
+                return;
+            }
+            let Some(expected) = room.media.as_ref().filter(|_| room.pending_media.is_none())
+            else {
+                drop(state);
+                self.party_selection_error(true);
+                return;
+            };
+            if !compatible_media(&local, expected, party.choosing_source) {
+                drop(state);
+                self.party_selection_error(true);
+                return;
+            }
+            let Some(playing) = state.playback.as_ref().filter(|playing| {
+                playing.session != 0
+                    && playing.series_id == series
+                    && playing.episode_id == current.episode_id
+            }) else {
+                return;
+            };
+            let Some(modal) = state
+                .modal_item
+                .as_ref()
+                .filter(|modal| modal.id == series && modal.request_id == current.episode_id)
+            else {
+                return;
+            };
+            if !next_episode::successor(&modal.videos, &current.episode_id, today_days())
+                .is_some_and(|next| next.id == episode)
+            {
+                return;
+            }
+            (
+                PlaybackGuard {
+                    activation: party.generation,
+                    room_id: room.room_id.clone(),
+                    generation: room.generation,
+                    media: expected.identity.clone(),
+                },
+                NextSelection {
+                    owner: modal.open_token.clone(),
+                    local_session: playing.session,
+                    native_session: self.player.screenshot_session(),
+                    series: series.into(),
+                    current: current.episode_id,
+                    episode: episode.into(),
+                },
+            )
+        };
+        if !self.party_preflight_media_inner(
+            next,
+            &local.identity.media_type,
+            series,
+            Some(&captured.0),
+        ) {
+            return;
+        }
+        // The worker's completion returns to this UI thread, so this owner is
+        // installed before any accepted proposal can finish navigation.
         if let Some(selection) = self.shared.lock().unwrap().party.selection.as_mut() {
-            selection.download = None;
+            selection.next = Some(captured.1);
+        }
+        if let Some(app) = self.app() {
+            app.set_party_busy(true);
+        }
+    }
+
+    fn party_complete_next(&self, next: NextSelection, guard: PlaybackGuard) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let current = {
+            let state = self.shared.lock().unwrap();
+            guard.accepts(&state.party)
+                && state.playback.as_ref().is_some_and(|playing| {
+                    playing.session == next.local_session
+                        && playing.series_id == next.series
+                        && playing.episode_id == next.current
+                })
+                && state.modal_item.as_ref().is_some_and(|modal| {
+                    Arc::ptr_eq(&modal.open_token, &next.owner)
+                        && modal.id == next.series
+                        && modal.request_id == next.current
+                })
+        };
+        if !current
+            || self.player.screenshot_session() != next.native_session
+            || !app.get_player_open()
+        {
+            return;
+        }
+        app.set_party_busy(false);
+        // The accepted generation already replaced the room. Closing this one
+        // local source must not emit the creator's global ClearMedia action.
+        self.note_player_progress_from_ui();
+        self.player.with_preserved_fullscreen_on_close(|| {
+            let _ = self.execute_playback_action(PlaybackAction::Stop);
+        });
+        app.set_party_page_open(false);
+        self.release_catalog_detail_for_native_successor();
+        self.episode_streams_by_id(&next.series, &next.episode);
+    }
+
+    pub(super) fn party_cancel_pending_source(&self) {
+        let cancelled_next = {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(selection) = state.party.selection.as_mut() {
+                selection.download = None;
+                selection.next.take().is_some()
+            } else {
+                false
+            }
+        };
+        if cancelled_next && let Some(app) = self.app() {
+            app.set_party_busy(false);
         }
     }
 
@@ -1022,7 +1226,9 @@ impl Bridge {
             return;
         }
         if self.app().is_some_and(|app| app.get_player_open()) {
-            let _ = self.execute_playback_action(PlaybackAction::Stop);
+            self.player.with_preserved_fullscreen_on_close(|| {
+                let _ = self.execute_playback_action(PlaybackAction::Stop);
+            });
         }
         if let Some(app) = self.app() {
             app.set_party_page_open(false);
@@ -1249,17 +1455,13 @@ impl Bridge {
                     .lock()
                     .unwrap()
                     .party
-                    .snapshot
+                    .snapshot_for_sources()
                     .as_ref()
-                    .is_some_and(|r| r.role == PartyRole::Host)
+                    .is_some_and(can_control)
                 {
                     return false;
                 }
-                if let Some(app) = self.app() {
-                    app.set_party_error(
-                        text::tr("Only the host controls the shared timeline.").into(),
-                    );
-                }
+                self.party_selection_error(false);
                 return true;
             }
             _ => return false,
@@ -1526,6 +1728,7 @@ impl Bridge {
                 let current_media = b.current_playback_identity();
                 let reopen_room;
                 let mut download = None;
+                let mut next = None;
                 {
                     let mut state = b.shared.lock().unwrap();
                     let p = &mut state.party;
@@ -1564,13 +1767,12 @@ impl Bridge {
                         let accepted_activation = selecting_media
                             && result.is_ok()
                             && operation_media_generation == Some(room.generation);
-                        if accepted_proposal && let Some(selection) = p.selection.as_mut() {
-                            selection.guard.generation = room.generation;
-                            selection.accepted = true;
-                            download = selection.download.take();
+                        if accepted_proposal {
+                            (download, next) = p.accept_prepared_selection(
+                                room,
+                                operation_media_generation.unwrap(),
+                            );
                         } else if preparing_media {
-                            // A later A → B → A snapshot cannot adopt this
-                            // earlier proposal's local resolver or download.
                             p.reject_prepared_selection();
                             p.choosing_media = false;
                         }
@@ -1634,6 +1836,9 @@ impl Bridge {
                 }
                 if let Some(id) = download {
                     b.play_download(&id);
+                }
+                if let Some((choice, guard)) = next {
+                    b.party_complete_next(choice, guard);
                 }
                 if remote_playback::is_foreground() {
                     b.party_publish();

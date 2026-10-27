@@ -337,3 +337,75 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
     );
     slint::select_bundled_translation("en").unwrap();
 }
+
+#[test]
+fn party_next_button_and_media_key_follow_live_control_permissions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::party_next_button_and_media_key_follow_live_control_permissions"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_next_episode_visible(true);
+    app.set_next_episode_token("current-generation:next".into());
+    app.set_party_active(true);
+    let choices = Rc::new(RefCell::new(Vec::new()));
+    let recorded = choices.clone();
+    app.on_next_episode_streams(move |token| recorded.borrow_mut().push(token.to_string()));
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    app.window().show().unwrap();
+    for tv in [false, true] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        for (host, everyone, busy) in [
+            (true, false, false),
+            (false, false, false),
+            (false, true, false),
+            (false, true, true),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            app.set_party_is_host(host);
+            app.set_party_allow_everyone(everyone);
+            app.set_party_can_control(host || everyone);
+            app.set_party_can_choose_media(host || everyone);
+            app.set_party_busy(busy);
+            app.set_osd_visible(true);
+            settle(&app);
+            let allowed = (host || everyone) && !busy;
+            let choose = ElementHandle::find_by_accessible_label(&app, "Choose streams")
+                .next()
+                .expect("next episode action");
+            assert_eq!(choose.accessible_enabled(), Some(allowed));
+            let count = choices.borrow().len();
+            click(&app, &choose);
+            assert_eq!(
+                choices.borrow().len(),
+                count + usize::from(allowed),
+                "pointer next: TV={tv}, host={host}, everyone={everyone}, busy={busy}"
+            );
+            let media_next: slint::SharedString = "\u{e104}".into();
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                    text: media_next.clone(),
+                });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: media_next });
+            settle(&app);
+            assert_eq!(
+                choices.borrow().len(),
+                count + 2 * usize::from(allowed),
+                "native media next uses the same accepted permissions"
+            );
+            let dismiss = ElementHandle::find_by_accessible_label(&app, "Dismiss next episode")
+                .next()
+                .expect("dismiss remains accessible");
+            assert_ne!(dismiss.accessible_enabled(), Some(false));
+        }
+    }
+}

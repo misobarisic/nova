@@ -246,6 +246,11 @@ impl RetryContext {
 }
 
 impl PlaybackIntent {
+    pub(super) fn party_bound_to(&self, state: &party::State) -> bool {
+        self.party_guard
+            .as_ref()
+            .is_some_and(|guard| guard.accepts(state))
+    }
     pub(super) fn active_local(&self) -> bool {
         self.in_app && self.token.is_current()
     }

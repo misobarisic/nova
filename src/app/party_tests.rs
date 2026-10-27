@@ -854,89 +854,264 @@ fn stopping_playback_keeps_hosts_and_guests_in_the_room() {
     );
 }
 
+fn prepare_next_party(bridge: &Bridge, app: &AppWindow, role: PartyRole) -> String {
+    let _service = install_room(bridge, app, role);
+    let mut media = room(role).media.unwrap();
+    media.identity.media_type = "series".into();
+    media.identity.episode_id = "tt123:1:1".into();
+    media.identity.episode = "S1 E1".into();
+    media.season = Some(1);
+    media.episode = Some(1);
+    media.duration = 1440.0;
+    bridge
+        .shared
+        .lock()
+        .unwrap()
+        .party
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .media = Some(media.clone());
+    if role == PartyRole::Guest {
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .party
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .control_policy = ControlPolicy::Everyone;
+    }
+    select_local_media(bridge, &media);
+    {
+        let mut state = bridge.shared.lock().unwrap();
+        let modal = state.modal_item.as_mut().unwrap();
+        modal.videos = (1..=3)
+            .map(|episode| Video {
+                id: format!("tt123:1:{episode}"),
+                season: Some(1),
+                episode: Some(episode),
+                ..Default::default()
+            })
+            .collect();
+        modal.seasons = vec![1];
+        state.cache_settings.prefetch_next_episode_streams = false;
+    }
+    bridge.party_prepare_stream_selection();
+    let request = bridge.begin_playback_request();
+    assert!(request.is_current());
+    bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+        session: next_episode::new_session(),
+        series_id: "tt123".into(),
+        episode_id: "tt123:1:1".into(),
+        ..Default::default()
+    });
+    app.set_modal_visible(true);
+    app.set_detail_is_movie(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(1440.0);
+    app.set_position(1321.0);
+    bridge.refresh_next_episode_prompt();
+    assert!(app.get_next_episode_visible());
+    app.get_next_episode_token().to_string()
+}
+
+fn accept_next_party(bridge: &Bridge) -> (NextSelection, PlaybackGuard) {
+    let mut state = bridge.shared.lock().unwrap();
+    let proposed = match state.party.pending.pop_front().unwrap() {
+        Operation::PrepareMedia(1, 0, media) => media,
+        _ => panic!("Next must propose once against the original generation"),
+    };
+    let mut accepted = state.party.snapshot.clone().unwrap();
+    accepted.generation = 2;
+    accepted.media = None;
+    accepted.pending_media = Some(proposed);
+    let (download, next) = state.party.accept_prepared_selection(&accepted, 1);
+    assert!(download.is_none());
+    state.party.snapshot = Some(accepted);
+    next.unwrap()
+}
+
 #[test]
-fn host_next_episode_reaches_the_source_picker_without_leaving_the_room() {
+fn host_and_everyone_guest_next_wait_for_acceptance_then_open_their_source_picker() {
     isolated(
         concat!(
             module_path!(),
-            "::host_next_episode_reaches_the_source_picker_without_leaving_the_room"
+            "::host_and_everyone_guest_next_wait_for_acceptance_then_open_their_source_picker"
         ),
         |Fixture { app, bridge }| {
-            let service = install_room(&bridge, &app, PartyRole::Host);
-            let mut media = room(PartyRole::Host).media.unwrap();
-            media.identity.media_type = "series".into();
-            media.identity.episode_id = "tt123:1:1".into();
-            media.identity.episode = "S1 E1".into();
-            media.season = Some(1);
-            media.episode = Some(1);
-            media.duration = 1440.0;
-            select_local_media(&bridge, &media);
-            {
-                let mut state = bridge.shared.lock().unwrap();
-                state.party.snapshot.as_mut().unwrap().media = Some(media);
-                state.modal_item.as_mut().unwrap().videos = (1..=2)
-                    .map(|episode| Video {
-                        id: format!("tt123:1:{episode}"),
-                        season: Some(1),
-                        episode: Some(episode),
-                        ..Default::default()
+            for role in [PartyRole::Host, PartyRole::Guest] {
+                bridge.shared.lock().unwrap().party = State::default();
+                let token = prepare_next_party(&bridge, &app, role);
+                let close_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let count = close_calls.clone();
+                let close_bridge = bridge.clone();
+                app.on_close_player(move || {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    close_bridge
+                        .dispatch_playback_action(PlaybackAction::Stop)
+                        .unwrap();
+                });
+                app.window().set_fullscreen(true);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode {
+                        token: token.clone(),
                     })
-                    .collect();
-                state.cache_settings.prefetch_next_episode_streams = false;
-            }
-            bridge.party_prepare_stream_selection();
-            let request = bridge.begin_playback_request();
-            let session = crate::app::next_episode::new_session();
-            bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
-                session,
-                series_id: "tt123".into(),
-                episode_id: "tt123:1:1".into(),
-                ..Default::default()
-            });
-            // Use the production close route: the nested Stop opens the room
-            // before Next continues into the following episode's source picker.
-            let close_bridge = bridge.clone();
-            app.on_close_player(move || {
-                close_bridge
-                    .dispatch_playback_action(PlaybackAction::Stop)
                     .unwrap();
-            });
-            app.set_modal_visible(true);
-            app.set_detail_is_movie(false);
-            app.set_party_page_open(false);
-            app.set_player_open(true);
-            app.set_playback_started(true);
-            app.set_duration(1440.0);
-            app.set_position(1321.0);
-            bridge.refresh_next_episode_prompt();
-            assert!(app.get_next_episode_visible());
-            assert_eq!(
-                app.get_next_episode_token().to_string(),
-                format!("{session}:tt123:1:2")
-            );
-            let token = app.get_next_episode_token().to_string();
+                assert!(
+                    app.get_player_open(),
+                    "Keep the original player until the room accepts"
+                );
+                assert!(
+                    app.get_party_busy(),
+                    "Awaiting acceptance disables repeat UI requests"
+                );
+                assert_eq!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .playback
+                        .as_ref()
+                        .unwrap()
+                        .episode_id,
+                    "tt123:1:1"
+                );
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                    .unwrap();
+                assert_eq!(
+                    bridge.shared.lock().unwrap().party.pending.len(),
+                    1,
+                    "Duplicate clicks retain the same origin generation"
+                );
+                let (choice, guard) = accept_next_party(&bridge);
+                bridge.party_complete_next(choice, guard);
+                assert!(!app.get_player_open());
+                assert!(app.window().is_fullscreen());
+                assert_eq!(
+                    close_calls.load(Ordering::Relaxed),
+                    0,
+                    "Internal Next close never dispatches global ClearMedia"
+                );
+                assert!(app.get_stream_selector_open());
+                assert_eq!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .unwrap()
+                        .request_id,
+                    "tt123:1:2"
+                );
+                assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+                let accepted = bridge.shared.lock().unwrap().party.snapshot.clone();
+                let owner = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .open_token
+                    .clone();
+                bridge.party_follow_selection(accepted.as_ref());
+                assert!(Arc::ptr_eq(
+                    &owner,
+                    &bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .unwrap()
+                        .open_token
+                ));
+            }
+        },
+    );
+}
 
+#[test]
+fn late_next_acceptance_cannot_close_a_replacement_local_session() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::late_next_acceptance_cannot_close_a_replacement_local_session"
+        ),
+        |Fixture { app, bridge }| {
+            let token = prepare_next_party(&bridge, &app, PartyRole::Host);
             bridge
                 .dispatch_playback_action(PlaybackAction::NextEpisode { token })
                 .unwrap();
+            let (choice, guard) = accept_next_party(&bridge);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .playback
+                .as_mut()
+                .unwrap()
+                .session = next_episode::new_session();
+            bridge.party_complete_next(choice, guard);
+            assert!(app.get_player_open());
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .request_id,
+                "tt123:1:1"
+            );
+        },
+    );
+}
 
-            assert!(!app.get_player_open());
-            assert!(!request.is_current());
-            assert!(!app.get_next_episode_visible());
-            assert!(app.get_party_active());
-            assert!(!app.get_party_page_open());
-            assert!(app.get_modal_visible());
-            assert!(app.get_stream_selector_open());
-            assert_eq!(app.get_detail_tab(), 3);
-            let state = bridge.shared.lock().unwrap();
-            assert!(Arc::ptr_eq(state.party.service.as_ref().unwrap(), &service));
-            assert!(state.party.choosing_media);
-            assert!(matches!(
-                state.party.pending.front(),
-                Some(Operation::PrepareMedia(_, _, media)) if media.identity.episode_id == "tt123:1:2"
-            ));
-            assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:1:2");
-            assert_eq!(state.playback.as_ref().unwrap().episode_id, "tt123:1:2");
+#[test]
+fn stale_next_offer_cannot_advance_a_room_that_already_selected_the_successor() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::stale_next_offer_cannot_advance_a_room_that_already_selected_the_successor"
+        ),
+        |Fixture { app, bridge }| {
+            let token = prepare_next_party(&bridge, &app, PartyRole::Guest);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                let room = state.party.snapshot.as_mut().unwrap();
+                room.generation += 1;
+                room.media.as_mut().unwrap().identity.episode_id = "tt123:1:2".into();
+                room.media.as_mut().unwrap().episode = Some(2);
+            }
+            bridge
+                .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                .unwrap();
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            assert!(app.get_player_open());
+            let winning = bridge.shared.lock().unwrap().party.snapshot.clone();
+            bridge.party_follow_selection(winning.as_ref());
+            assert!(
+                !app.get_player_open(),
+                "Follow the other member's winning generation normally"
+            );
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .request_id,
+                "tt123:1:2"
+            );
         },
     );
 }
@@ -1576,6 +1751,148 @@ fn locked_profile_preflight_cannot_announce_or_replace_party_media() {
             assert!(state.party.pending.is_empty());
             drop(state);
             profile_policy::set_entry_blocked(false);
+        },
+    );
+}
+
+#[test]
+fn rejected_next_keeps_current_playback_or_follows_the_winning_episode() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::rejected_next_keeps_current_playback_or_follows_the_winning_episode"
+        ),
+        |Fixture { app, bridge }| {
+            for another_member_won in [false, true] {
+                bridge.shared.lock().unwrap().party = State::default();
+                let token = prepare_next_party(&bridge, &app, PartyRole::Guest);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                    .unwrap();
+                let latest = {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.party.pending.clear();
+                    // This is the same rejection cleanup used by the coordinator
+                    // after a nonterminal service reply. The room stays connected.
+                    state.party.reject_prepared_selection();
+                    let latest = state.party.snapshot.as_mut().unwrap();
+                    if another_member_won {
+                        latest.generation = 2;
+                        let mut winner = latest.media.take().unwrap();
+                        winner.identity.episode_id = "tt123:1:2".into();
+                        winner.episode = Some(2);
+                        winner.duration = 0.0;
+                        latest.pending_media = Some(winner);
+                    } else {
+                        latest.control_policy = ControlPolicy::HostOnly;
+                        latest.control_revision += 1;
+                    }
+                    latest.clone()
+                };
+                bridge.party_follow_selection(Some(&latest));
+                assert!(bridge.party_active());
+                assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+                if another_member_won {
+                    assert!(!app.get_player_open());
+                    assert_eq!(
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .modal_item
+                            .as_ref()
+                            .unwrap()
+                            .request_id,
+                        "tt123:1:2"
+                    );
+                    assert!(app.get_stream_selector_open());
+                } else {
+                    assert!(
+                        app.get_player_open(),
+                        "Permission rejection does not close the original player"
+                    );
+                    assert_eq!(
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .modal_item
+                            .as_ref()
+                            .unwrap()
+                            .request_id,
+                        "tt123:1:1"
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn accepted_party_next_uses_the_exact_successor_across_seasons() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::accepted_party_next_uses_the_exact_successor_across_seasons"
+        ),
+        |Fixture { app, bridge }| {
+            prepare_next_party(&bridge, &app, PartyRole::Host);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                let modal = state.modal_item.as_mut().unwrap();
+                modal.videos.retain(|video| video.id == "tt123:1:1");
+                modal.videos.push(Video {
+                    id: "tt123:2:1".into(),
+                    season: Some(2),
+                    episode: Some(1),
+                    ..Default::default()
+                });
+                modal.seasons = vec![1, 2];
+            }
+            bridge.refresh_next_episode_prompt();
+            let token = app.get_next_episode_token().to_string();
+            assert!(token.ends_with(":tt123:2:1"));
+            bridge
+                .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                .unwrap();
+            assert!(app.get_player_open());
+            let (choice, guard) = accept_next_party(&bridge);
+            bridge.party_complete_next(choice, guard);
+            assert!(!app.get_player_open());
+            assert!(app.get_stream_selector_open());
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.modal_item.as_ref().unwrap().request_id, "tt123:2:1");
+            assert_eq!(state.modal_item.as_ref().unwrap().season_index, 1);
+            assert!(state.party.pending.is_empty());
+        },
+    );
+}
+
+#[test]
+fn old_next_offer_cannot_rebind_its_playing_source_after_room_aba() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::old_next_offer_cannot_rebind_its_playing_source_after_room_aba"
+        ),
+        |Fixture { app, bridge }| {
+            let token = prepare_next_party(&bridge, &app, PartyRole::Host);
+            // Same title, same episode and same local banner token, but a later
+            // room selection owns the media. The old source captured generation 1.
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .generation = 3;
+            bridge
+                .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                .unwrap();
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            assert!(app.get_player_open());
         },
     );
 }

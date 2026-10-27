@@ -214,6 +214,10 @@ impl Bridge {
         let Some((series, episode)) = selection else {
             return;
         };
+        if self.party_active() {
+            self.party_next_episode(&series, &episode);
+            return;
+        }
         // Cache the latest values before close resets the player properties.
         // The normal close callback finalizes history and torrent/brightness state.
         self.note_player_progress_from_ui();
