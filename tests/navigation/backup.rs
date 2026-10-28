@@ -309,10 +309,10 @@ fn backup_tv_stage_navigation_skips_absent_actions_and_activates_current_primary
 }
 
 #[test]
-fn backup_blank_margins_block_underlying_settings_clicks_and_wheel() {
+fn backup_full_viewport_blocks_underlying_settings_clicks_and_wheel() {
     if !isolation::run(concat!(
         module_path!(),
-        "::backup_blank_margins_block_underlying_settings_clicks_and_wheel"
+        "::backup_full_viewport_blocks_underlying_settings_clicks_and_wheel"
     )) {
         return;
     }
@@ -360,8 +360,9 @@ fn backup_blank_margins_block_underlying_settings_clicks_and_wheel() {
         .next()
         .unwrap();
     assert!(
-        position.x > scroll.absolute_position().x + scroll.size().width,
-        "underlay target must be in a blank overlay margin"
+        position.x >= scroll.absolute_position().x
+            && position.x + size.width <= scroll.absolute_position().x + scroll.size().width + 0.5,
+        "The full-width destination covers the underlying control"
     );
     let position =
         slint::LogicalPosition::new(position.x + size.width / 2., position.y + size.height / 2.);
@@ -773,5 +774,159 @@ fn backup_retained_toggle_tracks_presets_and_external_checked_updates_after_clic
     assert!(
         std::ptr::eq(original.as_any(), ui.get_components().as_any()),
         "state updates keep the model and toggle delegate mounted"
+    );
+}
+
+#[test]
+fn backup_canvas_and_content_follow_the_full_viewport_through_resize_and_motion() {
+    if !isolation::run(concat!(
+        module_path!(),
+        "::backup_canvas_and_content_follow_the_full_viewport_through_resize_and_motion"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova_ui::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_animations(false);
+    app.global::<nova_ui::Anim>().set_enabled(false);
+    app.window().show().unwrap();
+    let ui = app.global::<nova_ui::BackupBridge>();
+    let safe = i_slint_core::lengths::LogicalEdges {
+        top: 28.0,
+        bottom: 12.0,
+        left: 8.0,
+        right: 16.0,
+    };
+    i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(safe);
+
+    fn element(app: &nova_ui::AppWindow, id: &str) -> ElementHandle {
+        ElementHandle::find_by_element_id(app, id)
+            .next()
+            .unwrap_or_else(|| panic!("missing {id}"))
+    }
+    fn full_viewport(app: &nova_ui::AppWindow, safe: i_slint_core::lengths::LogicalEdges) {
+        let viewport = app.window().size().to_logical(app.window().scale_factor());
+        let host = element(app, "AppWindow::backup_host");
+        let page = element(app, "AppWindow::backup_page");
+        let scroll = element(app, "BackupPanel::scroll");
+        assert!(host.absolute_position().x.abs() < 0.5 && host.absolute_position().y.abs() < 0.5);
+        assert!((host.size().width - viewport.width).abs() < 0.5);
+        assert!((host.size().height - viewport.height).abs() < 0.5);
+        assert_eq!(
+            host.computed_opacity(),
+            1.0,
+            "Canvas must remain opaque while its content slides/fades"
+        );
+        assert!((page.size().width - viewport.width).abs() < 0.5);
+        assert!((page.size().height - viewport.height).abs() < 0.5);
+        let expected_width = (viewport.width - safe.left - safe.right - 36.0).max(0.0);
+        assert!(
+            (scroll.size().width - expected_width).abs() < 1.0,
+            "Data must use all safe width, got {} of {expected_width}",
+            scroll.size().width
+        );
+        assert!(
+            (scroll.absolute_position().x - page.absolute_position().x - safe.left - 18.0).abs()
+                < 1.0
+        );
+        assert!(scroll.size().height >= 0.0);
+        assert!(scroll.absolute_position().y >= safe.top);
+        assert!(
+            scroll.absolute_position().y + scroll.size().height
+                <= viewport.height - safe.bottom + 0.5
+        );
+    }
+    fn frames(app: &nova_ui::AppWindow, count: usize) {
+        for _ in 0..count {
+            for item in ElementQuery::from_root(app)
+                .match_predicate(|_| true)
+                .find_all()
+            {
+                let _ = (item.absolute_position(), item.size());
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        }
+    }
+    for (width, height, android, tv) in [
+        (360, 780, true, false),
+        (1440, 900, false, false),
+        (1920, 1080, false, true),
+        (800, 360, true, false),
+    ] {
+        app.set_is_android(android);
+        app.global::<nova_ui::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::LogicalSize::new(width as f32, height as f32));
+        ui.set_open(true);
+        settle(&app);
+        full_viewport(&app, safe);
+        let scroll = element(&app, "BackupPanel::scroll");
+        let select = button(&app, "Select");
+        assert!(select.absolute_position().x >= scroll.absolute_position().x);
+        assert!(
+            select.absolute_position().x + select.size().width
+                <= scroll.absolute_position().x + scroll.size().width + 0.5,
+            "Controls cannot introduce horizontal overflow"
+        );
+        app.window().set_size(slint::LogicalSize::new(
+            width as f32 + 112.0,
+            height as f32 + 32.0,
+        ));
+        settle(&app);
+        full_viewport(&app, safe);
+        ui.set_open(false);
+        settle(&app);
+    }
+    app.set_is_android(false);
+    app.global::<nova_ui::InterfaceStyle>().set_tv(false);
+    app.set_animations(true);
+    app.set_anim_transitions(true);
+    app.global::<nova_ui::Anim>().set_enabled(true);
+    app.global::<nova_ui::Anim>().set_transitions(true);
+    app.window()
+        .set_size(slint::LogicalSize::new(1440.0, 900.0));
+    ui.set_open(true);
+    frames(&app, 4);
+    full_viewport(&app, safe);
+    let entering = element(&app, "AppWindow::backup_page")
+        .absolute_position()
+        .x;
+    assert!(
+        entering > 0.5 && entering < 1439.5,
+        "Content retains the existing push transition"
+    );
+    app.window()
+        .set_size(slint::LogicalSize::new(1920.0, 1080.0));
+    frames(&app, 1);
+    full_viewport(&app, safe);
+    frames(&app, 28);
+    // Full-width rows put Select near the right edge. Retain its steady-state
+    // handle: accessibility lookup culls it once the exit slides it offscreen.
+    let retained_select = button(&app, "Select");
+    ui.set_open(false);
+    frames(&app, 4);
+    full_viewport(&app, safe);
+    assert!(
+        element(&app, "AppWindow::backup_page")
+            .absolute_position()
+            .x
+            > 0.5
+    );
+    assert_eq!(
+        retained_select.accessible_enabled(),
+        Some(false),
+        "Retained exit content has no authority"
+    );
+    app.window()
+        .set_size(slint::LogicalSize::new(1000.0, 650.0));
+    frames(&app, 1);
+    full_viewport(&app, safe);
+    frames(&app, 28);
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AppWindow::backup_host")
+            .next()
+            .is_none()
     );
 }

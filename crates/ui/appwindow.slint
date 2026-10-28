@@ -3132,7 +3132,10 @@ export component AppWindow inherits Window {
         safe-right: root.safe-area-insets.right;
     }
     if root.backup_open || root.backup_visual_retained: backup_host := Rectangle {
-        width: 100%; height: 100%; clip: true;
+        x: 0px; y: 0px; width: root.width; height: root.height; clip: true;
+        // The animated page can expose either edge. Keep its canvas at the
+        // viewport, independent of the content's slide/fade and safe insets.
+        background: Theme.current.artwork_canvas;
         // Cover the exposed edge throughout both directions of the push/pop.
         TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
         backup_page := BackupPanel {

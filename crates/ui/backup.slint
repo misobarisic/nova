@@ -15,6 +15,7 @@ component BackupChoice inherits SettingsRow {
 }
 
 export component BackupPanel inherits Rectangle {
+    min-width: 0px; min-height: 0px;
     in property <bool> active: true;
     changed active => { if root.active { focus_timer.start(); } else { focus_timer.stop(); } }
     in property <int> focus-request;
@@ -119,8 +120,11 @@ export component BackupPanel inherits Rectangle {
         }
         key-pressed(e) => {if e.text==Key.Return || e.text==" " {if !e.repeat {root.activate();} accept} else {reject}}
         scroll := ScrollView {
-            x:root.safe-left+Math.max(18px,(parent.width - root.safe-left - root.safe-right - 850px)/2); y:root.safe-top+18px;
-            width:Math.min(850px,parent.width - root.safe-left - root.safe-right - 36px); height:parent.height - root.safe-top - root.safe-bottom - 36px;
+            // Data follows the full Settings viewport on wide and narrow windows.
+            // Insets protect its contents without shrinking the page canvas.
+            x:root.safe-left+18px; y:root.safe-top+18px;
+            width:Math.max(0px,parent.width - root.safe-left - root.safe-right - 36px);
+            height:Math.max(0px,parent.height - root.safe-top - root.safe-bottom - 36px);
             content-width:self.visible-width; content-height:body.preferred-height;
             body := VerticalLayout {
                 width:100%; spacing:16px;
