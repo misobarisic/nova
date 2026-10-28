@@ -25,6 +25,24 @@ fn shared_credential_key(service: Service) -> &'static str {
         Service::AniList => "credentials:anilist",
     }
 }
+/// Sync's unknown-field merge can reorder object keys. Credential identity
+/// includes every field, but not JSON formatting; malformed data fails closed.
+fn credential_payload_matches(current: Option<&str>, consumed: &str) -> bool {
+    let Some(current) = current.filter(|raw| raw.len() <= 65_536) else {
+        return false;
+    };
+    if consumed.len() > 65_536 {
+        return false;
+    }
+    let Ok(serde_json::Value::Object(current)) = serde_json::from_str(current) else {
+        return false;
+    };
+    let Ok(serde_json::Value::Object(consumed)) = serde_json::from_str(consumed) else {
+        return false;
+    };
+    current == consumed
+}
+
 fn consumes_current_pair(
     shared: &Option<nova_sync::Record>,
     local: Option<&str>,
@@ -32,10 +50,10 @@ fn consumes_current_pair(
     previously_shared: bool,
 ) -> bool {
     !previously_shared
-        && local == Some(consumed)
+        && credential_payload_matches(local, consumed)
         && shared
             .as_ref()
-            .is_none_or(|r| r.value.as_deref() == Some(consumed))
+            .is_none_or(|r| credential_payload_matches(r.value.as_deref(), consumed))
 }
 #[allow(clippy::too_many_arguments)]
 fn stage_refresh(
@@ -105,11 +123,13 @@ fn mutation_snapshot_allowed(
     mappings: &[MappingStamp],
     automatic: bool,
 ) -> Result<(), ApiError> {
-    if local != Some(consumed)
-        || store
-            .record(domain, shared_credential_key(target.account.service))
-            .and_then(|record| record.value.as_deref())
-            != Some(consumed)
+    if !credential_payload_matches(local, consumed)
+        || !credential_payload_matches(
+            store
+                .record(domain, shared_credential_key(target.account.service))
+                .and_then(|record| record.value.as_deref()),
+            consumed,
+        )
         || nova_sync::parse_profile_domain(domain).is_some_and(|(id, _)| {
             store
                 .record("profile_deletions", id)
@@ -541,6 +561,351 @@ mod tests {
     use super::*;
     const DOMAIN: &str = "profile:alice:tracking";
     const LOCAL: &str = "profile:alice:tracking:credentials:mal:v1";
+    fn payload_fixture(
+        service: Service,
+    ) -> (TrackingState, TargetKey, MappingStamp, SavedConnection) {
+        let account = AccountKey {
+            service,
+            remote_user_id: NonZeroU32::new(7).unwrap(),
+        };
+        let target = TargetKey {
+            account: account.clone(),
+            media_kind: MediaKind::Anime,
+            remote_media_id: NonZeroU32::new(12).unwrap(),
+        };
+        let binding = Binding {
+            id: "payload-binding".into(),
+            source: SourceRef {
+                provider_id: "nova".into(),
+                source_id: "fixture-title".into(),
+                media_type: "series".into(),
+            },
+            target: target.clone(),
+            account_generation: NonZeroU64::MIN,
+            mapping_revision: NonZeroU64::MIN,
+            enabled: true,
+            bulk_origin: false,
+            assignments: vec![Assignment {
+                episode_id: "fixture-episode".into(),
+                target_episode: NonZeroU32::MIN,
+            }],
+        };
+        let stamp = MappingStamp {
+            binding_id: binding.id.clone(),
+            revision: binding.mapping_revision,
+            source: binding.source.clone(),
+            assignments: binding.assignments.clone(),
+        };
+        let state = TrackingState {
+            accounts: vec![Account {
+                key: account.clone(),
+                generation: NonZeroU64::MIN,
+                display_name: "Fixture".into(),
+            }],
+            active_accounts: vec![account.clone()],
+            targets: vec![Target {
+                key: target.clone(),
+                remote_entry_id: None,
+                final_episode_total: Some(NonZeroU32::new(12).unwrap()),
+                release_finished: true,
+            }],
+            bindings: vec![binding],
+            projections: vec![Projection::new(target.clone(), NonZeroU64::MIN, 0, vec![])],
+            ..Default::default()
+        };
+        let connection = SavedConnection {
+            account,
+            registration: ClientRegistration {
+                client_id: "fixture-client".into(),
+                redirect_uri: "http://127.0.0.1:8777/callback".into(),
+            },
+            tokens: Tokens {
+                access: Secret::new("fixture-access".into()).unwrap(),
+                refresh: (service == Service::MyAnimeList)
+                    .then(|| Secret::new("fixture-refresh".into()).unwrap()),
+                expires_at: Some(10_000),
+            },
+        };
+        (state, target, stamp, connection)
+    }
+
+    #[derive(Clone, Default)]
+    struct PayloadMemory(Arc<Mutex<HashMap<String, String>>>);
+    impl StateStorage for PayloadMemory {
+        fn read(&self, key: &str) -> Result<Option<String>, nova_storage::Error> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+        fn write(&self, entries: &[(String, Option<String>)]) -> Result<(), nova_storage::Error> {
+            let mut rows = self.0.lock().unwrap();
+            for (key, value) in entries {
+                if let Some(value) = value {
+                    rows.insert(key.clone(), value.clone());
+                } else {
+                    rows.remove(key);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct PayloadViewer(Service);
+    impl api::Transport for PayloadViewer {
+        fn send(&self, _: api::Request) -> Result<api::Response, ApiError> {
+            Ok(api::Response {
+                status: 200,
+                retry_after: None,
+                reset_at: None,
+                body: if self.0 == Service::MyAnimeList {
+                    serde_json::json!({"id":7,"name":"Fixture"})
+                } else {
+                    serde_json::json!({"data":{"Viewer":{"id":7,"name":"Fixture","mediaListOptions":{"scoreFormat":"POINT_10"}}}})
+                },
+            })
+        }
+    }
+
+    #[test]
+    fn verified_reconnect_remains_authorized_after_sync_reorders_credentials() {
+        for service in [Service::MyAnimeList, Service::AniList] {
+            let (state, target, stamp, connection) = payload_fixture(service);
+            // Follow successful sign-in's verification, atomic credential/state
+            // save and resume path using only an in-memory API/storage fixture.
+            let mut client = api::Client::new(
+                service,
+                connection.tokens.access.duplicate(),
+                PayloadViewer(service),
+            );
+            assert_eq!(client.verify(100).unwrap().account, connection.account);
+            let memory = PayloadMemory::default();
+            let mut local = Store::load(memory.clone()).unwrap();
+            local
+                .save_with_connection(state, service, Some(&connection))
+                .unwrap();
+            local
+                .resume_account(&target.account, NonZeroU64::MIN)
+                .unwrap();
+            local.replace_progress(&target, 1, vec![]).unwrap();
+            let (key, consumed, _) = connection_record(&connection).unwrap();
+            let raw = memory
+                .read(nova_tracking::credentials::credential_key(service))
+                .unwrap()
+                .unwrap();
+            assert_eq!(raw, consumed);
+            let mut old: serde_json::Value = serde_json::from_str(&consumed).unwrap();
+            old["access"] = "fixture-before-reconnect".into();
+            let mut sync = nova_sync::Store::default();
+            // Keep the baseline lookup in this fixture's in-memory extras;
+            // an unseeded Store otherwise falls back to process-wide storage.
+            sync.queue_extra(&format!("sync:baseline:{DOMAIN}"), None);
+            let mut records = peer_records(local.state()).unwrap();
+            records.push((key.clone(), old.to_string(), 0));
+            nova_sync::prepare_snapshot(&mut sync, 1, DOMAIN, &records, None, false, false)
+                .unwrap();
+            records.last_mut().unwrap().1.clone_from(&consumed);
+            nova_sync::prepare_snapshot(&mut sync, 1, DOMAIN, &records, None, false, false)
+                .unwrap();
+            let shared = sync.record(DOMAIN, &key).cloned();
+            assert_ne!(
+                shared.as_ref().unwrap().value.as_deref(),
+                Some(consumed.as_str()),
+                "The actual sync update must exercise reordered JSON"
+            );
+            assert!(consumes_current_pair(&shared, Some(&raw), &consumed, false));
+            // A second reconnect publication must remain a no-op and may not
+            // turn the retained explicit update into AuthenticationRequired.
+            assert!(
+                !nova_sync::prepare_snapshot(&mut sync, 1, DOMAIN, &records, None, false, false)
+                    .unwrap()
+            );
+            let attempt = local.begin_delivery(&target, 100).unwrap().unwrap();
+            assert_eq!(
+                mutation_snapshot_allowed(
+                    &sync,
+                    DOMAIN,
+                    local.state(),
+                    Some(&raw),
+                    &consumed,
+                    &target,
+                    std::slice::from_ref(&stamp),
+                    false
+                ),
+                Ok(())
+            );
+            local
+                .finish_delivery(&attempt, DeliveryOutcome::Applied { progress: 1 }, 101)
+                .unwrap();
+            assert!(local.state().outbox.pending().is_empty());
+            // Formatting equivalence also authorizes the existing exact-record
+            // refresh transaction; it does not bypass that transaction's CAS.
+            assert!(credential_snapshot_matches(&sync, DOMAIN, service, &shared));
+            assert!(
+                stage_refresh(
+                    &mut sync,
+                    DOMAIN,
+                    service,
+                    &shared,
+                    "fixture-local-credential",
+                    &consumed,
+                    1
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn credential_payload_changes_and_revocation_still_fail_closed() {
+        for service in [Service::MyAnimeList, Service::AniList] {
+            let (state, target, stamp, connection) = payload_fixture(service);
+            let (key, consumed, _) = connection_record(&connection).unwrap();
+            let original: serde_json::Value = serde_json::from_str(&consumed).unwrap();
+            for field in [
+                "access",
+                "refresh",
+                "account",
+                "registration_client",
+                "registration_redirect",
+                "expiry",
+                "unknown",
+            ] {
+                let mut changed = original.clone();
+                match field {
+                    "access" => changed["access"] = "fixture-other-access".into(),
+                    "refresh" => changed["refresh"] = "fixture-other-refresh".into(),
+                    "account" => changed["account"]["remote_user_id"] = 8.into(),
+                    "registration_client" => {
+                        changed["registration"]["client_id"] = "other-client".into()
+                    }
+                    "registration_redirect" => {
+                        changed["registration"]["redirect_uri"] =
+                            "http://127.0.0.1:9999/callback".into()
+                    }
+                    "expiry" => changed["expires_at"] = 20_000.into(),
+                    "unknown" => {
+                        changed["future_grant"] = serde_json::json!({"scope":"newer-semantics"})
+                    }
+                    _ => unreachable!(),
+                }
+                let changed = changed.to_string();
+                assert!(
+                    !credential_payload_matches(Some(&changed), &consumed),
+                    "{field}"
+                );
+                let mut sync = nova_sync::Store::default();
+                for (row, value, _) in peer_records(&state).unwrap() {
+                    sync.set(DOMAIN, &row, Some(value), 0, 1);
+                }
+                sync.set(DOMAIN, &key, Some(changed.clone()), 0, 2);
+                let shared = sync.record(DOMAIN, &key).cloned();
+                assert!(
+                    !consumes_current_pair(&shared, Some(&consumed), &consumed, false),
+                    "{field}"
+                );
+                assert!(
+                    !consumes_current_pair(&None, Some(&changed), &consumed, false),
+                    "Changed local credentials must fail: {field}"
+                );
+                assert_eq!(
+                    mutation_snapshot_allowed(
+                        &sync,
+                        DOMAIN,
+                        &state,
+                        Some(&consumed),
+                        &consumed,
+                        &target,
+                        std::slice::from_ref(&stamp),
+                        false
+                    ),
+                    Err(ApiError::Authentication),
+                    "{field}"
+                );
+            }
+            let mut sync = nova_sync::Store::default();
+            sync.set(DOMAIN, &key, Some(consumed.clone()), 0, 1);
+            let expected = sync.record(DOMAIN, &key).cloned();
+            assert!(
+                !consumes_current_pair(&expected, Some(&consumed), &consumed, true),
+                "Previously shared revocations cannot become legacy seeds"
+            );
+            sync.set(DOMAIN, &key, None, 0, 2);
+            let tombstone = sync.record(DOMAIN, &key).cloned();
+            assert!(!consumes_current_pair(
+                &tombstone,
+                Some(&consumed),
+                &consumed,
+                false
+            ));
+            assert!(!credential_snapshot_matches(
+                &sync, DOMAIN, service, &expected
+            ));
+            assert!(
+                stage_refresh(
+                    &mut sync,
+                    DOMAIN,
+                    service,
+                    &expected,
+                    "fixture-local-credential",
+                    &consumed,
+                    1
+                )
+                .is_err()
+            );
+            assert_eq!(
+                mutation_snapshot_allowed(
+                    &sync,
+                    DOMAIN,
+                    &state,
+                    Some(&consumed),
+                    &consumed,
+                    &target,
+                    std::slice::from_ref(&stamp),
+                    false
+                ),
+                Err(ApiError::Authentication)
+            );
+            // Equal payloads under a later record version are still not the
+            // record captured by an earlier refresh attempt.
+            sync.set(DOMAIN, &key, Some(consumed.clone()), 0, 2);
+            assert!(credential_payload_matches(
+                sync.record(DOMAIN, &key).unwrap().value.as_deref(),
+                &consumed
+            ));
+            assert!(!credential_snapshot_matches(
+                &sync, DOMAIN, service, &expected
+            ));
+            assert!(
+                stage_refresh(
+                    &mut sync,
+                    DOMAIN,
+                    service,
+                    &expected,
+                    "fixture-local-credential",
+                    &consumed,
+                    1
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_or_oversized_payloads_never_gain_formatting_equivalence() {
+        let (_, _, _, connection) = payload_fixture(Service::MyAnimeList);
+        let (_, consumed, _) = connection_record(&connection).unwrap();
+        assert!(!credential_payload_matches(None, &consumed));
+        for raw in ["", "not-json", "{", "null", "[]", "42", "\"credential\""] {
+            assert!(!credential_payload_matches(Some(raw), &consumed));
+            assert!(
+                !credential_payload_matches(Some(raw), raw),
+                "No malformed exact-string fast path"
+            );
+        }
+        assert!(!credential_payload_matches(Some("{}"), &consumed));
+        let oversized = serde_json::json!({"access":"x".repeat(65_536)}).to_string();
+        assert!(!credential_payload_matches(Some(&oversized), &consumed));
+        assert!(!credential_payload_matches(Some(&consumed), &oversized));
+    }
+
     #[test]
     fn blocked_entry_read_rechecks_durable_peer_authorization_before_mutation() {
         const ROOT: &str = "NOVA_TRACKING_MUTATION_AUTH_TEST_ROOT";
@@ -842,11 +1207,17 @@ mod tests {
     #[test]
     fn refresh_capture_rejects_stale_consumed_pair_even_when_disk_and_shared_agree() {
         let mut store = refresh_store();
-        let consumed = "old-pair";
+        let consumed = r#"{"access":"old-pair"}"#;
         // A remote apply can update disk and shared state while the live
         // session (or a just-loaded connection) still holds the old pair.
-        store.set(DOMAIN, "credentials:mal", Some("newer-pair".into()), 0, 2);
-        store.queue_extra(LOCAL, Some("newer-pair".into()));
+        store.set(
+            DOMAIN,
+            "credentials:mal",
+            Some(r#"{"access":"newer-pair"}"#.into()),
+            0,
+            2,
+        );
+        store.queue_extra(LOCAL, Some(r#"{"access":"newer-pair"}"#.into()));
         let shared = store.record(DOMAIN, "credentials:mal").cloned();
         let local = store.extra_value(LOCAL).unwrap();
         assert!(!consumes_current_pair(
@@ -858,7 +1229,7 @@ mod tests {
         assert!(consumes_current_pair(
             &shared,
             local.as_deref(),
-            "newer-pair",
+            r#"{"access":"newer-pair"}"#,
             false
         ));
         assert!(!consumes_current_pair(

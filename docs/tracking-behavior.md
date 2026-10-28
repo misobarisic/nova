@@ -106,6 +106,15 @@ between devices. Ordinary remote apply uses `ApplyingGuard` and does not echo.
 Concurrent conflicting links are disabled across the mesh for explicit alignment
 repair; invalid or unsupported records remain pending instead of being erased.
 
+Credential checks at mutation and refresh boundaries compare parsed JSON objects
+within a 64 KiB limit. Sync’s unknown-field merge may reorder keys or whitespace
+without changing the sign-in; formatting alone must not turn a connected
+account’s mapped updates into an authentication failure. Every field, including
+unknown fields, participates in payload equality, so changed values still reject
+the consumed credential. Refresh commits retain exact sync-record, version,
+vector-clock and tombstone checks; profile and tracking-consent guards also
+remain in force.
+
 Unlinks and shared sign-in removals use sync tombstones, so offline peers cannot
 restore an old link merely by returning. Projection acknowledges the captured
 domain digest after the local commit; a newer concurrent merge remains pending.
