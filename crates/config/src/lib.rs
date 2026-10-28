@@ -799,6 +799,14 @@ const fn default_image_disk_cache_limit() -> Option<u32> {
     Some(1024)
 }
 
+const fn default_cache_image_format() -> CacheImageFormat {
+    CacheImageFormat::Webp
+}
+
+const fn default_cache_image_quality() -> u8 {
+    50
+}
+
 macro_rules! cache_settings_type {
     ($($fields:tt)*) => {
         #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -837,9 +845,12 @@ cache_settings_type! {
     #[serde(default = "default_image_disk_cache_limit")]
     pub image_disk_cache_limit_mb: Option<u32>,
     /// Encode processed variants lossily when enabled; otherwise resizing is lossless.
+    #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_cache_image_format")]
     pub format: CacheImageFormat,
     /// Encoding quality 1-100 (WebP lossy / JPEG).
+    #[serde(default = "default_cache_image_quality")]
     pub quality: u8,
     /// Longest side of Detail posters; None preserves original dimensions.
     pub detail_poster_max_side: Option<u32>,
@@ -1151,9 +1162,9 @@ impl Default for CacheSettings {
             tmdb_api_key: String::new(),
             cache_images: true,
             image_disk_cache_limit_mb: default_image_disk_cache_limit(),
-            enabled: false,
-            format: CacheImageFormat::Webp,
-            quality: 85,
+            enabled: true,
+            format: default_cache_image_format(),
+            quality: default_cache_image_quality(),
             detail_poster_max_side: Some(480),
             detail_backdrop_max_side: Some(960),
             episode_thumbnail_max_side: Some(360),
@@ -1621,6 +1632,31 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_cache_defaults_apply_only_to_missing_preferences() {
+        for settings in [
+            CacheSettings::default(),
+            serde_json::from_str::<CacheSettings>("{}").unwrap(),
+            serde_json::from_str::<CacheSettings>(r#"{"date_relative":false}"#).unwrap(),
+        ] {
+            assert!(settings.cache_images);
+            assert!(settings.enabled);
+            assert_eq!(settings.format, CacheImageFormat::Webp);
+            assert_eq!(settings.quality, 50);
+        }
+        let saved: CacheSettings = serde_json::from_str(
+            r#"{"cache_images":false,"enabled":false,"format":"jpeg","quality":91}"#,
+        )
+        .unwrap();
+        assert!(!saved.cache_images);
+        assert!(!saved.enabled);
+        assert_eq!(saved.format, CacheImageFormat::Jpeg);
+        assert_eq!(saved.quality, 91);
+        let saved_again: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(saved_again, saved);
+    }
 
     #[test]
     fn saved_external_preference_only_applies_on_android() {

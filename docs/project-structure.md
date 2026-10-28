@@ -1050,6 +1050,9 @@ from the KV store in `<data>/nova.redb`; any old files are left untouched.
   `XDG_DATA_HOME` and `XDG_CACHE_HOME` values only when absolute; empty/relative roots fall back to HOME, then the temporary directory.
 
 ### Image cache (`nova-media::cache`)
+New settings enable disk image caching and WebP compression at quality 50.
+Missing image-cache fields use these defaults; explicitly saved cache switches,
+formats and quality values remain unchanged.
 The byte-budgeted decoded LRU and disk cache share a key made from source URL
 and the resolved processing recipe, so consumers with identical recipes share
 decoded entries. Each disk variant is one atomic `.variant` file: `NVIMAGE2`
