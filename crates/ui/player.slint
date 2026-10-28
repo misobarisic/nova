@@ -665,6 +665,7 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             label: @tr("Stats for nerds");
                             value: @tr("This device");
+                            icon: @image-url("../../assets/icons/menus/about.svg");
                             focused: root.focused_idx == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
                             reveal(y,h) => { root.reveal_row(y,h); }
                             activate => { root.stats_requested(); }
@@ -1137,6 +1138,13 @@ export component PlayerOverlay {
     in property <[PlayerStatsRow]> stats_rows;
     in property <string> stats_notice;
     callback stats_copy();
+    // Position belongs to this player instance, independently of diagnostics
+    // data/visibility. Reopening retains it; closing playback drops the instance.
+    private property <bool> stats_moved: false;
+    private property <length> stats_left;
+    private property <length> stats_top;
+    private property <length> stats_drag_origin_x;
+    private property <length> stats_drag_origin_y;
     function open_stats() { root.open_popup = 0; root.stats_visible = true; }
     changed stats_visible => {
         if root.stats_visible { root.open_popup = 0; stats_focus_timer.start(); }
@@ -3622,14 +3630,32 @@ export component PlayerOverlay {
     // Diagnostics stays painted while the ordinary transport auto-hides.
     stats_overlay := PlayerStats {
         visible: root.stats_visible;
-        x: root.safe-left + 18px;
-        y: root.safe-top + (InterfaceStyle.tv ? 76px : 60px);
+        x: Math.clamp(root.stats_moved ? root.stats_left : root.safe-left + 18px,
+            root.safe-left + 8px, Math.max(root.safe-left + 8px, root.width - root.safe-right - 8px - self.width));
+        y: Math.clamp(root.stats_moved ? root.stats_top : root.safe-top + (InterfaceStyle.tv ? 76px : 60px),
+            root.safe-top + 8px, Math.max(root.safe-top + 8px, root.height - root.safe-bottom - 8px - self.height));
         width: Math.max(0px, Math.min(InterfaceStyle.tv ? 600px : 440px, root.width - root.safe-left - root.safe-right - 36px));
-        available_height: Math.max(0px, root.height - self.y - root.safe-bottom - 16px);
+        // Moving the panel never resizes it. Only viewport/safe-area changes
+        // affect the limit; very short views prioritize the fixed action lanes.
+        available_height: Math.max(0px, Math.min(root.height - root.safe-top - root.safe-bottom - 16px,
+            Math.max(self.controls_height + 32px, root.height - root.safe-top - root.safe-bottom - (InterfaceStyle.tv ? 76px : 60px) - 16px)));
         rows: root.stats_rows;
         notice: root.stats_notice;
         closed => { root.stats_visible = false; }
         copy => { root.stats_copy(); }
+        drag_started => {
+            root.stats_drag_origin_x = self.x;
+            root.stats_drag_origin_y = self.y;
+            root.stats_left = self.x;
+            root.stats_top = self.y;
+            root.stats_moved = true;
+        }
+        dragged(dx, dy) => {
+            if root.stats_visible {
+                root.stats_left = root.stats_drag_origin_x + dx;
+                root.stats_top = root.stats_drag_origin_y + dy;
+            }
+        }
         // Diagnostics owns navigation, while ordinary playback shortcuts keep
         // their existing dispatcher, permissions and repeat handling.
         unhandled_key(e) => { key_scope.key-pressed(e) }

@@ -994,6 +994,11 @@ to cast/receiver playback clears it. A delayed sample or copy result cannot ente
 a replacement source or a reopened panel. One in-flight sampler remains bounded
 across those transitions and Android activity replacement.
 
+Drag the panel by its header with a mouse or touch. Its position stays within
+the player's safe area when the window resizes or rotates, and moving it does
+not resize the card or change playback. Closing and reopening statistics keeps
+the position during the same player session; closing playback resets it.
+
 Dimensions, content FPS, actual display refresh, codecs/decoder, measured bitrate,
 drop counters, audio, A/V sync, renderer and actual playback speed appear only
 when available. Actual speed retains three decimals, so a party's temporary

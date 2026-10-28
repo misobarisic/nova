@@ -81,6 +81,15 @@ fn open_from_menu(app: &nova::AppWindow) {
     settle(app);
     for _ in 0..12 {
         if let Some(stats) = button(app, "Stats for nerds") {
+            assert!(
+                stats
+                    .query_descendants()
+                    .match_inherits("Image")
+                    .find_all()
+                    .iter()
+                    .any(|icon| icon.size().width >= 20.0),
+                "diagnostics menu entry has an icon"
+            );
             stats.mock_single_click(slint::platform::PointerEventButton::Left);
             settle(app);
             return;
@@ -321,4 +330,204 @@ fn stats_keeps_header_and_copy_reachable_with_safe_areas_translation_and_tv_back
     assert!(!app.get_stats_visible());
     assert_eq!(app.get_stats_rows().row_count(), 0);
     assert!(app.get_stats_notice().is_empty());
+}
+
+#[test]
+fn stats_header_drags_with_mouse_and_touch_without_playback_changes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::stats_header_drags_with_mouse_and_touch_without_playback_changes"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    use i_slint_core::{input::TouchPhase, platform::InternalEvent};
+    use slint::LogicalPosition;
+
+    fn pointer(app: &nova::AppWindow, position: LogicalPosition, phase: TouchPhase, touch: bool) {
+        if touch {
+            app.window()
+                .dispatch_event(WindowEvent::internal(InternalEvent::Touch {
+                    id: 7,
+                    position: i_slint_core::lengths::logical_point_from_api(position),
+                    phase,
+                }));
+        } else {
+            app.window().dispatch_event(match phase {
+                TouchPhase::Started => WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+                TouchPhase::Moved => WindowEvent::PointerMoved { position },
+                TouchPhase::Ended => WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+                TouchPhase::Cancelled => WindowEvent::PointerExited,
+            });
+        }
+        settle(app);
+    }
+    fn drag(app: &nova::AppWindow, dx: f32, dy: f32, touch: bool) {
+        let header = element(app, "PlayerStats::header_drag");
+        let p = header.absolute_position();
+        let start = LogicalPosition::new(p.x + 32.0, p.y + 20.0);
+        pointer(app, start, TouchPhase::Started, touch);
+        for fraction in [0.25, 0.5, 0.75, 1.0] {
+            pointer(
+                app,
+                LogicalPosition::new(start.x + dx * fraction, start.y + dy * fraction),
+                TouchPhase::Moved,
+                touch,
+            );
+        }
+        pointer(
+            app,
+            LogicalPosition::new(start.x + dx, start.y + dy),
+            TouchPhase::Ended,
+            touch,
+        );
+    }
+    fn card(app: &nova::AppWindow) -> (LogicalPosition, slint::LogicalSize) {
+        let panel = element(app, "PlayerOverlay::stats_overlay");
+        (panel.absolute_position(), panel.size())
+    }
+    fn near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1.0,
+            "actual {actual}, expected {expected}"
+        );
+    }
+
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_is_paused(false);
+    app.set_duration(600.0);
+    app.set_stats_visible(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    fixture(&app, false);
+    app.on_toggle_pause(|| panic!("dragging diagnostics paused playback"));
+    app.on_seek(|_| panic!("dragging diagnostics sought playback"));
+    app.on_seek_relative(|_| panic!("dragging diagnostics sought playback"));
+    app.on_volume_step(|_| panic!("dragging diagnostics changed volume"));
+    app.on_android_volume_step(|_| panic!("dragging diagnostics changed Android volume"));
+    app.on_android_brightness_step(|_| panic!("dragging diagnostics changed brightness"));
+    app.on_playback_speed_preview(|_| panic!("dragging diagnostics started a speed hold"));
+    app.on_playback_speed_changed(|_| panic!("dragging diagnostics changed speed"));
+    app.on_party_set_target_speed(|_| panic!("dragging diagnostics changed the party"));
+    let copies = Rc::new(Cell::new(0));
+    let recorded = copies.clone();
+    app.on_stats_copy(move || recorded.set(recorded.get() + 1));
+    app.window().show().unwrap();
+    settle(&app);
+    let initial = card(&app);
+    let dot = element(&app, "PlayerStats::live_dot");
+    let live = element(&app, "PlayerStats::live_label");
+    assert!(
+        dot.absolute_position().x + dot.size().width < live.absolute_position().x,
+        "Live dot must precede the label"
+    );
+
+    drag(&app, 0.0, 0.0, false);
+    assert_eq!(card(&app), initial, "a header click must not move the card");
+    drag(&app, 200.0, 90.0, false);
+    near(card(&app).0.x, initial.0.x + 200.0);
+    near(card(&app).0.y, initial.0.y + 90.0);
+    assert_eq!(
+        card(&app).1,
+        initial.1,
+        "moving downward must not shrink the body"
+    );
+    app.set_is_android(true);
+    drag(&app, -60.0, 35.0, true);
+    near(card(&app).0.x, initial.0.x + 140.0);
+    near(card(&app).0.y, initial.0.y + 125.0);
+    assert_eq!(
+        card(&app).1,
+        initial.1,
+        "repeated drags must keep a stable size"
+    );
+
+    let before_body = card(&app).0;
+    let body = element(&app, "PlayerStats::stats_body");
+    let p = body.absolute_position();
+    let start = LogicalPosition::new(p.x + 40.0, p.y + 30.0);
+    pointer(&app, start, TouchPhase::Started, true);
+    pointer(
+        &app,
+        LogicalPosition::new(start.x + 20.0, start.y - 20.0),
+        TouchPhase::Moved,
+        true,
+    );
+    pointer(
+        &app,
+        LogicalPosition::new(start.x + 20.0, start.y - 20.0),
+        TouchPhase::Ended,
+        true,
+    );
+    assert_eq!(
+        card(&app).0,
+        before_body,
+        "body scrolling must not drag the card"
+    );
+    button(&app, "Copy diagnostics")
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert_eq!(copies.get(), 1);
+    let saved = card(&app).0;
+    button(&app, "Close stats")
+        .unwrap()
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert!(!app.get_stats_visible());
+    app.set_stats_visible(true);
+    settle(&app);
+    assert_eq!(
+        card(&app).0,
+        saved,
+        "reopening retains this player instance's position"
+    );
+
+    drag(&app, -2000.0, -2000.0, false);
+    near(card(&app).0.x, 8.0);
+    near(card(&app).0.y, 8.0);
+    drag(&app, 4000.0, 4000.0, true);
+    let (p, size) = card(&app);
+    near(p.x + size.width, 1272.0);
+    near(p.y + size.height, 892.0);
+    for (width, height) in [(800, 260), (360, 800), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        let bridge = app.global::<nova::PlayerOsdBridge>();
+        bridge.set_safe_top(24.0);
+        bridge.set_safe_left(40.0);
+        bridge.set_safe_right(12.0);
+        bridge.set_safe_bottom(20.0);
+        settle(&app);
+        let (p, size) = card(&app);
+        assert!(
+            p.x >= 47.5 && p.y >= 31.5,
+            "safe-area top/left clamp: {p:?}"
+        );
+        assert!(
+            p.x + size.width <= width as f32 - 19.5 && p.y + size.height <= height as f32 - 27.5,
+            "safe-area right/bottom clamp: {p:?} {size:?}"
+        );
+        assert!(
+            button(&app, "Close stats").is_some() && button(&app, "Copy diagnostics").is_some()
+        );
+    }
+    app.set_player_open(false);
+    settle(&app);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    fixture(&app, false);
+    app.set_stats_visible(true);
+    settle(&app);
+    let bridge = app.global::<nova::PlayerOsdBridge>();
+    near(card(&app).0.x, bridge.get_safe_left() + 18.0);
+    near(card(&app).0.y, bridge.get_safe_top() + 60.0);
 }

@@ -9,7 +9,10 @@ export component PlayerStats inherits Rectangle {
     in property <length> available_height;
     callback closed();
     callback copy();
+    callback drag_started();
+    callback dragged(length, length);
     callback unhandled_key(KeyEvent) -> EventResult;
+    out property <length> controls_height: stats_header.height + stats_footer.height + 2px;
     private property <int> focus_index: 0; // Close, scroll body, Copy.
     private property <bool> keyboard_mode: InterfaceStyle.tv;
     private property <length> inset: 14px;
@@ -75,6 +78,38 @@ export component PlayerStats inherits Rectangle {
             // starts below this fixed top lane and must never cover Close.
             x: 0px; y: 0px;
             width: 100%; height: InterfaceStyle.tv ? 58px : 48px;
+            header_drag := TouchArea {
+                x: 0px; y: 0px;
+                width: Math.max(0px, stats_close.x - 2px); height: 100%;
+                enabled: root.visible;
+                mouse-cursor: self.drag_active ? grabbing : grab;
+                private property <bool> drag_active;
+                private property <int> drag_finger;
+                private property <length> press_x;
+                private property <length> press_y;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down && event.button == PointerEventButton.left && !self.drag_active {
+                        self.press_x = self.absolute-position.x + self.mouse-x;
+                        self.press_y = self.absolute-position.y + self.mouse-y;
+                        self.drag_finger = event.touch-finger-id;
+                        self.drag_active = true;
+                        root.focus_panel();
+                        root.drag_started();
+                    } else if event.kind == PointerEventKind.move && self.drag_active && event.touch-finger-id == self.drag_finger {
+                        // mouse-x/y change when this card moves too. Recover
+                        // window coordinates before reporting total press delta
+                        // so successive pointer events cannot feed back/jump.
+                        root.dragged(self.absolute-position.x + self.mouse-x - self.press_x,
+                            self.absolute-position.y + self.mouse-y - self.press_y);
+                    } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                        self.drag_active = false;
+                    }
+                }
+                changed pressed => { if !self.pressed { self.drag_active = false; } }
+                changed enabled => { if !self.enabled { self.drag_active = false; } }
+                clicked => { root.focus_panel(); }
+                scroll-event => { accept }
+            }
             Text {
                 x: root.inset; y: 0px;
                 width: Math.max(0px, parent.width - (InterfaceStyle.tv ? 148px : 132px) - root.inset);
@@ -84,8 +119,8 @@ export component PlayerStats inherits Rectangle {
             }
             Rectangle {
                 x: parent.width - (InterfaceStyle.tv ? 132px : 116px); y: 0px; width: 66px; height: 100%;
-                Rectangle { y: (parent.height - self.height) / 2; width: 8px; height: 8px; border-radius: 4px; background: #31df58; }
-                Text { x: 14px; width: parent.width - self.x; height: 100%; text: @tr("Live"); color: #e5e9ee; font-family: "monospace"; font-size: root.text_size; vertical-alignment: center; }
+                live_dot := Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: 8px; height: 8px; border-radius: 4px; background: #31df58; }
+                live_label := Text { x: 14px; y: 0px; width: parent.width - self.x; height: 100%; text: @tr("Live"); color: #e5e9ee; font-family: "monospace"; font-size: root.text_size; vertical-alignment: center; }
             }
             stats_close := Rectangle {
                 x: parent.width - self.width - 6px; y: (parent.height - self.height) / 2;
