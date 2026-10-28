@@ -39,11 +39,45 @@ fn token(session: u64, episode: &str) -> String {
     format!("{session}:{episode}")
 }
 
+fn footer_token(session: u64, source: u64, profile: u64, episode: &str) -> String {
+    format!("footer:{session}:{source}:{profile}:{episode}")
+}
+
+// Only existing inventory is inspected here. Availability never discovers a
+// source or starts a player, and remains independent of the timed banner.
+fn footer_successor(state: &Shared, today: i64) -> Option<(u64, String, String)> {
+    if !state.remote_playback.can_play_locally() || state.casting.active || state.casting.loading {
+        return None;
+    }
+    let playing = state
+        .playback
+        .as_ref()
+        .filter(|playing| playing.session != 0)?;
+    let intent = state
+        .playback_intent
+        .as_ref()
+        .filter(|intent| intent.local_successor_source(&playing.series_id, &playing.episode_id))?;
+    if state.party.active() && !intent.party_bound_to(&state.party) {
+        return None;
+    }
+    let modal = state
+        .modal_item
+        .as_ref()
+        .filter(|modal| modal.id == playing.series_id && modal.type_ != "movie")?;
+    let next = successor(&modal.videos, &playing.episode_id, today)?;
+    modal
+        .seasons
+        .iter()
+        .any(|season| Some(*season) == next.season)
+        .then(|| (playing.session, playing.series_id.clone(), next.id.clone()))
+}
+
 impl Bridge {
     pub(super) fn clear_next_episode_prompt(&self) {
         self.shared.lock().unwrap().stream_prefetch_live_session = None;
         if let Some(app) = self.app() {
             Self::hide_next_episode_prompt(&app);
+            Self::hide_next_episode_button(&app);
         }
     }
 
@@ -54,8 +88,42 @@ impl Bridge {
         app.set_next_episode_token(SharedString::default());
     }
 
+    fn hide_next_episode_button(app: &AppWindow) {
+        app.set_next_episode_button_available(false);
+        app.set_next_episode_button_token(SharedString::default());
+    }
+
+    fn refresh_next_episode_button(&self, app: &AppWindow) {
+        if !app.get_player_open()
+            || !app.get_playback_started()
+            || app.get_profiles_require_selection()
+            || profile_policy::entry_blocked()
+            || self.player.awaiting_start_confirmation()
+            || self.player.playback_failed()
+        {
+            Self::hide_next_episode_button(app);
+            return;
+        }
+        let offer = footer_successor(&self.shared.lock().unwrap(), today_days());
+        if let Some((session, _, episode)) = offer {
+            app.set_next_episode_button_token(
+                footer_token(
+                    session,
+                    self.player.screenshot_session(),
+                    profiles::capture().epoch,
+                    &episode,
+                )
+                .into(),
+            );
+            app.set_next_episode_button_available(true);
+        } else {
+            Self::hide_next_episode_button(app);
+        }
+    }
+
     pub(super) fn refresh_next_episode_prompt(&self) {
         let Some(app) = self.app() else { return };
+        self.refresh_next_episode_button(&app);
         self.refresh_next_episode_prefetch(&app);
         if !app.get_player_open()
             || !app.get_playback_started()
@@ -179,20 +247,48 @@ impl Bridge {
             && token(p.session, &p.next_episode_id) == offer_token
         {
             p.next_episode_dismissed = true;
+            state.stream_prefetch_live_session = None;
             drop(state);
-            self.clear_next_episode_prompt();
+            if let Some(app) = self.app() {
+                Self::hide_next_episode_prompt(&app);
+                self.refresh_next_episode_button(&app);
+            }
         }
     }
 
     pub(super) fn choose_next_episode_streams(&self, offer_token: &str) {
         let Some(app) = self.app() else { return };
-        if !app.get_player_open()
-            || !app.get_next_episode_visible()
-            || !near_end(app.get_position() as f64, app.get_duration() as f64)
-        {
+        let footer = offer_token.starts_with("footer:");
+        if !app.get_player_open() || !app.get_playback_started() {
             return;
         }
-        let selection = {
+        let selection = if footer {
+            if !app.get_next_episode_button_available()
+                || app.get_next_episode_button_token().as_str() != offer_token
+                || app.get_profiles_require_selection()
+                || profile_policy::entry_blocked()
+                || self.player.awaiting_start_confirmation()
+                || self.player.playback_failed()
+            {
+                return;
+            }
+            footer_successor(&self.shared.lock().unwrap(), today_days()).and_then(
+                |(session, series, episode)| {
+                    (footer_token(
+                        session,
+                        self.player.screenshot_session(),
+                        profiles::capture().epoch,
+                        &episode,
+                    ) == offer_token)
+                        .then_some((series, episode))
+                },
+            )
+        } else {
+            if !app.get_next_episode_visible()
+                || !near_end(app.get_position() as f64, app.get_duration() as f64)
+            {
+                return;
+            }
             let state = self.shared.lock().unwrap();
             state.playback.as_ref().and_then(|p| {
                 if p.session == 0
@@ -529,6 +625,339 @@ mod tests {
         assert!(
             !app.get_player_open(),
             "duplicate actions never start playback"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod footer_tests {
+    use super::*;
+
+    fn isolated(name: &str, body: impl FnOnce(AppWindow, Bridge)) {
+        const ROOT: &str = "NOVA_NEXT_FOOTER_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-next-footer-{}-{}-{}",
+                std::process::id(),
+                nova_config::now_ms(),
+                name.rsplit("::").next().unwrap()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args([
+                    "--exact",
+                    name.strip_prefix("nova::").unwrap_or(name),
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        body(app, bridge);
+    }
+
+    fn prepare(bridge: &Bridge, app: &AppWindow) -> String {
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.prefetch_next_episode_streams = false;
+            state.cache_settings.auto_next_episode = true;
+            state.modal_item = Some(ModalItem {
+                details: Default::default(),
+                open_token: Arc::new(()),
+                pending_watch_now: None,
+                episodes_loading: false,
+                id: "series".into(),
+                type_: "series".into(),
+                request_id: "s1e1".into(),
+                videos: vec![
+                    Video {
+                        id: "s1e1".into(),
+                        season: Some(1),
+                        episode: Some(1),
+                        ..Default::default()
+                    },
+                    Video {
+                        id: "s1e2".into(),
+                        season: Some(1),
+                        episode: Some(2),
+                        ..Default::default()
+                    },
+                    Video {
+                        id: "s2e1".into(),
+                        season: Some(2),
+                        episode: Some(1),
+                        ..Default::default()
+                    },
+                ],
+                season_backdrops: HashMap::new(),
+                seasons: vec![1, 2],
+                season_index: 0,
+                episode_page: 0,
+                name: "Series".into(),
+                year: String::new(),
+                poster_url: String::new(),
+                background_url: String::new(),
+                logo_url: String::new(),
+                description: String::new(),
+                genres: Vec::new(),
+            });
+            state.playback = Some(PlaybackTarget {
+                series_id: "series".into(),
+                episode_id: "s1e1".into(),
+                session: new_session(),
+                ..Default::default()
+            });
+        }
+        assert!(bridge.begin_playback_request().is_current());
+        bridge.mark_playback_opened(true);
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_duration(1440.0);
+        app.set_position(10.0);
+        bridge.refresh_next_episode_prompt();
+        assert!(app.get_next_episode_button_available());
+        assert!(!app.get_next_episode_visible());
+        app.get_next_episode_button_token().to_string()
+    }
+
+    #[test]
+    fn early_footer_survives_banner_dismissal_and_opens_picker_without_autoplay() {
+        isolated(
+            concat!(
+                module_path!(),
+                "::early_footer_survives_banner_dismissal_and_opens_picker_without_autoplay"
+            ),
+            |app, bridge| {
+                let footer = prepare(&bridge, &app);
+                assert!(footer.starts_with("footer:"));
+                app.set_position(1321.0);
+                bridge.refresh_next_episode_prompt();
+                let banner = app.get_next_episode_token();
+                assert!(app.get_next_episode_visible());
+                bridge.dismiss_next_episode(banner.as_str());
+                assert!(!app.get_next_episode_visible());
+                assert!(app.get_next_episode_button_available());
+                assert_eq!(
+                    app.get_next_episode_button_token().as_str(),
+                    footer.as_str()
+                );
+                app.set_position(120.0);
+                bridge.refresh_next_episode_prompt();
+                bridge.choose_next_episode_streams(banner.as_str());
+                assert!(
+                    app.get_player_open(),
+                    "Dismissed/early banner tokens retain their original restrictions"
+                );
+                let closes = Arc::new(AtomicUsize::new(0));
+                let count = closes.clone();
+                let close_bridge = bridge.clone();
+                app.on_close_player(move || {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    close_bridge
+                        .dispatch_playback_action(nova_playback_api::PlaybackAction::Stop)
+                        .unwrap();
+                });
+                app.window().set_fullscreen(true);
+                app.set_is_fullscreen(true);
+                bridge
+                    .dispatch_playback_action(nova_playback_api::PlaybackAction::NextEpisode {
+                        token: footer.clone(),
+                    })
+                    .unwrap();
+                assert_eq!(closes.load(Ordering::Relaxed), 1);
+                assert!(!app.get_player_open());
+                assert!(app.get_stream_selector_open());
+                assert!(app.window().is_fullscreen());
+                assert!(
+                    !app.get_auto_next_preview(),
+                    "Explicit Next never starts the automatic countdown"
+                );
+                assert!(!app.get_next_episode_button_available());
+                {
+                    let state = bridge.shared.lock().unwrap();
+                    assert_eq!(state.modal_item.as_ref().unwrap().request_id, "s1e2");
+                    let progress = &state.progress[&progress_map_key("series", "s1e1")];
+                    assert_eq!(progress.position_secs, 120.0);
+                    assert!(
+                        !progress.watched,
+                        "Leaving early cannot force the episode watched"
+                    );
+                    assert!(
+                        state
+                            .playback_intent
+                            .as_ref()
+                            .is_none_or(|intent| !intent.in_app)
+                    );
+                }
+                bridge
+                    .dispatch_playback_action(nova_playback_api::PlaybackAction::NextEpisode {
+                        token: footer,
+                    })
+                    .ok();
+                assert_eq!(
+                    closes.load(Ordering::Relaxed),
+                    1,
+                    "Queued duplicate cannot close a newer selection"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn footer_revalidates_source_profile_inventory_release_and_season_before_closing() {
+        isolated(
+            concat!(
+                module_path!(),
+                "::footer_revalidates_source_profile_inventory_release_and_season_before_closing"
+            ),
+            |app, bridge| {
+                let closes = Arc::new(AtomicUsize::new(0));
+                let count = closes.clone();
+                app.on_close_player(move || {
+                    count.fetch_add(1, Ordering::Relaxed);
+                });
+                for change in [
+                    "session",
+                    "source",
+                    "pending-source",
+                    "profile",
+                    "entry-lock",
+                    "profile-picker",
+                    "cast",
+                    "series",
+                    "movie",
+                    "inventory",
+                    "season",
+                    "future",
+                    "finale",
+                ] {
+                    let footer = prepare(&bridge, &app);
+                    match change {
+                        "session" => {
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .playback
+                                .as_mut()
+                                .unwrap()
+                                .session = new_session()
+                        }
+                        "source" => {
+                            bridge.player.close();
+                            app.set_player_open(true);
+                            app.set_playback_started(true);
+                        }
+                        "pending-source" => {
+                            assert!(bridge.begin_playback_request().is_current());
+                        }
+                        "profile" => {}
+                        "entry-lock" => profile_policy::set_entry_blocked(true),
+                        "profile-picker" => app.set_profiles_require_selection(true),
+                        "cast" => bridge.shared.lock().unwrap().casting.active = true,
+                        "series" => {
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .modal_item
+                                .as_mut()
+                                .unwrap()
+                                .id = "another-series".into()
+                        }
+                        "movie" => {
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .modal_item
+                                .as_mut()
+                                .unwrap()
+                                .type_ = "movie".into()
+                        }
+                        "inventory" => bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .modal_item
+                            .as_mut()
+                            .unwrap()
+                            .videos
+                            .clear(),
+                        "season" => bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .modal_item
+                            .as_mut()
+                            .unwrap()
+                            .seasons
+                            .clear(),
+                        "future" => {
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .modal_item
+                                .as_mut()
+                                .unwrap()
+                                .videos[1]
+                                .released = Some("2099-01-01".into())
+                        }
+                        "finale" => {
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .modal_item
+                                .as_mut()
+                                .unwrap()
+                                .videos
+                                .truncate(1);
+                        }
+                        _ => unreachable!(),
+                    }
+                    if change == "profile" {
+                        let mut context = profiles::capture();
+                        context.epoch += 1;
+                        profiles::with_context(context, || {
+                            bridge.choose_next_episode_streams(&footer)
+                        });
+                    } else {
+                        bridge.choose_next_episode_streams(&footer);
+                    }
+                    assert_eq!(
+                        closes.load(Ordering::Relaxed),
+                        0,
+                        "{change}: stale or unavailable footer cannot close playback"
+                    );
+                    assert!(app.get_player_open(), "{change}");
+                    profile_policy::set_entry_blocked(false);
+                    app.set_profiles_require_selection(false);
+                    bridge.shared.lock().unwrap().casting.active = false;
+                }
+            },
         );
     }
 }

@@ -2842,3 +2842,123 @@ fn system_media_party_controls_follow_shared_authority_without_saving_personal_s
         },
     );
 }
+
+#[test]
+fn early_footer_next_uses_the_same_host_and_shared_guest_transaction() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::early_footer_next_uses_the_same_host_and_shared_guest_transaction"
+        ),
+        |Fixture { app, bridge }| {
+            for role in [PartyRole::Host, PartyRole::Guest] {
+                bridge.shared.lock().unwrap().party = State::default();
+                prepare_next_party(&bridge, &app, role);
+                bridge.mark_playback_opened(true);
+                app.set_position(10.0);
+                bridge.refresh_next_episode_prompt();
+                assert!(!app.get_next_episode_visible());
+                assert!(app.get_next_episode_button_available());
+                let token = app.get_next_episode_button_token().to_string();
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode {
+                        token: token.clone(),
+                    })
+                    .unwrap();
+                assert!(
+                    app.get_player_open(),
+                    "Even early footer requests wait for room acceptance"
+                );
+                assert!(app.get_party_busy());
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode {
+                        token: token.clone(),
+                    })
+                    .unwrap();
+                assert_eq!(bridge.shared.lock().unwrap().party.pending.len(), 1);
+                let (choice, guard) = accept_next_party(&bridge);
+                bridge.party_complete_next(choice, guard);
+                assert!(!app.get_player_open());
+                assert!(app.get_stream_selector_open());
+                assert!(!app.get_auto_next_preview());
+                assert_eq!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .unwrap()
+                        .request_id,
+                    "tt123:1:2"
+                );
+                assert_eq!(
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .party
+                        .snapshot
+                        .as_ref()
+                        .unwrap()
+                        .generation,
+                    2
+                );
+                bridge
+                    .dispatch_playback_action(PlaybackAction::NextEpisode { token })
+                    .ok();
+                assert!(
+                    !bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .party
+                        .pending
+                        .iter()
+                        .any(|operation| matches!(
+                            operation,
+                            Operation::PrepareMedia(..) | Operation::ClearMedia { .. }
+                        )),
+                    "An old footer cannot replace or clear the accepted successor"
+                );
+            }
+            bridge.shared.lock().unwrap().party = State::default();
+            prepare_next_party(&bridge, &app, PartyRole::Guest);
+            bridge.mark_playback_opened(true);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .control_policy = ControlPolicy::HostOnly;
+            bridge.party_publish();
+            app.set_position(10.0);
+            bridge.refresh_next_episode_prompt();
+            assert!(app.get_next_episode_button_available());
+            assert!(!app.get_party_can_control());
+            bridge
+                .dispatch_playback_action(PlaybackAction::NextEpisode {
+                    token: app.get_next_episode_button_token().to_string(),
+                })
+                .unwrap();
+            assert!(app.get_player_open());
+            assert!(bridge.shared.lock().unwrap().party.pending.is_empty());
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                1,
+                "Footer availability never grants HostOnly guests shared authority"
+            );
+        },
+    );
+}

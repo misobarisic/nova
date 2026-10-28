@@ -643,7 +643,18 @@ restore removed jobs or attach data to a reused job ID or changed artifact.
 Implementation and policy tests: `src/app/intro_skip.rs`; headless overlay
 regression: `tests/player/intro_skip.rs` in `ui_player`.
 
-## Next-episode banner
+## Next-episode controls
+
+The footer's Lucide SkipForward button opens the next episode's stream selector
+at any point after episodic playback starts. It appears when the loaded episode
+inventory contains a released, sequential successor with a usable season. Movies,
+final episodes, future releases, loading and remote playback do not offer it.
+The button saves normal progress and closes the current source through the same
+cleanup as **Choose streams** below; it never chooses or starts a source itself.
+In watch parties it uses the shared host/everyone control permission and waits
+for the creator to accept the episode change before opening the local picker.
+Dismissal of the timed banner does not remove the footer button. Source and
+profile tokens reject actions left over from another playback session.
 
 In-app episodic playback offers the next episode during the final two minutes,
 capped at the final 10% for short episodes. The duration must be known and
@@ -688,11 +699,15 @@ then dismisses the banner, then closes the player on a subsequent press.
 Implementation: `src/app/next_episode.rs` owns eligibility and session guards;
 `src/app/playback.rs` observes progress; `src/app/detail.rs` shares ID-based
 episode stream selection with the existing picker; `src/app/run.rs` wires
-callbacks and close cleanup. `crates/ui/player.slint` renders the banner through
-the AppWindow `next_episode_*` properties/callbacks.
+callbacks and close cleanup. `crates/ui/player.slint` renders both controls through
+the AppWindow `next_episode_*` properties/callbacks. The footer uses separate
+`next_episode_button_available` and `next_episode_button_token` properties, sharing
+the existing `next_episode_streams` callback without changing party wire actions.
 
 Regression coverage lives beside the policy in `src/app/next_episode.rs` and
-in `tests/shared_layout/next_episode_banner.rs` for headless layout, navigation and input.
+in `tests/shared_layout/next_episode_banner.rs` for banner layout and input.
+`tests/player/next_episode_control.rs` covers footer navigation, permissions and
+compact layouts; `src/app/party_tests.rs` covers accepted party transitions.
 
 ## Synced watch queue and continuous playback
 

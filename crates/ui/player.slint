@@ -1160,6 +1160,13 @@ export component PlayerOverlay {
     in property <int> skip_segment_kind;
     callback skip_segment();
     callback dismiss_skip_segment();
+    in property <bool> next_episode_button_available;
+    in property <string> next_episode_button_token;
+    private property <bool> footer_next_enabled: root.next_episode_button_available
+        && root.next_episode_button_token != "" && root.playback_started && root.timeline_control_allowed;
+    function choose_footer_next() {
+        if root.footer_next_enabled { root.next_episode_streams(root.next_episode_button_token); }
+    }
     in property <bool> next_episode_visible;
     in property <string> next_episode_title;
     in property <string> next_episode_context;
@@ -1353,7 +1360,8 @@ export component PlayerOverlay {
     // Tab/Shift+Tab visits OSD controls; arrow keys directly seek or change
     // volume unless a popup owns them for its existing menu navigation.
     // 0 exit, 1 pause, 2 volume, 3/4 seek, 5/6 tracks, 7 settings,
-    // 8 fullscreen, 9 screenshot, 10/11 next-episode actions.
+    // 8 fullscreen, 9 screenshot, 10/11 offers, 12 timeline, 13 speed,
+    // 14 chapters, 15 Cast, 16 footer Next episode.
     property <int> kb_idx: 1;
     property <int> kb_menu: 0;
 
@@ -1475,6 +1483,7 @@ export component PlayerOverlay {
     }
     // Only present, enabled bottom-row controls participate in TV traversal.
     function tv_control_available(index: int) -> bool {
+        if index == 16 { return root.footer_next_enabled; }
         if index == 15 { return CastBridge.available; }
         if index == 1 { return root.timeline_control_allowed; }
         if index == 3 || index == 4 { return root.tv_can_seek(); }
@@ -1484,20 +1493,31 @@ export component PlayerOverlay {
         if index == 10 { return (root.next_episode_shown || root.skip_segment_shown) && root.timeline_control_allowed; }
         return index == 11 && (root.next_episode_shown || root.skip_segment_shown);
     }
-    function tv_step_control(direction: int) {
+    function tv_neighbour(index: int, direction: int) -> int {
+        if root.next_episode_button_available {
+            if index == 6 && direction > 0 { return 16; }
+            if index == 7 && direction < 0 { return 16; }
+            if index == 16 { return direction > 0 ? 7 : 6; }
+        }
+        return Math.clamp(index + direction, 1, 15);
+    }
+    function tv_control_neighbour(index: int, direction: int) -> int {
         // Bound the walk: unavailable track/screenshot/party actions cannot trap focus.
-        let first = Math.clamp(root.kb_idx + direction, 1, 15);
-        if root.tv_control_available(first) { root.kb_idx = first; return; }
-        let second = Math.clamp(first + direction, 1, 15);
-        if root.tv_control_available(second) { root.kb_idx = second; return; }
-        let third = Math.clamp(second + direction, 1, 15);
-        if root.tv_control_available(third) { root.kb_idx = third; return; }
-        let fourth = Math.clamp(third + direction, 1, 15);
-        if root.tv_control_available(fourth) { root.kb_idx = fourth; return; }
-        let fifth = Math.clamp(fourth + direction, 1, 15);
-        if root.tv_control_available(fifth) { root.kb_idx = fifth; return; }
-        let sixth = Math.clamp(fifth + direction, 1, 15);
-        if root.tv_control_available(sixth) { root.kb_idx = sixth; }
+        let first = root.tv_neighbour(index, direction);
+        if root.tv_control_available(first) { return first; }
+        let second = root.tv_neighbour(first, direction);
+        if root.tv_control_available(second) { return second; }
+        let third = root.tv_neighbour(second, direction);
+        if root.tv_control_available(third) { return third; }
+        let fourth = root.tv_neighbour(third, direction);
+        if root.tv_control_available(fourth) { return fourth; }
+        let fifth = root.tv_neighbour(fourth, direction);
+        if root.tv_control_available(fifth) { return fifth; }
+        let sixth = root.tv_neighbour(fifth, direction);
+        return root.tv_control_available(sixth) ? sixth : index;
+    }
+    function tv_step_control(direction: int) {
+        root.kb_idx = root.tv_control_neighbour(root.kb_idx, direction);
     }
     // An input held beyond the ordinary three-second timeout stays interactive.
     tv_seek_wake := Timer {
@@ -1599,15 +1619,28 @@ export component PlayerOverlay {
         }
     }
 
-    // Preserve existing action indices; speed uses 13, chapter title uses 14.
+    // Preserve existing action indices; footer Next uses 16 (banner stays 10/11).
     function kb_control_max() -> int {
-        return CastBridge.available ? 15 : 14;
+        return root.next_episode_button_available ? 16 : CastBridge.available ? 15 : 14;
     }
 
     // Neighbour control in the strip, skipping buttons absent on this
     // layout: the volume control (2) is gone on Android (volume pinned to
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
+        if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, -1); }
+        // With the new utility present, follow its actual left-to-right lane.
+        if root.next_episode_button_available {
+            if root.kb_idx == 16 { return root.footer_speed_visible ? 13 : root.narrow ? (root.is_android ? 4 : 2) : 6; }
+            if root.kb_idx == 9 { return root.footer_next_enabled ? 16 : root.footer_speed_visible ? 13 : root.narrow ? (root.is_android ? 4 : 2) : 6; }
+            if root.kb_idx == 7 { return 9; }
+            if root.kb_idx == 8 { return 7; }
+            if root.kb_idx == 10 { return root.is_android ? 7 : 8; }
+            if root.kb_idx == 13 { return root.narrow ? (root.is_android ? 4 : 2) : 6; }
+            if root.kb_idx == 5 { return root.is_android ? 4 : 2; }
+            if root.kb_idx == 2 { return root.narrow ? 1 : 4; }
+            if root.kb_idx == 3 { return 1; }
+        }
         if root.kb_idx == 15 { return 0; }
         if root.kb_idx == 14 { return CastBridge.available ? 15 : 0; }
         if root.kb_idx == 1 && !root.chapter_shortcut_available { return CastBridge.available ? 15 : 0; }
@@ -1626,6 +1659,20 @@ export component PlayerOverlay {
     }
 
     function kb_next() -> int {
+        if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, 1); }
+        if root.next_episode_button_available {
+            if root.kb_idx == 1 { return root.narrow && !root.is_android ? 2 : 3; }
+            if root.kb_idx == 2 || (root.kb_idx == 4 && root.is_android) {
+                return !root.narrow ? 5 : root.footer_speed_visible ? 13 : root.footer_next_enabled ? 16 : 9;
+            }
+            if root.kb_idx == 4 { return 2; }
+            if root.kb_idx == 6 { return root.footer_speed_visible ? 13 : root.footer_next_enabled ? 16 : 9; }
+            if root.kb_idx == 13 { return root.footer_next_enabled ? 16 : 9; }
+            if root.kb_idx == 16 { return 9; }
+            if root.kb_idx == 9 { return 7; }
+            if root.kb_idx == 7 { return root.is_android ? (root.next_episode_shown || root.skip_segment_shown ? 10 : 7) : 8; }
+            if root.kb_idx == 8 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 8; }
+        }
         if root.kb_idx == 14 { return 1; }
         if root.kb_idx == 0 { return CastBridge.available ? 15 : root.chapter_shortcut_available ? 14 : 1; }
         if root.kb_idx == 15 { return root.chapter_shortcut_available ? 14 : 1; }
@@ -1646,7 +1693,7 @@ export component PlayerOverlay {
     private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.can_control);
     changed timeline_control_allowed => {
         if !root.timeline_control_allowed { root.tv_cancel_seek(); root.pointer_scrubbing = false; }
-        if InterfaceStyle.tv { root.kb_clamp_focus(); }
+        root.kb_clamp_focus();
     }
     private property <bool> party_owns_playback: (PartyBridge.active || PartyBridge.busy);
     changed party_owns_playback => {
@@ -1678,6 +1725,7 @@ export component PlayerOverlay {
     }
 
     function kb_activate() {
+        if root.kb_idx == 16 { root.choose_footer_next(); return; }
         if root.kb_idx == 15 { CastBridge.show(); return; }
         if root.kb_idx == 14 { root.open_chapters(); return; }
         if (root.kb_idx == 10 && root.skip_segment_shown) {
@@ -1874,6 +1922,8 @@ export component PlayerOverlay {
             if !root.tv_control_available(root.kb_idx) { root.kb_idx = 7; }
             return;
         }
+        if root.kb_idx == 16 && !root.footer_next_enabled { root.kb_idx = 7; }
+        if root.kb_idx == 13 && !root.footer_speed_visible { root.kb_idx = 7; }
         if (root.kb_idx > root.kb_control_max()) { root.kb_idx = 1; }
         if root.is_android && root.kb_idx == 8 { root.kb_idx = 7; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6
@@ -1888,6 +1938,8 @@ export component PlayerOverlay {
     changed is_android => { root.kb_clamp_focus(); }
     changed skip_segment_shown => { root.kb_clamp_focus(); }
     changed next_episode_shown => { root.kb_clamp_focus(); }
+    changed footer_next_enabled => { root.kb_clamp_focus(); }
+    changed footer_speed_visible => { root.kb_clamp_focus(); }
     changed playback_started => {
         if !root.playback_started { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.open_popup = 0; root.kb_idx = 0; root.flash_show = false; }
         else { root.kb_idx = 1; }
@@ -1965,7 +2017,12 @@ export component PlayerOverlay {
     private property <length> content_right: root.safe-right + (root.narrow ? 16px : 24px);
     private property <bool> mobile_landscape: root.is_android && !root.narrow && !InterfaceStyle.tv;
     private property <length> rail_height: InterfaceStyle.tv ? 104px : root.mobile_landscape ? 54px : 102px;
-    private property <length> utility_width: root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px;
+    // At the smallest desktop portrait width, speed remains in Playback's
+    // menu rather than squeezing seven touch targets past the safe viewport.
+    private property <bool> footer_speed_visible: !InterfaceStyle.tv && !(root.narrow && !root.is_android
+        && root.next_episode_button_available && root.width - root.content_left - root.content_right < 292px);
+    private property <length> utility_width: (root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px)
+        + (root.next_episode_button_available ? 48px : 0px);
     private property <length> caption_height: show_heading.height + episode_heading.height
         + badge_lane.height + summary_heading.height + 12px;
     // Shared deterministic geometry keeps offer avoidance aligned with the
@@ -3354,7 +3411,7 @@ export component PlayerOverlay {
                         }
                     }
 
-                    if !InterfaceStyle.tv: speed_button := IconBtn {
+                    if root.footer_speed_visible: speed_button := IconBtn {
                         enabled: !PartyBridge.busy;
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
@@ -3367,6 +3424,28 @@ export component PlayerOverlay {
                             root.settings_page = 4; root.open_popup = 4;
                         }
                         Text { text: PartyBridge.active ? PlaybackSpeed.label(PartyBridge.target_speed) : Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    if root.next_episode_button_available: next_episode_button := IconBtn {
+                        enabled: root.footer_next_enabled;
+                        accessible-role: button;
+                        accessible-label: @tr("Next episode");
+                        accessible-enabled: root.footer_next_enabled;
+                        accessible-action-default => { if root.guard_osd_control() { root.choose_footer_next(); } }
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
+                        focused: root.kb_active && root.kb_idx == 16 && root.open_popup == 0;
+                        clicked => {
+                            if !root.guard_osd_control() { return; }
+                            root.kb_active = false; root.kb_idx = 16;
+                            root.choose_footer_next();
+                        }
+                        Image {
+                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            width: 26px; height: 26px;
+                            source: @image-url("../../assets/icons/player/skip-forward.svg");
+                            colorize: Theme.current.text_bright;
+                        }
                     }
                     if !InterfaceStyle.tv: screenshot_button := Rectangle {
                         width: 40px; height: 40px; border-radius: 10px;

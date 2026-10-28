@@ -384,6 +384,8 @@ export component AppWindow inherits Window {
     public function onboarding_bridge_finished() { root.onboarding_finished(); }
     public function onboarding_bridge_background_requested() { root.exit_to_background(); }
     PlayerOsdBindings {
+        next_episode_button_available <=> root.next_episode_button_available;
+        next_episode_button_token <=> root.next_episode_button_token;
         stats_visible <=> root.stats_visible;
         stats_rows <=> root.stats_rows;
         stats_notice <=> root.stats_notice;
@@ -1974,6 +1976,8 @@ export component AppWindow inherits Window {
     in-out property <int> skip_segment_kind;
     callback skip_segment();
     callback dismiss_skip_segment();
+    in-out property <bool> next_episode_button_available: false;
+    in-out property <string> next_episode_button_token: "";
     in-out property <bool> next_episode_visible: false;
     in-out property <string> next_episode_token: "";
     in-out property <string> next_episode_title: "";

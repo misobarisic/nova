@@ -3,6 +3,8 @@ import { PlayerOsdBridge, OnboardingBridge, PlayerStatsRow, TrackRow, ChapterRow
 // must never reconnect an already-joined backend/global property pool.
 
 export component PlayerOsdBindings {
+    in-out property <bool> next_episode_button_available <=> PlayerOsdBridge.next_episode_button_available;
+    in-out property <string> next_episode_button_token <=> PlayerOsdBridge.next_episode_button_token;
     in-out property <bool> stats_visible <=> PlayerOsdBridge.stats_visible;
     in-out property <[PlayerStatsRow]> stats_rows <=> PlayerOsdBridge.stats_rows;
     in-out property <string> stats_notice <=> PlayerOsdBridge.stats_notice;

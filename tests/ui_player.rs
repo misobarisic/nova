@@ -59,3 +59,6 @@ mod loading;
 
 #[path = "player/stats.rs"]
 mod stats;
+
+#[path = "player/next_episode_control.rs"]
+mod next_episode_control;

@@ -36,6 +36,8 @@ export component PlayerOsdModule inherits Window {
         skip_segment_kind <=> PlayerOsdBridge.skip_segment_kind;
         skip_segment => { PlayerOsdBridge.skip_segment(); }
         dismiss_skip_segment => { PlayerOsdBridge.dismiss_skip_segment(); }
+        next_episode_button_available: PlayerOsdBridge.next_episode_button_available;
+        next_episode_button_token: PlayerOsdBridge.next_episode_button_token;
         next_episode_visible <=> PlayerOsdBridge.next_episode_visible;
         next_episode_token <=> PlayerOsdBridge.next_episode_token;
         next_episode_title <=> PlayerOsdBridge.next_episode_title;

@@ -11,6 +11,7 @@ SVGs from [lucide-icons/lucide at `c29c276f16590cf017126671535ad8c792be64d8`](ht
 | Playback speed | `gauge.svg` |
 | Subtitle appearance and timing | `captions.svg` |
 | Intro skipping | `skip-forward.svg` |
+| Footer Next episode | `skip-forward.svg` |
 | Second subtitles | `languages.svg` |
 | Scene bookmarks | `bookmark.svg` |
 | Saved-scene play / edit / clear / delete | `play.svg` / `pencil.svg` / `eraser.svg` / `trash.svg` |
@@ -30,7 +31,9 @@ unmodified upstream asset used by both saved-scene action surfaces.
 The icons retain their 24×24 view box, 2px stroke, and rounded caps/joins.
 `MenuRow.icon` renders them at 24px and recolors them with
 `Theme.current.accent_soft`, so they follow Nova's selected theme.
-Transport controls and track-picker icons continue using Nova's existing glyphs.
+The footer Next episode control renders `skip-forward.svg` at 26px in the
+theme's bright text color. Other transport controls and track-picker icons use
+Nova's existing glyphs.
 
 Copyright © 2026 Lucide Icons and Contributors. Distributed under the ISC
 License. The complete upstream [LICENSE](LICENSE) also retains its Feather MIT

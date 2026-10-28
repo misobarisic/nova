@@ -254,6 +254,14 @@ impl PlaybackIntent {
     pub(super) fn active_local(&self) -> bool {
         self.in_app && self.token.is_current()
     }
+    pub(super) fn local_successor_source(&self, series: &str, episode: &str) -> bool {
+        self.active_local()
+            && !self.pending
+            && !self.detached
+            && self.context.media_type != "movie"
+            && self.context.media_id == series
+            && self.context.request_id == episode
+    }
     fn accepts(&self, token: &crate::torrent::PlaybackRequest, modal: Option<&ModalItem>) -> bool {
         self.token.same_request(token)
             && token.is_current()
