@@ -7,6 +7,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_search_matches => invoke_settings_bridge_search_matches(arg0, arg1),
     );
     crate::forward_app_callbacks!(app, app.global::<SettingsBridge>(); recover_focus;
+        on_view_changed => invoke_settings_bridge_view_changed(arg0),
         on_tracking_connect => invoke_settings_bridge_tracking_connect(arg0, arg1, arg2),
         on_tracking_complete => invoke_settings_bridge_tracking_complete(arg0, arg1),
         on_tracking_disconnect => invoke_settings_bridge_tracking_disconnect(arg0),

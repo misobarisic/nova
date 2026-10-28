@@ -39,6 +39,8 @@ export component SettingsSyncModule inherits Window {
     changed measured_preferred => { root.publish_size(); }
     private property <bool> inspector_open: false;
     private property <bool> inspector_episodes_open: false;
+    private property <bool> advanced_visible: SettingsContent.advanced_visible;
+    changed advanced_visible => { if !root.advanced_visible { root.inspector_open = false; SettingsBridge.sync_inspector_active = false; } }
     init => { root.publish_size(); SettingsBridge.sync_inspector_active = false; }
     function publish_size() {
         if SettingsBridge.sel == 7 {
@@ -115,100 +117,104 @@ export component SettingsSyncModule inherits Window {
                 }
             }
 
-            SectionHeader { label: @tr("SYNC INSPECTOR"); }
-            inspector_intro := Rectangle {
-                vertical-stretch: 0;
-                height: intro_body.preferred-height;
-                background: Theme.current.card;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: Theme.current.border_soft;
-                intro_body := VerticalLayout {
-                    alignment: start;
-                    padding: 16px;
-                    spacing: 12px;
-                    Text {
-                        text: @tr("Understand this device's sync state");
-                        color: Theme.current.text_bright;
-                        font-size: 16px;
-                        font-weight: 600;
-                        wrap: word-wrap; min-width: 0px;
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 16px;
+                SectionHeader { label: @tr("SYNC INSPECTOR"); }
+                inspector_intro := Rectangle {
+                    vertical-stretch: 0;
+                    height: intro_body.preferred-height;
+                    background: Theme.current.card;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: Theme.current.border_soft;
+                    intro_body := VerticalLayout {
+                        alignment: start;
+                        padding: 16px;
+                        spacing: 12px;
+                        Text {
+                            text: @tr("Understand this device's sync state");
+                            color: Theme.current.text_bright;
+                            font-size: 16px;
+                            font-weight: 600;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                        Text {
+                            text: @tr("Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off.");
+                            color: Theme.current.text_settings;
+                            font-size: 13px;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                        PillButton {
+                            accessible-id: "sync-inspector-toggle";
+                            label: root.inspector_open ? @tr("Close inspector") : @tr("Open inspector");
+                            clicked => { root.inspector_open = !root.inspector_open; SettingsBridge.sync_inspector_active = root.inspector_open; if root.inspector_open { SettingsBridge.sync_inspector_refresh(); } }
+                        }
                     }
-                    Text {
-                        text: @tr("Inspect stored data, pending local application and the actions behind an episode's watched state. Read only; available even while sync is off.");
-                        color: Theme.current.text_settings;
-                        font-size: 13px;
-                        wrap: word-wrap; min-width: 0px;
-                    }
-                    PillButton {
-                        accessible-id: "sync-inspector-toggle";
-                        label: root.inspector_open ? @tr("Close inspector") : @tr("Open inspector");
-                        clicked => { root.inspector_open = !root.inspector_open; SettingsBridge.sync_inspector_active = root.inspector_open; if root.inspector_open { SettingsBridge.sync_inspector_refresh(); } }
-                    }
                 }
-            }
-            if root.inspector_open: VerticalLayout {
-                vertical-stretch: 0;
-                alignment: start;
-                spacing: 12px;
-                Text {
-                    text: @tr("CURRENT PROFILE · LOCAL INVENTORY");
-                    color: Theme.current.text_bright; font-size: 12px; font-weight: 600;
-                    wrap: word-wrap; min-width: 0px;
-                }
-                Text {
-                    text: @tr("Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here.");
-                    color: Theme.current.text_settings; font-size: 12px;
-                    wrap: word-wrap; min-width: 0px;
-                }
-                for row in SettingsBridge.sync_inspector_rows: InspectorRow {
-                    title: row.title; detail: row.detail; status: row.status;
-                }
-                if SettingsBridge.sync_inspector_rows.length == 0: Text {
-                    text: @tr("No sync records stored yet. Local changes appear here after they are saved.");
-                    color: Theme.current.text_settings; font-size: 13px;
-                    wrap: word-wrap; min-width: 0px;
-                }
-                PillButton {
-                    accessible-id: "sync-inspector-refresh";
-                    label: @tr("Refresh inspector");
-                    clicked => { SettingsBridge.sync_inspector_refresh(); }
-                }
-                PillButton {
-                    accessible-id: "sync-inspector-episodes";
-                    label: root.inspector_episodes_open ? @tr("Hide episode explanations") : @tr("Explain watched states");
-                    clicked => { root.inspector_episodes_open = !root.inspector_episodes_open; }
-                }
-                if root.inspector_episodes_open: VerticalLayout {
+                if root.inspector_open: VerticalLayout {
                     vertical-stretch: 0;
                     alignment: start;
                     spacing: 12px;
-                    SearchField {
-                        min-width: 0px;
-                        show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
-                        roomy: true;
-                        text <=> SettingsBridge.sync_inspector_query;
-                        placeholder-text: @tr("Find a saved title or episode");
-                        focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                        edited(query) => { SettingsBridge.sync_inspector_query_changed(query); }
-                        accepted(query) => { SettingsBridge.sync_inspector_query_changed(query); }
+                    Text {
+                        text: @tr("CURRENT PROFILE · LOCAL INVENTORY");
+                        color: Theme.current.text_bright; font-size: 12px; font-weight: 600;
+                        wrap: word-wrap; min-width: 0px;
                     }
                     Text {
-                        text: @tr("Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history.");
+                        text: @tr("Stored records are this device's sync state. A completed exchange snapshot is a local watermark, not proof that another device applied every record. Newer records may need another exchange; their delivery is unknown. Pending application means records still need to be applied here.");
                         color: Theme.current.text_settings; font-size: 12px;
                         wrap: word-wrap; min-width: 0px;
                     }
-                    for row in SettingsBridge.sync_inspector_episodes: InspectorRow {
+                    for row in SettingsBridge.sync_inspector_rows: InspectorRow {
                         title: row.title; detail: row.detail; status: row.status;
                     }
-                    if SettingsBridge.sync_inspector_episodes.length == 0: Text {
-                        text: @tr("No matching saved episode states.");
+                    if SettingsBridge.sync_inspector_rows.length == 0: Text {
+                        text: @tr("No sync records stored yet. Local changes appear here after they are saved.");
                         color: Theme.current.text_settings; font-size: 13px;
                         wrap: word-wrap; min-width: 0px;
                     }
+                    PillButton {
+                        accessible-id: "sync-inspector-refresh";
+                        label: @tr("Refresh inspector");
+                        clicked => { SettingsBridge.sync_inspector_refresh(); }
+                    }
+                    PillButton {
+                        accessible-id: "sync-inspector-episodes";
+                        label: root.inspector_episodes_open ? @tr("Hide episode explanations") : @tr("Explain watched states");
+                        clicked => { root.inspector_episodes_open = !root.inspector_episodes_open; }
+                    }
+                    if root.inspector_episodes_open: VerticalLayout {
+                        vertical-stretch: 0;
+                        alignment: start;
+                        spacing: 12px;
+                        SearchField {
+                            min-width: 0px;
+                            show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                            roomy: true;
+                            text <=> SettingsBridge.sync_inspector_query;
+                            placeholder-text: @tr("Find a saved title or episode");
+                            focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                            edited(query) => { SettingsBridge.sync_inspector_query_changed(query); }
+                            accepted(query) => { SettingsBridge.sync_inspector_query_changed(query); }
+                        }
+                        Text {
+                            text: @tr("Up to 80 most recently changed matching episodes. Action clocks show milliseconds, logical counter and device tie-break ID. They describe the winning registers, not a full event history.");
+                            color: Theme.current.text_settings; font-size: 12px;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                        for row in SettingsBridge.sync_inspector_episodes: InspectorRow {
+                            title: row.title; detail: row.detail; status: row.status;
+                        }
+                        if SettingsBridge.sync_inspector_episodes.length == 0: Text {
+                            text: @tr("No matching saved episode states.");
+                            color: Theme.current.text_settings; font-size: 13px;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                    }
                 }
-            }
 
+
+            }
             SectionHeader { label: @tr("Cross-device sync"); }
 
             // ---- Sync --------------------------------------
@@ -362,15 +368,18 @@ export component SettingsSyncModule inherits Window {
                     VerticalLayout {
                         spacing: 0px;
 
-                        SettingsRow {
-                            setting-key: "sync_interval";
-                            row-title: @tr("Auto-sync while the app is running");
-                            row-desc: @tr("How often to check for changes while the app is open or a download is active.");
+                        if SettingsContent.advanced_visible: VerticalLayout {
+                            vertical-stretch: 0; spacing: 0px;
+                            SettingsRow {
+                                setting-key: "sync_interval";
+                                row-title: @tr("Auto-sync while the app is running");
+                                row-desc: @tr("How often to check for changes while the app is open or a download is active.");
 
-                            Segmented {
-                                labels: [@tr("30s"), @tr("1m"), @tr("5m"), @tr("15m")];
-                                current_index: SettingsBridge.sync_interval_index;
-                                picked(i) => { SettingsBridge.sync_interval_index = i; SettingsBridge.sync_interval_picked(i); }
+                                Segmented {
+                                    labels: [@tr("30s"), @tr("1m"), @tr("5m"), @tr("15m")];
+                                    current_index: SettingsBridge.sync_interval_index;
+                                    picked(i) => { SettingsBridge.sync_interval_index = i; SettingsBridge.sync_interval_picked(i); }
+                                }
                             }
                         }
 
@@ -591,45 +600,48 @@ export component SettingsSyncModule inherits Window {
                     VerticalLayout {
                         spacing: 0px;
 
-                        Rectangle {
-                            background: Theme.current.card;
+                        if SettingsContent.advanced_visible: VerticalLayout {
+                            vertical-stretch: 0; spacing: 16px;
+                            Rectangle {
+                                background: Theme.current.card;
 
-                            VerticalLayout {
-                                spacing: 10px;
-                                padding-top: 16px;
-                                padding-bottom: 16px;
-                                padding-left: 16px;
-                                padding-right: 16px;
+                                VerticalLayout {
+                                    spacing: 10px;
+                                    padding-top: 16px;
+                                    padding-bottom: 16px;
+                                    padding-left: 16px;
+                                    padding-right: 16px;
 
-                                Text {
-                                    text: @tr("Add a device by its endpoint ID");
-                                    // A heading may wrap: without this it reports its full
-                                    // single-line width as the card minimum.
-                                    wrap: word-wrap;
-                                    min-width: 0px;
-                                    font-size: 14px;
-                                    color: Theme.current.text_settings;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-
-                                    sync_peer_field := SearchField {
-                                        show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
-                                        roomy: true;
-                                        text <=> SettingsBridge.sync_peer_input;
-                                        placeholder-text: @tr("peer endpoint id");
-                                        focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                                        horizontal-stretch: 1;
+                                    Text {
+                                        text: @tr("Add a device by its endpoint ID");
+                                        // A heading may wrap: without this it reports its full
+                                        // single-line width as the card minimum.
+                                        wrap: word-wrap;
                                         min-width: 0px;
-                                        accepted(t) => { SettingsBridge.sync_add_peer(t); }
+                                        font-size: 14px;
+                                        color: Theme.current.text_settings;
                                     }
 
-                                    PillButton {
-                                        label: @tr("Add");
-                                        roomy: true;
-                                        primary: true;
-                                        clicked => { SettingsBridge.sync_add_peer(SettingsBridge.sync_peer_input); }
+                                    HorizontalLayout {
+                                        spacing: 12px;
+
+                                        sync_peer_field := SearchField {
+                                            show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                                            roomy: true;
+                                            text <=> SettingsBridge.sync_peer_input;
+                                            placeholder-text: @tr("peer endpoint id");
+                                            focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                            horizontal-stretch: 1;
+                                            min-width: 0px;
+                                            accepted(t) => { SettingsBridge.sync_add_peer(t); }
+                                        }
+
+                                        PillButton {
+                                            label: @tr("Add");
+                                            roomy: true;
+                                            primary: true;
+                                            clicked => { SettingsBridge.sync_add_peer(SettingsBridge.sync_peer_input); }
+                                        }
                                     }
                                 }
                             }

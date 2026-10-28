@@ -37,64 +37,68 @@ export component SettingsLookFeelModule inherits Window {
                         toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 0; SettingsContent.schedule_save(); }
                     }
                 } }
-            SectionHeader { label: @tr("Motion options"); }
-            if !SettingsBridge.animations: Text { text: @tr("Enable animations to use the motion options below."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-            SettingsCard { SettingsRow {
-                    tinted: true;
-                    setting-key: "anim_transitions";
-                    row-title: @tr("Page transitions");
-                    row-desc: @tr("Slide and fade between pages, move tab indicators and rotate download chevrons.");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 16px;
+                SectionHeader { label: @tr("Motion options"); }
+                if !SettingsBridge.animations: Text { text: @tr("Enable animations to use the motion options below."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                SettingsCard { SettingsRow {
+                        tinted: true;
+                        setting-key: "anim_transitions";
+                        row-title: @tr("Page transitions");
+                        row-desc: @tr("Slide and fade between pages, move tab indicators and rotate download chevrons.");
 
-                    ToggleSwitch {
-                        name: @tr("Page transitions");
-                        enabled: SettingsBridge.animations;
-                        checked <=> SettingsBridge.anim_transitions;
-                        focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 1 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 1; SettingsContent.schedule_save(); }
+                        ToggleSwitch {
+                            name: @tr("Page transitions");
+                            enabled: SettingsBridge.animations;
+                            checked <=> SettingsBridge.anim_transitions;
+                            focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 1 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 1; SettingsContent.schedule_save(); }
+                        }
                     }
-                }
-                SettingsRow {
-                    tinted: false;
-                    setting-key: "anim_hover";
-                    row-title: @tr("Hover effects");
-                    row-desc: @tr("Card lift and highlight fades on buttons, toggles, rows and filter pills.");
+                    SettingsRow {
+                        tinted: false;
+                        setting-key: "anim_hover";
+                        row-title: @tr("Hover effects");
+                        row-desc: @tr("Card lift and highlight fades on buttons, toggles, rows and filter pills.");
 
-                    ToggleSwitch {
-                        name: @tr("Hover effects");
-                        enabled: SettingsBridge.animations;
-                        checked <=> SettingsBridge.anim_hover;
-                        focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 2 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 2; SettingsContent.schedule_save(); }
+                        ToggleSwitch {
+                            name: @tr("Hover effects");
+                            enabled: SettingsBridge.animations;
+                            checked <=> SettingsBridge.anim_hover;
+                            focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 2 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 2; SettingsContent.schedule_save(); }
+                        }
                     }
-                }
-                SettingsRow {
-                    tinted: true;
-                    setting-key: "anim_player";
-                    row-title: @tr("Player OSD");
-                    row-desc: @tr("Fade and slide of the player controls, close button and volume slider.");
+                    SettingsRow {
+                        tinted: true;
+                        setting-key: "anim_player";
+                        row-title: @tr("Player OSD");
+                        row-desc: @tr("Fade and slide of the player controls, close button and volume slider.");
 
-                    ToggleSwitch {
-                        name: @tr("Player OSD");
-                        enabled: SettingsBridge.animations;
-                        checked <=> SettingsBridge.anim_player;
-                        focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 3 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 3; SettingsContent.schedule_save(); }
+                        ToggleSwitch {
+                            name: @tr("Player OSD");
+                            enabled: SettingsBridge.animations;
+                            checked <=> SettingsBridge.anim_player;
+                            focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 3 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 3; SettingsContent.schedule_save(); }
+                        }
                     }
-                }
-                SettingsRow {
-                    tinted: false;
-                    setting-key: "anim_nav_slide";
-                    row-title: @tr("Navigation feedback");
-                    row-desc: @tr("Gently pop the selected navigation icon when switching pages.");
+                    SettingsRow {
+                        tinted: false;
+                        setting-key: "anim_nav_slide";
+                        row-title: @tr("Navigation feedback");
+                        row-desc: @tr("Gently pop the selected navigation icon when switching pages.");
 
-                    ToggleSwitch {
-                        name: @tr("Navigation feedback");
-                        enabled: SettingsBridge.animations;
-                        checked <=> SettingsBridge.anim_nav_slide;
-                        focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 4 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 4; SettingsContent.schedule_save(); }
-                    }
-                } }
+                        ToggleSwitch {
+                            name: @tr("Navigation feedback");
+                            enabled: SettingsBridge.animations;
+                            checked <=> SettingsBridge.anim_nav_slide;
+                            focused: SettingsBridge.kb_zone == 10 && SettingsContent.kb_anr == 4 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 10; SettingsContent.kb_anr = 4; SettingsContent.schedule_save(); }
+                        }
+                    } }
+
+            }
         }
     }
 }

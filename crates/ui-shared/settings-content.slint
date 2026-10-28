@@ -34,6 +34,7 @@ export global SettingsContent {
     // matching row consumes the one-shot reveal; the key keeps its visible
     // highlight until the next navigation or search. Never persist this state.
     in-out property <string> search_target_key;
+    out property <bool> advanced_visible: SettingsBridge.advanced || SettingsContent.search_target_key != "";
     in-out property <int> search_target_section: -1;
     in-out property <bool> search_target_pending: false;
     in-out property <bool> dl_revealed: true;

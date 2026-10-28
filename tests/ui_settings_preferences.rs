@@ -68,3 +68,6 @@ mod spoiler;
 
 #[path = "settings_preferences/torrent_ram.rs"]
 mod torrent_ram;
+
+#[path = "settings_preferences/settings_view.rs"]
+mod settings_view;

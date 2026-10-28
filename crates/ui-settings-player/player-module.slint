@@ -186,6 +186,23 @@ export component SettingsPlayerModule inherits Window {
         root.select_filter(SettingsContent.kb_stream_filter_sort_start() + index + (action == 0 ? -1 : action == 1 ? 1 : 0));
         SettingsContent.focus_shell();
     }
+    function edit_simple_filters() {
+        SettingsContent.focus_shell();
+        SettingsContent.clear_search_target();
+        SettingsBridge.advanced = true;
+        SettingsBridge.view_changed(true);
+        reveal_filters.start();
+    }
+    // Wait for the existing rule editor to mount and publish its actual height.
+    reveal_filters := Timer {
+        interval: 32ms; running: false;
+        triggered => {
+            self.stop();
+            if SettingsContent.advanced_visible && SettingsBridge.sel == 5 {
+                SettingsContent.reveal_detail_control(full_filters.absolute-position.y, Math.min(120px, full_filters.height));
+            }
+        }
+    }
     body_layout := VerticalLayout {
         width: 100%; height: 100%; spacing: 0px; alignment: start;
         VerticalLayout {
@@ -242,17 +259,20 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
 
-                if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
-                    tinted: true;
-                    setting-key: "android_hwdec";
-                    row-title: @tr("Video decoder");
-                    row-desc: @tr("HW+ keeps decoded frames on the GPU and is fastest; it falls back to HW, then SW. HW falls back to SW.");
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
+                        tinted: true;
+                        setting-key: "android_hwdec";
+                        row-title: @tr("Video decoder");
+                        row-desc: @tr("HW+ keeps decoded frames on the GPU and is fastest; it falls back to HW, then SW. HW falls back to SW.");
 
-                    Segmented {
-                        labels: ["HW+", "HW", "SW"];
-                        current_index: SettingsBridge.android_hwdec_index;
-                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.android_hwdec_index = i; SettingsContent.schedule_save(); }
+                        Segmented {
+                            labels: ["HW+", "HW", "SW"];
+                            current_index: SettingsBridge.android_hwdec_index;
+                            focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
+                            picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.android_hwdec_index = i; SettingsContent.schedule_save(); }
+                        }
                     }
                 }
 
@@ -299,24 +319,27 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
 
-                if SettingsBridge.desktop_decoder_available && SettingsBridge.player_backend_index == 0: SettingsRow {
-                    tinted: true;
-                    setting-key: "desktop_hwdec";
-                    row-title: @tr("Video decoder");
-                    row-desc: SettingsBridge.hw_plus_available
-                        ? @tr("HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding.")
-                        : @tr("HW uses copy-back decoding with a software fallback. SW uses software decoding.");
-                    Segmented {
-                        labels: ["HW+", "HW", "SW"];
-                        current_index: SettingsBridge.desktop_hwdec_index;
-                        disabled_index: SettingsBridge.hw_plus_available ? -1 : 0;
-                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
-                        picked(i) => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = 2;
-                            SettingsBridge.desktop_hwdec_index = i;
-                            SettingsContent.schedule_save();
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    if SettingsBridge.desktop_decoder_available && SettingsBridge.player_backend_index == 0: SettingsRow {
+                        tinted: true;
+                        setting-key: "desktop_hwdec";
+                        row-title: @tr("Video decoder");
+                        row-desc: SettingsBridge.hw_plus_available
+                            ? @tr("HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW uses copy-back decoding. SW uses software decoding.")
+                            : @tr("HW uses copy-back decoding with a software fallback. SW uses software decoding.");
+                        Segmented {
+                            labels: ["HW+", "HW", "SW"];
+                            current_index: SettingsBridge.desktop_hwdec_index;
+                            disabled_index: SettingsBridge.hw_plus_available ? -1 : 0;
+                            focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
+                            picked(i) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = 2;
+                                SettingsBridge.desktop_hwdec_index = i;
+                                SettingsContent.schedule_save();
+                            }
                         }
                     }
                 }
@@ -522,92 +545,98 @@ export component SettingsPlayerModule inherits Window {
                         }
                     }
                 }
-                if SettingsBridge.player_backend_index == 0: SettingsRow {
-                    setting-key: "prefetch_next_episode_streams";
-                    row-title: @tr("Prefetch next episode streams");
-                    row-desc: @tr("Look up available sources shortly before the next episode buttons appear. Sources stay in memory; playback starts only after you choose.");
-                    Segmented {
-                        labels: [@tr("Off"), @tr("On")];
-                        current_index: SettingsBridge.prefetch_next_episode_streams ? 1 : 0;
-                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 1 && SettingsBridge.kb_active;
-                        picked(i) => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 1;
-                            SettingsBridge.prefetch_next_episode_streams = i == 1;
-                            SettingsContent.schedule_setting("prefetch_next_episode_streams");
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    if SettingsBridge.player_backend_index == 0: SettingsRow {
+                        setting-key: "prefetch_next_episode_streams";
+                        row-title: @tr("Prefetch next episode streams");
+                        row-desc: @tr("Look up available sources shortly before the next episode buttons appear. Sources stay in memory; playback starts only after you choose.");
+                        Segmented {
+                            labels: [@tr("Off"), @tr("On")];
+                            current_index: SettingsBridge.prefetch_next_episode_streams ? 1 : 0;
+                            focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 1 && SettingsBridge.kb_active;
+                            picked(i) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 1;
+                                SettingsBridge.prefetch_next_episode_streams = i == 1;
+                                SettingsContent.schedule_setting("prefetch_next_episode_streams");
+                            }
                         }
                     }
                 }
             }
-            if SettingsBridge.player_backend_index == 0: VerticalLayout {
-                spacing: 16px;
-                SectionHeader { label: @tr("Screenshots"); }
-                SettingsCard {
-                    SettingsRow {
-                        setting-key: "screenshot_format";
-                        row-title: @tr("Screenshot format");
-                        row-desc: @tr("PNG and lossless WebP preserve every pixel. JPEG and lossy WebP use the quality setting.");
-                        screenshot_format := Dropdown {
-                            width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
-                            model: [@tr("PNG (lossless)"), @tr("JPEG"), @tr("WebP (lossless)"), @tr("WebP (lossy)")];
-                            current-index <=> SettingsBridge.screenshot_format_index;
-                            roomy: true;
-                            border-color: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 2 ? Theme.current.focus_ring : Theme.current.control_border;
-                            selected(_) => {
-                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                                SettingsBridge.kb_zone = 9;
-                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 2;
-                                SettingsContent.schedule_setting("screenshot_format");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 16px;
+                if SettingsBridge.player_backend_index == 0: VerticalLayout {
+                    spacing: 16px;
+                    SectionHeader { label: @tr("Screenshots"); }
+                    SettingsCard {
+                        SettingsRow {
+                            setting-key: "screenshot_format";
+                            row-title: @tr("Screenshot format");
+                            row-desc: @tr("PNG and lossless WebP preserve every pixel. JPEG and lossy WebP use the quality setting.");
+                            screenshot_format := Dropdown {
+                                width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
+                                model: [@tr("PNG (lossless)"), @tr("JPEG"), @tr("WebP (lossless)"), @tr("WebP (lossy)")];
+                                current-index <=> SettingsBridge.screenshot_format_index;
+                                roomy: true;
+                                border-color: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 2 ? Theme.current.focus_ring : Theme.current.control_border;
+                                selected(_) => {
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 9;
+                                    SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 2;
+                                    SettingsContent.schedule_setting("screenshot_format");
+                                }
                             }
                         }
-                    }
-                    SettingsRow {
-                        setting-key: "screenshot_show_folder";
-                        row-title: @tr("Screenshot folder");
-                        row-desc: @tr("Save in Pictures/Nova or group captures by show.");
-                        Segmented {
-                            labels: [@tr("Nova"), @tr("Show folders")];
-                            current_index: SettingsBridge.screenshot_show_folder ? 1 : 0;
-                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 3;
-                            picked(i) => {
-                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                                SettingsBridge.kb_zone = 9;
-                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 3;
-                                SettingsBridge.screenshot_show_folder = i == 1;
-                                SettingsContent.schedule_setting("screenshot_show_folder");
+                        SettingsRow {
+                            setting-key: "screenshot_show_folder";
+                            row-title: @tr("Screenshot folder");
+                            row-desc: @tr("Save in Pictures/Nova or group captures by show.");
+                            Segmented {
+                                labels: [@tr("Nova"), @tr("Show folders")];
+                                current_index: SettingsBridge.screenshot_show_folder ? 1 : 0;
+                                focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 3;
+                                picked(i) => {
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 9;
+                                    SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 3;
+                                    SettingsBridge.screenshot_show_folder = i == 1;
+                                    SettingsContent.schedule_setting("screenshot_show_folder");
+                                }
                             }
                         }
-                    }
-                    if SettingsBridge.screenshot_format_index == 1: SettingsRow {
-                        setting-key: "screenshot_jpeg_quality";
-                        row-title: @tr("JPEG quality");
-                        row-desc: @tr("Higher values retain more detail and create larger files.");
-                        jpeg_quality := NumericSetting {
-                            value <=> SettingsBridge.screenshot_jpeg_quality;
-                            minimum: 1; maximum: 100; step: 1; suffix: "%";
-                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
-                            changed(_) => {
-                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                                SettingsBridge.kb_zone = 9;
-                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
-                                SettingsContent.schedule_setting("screenshot_jpeg_quality");
+                        if SettingsBridge.screenshot_format_index == 1: SettingsRow {
+                            setting-key: "screenshot_jpeg_quality";
+                            row-title: @tr("JPEG quality");
+                            row-desc: @tr("Higher values retain more detail and create larger files.");
+                            jpeg_quality := NumericSetting {
+                                value <=> SettingsBridge.screenshot_jpeg_quality;
+                                minimum: 1; maximum: 100; step: 1; suffix: "%";
+                                focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
+                                changed(_) => {
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 9;
+                                    SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
+                                    SettingsContent.schedule_setting("screenshot_jpeg_quality");
+                                }
                             }
                         }
-                    }
-                    if SettingsBridge.screenshot_format_index == 3: SettingsRow {
-                        setting-key: "screenshot_webp_quality";
-                        row-title: @tr("WebP quality");
-                        row-desc: @tr("Higher values retain more detail and create larger files.");
-                        webp_quality := NumericSetting {
-                            value <=> SettingsBridge.screenshot_webp_quality;
-                            minimum: 1; maximum: 100; step: 1; suffix: "%";
-                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
-                            changed(_) => {
-                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                                SettingsBridge.kb_zone = 9;
-                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
-                                SettingsContent.schedule_setting("screenshot_webp_quality");
+                        if SettingsBridge.screenshot_format_index == 3: SettingsRow {
+                            setting-key: "screenshot_webp_quality";
+                            row-title: @tr("WebP quality");
+                            row-desc: @tr("Higher values retain more detail and create larger files.");
+                            webp_quality := NumericSetting {
+                                value <=> SettingsBridge.screenshot_webp_quality;
+                                minimum: 1; maximum: 100; step: 1; suffix: "%";
+                                focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
+                                changed(_) => {
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 9;
+                                    SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
+                                    SettingsContent.schedule_setting("screenshot_webp_quality");
+                                }
                             }
                         }
                     }
@@ -634,21 +663,24 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
             }
-            if SettingsBridge.player_backend_index == 0: SettingsCard {
-                SettingsRow {
-                    setting-key: "show_chapters";
-                    row-title: @tr("Show chapters on timeline");
-                    row-desc: @tr("Show chapter cutouts and the current chapter name below the seek bar. Tap the name to choose a chapter.");
-                    Segmented {
-                        labels: [@tr("Off"), @tr("On")];
-                        current_index: SettingsBridge.show_chapters ? 1 : 0;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8;
-                        picked(i) => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8;
-                            SettingsBridge.show_chapters = i == 1;
-                            SettingsContent.schedule_setting("show_chapters");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if SettingsBridge.player_backend_index == 0: SettingsCard {
+                    SettingsRow {
+                        setting-key: "show_chapters";
+                        row-title: @tr("Show chapters on timeline");
+                        row-desc: @tr("Show chapter cutouts and the current chapter name below the seek bar. Tap the name to choose a chapter.");
+                        Segmented {
+                            labels: [@tr("Off"), @tr("On")];
+                            current_index: SettingsBridge.show_chapters ? 1 : 0;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8;
+                            picked(i) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 8;
+                                SettingsBridge.show_chapters = i == 1;
+                                SettingsContent.schedule_setting("show_chapters");
+                            }
                         }
                     }
                 }
@@ -692,22 +724,25 @@ export component SettingsPlayerModule inherits Window {
                     }
                 }
             }
-            if SettingsBridge.player_backend_index == 0: SettingsCard {
-                SettingsRow {
-                    setting-key: "intro_skip_confidence";
-                    row-title: @tr("Automatic skip confidence");
-                    row-desc: @tr("Minimum confidence for automatic intro and recap skips. Lower-confidence timings still offer a manual prompt. Applies to providers that report confidence.");
-                    confidence_preset := Dropdown {
-                        width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
-                        model: [@tr("Any (0%)"), @tr("Low (25%)"), @tr("Balanced (50%)"), @tr("High (80%)"), @tr("Very high (95%)")];
-                        current-index <=> SettingsBridge.intro_skip_confidence_index;
-                        roomy: true;
-                        border-color: SettingsBridge.kb_zone == 9 && SettingsBridge.kb_active && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11 ? Theme.current.focus_ring : Theme.current.control_border;
-                        selected(_) => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11;
-                            SettingsContent.schedule_setting("intro_skip_confidence");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if SettingsBridge.player_backend_index == 0: SettingsCard {
+                    SettingsRow {
+                        setting-key: "intro_skip_confidence";
+                        row-title: @tr("Automatic skip confidence");
+                        row-desc: @tr("Minimum confidence for automatic intro and recap skips. Lower-confidence timings still offer a manual prompt. Applies to providers that report confidence.");
+                        confidence_preset := Dropdown {
+                            width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
+                            model: [@tr("Any (0%)"), @tr("Low (25%)"), @tr("Balanced (50%)"), @tr("High (80%)"), @tr("Very high (95%)")];
+                            current-index <=> SettingsBridge.intro_skip_confidence_index;
+                            roomy: true;
+                            border-color: SettingsBridge.kb_zone == 9 && SettingsBridge.kb_active && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11 ? Theme.current.focus_ring : Theme.current.control_border;
+                            selected(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) + 11;
+                                SettingsContent.schedule_setting("intro_skip_confidence");
+                            }
                         }
                     }
                 }
@@ -732,20 +767,23 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
-            if SettingsBridge.player_backend_index == 0: SettingsCard {
-                SettingsRow {
-                    setting-key: "show_stream_loading_text";
-                    row-title: @tr("Show loading status text");
-                    row-desc: @tr("Show connection and buffering messages while a stream starts. Errors always remain visible.");
-                    ToggleSwitch {
-                        name: @tr("Show loading status text");
-                        checked <=> SettingsBridge.show_stream_loading_text;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_loading_text_row();
-                        toggled => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_loading_text_row();
-                            SettingsContent.schedule_setting("show_stream_loading_text");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if SettingsBridge.player_backend_index == 0: SettingsCard {
+                    SettingsRow {
+                        setting-key: "show_stream_loading_text";
+                        row-title: @tr("Show loading status text");
+                        row-desc: @tr("Show connection and buffering messages while a stream starts. Errors always remain visible.");
+                        ToggleSwitch {
+                            name: @tr("Show loading status text");
+                            checked <=> SettingsBridge.show_stream_loading_text;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_loading_text_row();
+                            toggled => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_loading_text_row();
+                                SettingsContent.schedule_setting("show_stream_loading_text");
+                            }
                         }
                     }
                 }
@@ -769,283 +807,308 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
-            if SettingsBridge.player_backend_index == 0: SettingsCard {
-                SettingsRow {
-                    setting-key: "auto_retry_streams";
-                    row-title: @tr("Automatically try another source");
-                    row-desc: @tr("After 30 seconds without progress, try up to two different sources. Saved on this device. Pause or cancel to stop automatic retries.");
-                    ToggleSwitch {
-                        name: @tr("Automatically try another source");
-                        checked <=> SettingsBridge.auto_retry_streams;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_recovery_row();
-                        toggled => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_recovery_row();
-                            SettingsContent.schedule_setting("auto_retry_streams");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if SettingsBridge.player_backend_index == 0: SettingsCard {
+                    SettingsRow {
+                        setting-key: "auto_retry_streams";
+                        row-title: @tr("Automatically try another source");
+                        row-desc: @tr("After 30 seconds without progress, try up to two different sources. Saved on this device. Pause or cancel to stop automatic retries.");
+                        ToggleSwitch {
+                            name: @tr("Automatically try another source");
+                            checked <=> SettingsBridge.auto_retry_streams;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_recovery_row();
+                            toggled => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_recovery_row();
+                                SettingsContent.schedule_setting("auto_retry_streams");
+                            }
                         }
                     }
                 }
             }
 
-            if CastBridge.available: SettingsCard {
-                SettingsRow {
-                    setting-key: "casting_remux_buffer";
-                    row-title: @tr("Casting remux buffer");
-                    row-desc: @tr("Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session.");
-                    remux_buffer := Dropdown {
-                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
-                        model: ["32 MiB", "64 MiB", "128 MiB", "256 MiB"];
-                        accessible-role: combobox;
-                        accessible-label: @tr("Casting remux buffer");
-                        accessible-value: self.model[self.current-index];
-                        current-index <=> SettingsBridge.casting_remux_buffer_index;
-                        roomy: true;
-                        private property <bool> row-focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() - 1;
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                        selected(_) => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 9;
-                            SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() - 1;
-                            SettingsContent.schedule_setting("casting_remux_buffer");
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if CastBridge.available: SettingsCard {
+                    SettingsRow {
+                        setting-key: "casting_remux_buffer";
+                        row-title: @tr("Casting remux buffer");
+                        row-desc: @tr("Maximum memory for retained media segments when casting needs remuxing. Processing uses additional memory. Applies to the next casting session.");
+                        remux_buffer := Dropdown {
+                            width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                            model: ["32 MiB", "64 MiB", "128 MiB", "256 MiB"];
+                            accessible-role: combobox;
+                            accessible-label: @tr("Casting remux buffer");
+                            accessible-value: self.model[self.current-index];
+                            current-index <=> SettingsBridge.casting_remux_buffer_index;
+                            roomy: true;
+                            private property <bool> row-focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row() - 1;
+                            changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                            border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                            selected(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_stream_filters_row() - 1;
+                                SettingsContent.schedule_setting("casting_remux_buffer");
+                            }
                         }
                     }
                 }
             }
 
-            SectionHeader { label: @tr("Universal stream filters"); }
-            SettingsCard {
-                StreamRuleToggle {
-                    setting-key: "stream_filters_enabled";
-                    row-title: @tr("Use stream rules");
-                    row-desc: @tr("These rules apply to every addon. Each preference can sync or stay on this device.");
-                    rule-field: 0; rule-row: 0; checked <=> StreamFiltersBridge.enabled;
-                }
-            }
-            SectionHeader { label: @tr("Limits"); }
-            SettingsCard {
+            if !SettingsContent.advanced_visible: SettingsCard {
                 SettingsRow {
-                    setting-key: "stream_filters_resolution";
-                    row-title: @tr("Maximum resolution");
-                    Dropdown {
-                        accessible-role: combobox; accessible-label: @tr("Maximum resolution");
-                        accessible-value: self.model[self.current-index];
-                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
-                        model: [@tr("Any resolution"), "480p", "720p", "1080p", "1440p", "2160p", "4320p"];
-                        current-index <=> StreamFiltersBridge.max_resolution_index; roomy: true;
-                        property <bool> row-focused: root.filter_focused(1);
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                        selected(_) => { root.select_filter(1); StreamFiltersBridge.edited(1, "" + self.current-index); }
-                    }
-                }
-                SettingsRow {
-                    setting-key: "stream_filters_size";
-                    row-title: @tr("Maximum size");
-                    Dropdown {
-                        accessible-role: combobox; accessible-label: @tr("Maximum size");
-                        accessible-value: self.model[self.current-index];
-                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
-                        model: [@tr("Any size"), "1 GiB", "2 GiB", "4 GiB", "8 GiB", "16 GiB", "32 GiB", "64 GiB", "128 GiB"];
-                        current-index <=> StreamFiltersBridge.max_size_index; roomy: true;
-                        property <bool> row-focused: root.filter_focused(2);
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                        selected(_) => { root.select_filter(2); StreamFiltersBridge.edited(2, "" + self.current-index); }
-                    }
-                }
-            }
-            SectionHeader { label: @tr("Resolutions"); }
-            ResolutionRules { preferred: false; }
-            ResolutionRules { preferred: true; }
-            SectionHeader { label: @tr("Video codecs"); }
-            SettingsCard {
-                StreamRuleHeading {
-                    title: @tr("Allowed video codecs"); setting-key: "stream_filters_allowed_codecs";
-                    description: @tr("All codecs when none selected");
-                }
-                StreamRuleToggle { row-title: "H.264 / AVC"; rule-field: 3; rule-row: SettingsContent.kb_stream_filter_codec_start() + 0; checked <=> StreamFiltersBridge.allow_avc; }
-                StreamRuleToggle { row-title: "H.265 / HEVC"; rule-field: 4; rule-row: SettingsContent.kb_stream_filter_codec_start() + 1; checked <=> StreamFiltersBridge.allow_hevc; }
-                StreamRuleToggle { row-title: "AV1"; rule-field: 5; rule-row: SettingsContent.kb_stream_filter_codec_start() + 2; checked <=> StreamFiltersBridge.allow_av1; }
-                StreamRuleToggle { row-title: "VP9"; rule-field: 6; rule-row: SettingsContent.kb_stream_filter_codec_start() + 3; checked <=> StreamFiltersBridge.allow_vp9; }
-                StreamRuleToggle { row-title: @tr("Other video codecs"); rule-field: 10; rule-row: SettingsContent.kb_stream_filter_codec_start() + 4; checked <=> StreamFiltersBridge.allow_other; }
-            }
-            SettingsCard {
-                StreamRuleHeading {
-                    title: @tr("Excluded video codecs"); setting-key: "stream_filters_excluded_codecs";
-                    description: @tr("Excluded codecs stay hidden even when they are also allowed.");
-                }
-                StreamRuleToggle { row-title: @tr("Exclude H.264 / AVC"); rule-field: 11; rule-row: SettingsContent.kb_stream_filter_codec_start() + 5; checked <=> StreamFiltersBridge.block_avc; }
-                StreamRuleToggle { row-title: @tr("Exclude H.265 / HEVC"); rule-field: 12; rule-row: SettingsContent.kb_stream_filter_codec_start() + 6; checked <=> StreamFiltersBridge.block_hevc; }
-                StreamRuleToggle { row-title: @tr("Exclude AV1"); rule-field: 13; rule-row: SettingsContent.kb_stream_filter_codec_start() + 7; checked <=> StreamFiltersBridge.block_av1; }
-                StreamRuleToggle { row-title: @tr("Exclude VP9"); rule-field: 14; rule-row: SettingsContent.kb_stream_filter_codec_start() + 8; checked <=> StreamFiltersBridge.block_vp9; }
-                StreamRuleToggle { row-title: @tr("Exclude other video codecs"); rule-field: 15; rule-row: SettingsContent.kb_stream_filter_codec_start() + 9; checked <=> StreamFiltersBridge.block_other; }
-            }
-            SettingsCard {
-                StreamRuleHeading {
-                    title: @tr("Preferred video codecs"); setting-key: "stream_filters_codec_priority";
-                    description: @tr("Use this preference order when sorting by Video codec. Unlisted codecs keep their existing order.");
-                }
-                SettingsRow {
-                    row-title: @tr("Add codec preference");
-                    row-desc: StreamFiltersBridge.codec_priority_order.length == 0 ? @tr("No codec preference") : "";
-                    Dropdown {
-                        width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px)); roomy: true;
-                        model: ["H.264 / AVC", "H.265 / HEVC", "AV1", "VP9", @tr("Other video codecs")];
-                        current-index <=> SettingsContent.stream_filter_codec_choice;
-                        accessible-role: combobox; accessible-label: @tr("Add codec preference"); accessible-value: self.model[self.current-index];
-                        property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_picker());
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
-                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                        selected(_) => { root.select_filter(SettingsContent.kb_stream_filter_codec_picker()); StreamFiltersBridge.edited(16, "add:" + SettingsContent.stream_filter_codec_key(self.current-index)); }
-                    }
-                }
-                for codec[index] in StreamFiltersBridge.codec_priority_order: SettingsRow {
-                    property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index);
-                    changed row-focused => { if self.row-focused {
-                        SettingsContent.reveal_detail_control(self.absolute-position.y, self.height);
-                        if StreamFiltersBridge.codec_priority_order.length == 1 { SettingsContent.stream_filter_priority_column = 2; }
-                        else if index == 0 && SettingsContent.stream_filter_priority_column == 0 { SettingsContent.stream_filter_priority_column = 1; }
-                        else if index + 1 == StreamFiltersBridge.codec_priority_order.length && SettingsContent.stream_filter_priority_column == 1 { SettingsContent.stream_filter_priority_column = 0; }
-                    } }
-                    row-title: (index + 1) + ". " + SettingsContent.stream_filter_codec_label(codec);
-                    HorizontalLayout {
-                        spacing: 8px; height: self.preferred-height;
-                        AddonIconButton {
-                            name: @tr("Move up") + ": " + SettingsContent.stream_filter_codec_label(codec);
-                            enabled: index > 0; focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 0;
-                            Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-up.svg"); colorize: Theme.current.text_settings; }
-                            clicked => { root.priority_action(codec, index, 0); }
-                        }
-                        AddonIconButton {
-                            name: @tr("Move down") + ": " + SettingsContent.stream_filter_codec_label(codec);
-                            enabled: index + 1 < StreamFiltersBridge.codec_priority_order.length; focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 1;
-                            Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-down.svg"); colorize: Theme.current.text_settings; }
-                            clicked => { root.priority_action(codec, index, 1); }
-                        }
-                        AddonIconButton {
-                            name: @tr("Remove") + ": " + SettingsContent.stream_filter_codec_label(codec);
-                            focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 2;
-                            Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/player/x.svg"); colorize: Theme.current.text_settings; }
-                            clicked => { root.priority_action(codec, index, 2); }
-                        }
-                    }
-                }
-                StreamRuleToggle {
-                    setting-key: "stream_filters_require_codec";
-                    row-title: @tr("Only preferred video codecs");
-                    row-desc: @tr("Hide streams with other advertised video codecs. An empty preference list allows every codec.");
-                    rule-field: 18; rule-row: SettingsContent.kb_stream_filter_require_codec(); checked <=> StreamFiltersBridge.require_preferred_codec;
-                }
-            }
-            SectionHeader { label: @tr("Audio languages"); }
-            SettingsCard {
-                StreamRuleToggle {
-                    setting-key: "stream_filters_audio";
-                    row-title: @tr("Use preferred audio languages");
-                    row-desc: @tr("Follow Preferred audio languages.") + " " + StreamFiltersBridge.preferred_audio_languages;
-                    rule-field: 17; rule-row: SettingsContent.kb_stream_filter_audio_source(); checked <=> StreamFiltersBridge.use_preferred_audio_languages;
-                }
-                if !StreamFiltersBridge.use_preferred_audio_languages: SettingsRow {
-                    setting-key: "stream_filters_audio";
-                    row-title: @tr("Custom audio languages");
-                    row-desc: @tr("Search and add languages in preference order. Changes apply immediately.");
-                    HorizontalLayout {
-                        width: 100%; height: self.preferred-height; spacing: 8px;
-                        KbMark { on: root.filter_focused(SettingsContent.kb_stream_filter_audio_picker()); active: SettingsBridge.kb_active; }
-                        filter_languages := PlaybackLanguagePicker {
-                            multiple: true; min-width: 0px; horizontal-stretch: 1;
-                            dropdown-width: Math.min(180px, Math.max(100px, SettingsContent.slot_width * 0.4));
-                            codes: StreamFiltersBridge.language_codes; names: StreamFiltersBridge.language_names;
-                            selected-codes: StreamFiltersBridge.selected_language_codes; selected-names: StreamFiltersBridge.selected_language_names;
-                            current-label: @tr("Add language");
-                            keyboard-mode: SettingsBridge.kb_active; edit-requested: SettingsContent.kb_edit == 8;
-                            search(query, _) => { StreamFiltersBridge.language_search(query); }
-                            edited(code, action, _) => { root.select_filter(SettingsContent.kb_stream_filter_audio_picker()); StreamFiltersBridge.language_edited(code, action); }
-                            focus_changed(focused) => { SettingsContent.player_language_input_focused = focused; if focused { root.select_filter(SettingsContent.kb_stream_filter_audio_picker()); } }
-                            reveal(y, h) => { SettingsContent.reveal_detail_control(y, h); }
-                            accepted => { SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell(); }
-                        }
-                    }
-                }
-                StreamRuleToggle {
-                    setting-key: "stream_filters_require_audio";
-                    row-title: @tr("Require one of these audio languages");
-                    row-desc: @tr("Hide streams with other advertised audio languages. An empty preference list allows every language.");
-                    rule-field: 8; rule-row: SettingsContent.kb_stream_filter_require(); checked <=> StreamFiltersBridge.require_audio;
-                }
-                if StreamFiltersBridge.notice != "": Rectangle {
-                    height: filter_notice.preferred-height + 28px; vertical-stretch: 0;
-                    filter_notice := Text { x: 16px; y: 14px; width: Math.max(1px, parent.width - 32px); text: StreamFiltersBridge.notice; font-size: 13px; color: Theme.current.text_destructive; wrap: word-wrap; }
-                }
-            }
-            SectionHeader { label: @tr("Unknown details"); }
-            SettingsCard {
-                StreamRuleToggle {
-                    setting-key: "stream_filters_retain_unknown";
-                    row-title: @tr("Keep streams with unknown details");
-                    row-desc: @tr("Keep offers whose resolution, size, codec or audio languages are not advertised.");
-                    rule-field: 9; rule-row: SettingsContent.kb_stream_filter_unknown(); checked <=> StreamFiltersBridge.retain_unknown;
-                }
-            }
-            SettingsCard {
-                StreamRuleHeading {
-                    title: @tr("Sort order"); setting-key: "stream_filters_sort_order";
-                    description: @tr("Move any criterion, including audio and codec, to set its priority. Unknown values always stay last.");
-                }
-                for criterion[index] in StreamFiltersBridge.sort_order: SettingsRow {
-                    property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index);
-                    changed row-focused => { if self.row-focused {
-                        SettingsContent.reveal_detail_control(self.absolute-position.y, self.height);
-                        if index == 0 && SettingsContent.stream_filter_sort_column == 0 { SettingsContent.stream_filter_sort_column = 1; }
-                        else if index + 1 == StreamFiltersBridge.sort_order.length && SettingsContent.stream_filter_sort_column == 1 { SettingsContent.stream_filter_sort_column = 0; }
-                    } }
-                    row-title: (index + 1) + ". " + SettingsContent.stream_filter_sort_label(criterion);
-                    row-desc: criterion == "subtitle" ? @tr("Uses Preferred subtitle languages.") : criterion == "resolution" && StreamFiltersBridge.resolution_priority_order.length > 0 ? @tr("Uses preferred resolutions first; direction orders the remaining resolutions.") : "";
-                    sort_actions := Rectangle {
-                        width: Math.min(420px, Math.max(1px, SettingsContent.slot_width - 32px));
-                        private property <string> direction: SettingsContent.stream_filter_sort_direction(criterion, StreamFiltersBridge.sort_ascending[index]);
-                        private property <length> direction_width: Math.min(direction_measure.preferred-width + 28px, self.width);
-                        private property <bool> inline: self.width >= sort_up.width + sort_down.width + self.direction_width + 16px;
-                        height: self.inline ? Math.max(sort_up.height, sort_direction.height) : sort_up.height + 8px + sort_direction.height;
-                        direction_measure := Text { width: 0px; height: 0px; text: parent.direction; font-size: InterfaceStyle.tv ? 20px : 13px; }
-                        sort_up := AddonIconButton {
-                            x: 0px; y: 0px;
-                            name: @tr("Move up") + ": " + SettingsContent.stream_filter_sort_label(criterion); enabled: index > 0;
-                            focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 0;
-                            Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-up.svg"); colorize: Theme.current.text_settings; }
-                            clicked => { root.sort_action(criterion, index, 0); }
-                        }
-                        sort_down := AddonIconButton {
-                            x: sort_up.width + 8px; y: 0px;
-                            name: @tr("Move down") + ": " + SettingsContent.stream_filter_sort_label(criterion); enabled: index + 1 < StreamFiltersBridge.sort_order.length;
-                            focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 1;
-                            Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-down.svg"); colorize: Theme.current.text_settings; }
-                            clicked => { root.sort_action(criterion, index, 1); }
-                        }
-                        sort_direction := PillButton {
-                            x: sort_actions.inline ? sort_down.x + sort_down.width + 8px : 0px;
-                            y: sort_actions.inline ? 0px : sort_up.height + 8px;
-                            width: sort_actions.direction_width; wrap_label: true;
-                            label: sort_actions.direction;
-                            accessible-label: @tr("Sort direction") + ": " + SettingsContent.stream_filter_sort_label(criterion);
-                            focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 2;
-                            clicked => { root.sort_action(criterion, index, 2); }
-                        }
-                    }
-                }
-            }
-            SettingsCard {
-                SettingsRow {
-                    row-title: @tr("Reset rules");
+                    row-title: @tr("Universal stream filters");
+                    row-desc: StreamFiltersBridge.summary == "" ? (StreamFiltersBridge.enabled ? @tr("On") : @tr("Off")) : StreamFiltersBridge.summary;
                     PillButton {
-                        label: @tr("Reset"); focused: root.filter_focused(SettingsContent.kb_stream_filter_reset());
-                        clicked => {
-                            root.select_filter(0); StreamFiltersBridge.reset();
-                            SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell();
+                        label: @tr("Edit filters"); wrap_label: true;
+                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_stream_filters_row();
+                        clicked => { root.edit_simple_filters(); }
+                    }
+                }
+            }
+            // The reveal timer needs a stable anchor across the mode change.
+            full_filters := VerticalLayout {
+                vertical-stretch: 0; spacing: 0px;
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 16px;
+                    SectionHeader { label: @tr("Universal stream filters"); }
+                    SettingsCard {
+                        StreamRuleToggle {
+                            setting-key: "stream_filters_enabled";
+                            row-title: @tr("Use stream rules");
+                            row-desc: @tr("These rules apply to every addon. Each preference can sync or stay on this device.");
+                            rule-field: 0; rule-row: 0; checked <=> StreamFiltersBridge.enabled;
                         }
                     }
+                    SectionHeader { label: @tr("Limits"); }
+                    SettingsCard {
+                        SettingsRow {
+                            setting-key: "stream_filters_resolution";
+                            row-title: @tr("Maximum resolution");
+                            Dropdown {
+                                accessible-role: combobox; accessible-label: @tr("Maximum resolution");
+                                accessible-value: self.model[self.current-index];
+                                width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                                model: [@tr("Any resolution"), "480p", "720p", "1080p", "1440p", "2160p", "4320p"];
+                                current-index <=> StreamFiltersBridge.max_resolution_index; roomy: true;
+                                property <bool> row-focused: root.filter_focused(1);
+                                changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                                selected(_) => { root.select_filter(1); StreamFiltersBridge.edited(1, "" + self.current-index); }
+                            }
+                        }
+                        SettingsRow {
+                            setting-key: "stream_filters_size";
+                            row-title: @tr("Maximum size");
+                            Dropdown {
+                                accessible-role: combobox; accessible-label: @tr("Maximum size");
+                                accessible-value: self.model[self.current-index];
+                                width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                                model: [@tr("Any size"), "1 GiB", "2 GiB", "4 GiB", "8 GiB", "16 GiB", "32 GiB", "64 GiB", "128 GiB"];
+                                current-index <=> StreamFiltersBridge.max_size_index; roomy: true;
+                                property <bool> row-focused: root.filter_focused(2);
+                                changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                                selected(_) => { root.select_filter(2); StreamFiltersBridge.edited(2, "" + self.current-index); }
+                            }
+                        }
+                    }
+                    SectionHeader { label: @tr("Resolutions"); }
+                    ResolutionRules { preferred: false; }
+                    ResolutionRules { preferred: true; }
+                    SectionHeader { label: @tr("Video codecs"); }
+                    SettingsCard {
+                        StreamRuleHeading {
+                            title: @tr("Allowed video codecs"); setting-key: "stream_filters_allowed_codecs";
+                            description: @tr("All codecs when none selected");
+                        }
+                        StreamRuleToggle { row-title: "H.264 / AVC"; rule-field: 3; rule-row: SettingsContent.kb_stream_filter_codec_start() + 0; checked <=> StreamFiltersBridge.allow_avc; }
+                        StreamRuleToggle { row-title: "H.265 / HEVC"; rule-field: 4; rule-row: SettingsContent.kb_stream_filter_codec_start() + 1; checked <=> StreamFiltersBridge.allow_hevc; }
+                        StreamRuleToggle { row-title: "AV1"; rule-field: 5; rule-row: SettingsContent.kb_stream_filter_codec_start() + 2; checked <=> StreamFiltersBridge.allow_av1; }
+                        StreamRuleToggle { row-title: "VP9"; rule-field: 6; rule-row: SettingsContent.kb_stream_filter_codec_start() + 3; checked <=> StreamFiltersBridge.allow_vp9; }
+                        StreamRuleToggle { row-title: @tr("Other video codecs"); rule-field: 10; rule-row: SettingsContent.kb_stream_filter_codec_start() + 4; checked <=> StreamFiltersBridge.allow_other; }
+                    }
+                    SettingsCard {
+                        StreamRuleHeading {
+                            title: @tr("Excluded video codecs"); setting-key: "stream_filters_excluded_codecs";
+                            description: @tr("Excluded codecs stay hidden even when they are also allowed.");
+                        }
+                        StreamRuleToggle { row-title: @tr("Exclude H.264 / AVC"); rule-field: 11; rule-row: SettingsContent.kb_stream_filter_codec_start() + 5; checked <=> StreamFiltersBridge.block_avc; }
+                        StreamRuleToggle { row-title: @tr("Exclude H.265 / HEVC"); rule-field: 12; rule-row: SettingsContent.kb_stream_filter_codec_start() + 6; checked <=> StreamFiltersBridge.block_hevc; }
+                        StreamRuleToggle { row-title: @tr("Exclude AV1"); rule-field: 13; rule-row: SettingsContent.kb_stream_filter_codec_start() + 7; checked <=> StreamFiltersBridge.block_av1; }
+                        StreamRuleToggle { row-title: @tr("Exclude VP9"); rule-field: 14; rule-row: SettingsContent.kb_stream_filter_codec_start() + 8; checked <=> StreamFiltersBridge.block_vp9; }
+                        StreamRuleToggle { row-title: @tr("Exclude other video codecs"); rule-field: 15; rule-row: SettingsContent.kb_stream_filter_codec_start() + 9; checked <=> StreamFiltersBridge.block_other; }
+                    }
+                    SettingsCard {
+                        StreamRuleHeading {
+                            title: @tr("Preferred video codecs"); setting-key: "stream_filters_codec_priority";
+                            description: @tr("Use this preference order when sorting by Video codec. Unlisted codecs keep their existing order.");
+                        }
+                        SettingsRow {
+                            row-title: @tr("Add codec preference");
+                            row-desc: StreamFiltersBridge.codec_priority_order.length == 0 ? @tr("No codec preference") : "";
+                            Dropdown {
+                                width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px)); roomy: true;
+                                model: ["H.264 / AVC", "H.265 / HEVC", "AV1", "VP9", @tr("Other video codecs")];
+                                current-index <=> SettingsContent.stream_filter_codec_choice;
+                                accessible-role: combobox; accessible-label: @tr("Add codec preference"); accessible-value: self.model[self.current-index];
+                                property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_picker());
+                                changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                                selected(_) => { root.select_filter(SettingsContent.kb_stream_filter_codec_picker()); StreamFiltersBridge.edited(16, "add:" + SettingsContent.stream_filter_codec_key(self.current-index)); }
+                            }
+                        }
+                        for codec[index] in StreamFiltersBridge.codec_priority_order: SettingsRow {
+                            property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index);
+                            changed row-focused => { if self.row-focused {
+                                SettingsContent.reveal_detail_control(self.absolute-position.y, self.height);
+                                if StreamFiltersBridge.codec_priority_order.length == 1 { SettingsContent.stream_filter_priority_column = 2; }
+                                else if index == 0 && SettingsContent.stream_filter_priority_column == 0 { SettingsContent.stream_filter_priority_column = 1; }
+                                else if index + 1 == StreamFiltersBridge.codec_priority_order.length && SettingsContent.stream_filter_priority_column == 1 { SettingsContent.stream_filter_priority_column = 0; }
+                            } }
+                            row-title: (index + 1) + ". " + SettingsContent.stream_filter_codec_label(codec);
+                            HorizontalLayout {
+                                spacing: 8px; height: self.preferred-height;
+                                AddonIconButton {
+                                    name: @tr("Move up") + ": " + SettingsContent.stream_filter_codec_label(codec);
+                                    enabled: index > 0; focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 0;
+                                    Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-up.svg"); colorize: Theme.current.text_settings; }
+                                    clicked => { root.priority_action(codec, index, 0); }
+                                }
+                                AddonIconButton {
+                                    name: @tr("Move down") + ": " + SettingsContent.stream_filter_codec_label(codec);
+                                    enabled: index + 1 < StreamFiltersBridge.codec_priority_order.length; focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 1;
+                                    Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-down.svg"); colorize: Theme.current.text_settings; }
+                                    clicked => { root.priority_action(codec, index, 1); }
+                                }
+                                AddonIconButton {
+                                    name: @tr("Remove") + ": " + SettingsContent.stream_filter_codec_label(codec);
+                                    focused: root.filter_focused(SettingsContent.kb_stream_filter_codec_priority_start() + index) && SettingsContent.stream_filter_priority_column == 2;
+                                    Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/player/x.svg"); colorize: Theme.current.text_settings; }
+                                    clicked => { root.priority_action(codec, index, 2); }
+                                }
+                            }
+                        }
+                        StreamRuleToggle {
+                            setting-key: "stream_filters_require_codec";
+                            row-title: @tr("Only preferred video codecs");
+                            row-desc: @tr("Hide streams with other advertised video codecs. An empty preference list allows every codec.");
+                            rule-field: 18; rule-row: SettingsContent.kb_stream_filter_require_codec(); checked <=> StreamFiltersBridge.require_preferred_codec;
+                        }
+                    }
+                    SectionHeader { label: @tr("Audio languages"); }
+                    SettingsCard {
+                        StreamRuleToggle {
+                            setting-key: "stream_filters_audio";
+                            row-title: @tr("Use preferred audio languages");
+                            row-desc: @tr("Follow Preferred audio languages.") + " " + StreamFiltersBridge.preferred_audio_languages;
+                            rule-field: 17; rule-row: SettingsContent.kb_stream_filter_audio_source(); checked <=> StreamFiltersBridge.use_preferred_audio_languages;
+                        }
+                        if !StreamFiltersBridge.use_preferred_audio_languages: SettingsRow {
+                            setting-key: "stream_filters_audio";
+                            row-title: @tr("Custom audio languages");
+                            row-desc: @tr("Search and add languages in preference order. Changes apply immediately.");
+                            HorizontalLayout {
+                                width: 100%; height: self.preferred-height; spacing: 8px;
+                                KbMark { on: root.filter_focused(SettingsContent.kb_stream_filter_audio_picker()); active: SettingsBridge.kb_active; }
+                                filter_languages := PlaybackLanguagePicker {
+                                    multiple: true; min-width: 0px; horizontal-stretch: 1;
+                                    dropdown-width: Math.min(180px, Math.max(100px, SettingsContent.slot_width * 0.4));
+                                    codes: StreamFiltersBridge.language_codes; names: StreamFiltersBridge.language_names;
+                                    selected-codes: StreamFiltersBridge.selected_language_codes; selected-names: StreamFiltersBridge.selected_language_names;
+                                    current-label: @tr("Add language");
+                                    keyboard-mode: SettingsBridge.kb_active; edit-requested: SettingsContent.kb_edit == 8;
+                                    search(query, _) => { StreamFiltersBridge.language_search(query); }
+                                    edited(code, action, _) => { root.select_filter(SettingsContent.kb_stream_filter_audio_picker()); StreamFiltersBridge.language_edited(code, action); }
+                                    focus_changed(focused) => { SettingsContent.player_language_input_focused = focused; if focused { root.select_filter(SettingsContent.kb_stream_filter_audio_picker()); } }
+                                    reveal(y, h) => { SettingsContent.reveal_detail_control(y, h); }
+                                    accepted => { SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell(); }
+                                }
+                            }
+                        }
+                        StreamRuleToggle {
+                            setting-key: "stream_filters_require_audio";
+                            row-title: @tr("Require one of these audio languages");
+                            row-desc: @tr("Hide streams with other advertised audio languages. An empty preference list allows every language.");
+                            rule-field: 8; rule-row: SettingsContent.kb_stream_filter_require(); checked <=> StreamFiltersBridge.require_audio;
+                        }
+                        if StreamFiltersBridge.notice != "": Rectangle {
+                            height: filter_notice.preferred-height + 28px; vertical-stretch: 0;
+                            filter_notice := Text { x: 16px; y: 14px; width: Math.max(1px, parent.width - 32px); text: StreamFiltersBridge.notice; font-size: 13px; color: Theme.current.text_destructive; wrap: word-wrap; }
+                        }
+                    }
+                    SectionHeader { label: @tr("Unknown details"); }
+                    SettingsCard {
+                        StreamRuleToggle {
+                            setting-key: "stream_filters_retain_unknown";
+                            row-title: @tr("Keep streams with unknown details");
+                            row-desc: @tr("Keep offers whose resolution, size, codec or audio languages are not advertised.");
+                            rule-field: 9; rule-row: SettingsContent.kb_stream_filter_unknown(); checked <=> StreamFiltersBridge.retain_unknown;
+                        }
+                    }
+                    SettingsCard {
+                        StreamRuleHeading {
+                            title: @tr("Sort order"); setting-key: "stream_filters_sort_order";
+                            description: @tr("Move any criterion, including audio and codec, to set its priority. Unknown values always stay last.");
+                        }
+                        for criterion[index] in StreamFiltersBridge.sort_order: SettingsRow {
+                            property <bool> row-focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index);
+                            changed row-focused => { if self.row-focused {
+                                SettingsContent.reveal_detail_control(self.absolute-position.y, self.height);
+                                if index == 0 && SettingsContent.stream_filter_sort_column == 0 { SettingsContent.stream_filter_sort_column = 1; }
+                                else if index + 1 == StreamFiltersBridge.sort_order.length && SettingsContent.stream_filter_sort_column == 1 { SettingsContent.stream_filter_sort_column = 0; }
+                            } }
+                            row-title: (index + 1) + ". " + SettingsContent.stream_filter_sort_label(criterion);
+                            row-desc: criterion == "subtitle" ? @tr("Uses Preferred subtitle languages.") : criterion == "resolution" && StreamFiltersBridge.resolution_priority_order.length > 0 ? @tr("Uses preferred resolutions first; direction orders the remaining resolutions.") : "";
+                            sort_actions := Rectangle {
+                                width: Math.min(420px, Math.max(1px, SettingsContent.slot_width - 32px));
+                                private property <string> direction: SettingsContent.stream_filter_sort_direction(criterion, StreamFiltersBridge.sort_ascending[index]);
+                                private property <length> direction_width: Math.min(direction_measure.preferred-width + 28px, self.width);
+                                private property <bool> inline: self.width >= sort_up.width + sort_down.width + self.direction_width + 16px;
+                                height: self.inline ? Math.max(sort_up.height, sort_direction.height) : sort_up.height + 8px + sort_direction.height;
+                                direction_measure := Text { width: 0px; height: 0px; text: parent.direction; font-size: InterfaceStyle.tv ? 20px : 13px; }
+                                sort_up := AddonIconButton {
+                                    x: 0px; y: 0px;
+                                    name: @tr("Move up") + ": " + SettingsContent.stream_filter_sort_label(criterion); enabled: index > 0;
+                                    focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 0;
+                                    Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-up.svg"); colorize: Theme.current.text_settings; }
+                                    clicked => { root.sort_action(criterion, index, 0); }
+                                }
+                                sort_down := AddonIconButton {
+                                    x: sort_up.width + 8px; y: 0px;
+                                    name: @tr("Move down") + ": " + SettingsContent.stream_filter_sort_label(criterion); enabled: index + 1 < StreamFiltersBridge.sort_order.length;
+                                    focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 1;
+                                    Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; source: @image-url("../../assets/icons/addons/arrow-down.svg"); colorize: Theme.current.text_settings; }
+                                    clicked => { root.sort_action(criterion, index, 1); }
+                                }
+                                sort_direction := PillButton {
+                                    x: sort_actions.inline ? sort_down.x + sort_down.width + 8px : 0px;
+                                    y: sort_actions.inline ? 0px : sort_up.height + 8px;
+                                    width: sort_actions.direction_width; wrap_label: true;
+                                    label: sort_actions.direction;
+                                    accessible-label: @tr("Sort direction") + ": " + SettingsContent.stream_filter_sort_label(criterion);
+                                    focused: root.filter_focused(SettingsContent.kb_stream_filter_sort_start() + index) && SettingsContent.stream_filter_sort_column == 2;
+                                    clicked => { root.sort_action(criterion, index, 2); }
+                                }
+                            }
+                        }
+                    }
+                    SettingsCard {
+                        SettingsRow {
+                            row-title: @tr("Reset rules");
+                            PillButton {
+                                label: @tr("Reset"); focused: root.filter_focused(SettingsContent.kb_stream_filter_reset());
+                                clicked => {
+                                    root.select_filter(0); StreamFiltersBridge.reset();
+                                    SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell();
+                                }
+                            }
+                        }
+                    }
+
                 }
             }
         }

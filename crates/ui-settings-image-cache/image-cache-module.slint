@@ -48,67 +48,80 @@ export component SettingsImageCacheModule inherits Window {
                         selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 11; SettingsContent.schedule_setting("image_disk_cache_limit_mb"); } }
                 }
             }
-            SectionHeader { label: @tr("Compression"); }
-            SettingsCard {
+            if !SettingsContent.advanced_visible: SettingsCard {
                 SettingsRow {
-                    setting-key: "enabled";
-                    row-title: @tr("Compress images");
-                    row-desc: @tr("Compress new downloads. Existing files change only when requested.");
-                    ToggleSwitch {
-                        name: @tr("Compress images"); checked <=> SettingsBridge.cache_enabled; enabled: SettingsBridge.cache_images && !SettingsBridge.cache_busy;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 1;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 1; SettingsContent.schedule_save(); } }
-                }
-                SettingsRow {
-                    setting-key: "format";
-                    row-title: @tr("Format");
-                    row-desc: @tr("JPEG or WebP for compressed artwork.");
-                    Segmented { labels: SettingsBridge.cache_format_names; current_index: SettingsBridge.cache_format_index; enabled: SettingsBridge.cache_images && SettingsBridge.cache_enabled && !SettingsBridge.cache_busy;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 2;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 2; SettingsBridge.cache_format_index = i; SettingsContent.schedule_save(); } }
-                }
-                SettingsRow {
-                    setting-key: "quality";
-                    row-title: @tr("Quality"); row-desc: @tr("Higher values retain more detail and use more disk space.");
-                    NumericSetting { value <=> SettingsBridge.cache_quality; minimum: 1; maximum: 100; step: 1; enabled: SettingsBridge.cache_images && SettingsBridge.cache_enabled && !SettingsBridge.cache_busy;
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 3;
-                        changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_save(); } }
+                    full-width-text: true;
+                    row-title: @tr("Image storage");
+                    row-desc: !SettingsBridge.cache_images ? @tr("Disk caching is off.")
+                        : !SettingsBridge.cache_enabled ? @tr("Compression") + " · " + @tr("Off")
+                        : SettingsBridge.cache_format_names[SettingsBridge.cache_format_index] + " · " + @tr("Quality") + " " + Math.round(SettingsBridge.cache_quality);
                 }
             }
-            if !SettingsBridge.cache_enabled || !SettingsBridge.cache_images: Text { text: @tr("Enable disk caching and compression to adjust format and quality."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-            SectionHeader { label: @tr("Image resolution"); }
-            Text { text: @tr("Limit the longest side without stretching or enlarging images. Original keeps the source dimensions."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-            SettingsCard {
-                SettingsRow {
-                    setting-key: "detail_poster_max_side"; row-title: @tr("Detail posters"); row-desc: @tr("Maximum size of show and movie posters in Detail.");
-                    Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.detail_poster_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
-                        selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 4; SettingsContent.schedule_setting("detail_poster_max_side"); } }
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 16px;
+                SectionHeader { label: @tr("Compression"); }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "enabled";
+                        row-title: @tr("Compress images");
+                        row-desc: @tr("Compress new downloads. Existing files change only when requested.");
+                        ToggleSwitch {
+                            name: @tr("Compress images"); checked <=> SettingsBridge.cache_enabled; enabled: SettingsBridge.cache_images && !SettingsBridge.cache_busy;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 1;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 1; SettingsContent.schedule_save(); } }
+                    }
+                    SettingsRow {
+                        setting-key: "format";
+                        row-title: @tr("Format");
+                        row-desc: @tr("JPEG or WebP for compressed artwork.");
+                        Segmented { labels: SettingsBridge.cache_format_names; current_index: SettingsBridge.cache_format_index; enabled: SettingsBridge.cache_images && SettingsBridge.cache_enabled && !SettingsBridge.cache_busy;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 2;
+                            picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 2; SettingsBridge.cache_format_index = i; SettingsContent.schedule_save(); } }
+                    }
+                    SettingsRow {
+                        setting-key: "quality";
+                        row-title: @tr("Quality"); row-desc: @tr("Higher values retain more detail and use more disk space.");
+                        NumericSetting { value <=> SettingsBridge.cache_quality; minimum: 1; maximum: 100; step: 1; enabled: SettingsBridge.cache_images && SettingsBridge.cache_enabled && !SettingsBridge.cache_busy;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 3;
+                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_save(); } }
+                    }
                 }
-                SettingsRow {
-                    setting-key: "detail_backdrop_max_side"; row-title: @tr("Detail backdrops"); row-desc: @tr("Maximum size of wide show and movie banners in Detail.");
-                    Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.detail_backdrop_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
-                        selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 5; SettingsContent.schedule_setting("detail_backdrop_max_side"); } }
+                if !SettingsBridge.cache_enabled || !SettingsBridge.cache_images: Text { text: @tr("Enable disk caching and compression to adjust format and quality."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                SectionHeader { label: @tr("Image resolution"); }
+                Text { text: @tr("Limit the longest side without stretching or enlarging images. Original keeps the source dimensions."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "detail_poster_max_side"; row-title: @tr("Detail posters"); row-desc: @tr("Maximum size of show and movie posters in Detail.");
+                        Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.detail_poster_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
+                            selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 4; SettingsContent.schedule_setting("detail_poster_max_side"); } }
+                    }
+                    SettingsRow {
+                        setting-key: "detail_backdrop_max_side"; row-title: @tr("Detail backdrops"); row-desc: @tr("Maximum size of wide show and movie banners in Detail.");
+                        Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.detail_backdrop_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
+                            selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 5; SettingsContent.schedule_setting("detail_backdrop_max_side"); } }
+                    }
+                    SettingsRow {
+                        setting-key: "episode_thumbnail_max_side"; row-title: @tr("Episode thumbnails"); row-desc: @tr("Maximum size of episode-list and season-picker images.");
+                        Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.episode_thumbnail_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
+                            selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 6; SettingsContent.schedule_setting("episode_thumbnail_max_side"); } }
+                    }
+                    SettingsRow {
+                        setting-key: "player_episode_backdrop_max_side"; row-title: @tr("Player episode backdrops"); row-desc: @tr("Maximum size of episode artwork while the player loads.");
+                        Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.player_episode_backdrop_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
+                            selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 7; SettingsContent.schedule_setting("player_episode_backdrop_max_side"); } }
+                    }
                 }
-                SettingsRow {
-                    setting-key: "episode_thumbnail_max_side"; row-title: @tr("Episode thumbnails"); row-desc: @tr("Maximum size of episode-list and season-picker images.");
-                    Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.episode_thumbnail_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
-                        selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 6; SettingsContent.schedule_setting("episode_thumbnail_max_side"); } }
+                SectionHeader { label: @tr("Memory"); }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "lru_cache_mb";
+                        row-title: @tr("Decoded-image budget"); row-desc: @tr("Memory available for decoded artwork, independent of disk caching.");
+                        NumericSetting { value <=> SettingsBridge.cache_lru_mb; minimum: 32; maximum: 512; step: 16; suffix: " MB";
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 8;
+                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 8; SettingsContent.schedule_save(); } }
+                    }
                 }
-                SettingsRow {
-                    setting-key: "player_episode_backdrop_max_side"; row-title: @tr("Player episode backdrops"); row-desc: @tr("Maximum size of episode artwork while the player loads.");
-                    Dropdown { width: 100%; model: SettingsBridge.image_resolution_names; current-index <=> SettingsBridge.player_episode_backdrop_resolution_index; enabled: !SettingsBridge.cache_busy; roomy: true;
-                        selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 7; SettingsContent.schedule_setting("player_episode_backdrop_max_side"); } }
-                }
-            }
-            SectionHeader { label: @tr("Memory"); }
-            SettingsCard {
-                SettingsRow {
-                    setting-key: "lru_cache_mb";
-                    row-title: @tr("Decoded-image budget"); row-desc: @tr("Memory available for decoded artwork, independent of disk caching.");
-                    NumericSetting { value <=> SettingsBridge.cache_lru_mb; minimum: 32; maximum: 512; step: 16; suffix: " MB";
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 8;
-                        changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 8; SettingsContent.schedule_save(); } }
-                }
+
             }
             SectionHeader { label: @tr("Maintenance"); }
             SettingsCard {
@@ -117,15 +130,18 @@ export component SettingsImageCacheModule inherits Window {
                         focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 10;
                         clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.clear_cache(); } }
                 }
-                SettingsRow { row-title: @tr("Convert existing images"); row-desc: @tr("Rebuild cached images with the current compression and resolution settings. This downloads the source images again.");
-                    PillButton { label: SettingsBridge.cache_rewriting ? @tr("Stop") : @tr("Re-encode now"); primary: !SettingsBridge.cache_rewriting;
-                        enabled: SettingsBridge.cache_rewriting || (!SettingsBridge.cache_busy && SettingsBridge.cache_images);
-                        focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 9;
-                        clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; if (SettingsBridge.cache_rewriting) { SettingsBridge.cancel_reencode(); } else { SettingsBridge.reencode_cache(); } } }
+                if SettingsContent.advanced_visible || SettingsBridge.cache_rewriting: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    SettingsRow { row-title: @tr("Convert existing images"); row-desc: @tr("Rebuild cached images with the current compression and resolution settings. This downloads the source images again.");
+                        PillButton { label: SettingsBridge.cache_rewriting ? @tr("Stop") : @tr("Re-encode now"); primary: !SettingsBridge.cache_rewriting;
+                            enabled: SettingsBridge.cache_rewriting || (!SettingsBridge.cache_busy && SettingsBridge.cache_images);
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 9;
+                            clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; if (SettingsBridge.cache_rewriting) { SettingsBridge.cancel_reencode(); } else { SettingsBridge.reencode_cache(); } } }
+                    }
                 }
             }
             if SettingsBridge.cache_status != "": Text { text: SettingsBridge.cache_status; color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-            if SettingsBridge.cache_busy: Text { text: @tr("Storage and compression controls are locked during maintenance. Memory remains available."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+            if SettingsBridge.cache_busy && SettingsContent.advanced_visible: Text { text: @tr("Storage and compression controls are locked during maintenance. Memory remains available."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
         }
     }
 }

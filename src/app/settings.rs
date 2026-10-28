@@ -1,6 +1,81 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
 
+/// Installation-local presentation only: never a CacheSettings/sync/profile field.
+pub(super) const SETTINGS_VIEW_KEY: &str = "ui:settings_view";
+static SETTINGS_ADVANCED: AtomicBool = AtomicBool::new(true);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsView {
+    Simple,
+    Advanced,
+}
+impl SettingsView {
+    fn raw(self) -> &'static str {
+        if self == Self::Advanced {
+            "advanced"
+        } else {
+            "simple"
+        }
+    }
+    fn advanced(self) -> bool {
+        self == Self::Advanced
+    }
+}
+
+fn initial_settings_view(
+    database_existed: bool,
+    mut read: impl FnMut(&str) -> Result<Option<String>, storage::Error>,
+    mut write: impl FnMut(&str, &str) -> Result<(), storage::Error>,
+) -> Result<SettingsView, storage::Error> {
+    if let Some(raw) = read(SETTINGS_VIEW_KEY)? {
+        // Future/invalid explicit values remain untouched. Advanced keeps the
+        // full existing interface available until the user deliberately chooses.
+        return Ok(if raw == "simple" {
+            SettingsView::Simple
+        } else {
+            SettingsView::Advanced
+        });
+    }
+    // The pre-open database probe already distinguishes upgrades, including
+    // empty databases and installs containing only non-default profiles.
+    let view = if database_existed {
+        SettingsView::Advanced
+    } else {
+        SettingsView::Simple
+    };
+    // Latch once: otherwise a fresh install which completes onboarding and
+    // restarts before opening Settings would be mistaken for an older install.
+    write(SETTINGS_VIEW_KEY, view.raw())?;
+    Ok(view)
+}
+
+pub(super) fn initialize_settings_view(database_existed: bool) {
+    let view = initial_settings_view(
+        database_existed,
+        |key| storage::try_get_str(key),
+        |key, value| storage::try_set_str(key, value),
+    );
+    match view {
+        Ok(view) => SETTINGS_ADVANCED.store(view.advanced(), Ordering::Release),
+        Err(error) => {
+            SETTINGS_ADVANCED.store(true, Ordering::Release);
+            storage::report(error);
+        }
+    }
+}
+
+fn persist_settings_view(advanced: bool) -> Result<(), storage::Error> {
+    let view = if advanced {
+        SettingsView::Advanced
+    } else {
+        SettingsView::Simple
+    };
+    storage::try_set_str(SETTINGS_VIEW_KEY, view.raw())?;
+    SETTINGS_ADVANCED.store(advanced, Ordering::Release);
+    Ok(())
+}
+
 /// Preserve switch delegates while their rows change so running thumb/color
 /// animations survive a synchronous settings refresh. Rebuild on identity changes.
 pub(super) fn update_control_rows<T: Clone + PartialEq + 'static>(
@@ -205,6 +280,15 @@ impl Bridge {
             );
         };
         if let Some(app) = self.app() {
+            let b = self.clone();
+            app.on_settings_view_changed(move |advanced| {
+                if let Err(error) = persist_settings_view(advanced) {
+                    storage::report(error);
+                }
+                if let Some(app) = b.app() {
+                    app.set_settings_advanced(SETTINGS_ADVANCED.load(Ordering::Acquire));
+                }
+            });
             app.on_settings_search_matches(|query, haystack| {
                 nova_ui::settings_search_matches(&query, &haystack)
             });
@@ -387,6 +471,7 @@ impl Bridge {
                 read_json::<nova_config::InterfaceMode>("interface_mode").unwrap_or_default();
             app.set_interface_mode_index(mode.index());
             apply_interface_mode(&app, mode);
+            app.set_settings_advanced(SETTINGS_ADVANCED.load(Ordering::Acquire));
             app.set_language_index(settings.language.index());
             app.set_language_names(
                 Rc::new(VecModel::<SharedString>::from(language_labels())).into(),
@@ -530,6 +615,7 @@ impl Bridge {
             return;
         }
         if let Some(app) = self.app() {
+            app.set_settings_advanced(SETTINGS_ADVANCED.load(Ordering::Acquire));
             app.set_show_about(false);
             app.set_show_home(false);
             app.set_show_library(false);
@@ -2230,5 +2316,220 @@ mod tests {
         );
         drop(bridge);
         drop(app);
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn presentation_default_latches_once_and_explicit_or_future_values_win() {
+        for (database_existed, expected) in [
+            (false, SettingsView::Simple),
+            (true, SettingsView::Advanced),
+        ] {
+            let reads = RefCell::new(Vec::new());
+            let writes = RefCell::new(Vec::new());
+            let view = initial_settings_view(
+                database_existed,
+                |key| {
+                    reads.borrow_mut().push(key.to_owned());
+                    Ok(None)
+                },
+                |key, value| {
+                    writes.borrow_mut().push((key.to_owned(), value.to_owned()));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(view, expected);
+            assert_eq!(
+                *reads.borrow(),
+                vec![SETTINGS_VIEW_KEY],
+                "Reuse the pre-open database probe; never scan user data"
+            );
+            assert_eq!(
+                *writes.borrow(),
+                vec![(SETTINGS_VIEW_KEY.to_string(), expected.raw().to_string())]
+            );
+        }
+        for (raw, expected) in [
+            ("simple", SettingsView::Simple),
+            ("advanced", SettingsView::Advanced),
+            ("future-mode", SettingsView::Advanced),
+            ("{broken", SettingsView::Advanced),
+        ] {
+            for database_existed in [false, true] {
+                let view = initial_settings_view(database_existed, |key| { assert_eq!(key, SETTINGS_VIEW_KEY); Ok(Some(raw.into())) }, |_, _| panic!("Explicit preferences, including unknown values, must not be overwritten")).unwrap();
+                assert_eq!(view, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_presentation_storage_never_latches_a_guess() {
+        let written = std::cell::Cell::new(false);
+        let result = initial_settings_view(
+            false,
+            |_| {
+                Err(storage::Error::new(
+                    storage::ErrorKind::Unavailable,
+                    "injected read failure",
+                ))
+            },
+            |_, _| {
+                written.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!written.get());
+        assert!(
+            initial_settings_view(
+                false,
+                |_| Ok(None),
+                |_, _| Err(storage::Error::new(
+                    storage::ErrorKind::Transaction,
+                    "injected write failure"
+                ))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn presentation_mode_roundtrips_per_installation_without_mutating_personal_settings() {
+        const ROOT: &str = "NOVA_SETTINGS_VIEW_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-settings-view-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).env(ROOT, &root)
+                .args(["--exact", "app::settings::view_tests::presentation_mode_roundtrips_per_installation_without_mutating_personal_settings", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        initialize_settings_view(false);
+        assert!(!SETTINGS_ADVANCED.load(Ordering::Acquire));
+        assert_eq!(
+            storage::try_get_str(SETTINGS_VIEW_KEY).unwrap().as_deref(),
+            Some("simple")
+        );
+        let values = [
+            (
+                "settings",
+                r#"{"quality":50,"playback_speed":1.25,"sync_overrides":{"quality":90}}"#,
+            ),
+            (
+                "profile:alice:settings",
+                r#"{"quality":75,"sync_overrides":{"cache_images":false}}"#,
+            ),
+            (
+                "profile:bob:settings",
+                r#"{"playback_speed":1.5,"show_stream_loading_text":false}"#,
+            ),
+            (
+                "playback_preferences:v1",
+                r#"{"movie\u0001tt123\u00012":{"speed":1.75}}"#,
+            ),
+            ("interface_mode", r#""tv""#),
+        ];
+        for (key, value) in values {
+            storage::try_set_str(key, value).unwrap();
+        }
+        // Simulate onboarding/default writes and a restart before first Settings.
+        initialize_settings_view(true);
+        assert!(
+            !SETTINGS_ADVANCED.load(Ordering::Acquire),
+            "Fresh Simple survives later settings creation and restart"
+        );
+        let sync_owner = nova_sync::local_store().unwrap();
+        let before_digest = sync_owner.lock().unwrap().digest();
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let before_settings =
+            serde_json::to_value(&bridge.shared.lock().unwrap().cache_settings).unwrap();
+        let _schedule = bridge.wire_settings_autosave();
+        app.invoke_settings_view_changed(false);
+        assert!(!app.get_settings_advanced());
+        app.set_settings_advanced(true);
+        assert_eq!(
+            storage::try_get_str(SETTINGS_VIEW_KEY).unwrap().as_deref(),
+            Some("simple"),
+            "Programmatic publication/search reveal must not persist a mode"
+        );
+        profiles::with_context(profiles::context_for("bob"), || {
+            app.invoke_settings_view_changed(true)
+        });
+        assert!(app.get_settings_advanced());
+        assert_eq!(
+            storage::try_get_str(SETTINGS_VIEW_KEY).unwrap().as_deref(),
+            Some("advanced")
+        );
+        assert!(!profiles::scoped_key(SETTINGS_VIEW_KEY));
+        for profile in ["alice", "bob"] {
+            let owner = profiles::ProfileStore::for_profile(profile);
+            assert_eq!(owner.key(SETTINGS_VIEW_KEY), SETTINGS_VIEW_KEY);
+            assert_eq!(
+                owner.read(SETTINGS_VIEW_KEY).unwrap().as_deref(),
+                Some("advanced")
+            );
+        }
+        let migration = profiles::legacy_snapshot_migration_entries().unwrap();
+        assert!(
+            !migration
+                .iter()
+                .any(|(key, _)| key.contains(SETTINGS_VIEW_KEY)),
+            "Profile migration must leave the device presentation key in place"
+        );
+        for (key, value) in values {
+            assert_eq!(
+                storage::try_get_str(key).unwrap().as_deref(),
+                Some(value),
+                "{key}: switching presentation cannot modify an underlying setting"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&bridge.shared.lock().unwrap().cache_settings).unwrap(),
+            before_settings
+        );
+        assert_eq!(
+            sync_owner.lock().unwrap().digest(),
+            before_digest,
+            "Presentation does not create sync records or device overrides"
+        );
+        initialize_settings_view(true);
+        assert!(SETTINGS_ADVANCED.load(Ordering::Acquire));
+        storage::try_set_str(SETTINGS_VIEW_KEY, "future-mode").unwrap();
+        initialize_settings_view(true);
+        assert!(SETTINGS_ADVANCED.load(Ordering::Acquire));
+        assert_eq!(
+            storage::try_get_str(SETTINGS_VIEW_KEY).unwrap().as_deref(),
+            Some("future-mode")
+        );
     }
 }

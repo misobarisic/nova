@@ -439,6 +439,8 @@ impl Bridge {
             .clone()
             .normalized();
         let bridge = app.global::<StreamFiltersBridge>();
+        bridge
+            .set_summary(text::stream_filter_summary(&self.effective_stream_filter_rules()).into());
         bridge.set_enabled(rules.enabled);
         bridge.set_sort_order(
             Rc::new(VecModel::from(

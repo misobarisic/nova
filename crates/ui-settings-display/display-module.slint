@@ -24,8 +24,6 @@ export component SettingsDisplayModule inherits Window {
     }
     function select_grouping(row:int) { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = row; }
     private property <bool> search_requested: SettingsContent.kb_edit == 9 && SettingsBridge.sel == 3;
-    changed search_requested => { if root.search_requested { search_focus.start(); } else { search_focus.stop(); } }
-    search_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.search_requested { grouping_search.focus(); } } }
     body_layout := VerticalLayout {
         width: 100%; height: 100%; spacing: 0px;
         VerticalLayout {
@@ -62,29 +60,35 @@ export component SettingsDisplayModule inherits Window {
             }
             SectionHeader { label: @tr("Artwork and metadata"); }
             SettingsCard {
-                SettingsRow {
-                    setting-key: "date_relative";
-                    row-title: @tr("Relative episode dates");
-                    row-desc: @tr("Show release dates as \"3 days ago\" instead of \"Mar 15, 2024\".");
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    SettingsRow {
+                        setting-key: "date_relative";
+                        row-title: @tr("Relative episode dates");
+                        row-desc: @tr("Show release dates as \"3 days ago\" instead of \"Mar 15, 2024\".");
 
-                    ToggleSwitch {
-                        name: @tr("Relative episode dates");
-                        checked <=> SettingsBridge.cache_date_relative;
-                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 0 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 0; SettingsContent.schedule_setting("date_relative"); }
+                        ToggleSwitch {
+                            name: @tr("Relative episode dates");
+                            checked <=> SettingsBridge.cache_date_relative;
+                            focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 0 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 0; SettingsContent.schedule_setting("date_relative"); }
+                        }
                     }
                 }
-                SettingsRow {
-                    tinted: true;
-                    setting-key: "prefetch_metadata";
-                    row-title: @tr("Prefetch episode metadata");
-                    row-desc: @tr("Download season/episode info in the background for items in Discover. My Library is always prefetched.");
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    SettingsRow {
+                        tinted: true;
+                        setting-key: "prefetch_metadata";
+                        row-title: @tr("Prefetch episode metadata");
+                        row-desc: @tr("Download season/episode info in the background for items in Discover. My Library is always prefetched.");
 
-                    ToggleSwitch {
-                        name: @tr("Prefetch episode metadata");
-                        checked <=> SettingsBridge.cache_prefetch_metadata;
-                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 1 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 1; SettingsContent.schedule_setting("prefetch_metadata"); }
+                        ToggleSwitch {
+                            name: @tr("Prefetch episode metadata");
+                            checked <=> SettingsBridge.cache_prefetch_metadata;
+                            focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 1 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 1; SettingsContent.schedule_setting("prefetch_metadata"); }
+                        }
                     }
                 }
                 SettingsRow {
@@ -129,15 +133,18 @@ export component SettingsDisplayModule inherits Window {
                         picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 3; SettingsBridge.discover_min_cols = i + 2; SettingsContent.schedule_setting("discover_min_cols"); }
                     }
                 }
-                SettingsRow {
-                    setting-key: "discover_catalog_addon_names";
-                    row-title: @tr("Show addon names in catalogs");
-                    row-desc: @tr("Prefix catalog names with their addon in Discover's All addons view.");
-                    ToggleSwitch {
-                        name: @tr("Show addon names in catalogs");
-                        checked <=> SettingsBridge.discover_catalog_addon_names;
-                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 6 && SettingsBridge.kb_active;
-                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 6; SettingsContent.schedule_setting("discover_catalog_addon_names"); }
+                if SettingsContent.advanced_visible: VerticalLayout {
+                    vertical-stretch: 0; spacing: 0px;
+                    SettingsRow {
+                        setting-key: "discover_catalog_addon_names";
+                        row-title: @tr("Show addon names in catalogs");
+                        row-desc: @tr("Prefix catalog names with their addon in Discover's All addons view.");
+                        ToggleSwitch {
+                            name: @tr("Show addon names in catalogs");
+                            checked <=> SettingsBridge.discover_catalog_addon_names;
+                            focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 6 && SettingsBridge.kb_active;
+                            toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 6; SettingsContent.schedule_setting("discover_catalog_addon_names"); }
+                        }
                     }
                 }
             }
@@ -157,82 +164,91 @@ export component SettingsDisplayModule inherits Window {
                     }
                 }
             }
-            SectionHeader { label: @tr("Catalog grouping"); }
-            SettingsCard {
-                SettingsRow {
-                    setting-key: "catalog_grouping_default";
-                    row-title: @tr("Catalog grouping");
-                    row-desc: @tr("Choose how Home and Discover organize catalog entries. Original keeps addon entries, Season separates confirmed seasons, and Series groups confirmed entries for the same show. Playback and Library identity stay unchanged.");
-                    grouping_default := Dropdown {
-                        accessible-role: combobox; accessible-id: "catalog-grouping-default"; accessible-label: @tr("Default catalog grouping"); accessible-value: self.model[self.current-index];
-                        model: [@tr("Original"), @tr("Season"), @tr("Series")]; current-index <=> CatalogGroupingBridge.default_index; roomy: true;
-                        width: Math.min(240px,Math.max(1px,SettingsContent.slot_width - 32px));
-                        property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 8 && SettingsBridge.kb_active;
-                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
-                        selected(_) => { root.select_grouping(8); CatalogGroupingBridge.default_index = self.current-index; CatalogGroupingBridge.default_changed(self.current-index); }
+            if SettingsContent.advanced_visible: VerticalLayout {
+                vertical-stretch: 0; spacing: 16px;
+                // The editor and its focus request share this conditional scope.
+                private property <bool> search_requested: root.search_requested;
+                changed search_requested => { if self.search_requested { search_focus.start(); } else { search_focus.stop(); } }
+                init => { if self.search_requested { search_focus.start(); } }
+                search_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.search_requested { grouping_search.focus(); } } }
+                SectionHeader { label: @tr("Catalog grouping"); }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "catalog_grouping_default";
+                        row-title: @tr("Catalog grouping");
+                        row-desc: @tr("Choose how Home and Discover organize catalog entries. Original keeps addon entries, Season separates confirmed seasons, and Series groups confirmed entries for the same show. Playback and Library identity stay unchanged.");
+                        grouping_default := Dropdown {
+                            accessible-role: combobox; accessible-id: "catalog-grouping-default"; accessible-label: @tr("Default catalog grouping"); accessible-value: self.model[self.current-index];
+                            model: [@tr("Original"), @tr("Season"), @tr("Series")]; current-index <=> CatalogGroupingBridge.default_index; roomy: true;
+                            width: Math.min(240px,Math.max(1px,SettingsContent.slot_width - 32px));
+                            property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 8 && SettingsBridge.kb_active;
+                            border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                            changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
+                            selected(_) => { root.select_grouping(8); CatalogGroupingBridge.default_index = self.current-index; CatalogGroupingBridge.default_changed(self.current-index); }
+                        }
+                    }
+                    SettingsRow {
+                        setting-key: "catalog_grouping_infer_series";
+                        row-title: @tr("Infer series grouping");
+                        row-desc: @tr("Use explicit season relationships and a confirmed series anchor when a provider has no parent mapping. Episode numbering and progress stay unchanged.");
+                        ToggleSwitch {
+                            accessible-id: "catalog-grouping-infer-series";
+                            name: @tr("Infer series grouping");
+                            checked <=> CatalogGroupingBridge.infer_series;
+                            focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 9 && SettingsBridge.kb_active;
+                            toggled => { root.select_grouping(9); CatalogGroupingBridge.infer_series_changed(self.checked); }
+                        }
                     }
                 }
-                SettingsRow {
-                    setting-key: "catalog_grouping_infer_series";
-                    row-title: @tr("Infer series grouping");
-                    row-desc: @tr("Use explicit season relationships and a confirmed series anchor when a provider has no parent mapping. Episode numbering and progress stay unchanged.");
-                    ToggleSwitch {
-                        accessible-id: "catalog-grouping-infer-series";
-                        name: @tr("Infer series grouping");
-                        checked <=> CatalogGroupingBridge.infer_series;
-                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 9 && SettingsBridge.kb_active;
-                        toggled => { root.select_grouping(9); CatalogGroupingBridge.infer_series_changed(self.checked); }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "catalog_grouping_overrides";
+                        row-title: @tr("Catalog overrides");
+                        row-desc: @tr("Set Home and Discover independently for each catalog. Default follows the choice above; every genre uses its catalog's rule.");
                     }
-                }
-            }
-            SettingsCard {
-                SettingsRow {
-                    setting-key: "catalog_grouping_overrides";
-                    row-title: @tr("Catalog overrides");
-                    row-desc: @tr("Set Home and Discover independently for each catalog. Default follows the choice above; every genre uses its catalog's rule.");
-                }
-                VerticalLayout { padding: 16px; spacing: 12px; alignment: start;
-                    grouping_search := SearchField {
-                        accessible-role: text-input; accessible-id: "catalog-grouping-search"; accessible-label: @tr("Search catalogs"); accessible-value: CatalogGroupingBridge.search;
-                        text <=> CatalogGroupingBridge.search; placeholder-text: @tr("Search catalogs"); roomy: true; search-icon: true;
-                        focus_changed(focused) => { SettingsContent.input_focused = focused; }
-                        edited(query) => { root.select_grouping(10); CatalogGroupingBridge.search_changed(query); }
-                        accepted(query) => { CatalogGroupingBridge.search_changed(query); SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); }
-                        property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 10 && SettingsBridge.kb_active;
-                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
-                    }
-                    if CatalogGroupingBridge.rows.length == 0: Text { text: CatalogGroupingBridge.search == "" ? @tr("No catalogs available.") : @tr("No catalogs match this search."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                    for catalog[i] in CatalogGroupingBridge.rows: SettingsCard {
-                        VerticalLayout { padding: 12px; spacing: 10px; alignment: start;
-                            Text { text: catalog.title; color: Theme.current.text_bright; font-weight: 700; wrap: word-wrap; min-width: 0px; }
-                            Text { text: catalog.addon + (catalog.media_type == "" ? "" : " · " + catalog.media_type); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
-                            if !catalog.available: Text { text: @tr("Unavailable addon"); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
-                            for caption[surface] in [@tr("Home"), @tr("Discover")]: VerticalLayout {
-                                spacing: 4px; alignment: start; vertical-stretch: 0;
-                                Text { text: caption; color: Theme.current.text_primary; }
-                                Dropdown {
-                                    accessible-role: combobox; accessible-id: "catalog-grouping-" + surface + ":" + catalog.key; accessible-label: caption + " · " + catalog.title; accessible-value: self.model[self.current-index]; accessible-enabled: self.enabled;
-                                    model: [@tr("Default"), @tr("Original"), @tr("Season"), @tr("Series")];
-                                    current-index: surface == 0 ? catalog.home_mode : catalog.discover_mode; roomy: true;
-                                    width: Math.min(240px,Math.max(1px,SettingsContent.slot_width - 88px));
-                                    property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 11 + i * 3 + surface && SettingsBridge.kb_active;
-                                    border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
-                                    changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
-                                    private property <string> opened_key;
-                                    opened => { self.opened_key = catalog.key; }
-                                    selected(_) => { if self.opened_key == catalog.key { root.select_grouping(11 + i * 3 + surface); CatalogGroupingBridge.override_changed(catalog.key,surface,self.current-index - 1); } }
+                    VerticalLayout { padding: 16px; spacing: 12px; alignment: start;
+                        grouping_search := SearchField {
+                            accessible-role: text-input; accessible-id: "catalog-grouping-search"; accessible-label: @tr("Search catalogs"); accessible-value: CatalogGroupingBridge.search;
+                            text <=> CatalogGroupingBridge.search; placeholder-text: @tr("Search catalogs"); roomy: true; search-icon: true;
+                            focus_changed(focused) => { SettingsContent.input_focused = focused; }
+                            edited(query) => { root.select_grouping(10); CatalogGroupingBridge.search_changed(query); }
+                            accepted(query) => { CatalogGroupingBridge.search_changed(query); SettingsContent.kb_edit = 0; SettingsContent.focus_shell(); }
+                            property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 10 && SettingsBridge.kb_active;
+                            changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
+                        }
+                        if CatalogGroupingBridge.rows.length == 0: Text { text: CatalogGroupingBridge.search == "" ? @tr("No catalogs available.") : @tr("No catalogs match this search."); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                        for catalog[i] in CatalogGroupingBridge.rows: SettingsCard {
+                            VerticalLayout { padding: 12px; spacing: 10px; alignment: start;
+                                Text { text: catalog.title; color: Theme.current.text_bright; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                                Text { text: catalog.addon + (catalog.media_type == "" ? "" : " · " + catalog.media_type); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                if !catalog.available: Text { text: @tr("Unavailable addon"); color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                                for caption[surface] in [@tr("Home"), @tr("Discover")]: VerticalLayout {
+                                    spacing: 4px; alignment: start; vertical-stretch: 0;
+                                    Text { text: caption; color: Theme.current.text_primary; }
+                                    Dropdown {
+                                        accessible-role: combobox; accessible-id: "catalog-grouping-" + surface + ":" + catalog.key; accessible-label: caption + " · " + catalog.title; accessible-value: self.model[self.current-index]; accessible-enabled: self.enabled;
+                                        model: [@tr("Default"), @tr("Original"), @tr("Season"), @tr("Series")];
+                                        current-index: surface == 0 ? catalog.home_mode : catalog.discover_mode; roomy: true;
+                                        width: Math.min(240px,Math.max(1px,SettingsContent.slot_width - 88px));
+                                        property <bool> row-focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 11 + i * 3 + surface && SettingsBridge.kb_active;
+                                        border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                                        changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y,self.height); } }
+                                        private property <string> opened_key;
+                                        opened => { self.opened_key = catalog.key; }
+                                        selected(_) => { if self.opened_key == catalog.key { root.select_grouping(11 + i * 3 + surface); CatalogGroupingBridge.override_changed(catalog.key,surface,self.current-index - 1); } }
+                                    }
                                 }
-                            }
-                            PillButton {
-                                label: @tr("Remove"); accessible-id: "catalog-grouping-remove:" + catalog.key; destructive: true; compact: true; enabled: catalog.home_mode != 0 || catalog.discover_mode != 0;
-                                horizontal-stretch: 0;
-                                focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 13 + i * 3 && SettingsBridge.kb_active;
-                                clicked => { root.select_grouping(13 + i * 3); SettingsContent.focus_shell(); CatalogGroupingBridge.override_removed(catalog.key); }
+                                PillButton {
+                                    label: @tr("Remove"); accessible-id: "catalog-grouping-remove:" + catalog.key; destructive: true; compact: true; enabled: catalog.home_mode != 0 || catalog.discover_mode != 0;
+                                    horizontal-stretch: 0;
+                                    focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 13 + i * 3 && SettingsBridge.kb_active;
+                                    clicked => { root.select_grouping(13 + i * 3); SettingsContent.focus_shell(); CatalogGroupingBridge.override_removed(catalog.key); }
+                                }
                             }
                         }
                     }
                 }
+
             }
         }
     }

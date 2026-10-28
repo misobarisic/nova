@@ -141,6 +141,7 @@ export component DetailBindings {
 }
 
 export component SettingsBindings {
+    in-out property <bool> advanced <=> SettingsBridge.advanced;
     in-out property <[string]> list_services_account <=> SettingsBridge.list_services_account;
     in-out property <[string]> list_services_status <=> SettingsBridge.list_services_status;
     in-out property <[bool]> list_services_connected <=> SettingsBridge.list_services_connected;

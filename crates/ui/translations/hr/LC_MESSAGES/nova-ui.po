@@ -5717,3 +5717,31 @@ msgstr "Zatvorite statistiku"
 #: player-stats.slint player.slint
 msgid "Copy diagnostics"
 msgstr "Kopirajte dijagnostiku"
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Settings view"
+msgstr "Prikaz postavki"
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Simple"
+msgstr "Osnovno"
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Advanced"
+msgstr "Napredno"
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Image storage"
+msgstr "Pohrana slika"
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Disk caching is off."
+msgstr "Predmemorija na disku je isključena."
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Original downloads; compression is off."
+msgstr "Izvorne preuzete slike; kompresija je isključena."
+
+#: settings.slint image-cache-module.slint player-module.slint
+msgid "Edit filters"
+msgstr "Uredite filtre"

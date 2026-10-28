@@ -632,6 +632,7 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
     }
     SettingsBindings {
+        advanced <=> root.settings_advanced;
         list_services_account <=> root.list_services_account;
         list_services_status <=> root.list_services_status;
         list_services_connected <=> root.list_services_connected;
@@ -2183,6 +2184,8 @@ export component AppWindow inherits Window {
     callback save_settings();
     in-out property <bool> persistence_failed: false;
     callback settings_edited(string);
+    in-out property <bool> settings_advanced: true;
+    callback settings_view_changed(bool);
     callback clear_cache();
     callback reencode_cache();
     callback torrents_changed();
@@ -2458,6 +2461,7 @@ export component AppWindow inherits Window {
     public function settings_bridge_home_row_catalog_removed(i: int) { root.home_row_catalog_removed(i); }
     public function settings_bridge_home_row_catalog_action(i: int, action: int) { root.home_row_catalog_action(i, action); }
     public function settings_bridge_settings_edited(field: string) { root.settings_edited(field); }
+    public function settings_bridge_view_changed(advanced: bool) { root.settings_view_changed(advanced); }
     public function settings_bridge_torrent_dir_edited(d: string) { root.torrent_dir_edited(d); }
     public function settings_bridge_download_auto_delete_watched_changed(v: bool) { root.download_auto_delete_watched_changed(v); }
     public function settings_bridge_download_list_remove(id: string) { root.download_list_remove(id); }
