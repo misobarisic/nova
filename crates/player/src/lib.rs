@@ -2516,8 +2516,10 @@ impl Player {
                 .pending_paused
                 .store(new_paused, Ordering::SeqCst);
         }
+        drop(mpv_guard);
         if let Some(app) = self.state.app.upgrade() {
             app.set_is_paused(new_paused);
+            app.window().request_redraw();
         }
         // Screens stay awake only while actually playing (mpv/VLC behavior).
         #[cfg(target_os = "linux")]
@@ -2526,7 +2528,6 @@ impl Player {
         converge_screen_on(!new_paused);
         #[cfg(target_os = "android")]
         {
-            drop(mpv_guard);
             if let Some(app) = self.state.app.upgrade() {
                 android_pip::publish(&self.state, &app, false);
             }
@@ -5023,6 +5024,16 @@ mod tests {
                 "explicit confirmation did not resume playback"
             );
             std::thread::sleep(Duration::from_millis(10));
+        }
+        // Each rapid toggle must publish both native state and the transport
+        // icon before a 250 ms tick can run, including a pause/resume burst.
+        for _ in 0..10 {
+            player.toggle();
+            assert!(player.is_paused());
+            assert!(app.get_is_paused());
+            player.toggle();
+            assert!(!player.is_paused());
+            assert!(!app.get_is_paused());
         }
         // Terminal startup failure abandons the hold and deferred load, while
         // keeping the failed source stopped. A second alternative may load.

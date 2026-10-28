@@ -7,7 +7,55 @@
 //! and the screen may dim.
 
 use std::os::fd::OwnedFd;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+
+#[derive(Clone, Copy, Default)]
+struct InhibitRequest {
+    want: bool,
+    revision: u64,
+}
+
+/// Only this tiny desired-state mailbox is shared with the UI. The worker owns
+/// the bus connections, cookies and blocking calls, including release calls.
+struct InhibitWorker {
+    latest: Arc<Mutex<InhibitRequest>>,
+    wakeup: mpsc::SyncSender<()>,
+}
+
+impl InhibitWorker {
+    fn spawn(
+        mut converge: impl FnMut(bool) + Send + 'static,
+    ) -> (Self, std::thread::JoinHandle<()>) {
+        let latest = Arc::new(Mutex::new(InhibitRequest::default()));
+        let requested = latest.clone();
+        let (wakeup, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let mut applied_revision = 0;
+            while receiver.recv().is_ok() {
+                let request = *requested.lock().unwrap_or_else(|e| e.into_inner());
+                if request.revision != applied_revision {
+                    applied_revision = request.revision;
+                    converge(request.want);
+                }
+            }
+        });
+        (Self { latest, wakeup }, worker)
+    }
+
+    fn request(&self, want: bool) {
+        {
+            let mut latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+            if latest.want == want {
+                return;
+            }
+            latest.want = want;
+            latest.revision = latest.revision.wrapping_add(1);
+        }
+        // One wake is enough: the worker reads the newest desired state. Never
+        // queue one bus call per click or wait for a slow service on the UI.
+        let _ = self.wakeup.try_send(());
+    }
+}
 
 /// What the player wants vs. what is held: the only transitions that touch
 /// D-Bus. Pure so the contract is unit-testable without a bus.
@@ -74,13 +122,28 @@ impl InhibitState {
     }
 }
 
-static STATE: Mutex<InhibitState> = Mutex::new(InhibitState::empty());
-
-/// Converge screen inhibition towards `want` (playing video). Transition-only:
-/// steady states make no D-Bus calls. Failed acquisition is retried only after
-/// pause/close; the initial attempt may contact both buses.
+/// Request screen inhibition towards `want` (playing video), without waiting
+/// for D-Bus. One worker coalesces transitions and owns all native resources.
 pub fn converge_idle_inhibit(want: bool) {
-    let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    static WORKER: OnceLock<InhibitWorker> = OnceLock::new();
+    WORKER
+        .get_or_init(|| {
+            let mut state = InhibitState::empty();
+            InhibitWorker::spawn(move |want| {
+                // Revisions retain pause/resume boundaries even if both were
+                // coalesced during a slow acquisition. A failed old interval
+                // must not suppress the next interval's acquisition attempt.
+                state.attempted = false;
+                converge_on_worker(&mut state, want);
+            })
+            .0
+        })
+        .request(want);
+}
+
+/// Transition-only: steady states make no D-Bus calls. Failed acquisition
+/// is retried only after pause/close; a try may contact both buses.
+fn converge_on_worker(state: &mut InhibitState, want: bool) {
     if !want {
         state.attempted = false;
     }
@@ -150,5 +213,73 @@ mod tests {
         assert_eq!(action_for(false, true, true), Action::Release);
         assert_eq!(action_for(true, true, true), Action::Keep);
         assert_eq!(action_for(false, false, false), Action::Keep);
+    }
+
+    #[test]
+    fn slow_inhibit_does_not_block_requests_and_bursts_converge_to_latest() {
+        let (entered, started) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let (observed, observations) = mpsc::channel();
+        let (worker, join) = InhibitWorker::spawn(move |want| {
+            observed.send(want).unwrap();
+            if want {
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+            }
+        });
+        worker.request(true);
+        started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        // The fake service remains blocked throughout the UI-side burst.
+        // Exactly one pending wake survives and its desired state is false.
+        for _ in 0..1_000 {
+            worker.request(false);
+            worker.request(true);
+        }
+        worker.request(false);
+        release.send(()).unwrap();
+        assert!(
+            observations
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        );
+        assert!(
+            !observations
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        );
+        drop(worker);
+        join.join().unwrap();
+        assert!(observations.try_recv().is_err());
+    }
+
+    #[test]
+    fn coalesced_pause_resume_preserves_retry_and_steady_ticks_are_ignored() {
+        let (entered, started) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let (observed, observations) = mpsc::channel();
+        let (worker, join) = InhibitWorker::spawn(move |want| {
+            observed.send(want).unwrap();
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+        });
+        worker.request(true);
+        started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        worker.request(false);
+        worker.request(true);
+        release.send(()).unwrap();
+        started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        for _ in 0..100 {
+            worker.request(true);
+        }
+        release.send(()).unwrap();
+        drop(worker);
+        join.join().unwrap();
+        assert_eq!(observations.into_iter().collect::<Vec<_>>(), [true, true]);
     }
 }

@@ -344,6 +344,14 @@ resolve before handing off; credential-bearing streams retain in-app playback.
 
 ## Linux system media controls
 
+Play/pause publishes the native pause state to the controls immediately and
+requests a redraw. Linux screen-saver/logind inhibition runs on one worker,
+including release on pause/EOF/close; its bounded mailbox coalesces rapid
+transitions to the latest desired state. Slow or unavailable D-Bus services
+therefore do not block the controls or queue a service call for every click.
+A pause/resume boundary permits another acquisition attempt after failure,
+even when both requests arrive during an earlier blocking call.
+
 Linux desktop builds expose the built-in player's current title and episode,
 duration, position, playback state, volume and speed through MPRIS on the session
 bus. Desktop media widgets and tools such as `playerctl --player=nova play-pause`
