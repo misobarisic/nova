@@ -531,3 +531,215 @@ fn stats_header_drags_with_mouse_and_touch_without_playback_changes() {
     near(card(&app).0.x, bridge.get_safe_left() + 18.0);
     near(card(&app).0.y, bridge.get_safe_top() + 60.0);
 }
+
+#[test]
+fn pointer_motion_within_stats_reveals_and_rearms_the_normal_osd_timer() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::pointer_motion_within_stats_reveals_and_rearms_the_normal_osd_timer"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_is_paused(false);
+    app.set_duration(600.0);
+    app.set_stats_visible(true);
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    fixture(&app, false);
+    app.on_toggle_pause(|| panic!("hovering stats paused playback"));
+    app.on_seek(|_| panic!("hovering stats sought playback"));
+    app.on_seek_relative(|_| panic!("hovering stats sought playback"));
+    app.on_volume_step(|_| panic!("hovering stats changed volume"));
+    app.on_stats_copy(|| panic!("hovering stats copied diagnostics"));
+    let calls = Rc::new(Cell::new(0));
+    let recorded = calls.clone();
+    let weak = app.as_weak();
+    app.on_osd_mouse_moved(move || {
+        recorded.set(recorded.get() + 1);
+        let app = weak.upgrade().unwrap();
+        app.set_osd_visible(true);
+        app.invoke_restart_osd_hide();
+    });
+    app.window().show().unwrap();
+    settle(&app);
+    for (id, left_margin) in [
+        ("PlayerStats::header_drag", false),
+        ("PlayerStats::close_touch", false),
+        ("PlayerStats::stats_scroll", false),
+        ("PlayerStats::row_label", false),
+        ("PlayerStats::copy_touch", false),
+        ("PlayerOverlay::stats_overlay", true),
+    ] {
+        let region = element(&app, id);
+        let p = region.absolute_position();
+        let size = region.size();
+        let x = p.x + if left_margin { 2.0 } else { size.width / 2.0 };
+        let y = p.y + size.height / 2.0;
+        app.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(x, y),
+        });
+        settle(&app);
+        app.set_osd_visible(false);
+        let before = calls.get();
+        // Stay within the same target while the controls are hidden.
+        app.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(x + 1.0, y),
+        });
+        settle(&app);
+        assert!(calls.get() > before, "{id} must report pointer movement");
+        assert!(app.get_osd_visible(), "{id} must wake the normal OSD");
+        assert!(
+            !app.global::<nova::PlayerOsdBridge>()
+                .get_osd_auto_hide_blocked()
+        );
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(3100));
+        settle(&app);
+        assert!(!app.get_osd_visible(), "{id} must not pin the OSD visible");
+        let before = calls.get();
+        app.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(x + 2.0, y),
+        });
+        settle(&app);
+        assert!(
+            calls.get() > before && app.get_osd_visible(),
+            "{id} must wake again without leaving the panel"
+        );
+    }
+    let card = element(&app, "PlayerOverlay::stats_overlay");
+    let p = card.absolute_position();
+    let y = p.y + card.size().height / 2.0;
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(2000));
+    app.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(p.x + 5.0, y),
+    });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(2000));
+    settle(&app);
+    assert!(
+        app.get_osd_visible(),
+        "movement restarts the existing hide deadline"
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1200));
+    settle(&app);
+    assert!(!app.get_osd_visible());
+    let before = calls.get();
+    fixture(&app, false);
+    settle(&app);
+    key(&app, "x");
+    assert_eq!(
+        calls.get(),
+        before,
+        "layout and keyboard input are not pointer activity"
+    );
+}
+
+#[test]
+fn overflowing_stats_body_still_pans_and_wakes_on_hover() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::overflowing_stats_body_still_pans_and_wakes_on_hover"
+    )) {
+        return;
+    }
+    use i_slint_core::{input::TouchPhase, platform::InternalEvent};
+    use slint::LogicalPosition;
+
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_is_paused(false);
+    app.set_duration(600.0);
+    app.set_stats_visible(true);
+    app.window().set_size(slint::PhysicalSize::new(800, 260));
+    fixture(&app, false);
+    app.on_toggle_pause(|| panic!("scrolling stats paused playback"));
+    app.on_seek(|_| panic!("scrolling stats sought playback"));
+    app.on_seek_relative(|_| panic!("scrolling stats sought playback"));
+    app.on_volume_step(|_| panic!("scrolling stats changed volume"));
+    app.on_playback_speed_preview(|_| panic!("scrolling stats started a speed hold"));
+    let calls = Rc::new(Cell::new(0));
+    let recorded = calls.clone();
+    let weak = app.as_weak();
+    app.on_osd_mouse_moved(move || {
+        recorded.set(recorded.get() + 1);
+        let app = weak.upgrade().unwrap();
+        app.set_osd_visible(true);
+        app.invoke_restart_osd_hide();
+    });
+    app.window().show().unwrap();
+    settle(&app);
+    let card = element(&app, "PlayerOverlay::stats_overlay");
+    let original_card = card.absolute_position();
+    let row = element(&app, "PlayerStats::row_label");
+    let original_row_y = row.absolute_position().y;
+    let scroll = element(&app, "PlayerStats::stats_scroll");
+    let p = scroll.absolute_position();
+    let size = scroll.size();
+    let start = LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height * 0.75);
+    let touch = |position: LogicalPosition, phase: TouchPhase| {
+        app.window()
+            .dispatch_event(WindowEvent::internal(InternalEvent::Touch {
+                id: 7,
+                position: i_slint_core::lengths::logical_point_from_api(position),
+                phase,
+            }));
+        settle(&app);
+    };
+    touch(start, TouchPhase::Started);
+    touch(
+        LogicalPosition::new(start.x, start.y - 12.0),
+        TouchPhase::Moved,
+    );
+    touch(
+        LogicalPosition::new(start.x, start.y - 40.0),
+        TouchPhase::Moved,
+    );
+    touch(
+        LogicalPosition::new(start.x, start.y - 40.0),
+        TouchPhase::Ended,
+    );
+    assert!(
+        row.absolute_position().y < original_row_y - 5.0,
+        "touch must pan the overflowing content"
+    );
+    assert_eq!(
+        card.absolute_position(),
+        original_card,
+        "body panning must not drag the card"
+    );
+    let hover = LogicalPosition::new(start.x, start.y - 30.0);
+    app.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: hover });
+    settle(&app);
+    app.set_osd_visible(false);
+    let before = calls.get();
+    app.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(hover.x + 1.0, hover.y),
+    });
+    settle(&app);
+    assert!(
+        calls.get() > before && app.get_osd_visible(),
+        "hover still wakes the OSD after touch panning"
+    );
+    assert!(
+        !app.global::<nova::PlayerOsdBridge>()
+            .get_osd_auto_hide_blocked()
+    );
+    let after_touch = row.absolute_position().y;
+    app.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: hover,
+        delta_x: 0.0,
+        delta_y: -80.0,
+    });
+    settle(&app);
+    assert!(
+        row.absolute_position().y < after_touch,
+        "wheel scrolling remains available"
+    );
+    assert_eq!(card.absolute_position(), original_card);
+}

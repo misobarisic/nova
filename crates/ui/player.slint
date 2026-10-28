@@ -3643,6 +3643,7 @@ export component PlayerOverlay {
         notice: root.stats_notice;
         closed => { root.stats_visible = false; }
         copy => { root.stats_copy(); }
+        pointer_activity => { root.osd_mouse_moved(); }
         drag_started => {
             root.stats_drag_origin_x = self.x;
             root.stats_drag_origin_y = self.y;

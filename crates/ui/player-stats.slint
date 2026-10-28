@@ -9,6 +9,7 @@ export component PlayerStats inherits Rectangle {
     in property <length> available_height;
     callback closed();
     callback copy();
+    callback pointer_activity();
     callback drag_started();
     callback dragged(length, length);
     callback unhandled_key(KeyEvent) -> EventResult;
@@ -47,6 +48,7 @@ export component PlayerStats inherits Rectangle {
     // boundary; neither may fall through to the video's playback gestures.
     TouchArea {
         width: 100%; height: 100%;
+        pointer-event(event) => { if event.kind == PointerEventKind.move { root.pointer_activity(); } }
         clicked => { root.focus_panel(); }
         scroll-event => { accept }
     }
@@ -88,6 +90,7 @@ export component PlayerStats inherits Rectangle {
                 private property <length> press_x;
                 private property <length> press_y;
                 pointer-event(event) => {
+                    if event.kind == PointerEventKind.move { root.pointer_activity(); }
                     if event.kind == PointerEventKind.down && event.button == PointerEventButton.left && !self.drag_active {
                         self.press_x = self.absolute-position.x + self.mouse-x;
                         self.press_y = self.absolute-position.y + self.mouse-y;
@@ -132,7 +135,11 @@ export component PlayerStats inherits Rectangle {
                 accessible-role: button; accessible-label: @tr("Close stats");
                 accessible-action-default => { root.closed(); }
                 IcClose { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; fill: #e9edf2; }
-                close_touch := TouchArea { mouse-cursor: pointer; clicked => { root.closed(); } }
+                close_touch := TouchArea {
+                    mouse-cursor: pointer;
+                    pointer-event(event) => { if event.kind == PointerEventKind.move { root.pointer_activity(); } }
+                    clicked => { root.closed(); }
+                }
             }
             Rectangle { x: root.inset; y: parent.height - 1px; width: parent.width - 2 * root.inset; height: 1px; background: #ffffff2a; }
         }
@@ -167,6 +174,13 @@ export component PlayerStats inherits Rectangle {
                         }
                     }
                 }
+                // The child observes hover over both rows and empty space;
+                // Flickable still takes the gesture when a drag pans the body.
+                TouchArea {
+                    x: 0px; y: 0px;
+                    width: stats_scroll.width; height: Math.max(stats_scroll.height, rows_col.preferred-height);
+                    pointer-event(event) => { if event.kind == PointerEventKind.move { root.pointer_activity(); } }
+                }
             }
         }
         stats_footer := Rectangle {
@@ -185,6 +199,7 @@ export component PlayerStats inherits Rectangle {
                 Text { x: 36px; width: Math.max(0px, parent.width - 44px); height: 100%; text: @tr("Copy diagnostics"); color: #55bfff; font-size: InterfaceStyle.tv ? 18px : 13px; vertical-alignment: center; overflow: elide; }
                 copy_touch := TouchArea {
                     mouse-cursor: pointer;
+                    pointer-event(event) => { if event.kind == PointerEventKind.move { root.pointer_activity(); } }
                     clicked => { root.keyboard_mode = false; root.focus_index = 2; root.focus_panel(); root.copy(); }
                 }
             }
