@@ -159,6 +159,22 @@ pub fn read_settings() -> SyncSettings {
         .unwrap_or_default()
 }
 
+/// Confirm a persisted opt-out without treating a read or parse failure as one.
+pub fn settings_explicitly_disabled() -> bool {
+    nova_storage::try_get_str(SETTINGS_KEY)
+        .ok()
+        .flatten()
+        .is_some_and(|raw| explicitly_disabled_settings(&raw))
+}
+
+fn explicitly_disabled_settings(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+        && serde_json::from_value::<SyncSettings>(value).is_ok()
+}
+
 /// Persist the sync settings. Does not start/stop the engine.
 pub fn write_settings(settings: &SyncSettings) {
     match serde_json::to_string(settings) {
@@ -1606,6 +1622,261 @@ static ENGINE: LazyLock<Mutex<Option<Arc<SyncEngine>>>> = LazyLock::new(|| Mutex
 static LIFECYCLE: Mutex<()> = Mutex::new(());
 static FOREGROUND_OWNER: AtomicBool = AtomicBool::new(false);
 
+// Called with the lifecycle transition held; keep expensive setup and disposal
+// on the caller's worker while checking cancellation on both sides of setup.
+fn guarded_foreground_transition<T: Clone>(
+    valid: impl Fn() -> bool,
+    current: impl Fn() -> Option<T>,
+    setup: impl FnOnce() -> Result<T>,
+    install: impl FnOnce(&T),
+    acquire: impl FnOnce(),
+    reset: impl FnOnce(),
+    restart: bool,
+) -> Result<Option<T>> {
+    if !valid() {
+        return Ok(None);
+    }
+    if restart {
+        reset();
+    }
+    let (engine, fresh) = match current() {
+        Some(engine) => (engine, false),
+        None => (setup()?, true),
+    };
+    if !valid() {
+        return Ok(None);
+    }
+    if fresh {
+        install(&engine);
+    }
+    acquire();
+    Ok(Some(engine))
+}
+
+/// Acquire foreground ownership only while the caller's request remains current.
+/// Call from a worker: setup and a requested restart can wait for shutdown.
+pub fn foreground_engine_guarded(
+    valid: impl Fn() -> bool,
+    restart: bool,
+) -> Result<Option<Arc<SyncEngine>>> {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    guarded_foreground_transition(
+        valid,
+        engine,
+        || SyncEngine::setup().map(Arc::new),
+        |engine| {
+            *ENGINE.lock().unwrap_or_else(|e| e.into_inner()) = Some(engine.clone());
+        },
+        || FOREGROUND_OWNER.store(true, Ordering::Release),
+        uninstall_inner,
+        restart,
+    )
+}
+
+/// Drop a foreground engine only if this request is still current when the
+/// serialized transition begins. Call from a worker, never the UI thread.
+pub fn uninstall_guarded(valid: impl FnOnce() -> bool) {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    guarded_release(valid, uninstall_inner);
+}
+
+fn guarded_release(valid: impl FnOnce() -> bool, release: impl FnOnce()) {
+    if valid() {
+        release();
+    }
+}
+
+#[cfg(test)]
+mod guarded_lifecycle_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+    #[test]
+    fn durable_opt_out_requires_an_explicit_valid_false() {
+        for raw in [
+            "{}",
+            r#"{"enabled":null}"#,
+            r#"{"enabled":"false"}"#,
+            r#"{"enabled":true}"#,
+            "invalid",
+            r#"{"enabled":false,"interval_secs":"bad"}"#,
+        ] {
+            assert!(!explicitly_disabled_settings(raw), "{raw}");
+        }
+        assert!(explicitly_disabled_settings(r#"{"enabled":false}"#));
+    }
+
+    #[test]
+    fn cancelled_foreground_request_preserves_headless_ownership() {
+        let installed = Cell::new(Some(7));
+        let owned = Cell::new(false);
+        let result = guarded_foreground_transition(
+            || false,
+            || installed.get(),
+            || panic!("cancelled request must not start setup"),
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || installed.set(None),
+            true,
+        )
+        .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(installed.get(), Some(7));
+        assert!(!owned.get());
+    }
+
+    #[test]
+    fn cancelled_new_engine_is_dropped_without_foreground_ownership() {
+        struct Engine(Arc<AtomicUsize>);
+        impl Drop for Engine {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        let generation = AtomicU64::new(1);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let owned = Cell::new(false);
+        let result = guarded_foreground_transition(
+            || generation.load(Ordering::Acquire) == 1,
+            || None::<Arc<Engine>>,
+            || {
+                generation.store(2, Ordering::Release);
+                Ok(Arc::new(Engine(dropped.clone())))
+            },
+            |_| panic!("cancelled engine must not be installed"),
+            || owned.set(true),
+            || {},
+            false,
+        )
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(dropped.load(Ordering::Acquire), 1);
+        assert!(!owned.get());
+    }
+
+    #[test]
+    fn cancelled_setup_is_discarded_and_stale_disable_cannot_undo_reenable() {
+        let generation = AtomicU64::new(1);
+        let installed = Cell::new(None);
+        let owned = Cell::new(false);
+        let cancelled = guarded_foreground_transition(
+            || generation.load(Ordering::Acquire) == 1,
+            || installed.get(),
+            || {
+                // Disable and re-enable while the first setup is in flight.
+                generation.store(3, Ordering::Release);
+                Ok(10)
+            },
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || installed.set(None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(cancelled, None);
+        assert_eq!(installed.get(), None);
+        guarded_release(
+            || generation.load(Ordering::Acquire) == 2,
+            || installed.set(None),
+        );
+        let current = guarded_foreground_transition(
+            || generation.load(Ordering::Acquire) == 3,
+            || installed.get(),
+            || Ok(20),
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || installed.set(None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(current, Some(20));
+        assert!(owned.get());
+        guarded_release(
+            || generation.load(Ordering::Acquire) == 2,
+            || installed.set(None),
+        );
+        assert_eq!(installed.get(), Some(20));
+    }
+
+    #[test]
+    fn foreground_acquisition_adopts_headless_engine_and_restart_replaces_it() {
+        let installed = Cell::new(Some(7));
+        let owned = Cell::new(false);
+        let acquire = || owned.set(true);
+        let first = guarded_foreground_transition(
+            || true,
+            || installed.get(),
+            || panic!("headless engine should be reused"),
+            |engine| installed.set(Some(*engine)),
+            acquire,
+            || installed.set(None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(first, Some(7));
+        assert!(owned.get());
+        let restarted = guarded_foreground_transition(
+            || true,
+            || installed.get(),
+            || Ok(8),
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || {
+                installed.set(None);
+                owned.set(false);
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(restarted, Some(8));
+        assert_eq!(installed.get(), Some(8));
+        assert!(owned.get());
+    }
+
+    #[test]
+    fn pending_restart_can_be_retried_after_cancelled_setup() {
+        let generation = AtomicU64::new(1);
+        let installed = Cell::new(Some(7));
+        let owned = Cell::new(true);
+        let restart_needed = Cell::new(true);
+        let cancelled = guarded_foreground_transition(
+            || generation.load(Ordering::Acquire) == 1,
+            || installed.get(),
+            || {
+                generation.store(3, Ordering::Release);
+                Ok(8)
+            },
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || {
+                installed.set(None);
+                owned.set(false);
+            },
+            restart_needed.get(),
+        )
+        .unwrap();
+        assert_eq!(cancelled, None);
+        assert!(restart_needed.get());
+        let retried = guarded_foreground_transition(
+            || generation.load(Ordering::Acquire) == 3,
+            || installed.get(),
+            || Ok(9),
+            |engine| installed.set(Some(*engine)),
+            || owned.set(true),
+            || {
+                installed.set(None);
+                owned.set(false);
+            },
+            restart_needed.get(),
+        )
+        .unwrap();
+        assert_eq!(retried, Some(9));
+        assert_eq!(installed.get(), Some(9));
+        assert!(owned.get());
+    }
+}
+
 pub fn foreground_engine() -> Result<Arc<SyncEngine>> {
     let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
     if engine().is_none() {
@@ -1659,6 +1930,9 @@ fn install_inner(engine: SyncEngine) {
 
 pub fn uninstall() {
     let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    uninstall_inner();
+}
+fn uninstall_inner() {
     FOREGROUND_OWNER.store(false, Ordering::Release);
     let old = ENGINE.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(old) = old {

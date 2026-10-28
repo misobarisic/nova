@@ -368,11 +368,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // In-app player (same window, like the reference prototype): mpv underlay
     // on desktop, HTML5 video element on web. Same public API either way.
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     let after_first_frame = Rc::new(std::cell::RefCell::new(None::<Box<dyn FnOnce()>>));
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     let first_frame_job = after_first_frame.clone();
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     let player = crate::player::Player::setup_with_render_observer(&app, move |state| {
         if matches!(state, slint::RenderingState::AfterRendering)
             && let Some(job) = first_frame_job.borrow_mut().take()
@@ -382,7 +382,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             slint::Timer::single_shot(Duration::ZERO, job);
         }
     });
-    #[cfg(not(feature = "desktop"))]
+    #[cfg(not(any(feature = "desktop", target_os = "android")))]
     let player = crate::player::Player::setup(&app);
     #[cfg(feature = "desktop")]
     let desktop_window = desktop_window::DesktopWindow::restore(&app, &player);
@@ -1306,11 +1306,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     #[cfg(not(feature = "desktop"))]
     {
+        #[cfg(not(target_os = "android"))]
         sync_torrent_engine(&active_torrent_settings());
         bridge.downloads.start();
+        #[cfg(not(target_os = "android"))]
         if sync_settings.enabled {
             bridge.start_sync();
         }
+    }
+    #[cfg(all(target_os = "android", not(feature = "desktop")))]
+    {
+        let b = bridge.clone();
+        *after_first_frame.borrow_mut() = Some(Box::new(move || {
+            b.start_torrent_after_first_frame();
+            if nova_sync::read_settings().enabled {
+                b.start_sync();
+            }
+        }));
     }
     #[cfg(feature = "desktop")]
     {
@@ -1729,6 +1741,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::web_log("nova: startup complete, entering event loop");
     let result = app.run();
+    #[cfg(all(target_os = "android", not(feature = "desktop")))]
+    {
+        sync::retire_sync_request(
+            &bridge.sync_start_generation,
+            bridge.sync_owned_generation.load(Ordering::Acquire),
+        );
+        bridge.sync_starting.store(false, Ordering::Release);
+    }
     bridge.cast_shutdown();
     bridge.cast_wait_shutdown();
     #[cfg(feature = "desktop")]

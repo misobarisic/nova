@@ -38,11 +38,13 @@ fn background_jobs_borrow_activity_engine_and_preserve_foreground_handoff() {
 
     let headless = nova_sync::background_engine().unwrap().unwrap();
     assert!(nova_sync::background_engine().unwrap().is_none());
-    let attached = nova_sync::foreground_engine().unwrap();
+    let attached = nova_sync::foreground_engine_guarded(|| true, false)
+        .unwrap()
+        .unwrap();
     assert!(Arc::ptr_eq(&headless.engine, &attached));
     drop(headless);
     assert!(Arc::ptr_eq(&nova_sync::engine().unwrap(), &attached));
-    nova_sync::uninstall();
+    nova_sync::uninstall_guarded(|| true);
     drop(attached);
 
     let headless = nova_sync::background_engine().unwrap().unwrap();

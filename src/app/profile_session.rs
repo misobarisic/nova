@@ -5,16 +5,66 @@ use std::sync::RwLock;
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Default)]
 pub(super) struct AccountRuntime {
     /// Most recent sync notice, retained in semantic form so a language switch
     /// can rerender it instead of leaving the old translation on screen.
     pub sync_link_notice: Mutex<Option<SyncNotice>>,
     pub profile_recovery_pending: Arc<AtomicBool>,
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     pub sync_start_generation: Arc<AtomicU64>,
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     pub sync_starting: Arc<AtomicBool>,
+    #[cfg(all(target_os = "android", not(feature = "desktop")))]
+    pub sync_restart_needed: Arc<AtomicBool>,
+    #[cfg(all(target_os = "android", not(feature = "desktop")))]
+    pub sync_owned_generation: AtomicU64,
+}
+
+#[cfg(any(test, all(target_os = "android", not(feature = "desktop"))))]
+#[derive(Clone, Default)]
+struct AndroidSyncRequests {
+    generation: Arc<AtomicU64>,
+    restart_needed: Arc<AtomicBool>,
+}
+
+#[cfg(all(target_os = "android", not(feature = "desktop")))]
+static ANDROID_SYNC_REQUESTS: LazyLock<AndroidSyncRequests> =
+    LazyLock::new(AndroidSyncRequests::default);
+
+impl Default for AccountRuntime {
+    fn default() -> Self {
+        Self {
+            sync_link_notice: Mutex::new(None),
+            profile_recovery_pending: Arc::default(),
+            #[cfg(feature = "desktop")]
+            sync_start_generation: Arc::default(),
+            #[cfg(all(target_os = "android", not(feature = "desktop")))]
+            sync_start_generation: ANDROID_SYNC_REQUESTS.generation.clone(),
+            #[cfg(any(feature = "desktop", target_os = "android"))]
+            sync_starting: Arc::default(),
+            #[cfg(all(target_os = "android", not(feature = "desktop")))]
+            sync_restart_needed: ANDROID_SYNC_REQUESTS.restart_needed.clone(),
+            #[cfg(all(target_os = "android", not(feature = "desktop")))]
+            sync_owned_generation: AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod android_sync_request_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_activity_shares_pending_restart_and_generation() {
+        let process = AndroidSyncRequests::default();
+        let old_activity = process.clone();
+        old_activity.restart_needed.store(true, Ordering::Release);
+        old_activity.generation.store(5, Ordering::Release);
+        let new_activity = process.clone();
+        assert!(new_activity.restart_needed.load(Ordering::Acquire));
+        assert_eq!(new_activity.generation.fetch_add(1, Ordering::AcqRel), 5);
+        assert_eq!(old_activity.generation.load(Ordering::Acquire), 6);
+    }
 }
 
 pub(super) struct DeviceRuntime {

@@ -169,40 +169,44 @@ pub(super) fn parse_domain(domain: &str) -> Option<(&str, &str)> {
     let (id, base) = domain.strip_prefix("profile:")?.split_once(':')?;
     (valid_id(id) && !base.is_empty()).then_some((id, base))
 }
+// Shared by scoped storage and the selective legacy migration.
+const SCOPED_EXACT_KEYS: &[&str] = &[
+    "settings",
+    "library",
+    "episode_progress",
+    "continue_hidden",
+    "viewing_activity:v1",
+    "watch_history_hidden:v1",
+    "new_episodes_hidden:v1",
+    "playback_preferences:v1",
+    "stream_family_preferences:v1",
+    "scene_bookmarks:v1",
+    "secondary_subtitles:v1",
+    "secondary_subtitle_positions:v1",
+    "watch_queue:v1",
+    "offline_policies:v1",
+    "watch_queue:v2",
+    super::profile_policy::KEY,
+    "release_subscriptions:v1",
+    "release_delivery:v1",
+    "calendar_export:v1",
+    "addons",
+    "addon_packages:v1",
+    "discover:search_history:v2",
+    "discover:search_history",
+    "home:showcase:v1",
+    "home:catalog-rows:v1",
+    "plugin_settings",
+];
+const SCOPED_PREFIXES: &[&str] = &[
+    "viewing_journal:v1:",
+    "tracking:",
+    "similar_titles:",
+    "stremio:",
+    "list_services:",
+];
 pub(super) fn scoped_key(key: &str) -> bool {
-    matches!(
-        key,
-        "settings"
-            | "library"
-            | "episode_progress"
-            | "continue_hidden"
-            | "viewing_activity:v1"
-            | "watch_history_hidden:v1"
-            | "new_episodes_hidden:v1"
-            | "playback_preferences:v1"
-            | "stream_family_preferences:v1"
-            | "scene_bookmarks:v1"
-            | "secondary_subtitles:v1"
-            | "secondary_subtitle_positions:v1"
-            | "watch_queue:v1"
-            | "offline_policies:v1"
-            | "watch_queue:v2"
-            | super::profile_policy::KEY
-            | "release_subscriptions:v1"
-            | "release_delivery:v1"
-            | "calendar_export:v1"
-            | "addons"
-            | "addon_packages:v1"
-            | "discover:search_history:v2"
-            | "discover:search_history"
-            | "home:showcase:v1"
-            | "home:catalog-rows:v1"
-            | "plugin_settings"
-    ) || key.starts_with("viewing_journal:v1:")
-        || key.starts_with("tracking:")
-        || key.starts_with("similar_titles:")
-        || key.starts_with("stremio:")
-        || key.starts_with("list_services:")
+    SCOPED_EXACT_KEYS.contains(&key) || SCOPED_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
 }
 pub(super) fn writable(id: &str) -> bool {
     !RUNTIME.read().unwrap().retired.contains(id)
@@ -497,16 +501,19 @@ pub(super) fn cache_dir(id: &str) -> std::path::PathBuf {
 pub(super) fn legacy_snapshot_migration_entries()
 -> Result<Vec<(String, Option<String>)>, nova_storage::Error> {
     let mut entries = Vec::new();
-    for (key, raw) in nova_storage::try_scan_prefix("")? {
-        // These checkpoints were introduced after profiles. An unowned row
-        // cannot prove which person's local watch action authorized an upload.
-        if scoped_key(&key) && !key.starts_with("list_services:") {
-            let target = storage_key_for(DEFAULT_ID, &key);
-            if nova_storage::try_get_str(&target)?.is_none() {
-                entries.push((target, Some(raw)));
-            }
-            entries.push((key, None));
+    // These checkpoints were introduced after profiles. An unowned row
+    // cannot prove which person's local watch action authorized an upload.
+    let prefixes: Vec<_> = SCOPED_PREFIXES
+        .iter()
+        .copied()
+        .filter(|prefix| *prefix != "list_services:")
+        .collect();
+    for (key, raw) in nova_storage::try_read_keys_and_prefixes(SCOPED_EXACT_KEYS, &prefixes)? {
+        let target = storage_key_for(DEFAULT_ID, &key);
+        if nova_storage::try_get_str(&target)?.is_none() {
+            entries.push((target, Some(raw)));
         }
+        entries.push((key, None));
     }
     Ok(entries)
 }

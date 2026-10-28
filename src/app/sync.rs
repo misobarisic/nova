@@ -2750,6 +2750,18 @@ pub(crate) fn backfill_added_at(entries: &mut [LibraryEntry]) -> bool {
     changed
 }
 
+#[cfg(any(test, all(target_os = "android", not(feature = "desktop"))))]
+pub(super) fn retire_sync_request(current: &AtomicU64, owned: u64) {
+    if owned != 0 {
+        let _ = current.compare_exchange(owned, owned + 1, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
+#[cfg(any(test, all(target_os = "android", not(feature = "desktop"))))]
+fn release_sync_request(current: u64, requested: u64, explicitly_disabled: bool) -> bool {
+    current == requested || explicitly_disabled
+}
+
 /// Start the sync engine (startup or Settings toggle-on). No-op when already
 /// running.
 impl Bridge {
@@ -2798,7 +2810,9 @@ impl Bridge {
                 });
             });
         }
-        #[cfg(not(feature = "desktop"))]
+        #[cfg(all(target_os = "android", not(feature = "desktop")))]
+        self.start_sync_android(false);
+        #[cfg(not(any(feature = "desktop", target_os = "android")))]
         match nova_sync::foreground_engine() {
             Ok(engine) => self.attach_sync(engine),
             Err(e) => {
@@ -2806,6 +2820,50 @@ impl Bridge {
                 self.sync_status_to_ui();
             }
         }
+    }
+
+    #[cfg(all(target_os = "android", not(feature = "desktop")))]
+    fn start_sync_android(&self, restart: bool) {
+        if restart {
+            self.sync_restart_needed.store(true, Ordering::Release);
+        }
+        if self.sync_starting.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let generation = self.sync_start_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.sync_owned_generation
+            .store(generation, Ordering::Release);
+        let b = self.clone();
+        std::thread::spawn(move || {
+            let valid = || {
+                b.sync_start_generation.load(Ordering::Acquire) == generation
+                    && nova_sync::read_settings().enabled
+            };
+            let restart = b.sync_restart_needed.load(Ordering::Acquire);
+            let result = nova_sync::foreground_engine_guarded(valid, restart);
+            let _ = profiles::invoke_account(move || {
+                if b.sync_start_generation.load(Ordering::Acquire) != generation {
+                    std::thread::spawn(move || drop(result));
+                    return;
+                }
+                b.sync_starting.store(false, Ordering::Release);
+                if !nova_sync::read_settings().enabled || b.app().is_none() {
+                    std::thread::spawn(move || drop(result));
+                    return;
+                }
+                match result {
+                    Ok(Some(engine)) => {
+                        b.sync_restart_needed.store(false, Ordering::Release);
+                        b.attach_sync(engine);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::error!(target: "nova_sync::app", error = %format_args!("{e:#}"), "could not start sync");
+                        b.sync_status_to_ui();
+                    }
+                }
+            });
+        });
     }
 
     fn attach_sync(&self, engine: Arc<nova_sync::SyncEngine>) {
@@ -2849,8 +2907,30 @@ impl Bridge {
             self.sync_start_generation.fetch_add(1, Ordering::AcqRel);
             self.sync_starting.store(false, Ordering::Release);
         }
+        #[cfg(all(target_os = "android", not(feature = "desktop")))]
+        let generation = {
+            let generation = self.sync_start_generation.fetch_add(1, Ordering::AcqRel) + 1;
+            self.sync_owned_generation
+                .store(generation, Ordering::Release);
+            self.sync_starting.store(false, Ordering::Release);
+            generation
+        };
         #[cfg(target_os = "android")]
         crate::app::android_bg::set_periodic_sync(false);
+        #[cfg(all(target_os = "android", not(feature = "desktop")))]
+        {
+            let current = self.sync_start_generation.clone();
+            std::thread::spawn(move || {
+                nova_sync::uninstall_guarded(|| {
+                    release_sync_request(
+                        current.load(Ordering::Acquire),
+                        generation,
+                        nova_sync::settings_explicitly_disabled(),
+                    )
+                });
+            });
+        }
+        #[cfg(not(all(target_os = "android", not(feature = "desktop"))))]
         nova_sync::uninstall();
         if let Some(app) = self.app() {
             app.set_remote_has_playing_devices(false);
@@ -3096,6 +3176,9 @@ impl Bridge {
         if settings.enabled {
             // Invalidate setup in flight too: discovery is fixed at bind time.
             self.stop_sync();
+            #[cfg(all(target_os = "android", not(feature = "desktop")))]
+            self.start_sync_android(true);
+            #[cfg(not(all(target_os = "android", not(feature = "desktop"))))]
             self.start_sync();
         }
         self.sync_status_to_ui();
@@ -3357,6 +3440,20 @@ fn activity_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retiring_activity_keeps_disabled_release_and_fences_stale_release() {
+        let generation = AtomicU64::new(4);
+        retire_sync_request(&generation, 4);
+        assert_eq!(generation.load(Ordering::Acquire), 5);
+        assert!(release_sync_request(5, 4, true));
+        // A recreated Activity enables sync and starts a newer request.
+        generation.store(6, Ordering::Release);
+        assert!(!release_sync_request(6, 4, false));
+        // A retiring old Activity cannot invalidate the new request.
+        retire_sync_request(&generation, 4);
+        assert_eq!(generation.load(Ordering::Acquire), 6);
+    }
 
     #[test]
     fn spoiler_preference_sync_is_independent_and_respects_device_overrides() {

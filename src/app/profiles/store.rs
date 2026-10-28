@@ -210,6 +210,23 @@ mod tests {
         for key in list_keys {
             nova_storage::try_set_str(key, "unowned").unwrap();
         }
+        nova_storage::try_set_str("library", "legacy library").unwrap();
+        nova_storage::try_set_str("profile:default:library", "existing library").unwrap();
+        nova_storage::try_set_str("tracking:legacy", "legacy tracking").unwrap();
+        nova_storage::try_set_str("library:unrelated", "unrelated").unwrap();
+        let entries = super::super::legacy_snapshot_migration_entries().unwrap();
+        assert!(entries.contains(&("library".into(), None)));
+        assert!(
+            !entries
+                .iter()
+                .any(|(key, _)| key == "profile:default:library")
+        );
+        assert!(entries.contains(&(
+            "profile:default:tracking:legacy".into(),
+            Some("legacy tracking".into())
+        )));
+        assert!(entries.contains(&("tracking:legacy".into(), None)));
+        assert!(!entries.iter().any(|(key, _)| key == "library:unrelated"));
         assert!(
             super::super::legacy_snapshot_migration_entries()
                 .unwrap()

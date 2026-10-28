@@ -2956,9 +2956,9 @@ pub(crate) fn write_torrent_settings(settings: &TorrentSettings) {
 pub(crate) fn active_torrent_settings() -> TorrentSettings {
     CURRENT_TORRENT_SETTINGS.lock().unwrap().clone()
 }
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", target_os = "android"))]
 impl Bridge {
-    /// Create the session on a worker after Home's first completed render.
+    /// Create the device-wide session on a worker after the first render.
     pub(super) fn start_torrent_after_first_frame(&self) {
         let settings = active_torrent_settings();
         if !settings.enabled || crate::torrent::engine().is_some() {
@@ -2968,7 +2968,11 @@ impl Bridge {
         let b = self.clone();
         thread::spawn(move || {
             let engine = crate::torrent::TorrentEngine::setup(dir.clone(), &settings);
-            let _ = crate::app::profiles::invoke_from_event_loop(move || {
+            #[cfg(all(target_os = "android", not(feature = "desktop")))]
+            use crate::app::profiles::invoke_account as deliver;
+            #[cfg(feature = "desktop")]
+            use crate::app::profiles::invoke_from_event_loop as deliver;
+            let _ = deliver(move || {
                 let current = active_torrent_settings();
                 if b.app().is_some()
                     && current.enabled

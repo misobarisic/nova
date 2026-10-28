@@ -358,13 +358,34 @@ pub fn try_scan_prefixes(prefixes: &[String]) -> Result<Vec<(String, String)>, E
     scan_prefixes_from(database()?, &prefixes)
 }
 
+/// Read exact keys and namespaces in one snapshot without decoding other rows.
+pub fn try_read_keys_and_prefixes(
+    keys: &[&str],
+    prefixes: &[&str],
+) -> Result<Vec<(String, String)>, Error> {
+    read_keys_and_prefixes_from(database()?, keys, prefixes)
+}
+
 fn scan_from(db: &Database, prefix: &str) -> Result<Vec<(String, String)>, Error> {
     scan_prefixes_from(db, &[prefix])
 }
 
 fn scan_prefixes_from(db: &Database, prefixes: &[&str]) -> Result<Vec<(String, String)>, Error> {
+    read_keys_and_prefixes_from(db, &[], prefixes)
+}
+
+fn read_keys_and_prefixes_from(
+    db: &Database,
+    keys: &[&str],
+    prefixes: &[&str],
+) -> Result<Vec<(String, String)>, Error> {
     let txn = db.begin_read().map_err(transaction)?;
     let mut out = BTreeMap::new();
+    for &key in keys {
+        if let Some((value, _)) = read_in(&txn, key)? {
+            out.insert(key.to_owned(), value);
+        }
+    }
     for &prefix in prefixes {
         match txn.open_table(KV) {
             Ok(table) => {
@@ -605,6 +626,29 @@ mod tests {
             ]
         );
         assert!(scan_from(&db, "").is_err());
+    }
+
+    #[test]
+    fn exact_keys_and_prefixes_ignore_unselected_corrupt_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("snapshot.redb")).unwrap();
+        write(&db, "library", "legacy", false);
+        write(&db, "library:unrelated", "ignored", false);
+        write(&db, "tracking:one", "cached", true);
+        let txn = db.begin_write().unwrap();
+        txn.open_table(CACHE)
+            .unwrap()
+            .insert("episodes:corrupt", b"broken".as_slice())
+            .unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            read_keys_and_prefixes_from(&db, &["library"], &["tracking:"]).unwrap(),
+            vec![
+                ("library".into(), "legacy".into()),
+                ("tracking:one".into(), "cached".into())
+            ]
+        );
+        assert!(read_keys_and_prefixes_from(&db, &["episodes:corrupt"], &[]).is_err());
     }
 
     #[test]
