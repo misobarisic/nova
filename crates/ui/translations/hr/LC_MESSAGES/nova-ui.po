@@ -5701,3 +5701,19 @@ msgstr "Vratite normalnu brzinu"
 #: party.slint player.slint
 msgid "Only the host can change playback speed."
 msgstr "Samo domaćin može mijenjati brzinu reprodukcije."
+
+#: player-stats.slint player.slint
+msgid "Stats for nerds"
+msgstr "Statistika za znatiželjne"
+
+#: player-stats.slint player.slint
+msgid "Live"
+msgstr "Uživo"
+
+#: player-stats.slint player.slint
+msgid "Close stats"
+msgstr "Zatvorite statistiku"
+
+#: player-stats.slint player.slint
+msgid "Copy diagnostics"
+msgstr "Kopirajte dijagnostiku"

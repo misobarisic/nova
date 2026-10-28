@@ -1,8 +1,13 @@
 import { RemoteBridge } from "remote-bridge.slint";
-import { TrackRow, ChapterRow, SceneBookmarkRow } from "../ui/types.slint";
+import { PlayerStatsRow, TrackRow, ChapterRow, SceneBookmarkRow } from "../ui/types.slint";
 
 // Shared canonical data handles; this global owns no visual tree.
 export global PlayerOsdBridge {
+    in-out property <bool> stats_visible;
+    in-out property <[PlayerStatsRow]> stats_rows;
+    in-out property <string> stats_notice;
+    callback stats_copy();
+    callback stats_visibility_changed(bool);
     in-out property <string> sleep_timer_label;
     in-out property <string> sleep_timer_notice;
     in-out property <bool> sleep_timer_available;

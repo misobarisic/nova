@@ -35,6 +35,8 @@ mod mpv_load;
 
 mod audio_processing;
 mod chapters;
+mod diagnostics;
+pub use diagnostics::DiagnosticsSnapshot;
 mod media_badges;
 mod media_probe;
 pub use media_probe::probe_local_duration;

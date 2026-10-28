@@ -14,6 +14,8 @@ import { SubtitleControls } from "subtitle-controls.slint";
 import { SearchField } from "searchfield.slint";
 
 import { SpeedControl } from "speedcontrol.slint";
+import { PlayerStats } from "player-stats.slint";
+import { PlayerStatsRow } from "@NovaUiShared";
 
 
 // Rounded player control with the same purple selected surface as menus.
@@ -397,6 +399,7 @@ component SettingsMenu inherits Rectangle {
     callback speed_stepped(int);
     callback back_requested();
     callback subtitle_tool_requested(int);
+    callback stats_requested();
     callback closed();
     function reveal_row(y: length, h: length) {
         let top = y - settings_scroll.absolute-position.y;
@@ -658,6 +661,13 @@ component SettingsMenu inherits Rectangle {
                             focused: root.focused_idx == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0);
                             reveal(y,h) => { root.reveal_row(y,h); }
                             activate => { root.page = 11; }
+                        }
+                        MenuRow {
+                            label: @tr("Stats for nerds");
+                            value: @tr("This device");
+                            focused: root.focused_idx == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                            activate => { root.stats_requested(); }
                         }
                     }
 
@@ -1119,7 +1129,23 @@ component NextEpisodeBanner inherits Rectangle {
 
 export component PlayerOverlay {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { key_scope.focus(); }
+    public function focus_shell() {
+        if root.stats_visible { stats_overlay.focus_panel(); }
+        else { key_scope.focus(); }
+    }
+    in-out property <bool> stats_visible;
+    in property <[PlayerStatsRow]> stats_rows;
+    in property <string> stats_notice;
+    callback stats_copy();
+    function open_stats() { root.open_popup = 0; root.stats_visible = true; }
+    changed stats_visible => {
+        if root.stats_visible { root.open_popup = 0; stats_focus_timer.start(); }
+        else { stats_focus_timer.stop(); key_scope.focus(); }
+    }
+    stats_focus_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); if root.stats_visible { stats_overlay.focus_panel(); } }
+    }
 
     in property <int> intro_skip_override_index: -1;
     callback intro_skip_mode_changed(int);
@@ -1211,7 +1237,7 @@ export component PlayerOverlay {
         if root.settings_page == 2 || root.settings_page == 8 { root.tracks_popup_opened(2); }
         if root.settings_page == 1 { root.kb_menu = root.hw_plus_available ? 0 : 1; }
         if root.settings_page == 7 { root.kb_menu = 0; }
-        key_scope.focus();
+        root.focus_shell();
     }
     // Current-selection summaries shown on the settings panel's root rows.
     in-out property <string> sub_label: "";
@@ -1486,7 +1512,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
+                return (root.decoder_available ? 10 : 9) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1541,6 +1567,7 @@ export component PlayerOverlay {
     }
 
     function system_back() {
+        if root.stats_visible { root.stats_visible = false; return; }
         if root.pointer_scrubbing { root.pointer_scrubbing = false; return; }
         if InterfaceStyle.tv {
             if root.tv_scrubbing { root.tv_cancel_seek(); }
@@ -1733,6 +1760,8 @@ export component PlayerOverlay {
                     root.settings_page = 10; root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0) {
                     root.settings_page = 11; root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.open_stats();
                 } else if !PartyBridge.busy {
                     root.settings_page = 4;
                     root.kb_menu = 0;
@@ -1948,7 +1977,7 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
-        key_scope.focus();
+        root.focus_shell();
         // Popup teardown can destroy a pressed/hovered slider without running
         // its release handler. Reopening starts with a fresh scroll gesture.
         SliderGesture.active = false;
@@ -3528,6 +3557,7 @@ export component PlayerOverlay {
             safe_top: root.safe-top; safe_left: root.safe-left; safe_right: root.safe-right;
             page <=> root.settings_page;
             back_requested => { root.settings_back(); }
+            stats_requested => { root.open_stats(); }
             subtitle_tool_requested(page) => { root.kb_active = false; root.open_subtitle_tool(page, 4); }
             focused_idx: root.kb_active ? root.kb_menu : -1;
             selected_index: root.decoder_selected;
@@ -3588,5 +3618,21 @@ export component PlayerOverlay {
         }
     }
     if root.playback_started && root.controls_active && CastBridge.available: CastButton { focused: root.kb_active && root.kb_idx == 15 && root.open_popup == 0; x: Math.max(root.safe-left, root.width - root.safe-right - self.width - 16px); y: root.safe-top + 12px; }
+
+    // Diagnostics stays painted while the ordinary transport auto-hides.
+    stats_overlay := PlayerStats {
+        visible: root.stats_visible;
+        x: root.safe-left + 18px;
+        y: root.safe-top + (InterfaceStyle.tv ? 76px : 60px);
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 600px : 440px, root.width - root.safe-left - root.safe-right - 36px));
+        available_height: Math.max(0px, root.height - self.y - root.safe-bottom - 16px);
+        rows: root.stats_rows;
+        notice: root.stats_notice;
+        closed => { root.stats_visible = false; }
+        copy => { root.stats_copy(); }
+        // Diagnostics owns navigation, while ordinary playback shortcuts keep
+        // their existing dispatcher, permissions and repeat handling.
+        unhandled_key(e) => { key_scope.key-pressed(e) }
+    }
 
 }

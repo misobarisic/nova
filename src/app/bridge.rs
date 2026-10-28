@@ -42,6 +42,7 @@ impl Bridge {
                 #[cfg(feature = "desktop")]
                 poster_tx,
                 player,
+                player_stats: Arc::default(),
                 downloads,
                 last_stream: Arc::default(),
                 profile_loaded_epoch: Arc::default(),

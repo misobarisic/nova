@@ -22,11 +22,11 @@ pub use nova_ui_shared::{
     CategoryRow, ChapterRow, CompletionDestination, ContinueRow, DetailActionRow, DetailInfo,
     DownloadEpisode, DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow,
     HomeCatalogSection, JournalMonthRow, JournalSessionRow, JournalTitleRow, LicenseSource,
-    MediaCard, PartyMemberRow, PluginSettingRow, ProfileRow, RemoteBookmarkRow, RemoteChapterRow,
-    RemoteDeviceRow, RemoteOfferRow, SceneBookmarkRow, SeasonCard, SettingSyncInfo, SheetItem,
-    SmartCollectionRow, SmartOfflineRow, StreamRow, SyncInspectorRow, SyncInvite, SyncPeer,
-    ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
-    TrackingMappingRow, TrackingSetupRow, UpcomingRow, WatchQueueRow,
+    MediaCard, PartyMemberRow, PlayerStatsRow, PluginSettingRow, ProfileRow, RemoteBookmarkRow,
+    RemoteChapterRow, RemoteDeviceRow, RemoteOfferRow, SceneBookmarkRow, SeasonCard,
+    SettingSyncInfo, SheetItem, SmartCollectionRow, SmartOfflineRow, StreamRow, SyncInspectorRow,
+    SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow,
+    TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow, WatchQueueRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

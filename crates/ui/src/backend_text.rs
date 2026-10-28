@@ -23,6 +23,29 @@ pub fn set_language(language: Language) {
     *LANGUAGE.lock().unwrap() = language;
 }
 
+/// Fixed-precision diagnostics values; unit symbols are supplied by the caller.
+pub fn stats_number(value: f64, precision: usize) -> String {
+    if !value.is_finite() {
+        return "—".into();
+    }
+    let precision = precision.min(3);
+    let number = format!("{value:.precision$}");
+    if croatian() {
+        number.replace('.', ",")
+    } else {
+        number
+    }
+}
+
+/// Diagnostics uses the download noun, while the ordinary action is a verb.
+pub fn stats_label(label: &str) -> &str {
+    if label == "Download" && croatian() {
+        "Preuzimanje"
+    } else {
+        tr(label)
+    }
+}
+
 /// Approximate playable-ahead duration, not a bandwidth guarantee.
 pub fn party_buffered_status(status: &str, seconds: f64) -> String {
     let seconds = if seconds.is_finite() {
@@ -1415,6 +1438,39 @@ pub fn tr(english: &str) -> &str {
             "Provjerite registraciju klijenta, ID na usluzi ili vrijednosti."
         }
         "This tracker does not support that field." => "Ova usluga ne podržava to polje.",
+        // ---- Local player diagnostics ---------------------------------
+        "Stats for nerds" => "Statistika za znatiželjne",
+        "Live" => "Uživo",
+        "Close stats" => "Zatvorite statistiku",
+        "Copy diagnostics" => "Kopirajte dijagnostiku",
+        "Source" => "Izvor",
+        "Video" => "Videozapis",
+        "Viewport" => "Područje prikaza",
+        "Codec" => "Kodek",
+        "Decoder" => "Dekoder",
+        "Video bitrate" => "Bitna brzina videa",
+        "Dropped frames" => "Odbačene sličice",
+        "Output drops" => "Odbačene pri prikazu",
+        "Decoder drops" => "Odbačene pri dekodiranju",
+        "Buffer" => "Međuspremnik",
+        "RAM cache" => "Predmemorija RAM-a",
+        "Audio" => "Zvuk",
+        "A/V sync" => "A/V usklađenost",
+        "Playback speed" => "Brzina reprodukcije",
+        "Renderer" => "Iscrtavanje",
+        "Display refresh" => "Osvježavanje zaslona",
+        "Packet cache" => "Predmemorija paketa",
+        "Buffer target" => "Ciljni međuspremnik",
+        "File size" => "Veličina datoteke",
+        "Torrent" => "Torrent",
+        "Torrent (RAM-only)" => "Torrent (samo RAM)",
+        "Network" => "Mreža",
+        "Local media" => "Lokalni sadržaj",
+        "Software" => "Softverski",
+        "Waiting for playback data…" => "Čekanje podataka reprodukcije…",
+        "Diagnostics copied." => "Dijagnostika je kopirana.",
+        "Could not copy diagnostics." => "Nije moguće kopirati dijagnostiku.",
+        "Diagnostics are not available yet." => "Dijagnostika još nije dostupna.",
         // ---- Downloads -------------------------------------------------
         "Queued" => "Čeka",
         "Preparing…" => "Priprema…",
@@ -2873,6 +2929,23 @@ pub fn calendar_week_title(first: (i64, u32, u32), last: (i64, u32, u32)) -> Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stats_numbers_and_labels_follow_the_display_language() {
+        super::with_language(nova_config::Language::English, || {
+            assert_eq!(super::stats_number(1.545, 3), "1.545");
+            assert_eq!(super::stats_number(23.976, 2), "23.98");
+            assert_eq!(super::stats_label("Download"), "Download");
+            assert_eq!(super::stats_number(f64::NAN, 1), "—");
+        });
+        super::with_language(nova_config::Language::Croatian, || {
+            assert_eq!(super::stats_number(1.545, 3), "1,545");
+            assert_eq!(super::stats_number(-2.5, 1), "-2,5");
+            assert_eq!(super::stats_number(1.0, 99), "1,000");
+            assert_eq!(super::stats_label("Download"), "Preuzimanje");
+            assert_eq!(super::tr("Download"), "Preuzmite");
+        });
+    }
+
     use super::*;
 
     #[test]

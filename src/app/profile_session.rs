@@ -76,6 +76,7 @@ pub(super) struct DeviceRuntime {
     #[cfg(feature = "desktop")]
     pub poster_tx: PosterTx,
     pub player: crate::player::Player,
+    pub player_stats: Arc<player_stats::Controller>,
     pub downloads: DownloadCoordinator,
     pub last_stream: Arc<last_stream::Cache>,
     pub profile_loaded_epoch: Arc<AtomicU64>,

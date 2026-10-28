@@ -1,0 +1,164 @@
+import { InterfaceStyle, PlayerStatsRow } from "@NovaUiShared";
+import { IcClose } from "icons.slint";
+
+// A read-only diagnostics surface. Keep its controls outside the scroll body
+// and outside the OSD fade, so short viewports and hidden controls remain usable.
+export component PlayerStats inherits Rectangle {
+    in property <[PlayerStatsRow]> rows;
+    in property <string> notice;
+    in property <length> available_height;
+    callback closed();
+    callback copy();
+    callback unhandled_key(KeyEvent) -> EventResult;
+    private property <int> focus_index: 0; // Close, scroll body, Copy.
+    private property <bool> keyboard_mode: InterfaceStyle.tv;
+    private property <length> inset: 14px;
+    private property <length> label_width: root.width < 360px ? 112px : 144px;
+    private property <length> text_size: InterfaceStyle.tv ? 17px : 12px;
+    height: Math.min(root.available_height, stats_header.height + rows_col.preferred-height + stats_footer.height + 2px);
+    background: #0c1017ed;
+    border-width: 1px;
+    border-color: #ffffff45;
+    border-radius: 10px;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: @tr("Stats for nerds");
+    forward-focus: stats_scope;
+
+    public function focus_panel() { stats_scope.focus(); }
+    function scroll_by(delta: length) {
+        stats_scroll.content-y = Math.clamp(stats_scroll.content-y + delta,
+            Math.min(0px, stats_scroll.height - stats_scroll.content-height), 0px);
+    }
+    function move_focus(direction: int) {
+        root.keyboard_mode = true;
+        if root.focus_index == 1 {
+            let at_end = stats_scroll.content-y <= Math.min(0px, stats_scroll.height - stats_scroll.content-height) + 1px;
+            if direction > 0 && !at_end { root.scroll_by(-48px); }
+            else if direction < 0 && stats_scroll.content-y < -1px { root.scroll_by(48px); }
+            else { root.focus_index = direction > 0 ? 2 : 0; }
+        } else { root.focus_index = 1; }
+    }
+
+    // The card absorbs empty-area taps and wheel events that reach a scroll
+    // boundary; neither may fall through to the video's playback gestures.
+    TouchArea {
+        width: 100%; height: 100%;
+        clicked => { root.focus_panel(); }
+        scroll-event => { accept }
+    }
+    stats_scope := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            root.keyboard_mode = true;
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { root.closed(); } accept
+            } else if e.text == Key.Tab {
+                root.focus_index = Math.mod(root.focus_index + (e.modifiers.shift ? 2 : 1), 3); accept
+            } else if e.text == Key.DownArrow || e.text == Key.UpArrow {
+                root.move_focus(e.text == Key.DownArrow ? 1 : -1); accept
+            } else if e.text == Key.PageDown || e.text == Key.PageUp {
+                root.focus_index = 1;
+                root.scroll_by(e.text == Key.PageDown ? -stats_scroll.height : stats_scroll.height); accept
+            } else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                root.focus_index = e.text == Key.LeftArrow ? 0 : 2; accept
+            } else if e.text == Key.Return {
+                if !e.repeat {
+                    if root.focus_index == 0 { root.closed(); }
+                    else if root.focus_index == 2 { root.copy(); }
+                } accept
+            } else { root.unhandled_key(e) }
+        }
+
+        stats_header := Rectangle {
+            // Plain children otherwise center vertically; the scroll body
+            // starts below this fixed top lane and must never cover Close.
+            x: 0px; y: 0px;
+            width: 100%; height: InterfaceStyle.tv ? 58px : 48px;
+            Text {
+                x: root.inset; y: 0px;
+                width: Math.max(0px, parent.width - (InterfaceStyle.tv ? 148px : 132px) - root.inset);
+                height: 100%; text: @tr("Stats for nerds"); color: #f3f5f8;
+                font-size: InterfaceStyle.tv ? 20px : 16px; font-weight: 700;
+                vertical-alignment: center; overflow: elide;
+            }
+            Rectangle {
+                x: parent.width - (InterfaceStyle.tv ? 132px : 116px); y: 0px; width: 66px; height: 100%;
+                Rectangle { y: (parent.height - self.height) / 2; width: 8px; height: 8px; border-radius: 4px; background: #31df58; }
+                Text { x: 14px; width: parent.width - self.x; height: 100%; text: @tr("Live"); color: #e5e9ee; font-family: "monospace"; font-size: root.text_size; vertical-alignment: center; }
+            }
+            stats_close := Rectangle {
+                x: parent.width - self.width - 6px; y: (parent.height - self.height) / 2;
+                width: InterfaceStyle.tv ? 48px : 40px; height: self.width;
+                border-radius: 7px;
+                border-width: root.keyboard_mode && root.focus_index == 0 ? 2px : 0px;
+                border-color: #55bfff;
+                background: close_touch.has-hover ? #ffffff14 : transparent;
+                accessible-role: button; accessible-label: @tr("Close stats");
+                accessible-action-default => { root.closed(); }
+                IcClose { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px; height: 20px; fill: #e9edf2; }
+                close_touch := TouchArea { mouse-cursor: pointer; clicked => { root.closed(); } }
+            }
+            Rectangle { x: root.inset; y: parent.height - 1px; width: parent.width - 2 * root.inset; height: 1px; background: #ffffff2a; }
+        }
+        stats_body := Rectangle {
+            x: root.inset; y: stats_header.height;
+            width: Math.max(0px, parent.width - 2 * root.inset);
+            height: Math.max(0px, root.height - stats_header.height - stats_footer.height - 2px);
+            border-width: root.keyboard_mode && root.focus_index == 1 ? 1px : 0px;
+            border-color: #55bfff; border-radius: 3px;
+            stats_scroll := Flickable {
+                x: 2px; y: 2px; width: Math.max(0px, parent.width - 4px); height: Math.max(0px, parent.height - 4px);
+                content-width: self.width; content-height: rows_col.preferred-height;
+                mouse-drag-pan-enabled: true;
+                rows_col := VerticalLayout {
+                    width: 100%; height: self.preferred-height;
+                    padding-top: 6px; padding-bottom: 6px; spacing: 2px;
+                    for row in root.rows: stats_row := Rectangle {
+                        height: Math.max(row_label.preferred-height, row_value.preferred-height) + 4px + (row.section_start ? 12px : 0px);
+                        if row.section_start: Rectangle { y: 3px; width: 100%; height: 1px; background: #ffffff2a; }
+                        row_label := Text {
+                            x: 0px; y: row.section_start ? 12px : 0px;
+                            width: Math.min(root.label_width, parent.width * 0.46); height: self.preferred-height;
+                            text: row.label; color: #9da4ae; font-family: "monospace"; font-size: root.text_size;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                        row_value := Text {
+                            x: row_label.width + 10px; y: row_label.y;
+                            width: Math.max(0px, parent.width - self.x); height: self.preferred-height;
+                            text: row.value == "" ? "—" : row.value; color: #f1f4f8;
+                            font-family: "monospace"; font-size: root.text_size;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                    }
+                }
+            }
+        }
+        stats_footer := Rectangle {
+            x: 0px; y: parent.height - self.height; width: 100%;
+            height: (InterfaceStyle.tv ? 62px : 52px) + (root.notice != "" ? stats_notice.preferred-height + 6px : 0px);
+            Rectangle { x: root.inset; y: 0px; width: parent.width - 2 * root.inset; height: 1px; background: #ffffff2a; }
+            stats_copy := Rectangle {
+                x: 8px; y: 6px; width: Math.max(0px, parent.width - 16px); height: InterfaceStyle.tv ? 50px : 40px;
+                border-width: root.keyboard_mode && root.focus_index == 2 ? 2px : 0px;
+                border-color: #55bfff; border-radius: 6px;
+                background: copy_touch.has-hover ? #55bfff14 : transparent;
+                accessible-role: button; accessible-label: @tr("Copy diagnostics");
+                accessible-action-default => { root.copy(); }
+                Rectangle { x: 9px; y: (parent.height - 17px) / 2 - 2px; width: 12px; height: 14px; border-width: 1.5px; border-color: #55bfff; border-radius: 2px; }
+                Rectangle { x: 13px; y: (parent.height - 17px) / 2 + 2px; width: 12px; height: 14px; background: #0c1017; border-width: 1.5px; border-color: #55bfff; border-radius: 2px; }
+                Text { x: 36px; width: Math.max(0px, parent.width - 44px); height: 100%; text: @tr("Copy diagnostics"); color: #55bfff; font-size: InterfaceStyle.tv ? 18px : 13px; vertical-alignment: center; overflow: elide; }
+                copy_touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.keyboard_mode = false; root.focus_index = 2; root.focus_panel(); root.copy(); }
+                }
+            }
+            stats_notice := Text {
+                x: root.inset; y: stats_copy.y + stats_copy.height + 2px;
+                width: Math.max(0px, parent.width - 2 * root.inset); height: self.preferred-height;
+                visible: root.notice != ""; text: root.notice; color: #b8c3cf;
+                font-size: InterfaceStyle.tv ? 16px : 12px; wrap: word-wrap;
+            }
+        }
+    }
+}

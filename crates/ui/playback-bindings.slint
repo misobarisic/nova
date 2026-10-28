@@ -1,8 +1,14 @@
-import { PlayerOsdBridge, OnboardingBridge, TrackRow, ChapterRow, SceneBookmarkRow } from "@NovaUiShared";
+import { PlayerOsdBridge, OnboardingBridge, PlayerStatsRow, TrackRow, ChapterRow, SceneBookmarkRow } from "@NovaUiShared";
 // Connect backend aliases once for the AppWindow lifetime. Conditional hosts
 // must never reconnect an already-joined backend/global property pool.
 
 export component PlayerOsdBindings {
+    in-out property <bool> stats_visible <=> PlayerOsdBridge.stats_visible;
+    in-out property <[PlayerStatsRow]> stats_rows <=> PlayerOsdBridge.stats_rows;
+    in-out property <string> stats_notice <=> PlayerOsdBridge.stats_notice;
+    // This lifetime outlasts the visual OSD: closing playback must still stop
+    // the diagnostics sampler after the page has been unmounted.
+    changed stats_visible => { PlayerOsdBridge.stats_visibility_changed(root.stats_visible); }
     in-out property <[TrackRow]> secondary_sub_tracks <=> PlayerOsdBridge.secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label <=> PlayerOsdBridge.secondary_sub_track_label;
     in-out property <int> secondary_subtitle_position_index <=> PlayerOsdBridge.secondary_subtitle_position_index;

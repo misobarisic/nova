@@ -1339,6 +1339,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Local and remote commands share the receiver's behavior and cleanup.
     use nova_playback_api::PlaybackAction;
     let b = bridge.clone();
+    app.on_stats_visibility_changed(move |visible| b.stats_visibility_changed(visible));
+    let b = bridge.clone();
+    app.on_stats_copy(move || b.copy_player_stats());
+    let b = bridge.clone();
     app.on_toggle_pause(move || {
         let _ = b.dispatch_playback_action(PlaybackAction::TogglePause);
     });
@@ -1679,6 +1683,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.refresh_playback_tools();
             tick_bridge.refresh_playback_end_menu();
+            tick_bridge.player_stats_tick();
             #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
             media_controls.publish(&tick_bridge);
             tick_bridge.refresh_intro_skip();

@@ -1,25 +1,63 @@
 //! Best-effort clipboard writes shared by identity, invite and addon actions.
 
 pub(crate) fn copy_to_clipboard(text: &str) {
-    #[cfg(target_os = "android")]
-    if let Err(error) = crate::player::set_clipboard(text) {
-        eprintln!("nova: {error}");
-    }
-    #[cfg(target_os = "windows")]
-    if let Err(error) = windows_clipboard(text) {
+    if let Err(error) = prepare_copy().and_then(|target| target.copy(text)) {
         eprintln!("nova: clipboard: {error}");
     }
-    #[cfg(not(any(target_os = "android", target_os = "windows")))]
+}
+
+/// Capture thread-affine ownership on the UI thread before a background copy.
+/// The prepared target contains no platform object or borrowed window.
+pub(crate) struct CopyTarget {
+    #[cfg(target_os = "windows")]
+    window: isize,
+}
+
+pub(crate) fn prepare_copy() -> Result<CopyTarget, String> {
+    #[cfg(target_os = "windows")]
     {
-        #[cfg(target_os = "macos")]
-        let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
-        #[cfg(not(target_os = "macos"))]
-        let candidates: &[(&str, &[&str])] = &[
-            ("wl-copy", &[]),
-            ("xclip", &["-selection", "clipboard"]),
-            ("xsel", &["--clipboard", "--input"]),
-        ];
-        copy_with_helpers(text, candidates);
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn GetActiveWindow() -> *mut std::ffi::c_void;
+        }
+        let window = unsafe { GetActiveWindow() } as isize;
+        if window == 0 {
+            return Err("Clipboard window unavailable".into());
+        }
+        Ok(CopyTarget { window })
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(CopyTarget {})
+}
+
+impl CopyTarget {
+    /// May wait for a platform helper; callers doing UI work should run this
+    /// on a bounded worker and show success only after this result is Ok.
+    pub(crate) fn copy(self, text: &str) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            crate::player::set_clipboard(text)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            windows_clipboard(text, self.window).map_err(|error| error.to_string())
+        }
+        #[cfg(not(any(target_os = "android", target_os = "windows")))]
+        {
+            #[cfg(target_os = "macos")]
+            let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
+            #[cfg(not(target_os = "macos"))]
+            let candidates: &[(&str, &[&str])] = &[
+                ("wl-copy", &[]),
+                ("xclip", &["-selection", "clipboard"]),
+                ("xsel", &["--clipboard", "--input"]),
+            ];
+            if copy_with_helpers(text, candidates) {
+                Ok(())
+            } else {
+                Err("Clipboard helper unavailable or failed".into())
+            }
+        }
     }
 }
 
@@ -48,7 +86,7 @@ fn copy_with_helpers(text: &str, candidates: &[(&str, &[&str])]) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_clipboard(text: &str) -> std::io::Result<()> {
+fn windows_clipboard(text: &str, window: isize) -> std::io::Result<()> {
     use std::ffi::c_void;
     type Handle = *mut c_void;
     #[link(name = "user32")]
@@ -57,7 +95,6 @@ fn windows_clipboard(text: &str) -> std::io::Result<()> {
         fn CloseClipboard() -> i32;
         fn EmptyClipboard() -> i32;
         fn SetClipboardData(format: u32, memory: Handle) -> Handle;
-        fn GetActiveWindow() -> Handle;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -100,7 +137,7 @@ fn windows_clipboard(text: &str) -> std::io::Result<()> {
         GlobalUnlock(memory.0);
         // Supply the application's active HWND: EmptyClipboard makes it the
         // owner, which SetClipboardData requires for delayed ownership rules.
-        if OpenClipboard(GetActiveWindow()) == 0 {
+        if OpenClipboard(window as Handle) == 0 {
             return Err(std::io::Error::last_os_error());
         }
         let _clipboard = Clipboard;

@@ -6,6 +6,8 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     {
         let bridge = app.global::<PlayerOsdBridge>();
         crate::forward_app_callbacks!(app, &bridge;
+            on_stats_copy => invoke_player_bridge_stats_copy(),
+            on_stats_visibility_changed => invoke_player_bridge_stats_visibility_changed(arg0),
             on_pick_secondary_sub_track => invoke_player_bridge_pick_secondary_sub_track(arg0),
             on_secondary_subtitle_position_changed => invoke_player_bridge_secondary_subtitle_position_changed(arg0),
             on_add_scene_bookmark => invoke_player_bridge_add_scene_bookmark(arg0),

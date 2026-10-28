@@ -845,6 +845,7 @@ mod playback_actions;
 mod playback_end;
 mod playback_preferences;
 mod playback_tools;
+mod player_stats;
 mod plugin_cache;
 mod plugin_settings;
 mod posters;

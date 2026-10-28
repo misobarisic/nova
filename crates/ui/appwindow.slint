@@ -14,7 +14,7 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { CatalogGroupingBridge, CatalogGroupingRow, CatalogGroupMemberRow, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, LastTimeBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CatalogGroupingBridge, CatalogGroupingRow, CatalogGroupMemberRow, BookmarksBridge, SmartCollectionsBridge, StreamFiltersBridge, LastTimeBridge, JournalBridge, QueueBridge, DetailInfo, CompletionBridge, CompletionDestination, PartyMemberRow, PlayerStatsRow, ProfileRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteChapterRow, RemoteBookmarkRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, ChapterRow, SceneBookmarkRow, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -329,6 +329,10 @@ export component AppWindow inherits Window {
     public function remote_bridge_device_close() { root.remote_device_close(); }
     public function remote_bridge_stream_picked(a0: int) { root.remote_stream_picked(a0); }
     public function remote_bridge_replacement_confirmed(a0: string, a1: bool) { root.remote_replacement_confirmed(a0, a1); }
+    callback stats_copy();
+    callback stats_visibility_changed(bool);
+    public function player_bridge_stats_copy() { root.stats_copy(); }
+    public function player_bridge_stats_visibility_changed(visible: bool) { root.stats_visibility_changed(visible); }
     public function player_bridge_intro_skip_mode_changed(i: int) { root.intro_skip_mode_changed(i); }
     public function player_bridge_skip_segment() { root.skip_segment(); }
     public function player_bridge_dismiss_skip_segment() { root.dismiss_skip_segment(); }
@@ -380,6 +384,9 @@ export component AppWindow inherits Window {
     public function onboarding_bridge_finished() { root.onboarding_finished(); }
     public function onboarding_bridge_background_requested() { root.exit_to_background(); }
     PlayerOsdBindings {
+        stats_visible <=> root.stats_visible;
+        stats_rows <=> root.stats_rows;
+        stats_notice <=> root.stats_notice;
         intro_skip_override_index <=> root.intro_skip_override_index;
         skip_segment_kind <=> root.skip_segment_kind;
         playback_started <=> root.playback_started;
@@ -1155,6 +1162,7 @@ export component AppWindow inherits Window {
     changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_settings => { if !root.show_settings && !MoreBridge.pin_open { MoreBridge.management_closed(); } if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
     changed player_open => {
+        if !root.player_open { root.stats_visible = false; root.stats_rows = []; root.stats_notice = ""; }
         SliderGesture.active = false; SliderGesture.hovered = false;
         root.osd_opacity_changed(root.osd_opacity);
         if !root.onboarding_visible { root.preserve_back_focus(); }
@@ -2043,6 +2051,9 @@ export component AppWindow inherits Window {
     in-out property <[TrackRow]> secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label;
     in-out property <int> secondary_subtitle_position_index;
+    in-out property <bool> stats_visible;
+    in-out property <[PlayerStatsRow]> stats_rows;
+    in-out property <string> stats_notice;
     in-out property <[SceneBookmarkRow]> scene_bookmarks;
     in-out property <string> scene_bookmark_notice;
     in-out property <bool> scene_bookmarks_available;
@@ -3052,7 +3063,7 @@ export component AppWindow inherits Window {
     if (root.party_active || root.party_busy) && root.player_open && root.playback_started && !root.party_page_open: PartyPlayerBadge {
         // Share the actual OSD fade, including loading and open player menus.
         opacity: root.osd_opacity;
-        visible: self.opacity > 0;
+        visible: self.opacity > 0 && !root.stats_visible;
         x: root.safe-area-insets.left + 18px;
         // The footer captions leave this top lane for watch-party controls.
         y: Math.max(root.safe-area-insets.top + 16px, PlayerOsdBridge.header_bottom + 12px);

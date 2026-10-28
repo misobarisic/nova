@@ -56,3 +56,6 @@ mod paused_controls;
 
 #[path = "player/loading.rs"]
 mod loading;
+
+#[path = "player/stats.rs"]
+mod stats;

@@ -13,6 +13,10 @@ export component PlayerOsdModule inherits Window {
     width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;
     page := PlayerOverlay {
         width: 100%; height: 100%;
+        stats_visible <=> PlayerOsdBridge.stats_visible;
+        stats_rows: PlayerOsdBridge.stats_rows;
+        stats_notice: PlayerOsdBridge.stats_notice;
+        stats_copy() => { PlayerOsdBridge.stats_copy(); }
         secondary_sub_tracks <=> PlayerOsdBridge.secondary_sub_tracks;
         secondary_sub_track_label <=> PlayerOsdBridge.secondary_sub_track_label;
         secondary_subtitle_position_index <=> PlayerOsdBridge.secondary_subtitle_position_index;

@@ -982,3 +982,35 @@ labels continue to show 1.50×. Native party rates allow 0.485–2.06× transien
 headroom around the target bounds. RAM buffering and torrent consumption budgets
 use this actual native rate, so faster shared playback reserves the appropriate
 wall-clock buffer without persisting a speed override.
+
+## Stats for nerds
+
+The player's Settings menu opens a read-only diagnostics overlay independently
+of the ordinary OSD. Everyone watching a party can view it, including guests
+without playback-control permission. It samples native facts and the active
+torrent about once per second while visible. Closing the panel stops sampling;
+closing/replacing the source, switching profiles, locking a profile or changing
+to cast/receiver playback clears it. A delayed sample or copy result cannot enter
+a replacement source or a reopened panel. One in-flight sampler remains bounded
+across those transitions and Android activity replacement.
+
+Dimensions, content FPS, actual display refresh, codecs/decoder, measured bitrate,
+drop counters, audio, A/V sync, renderer and actual playback speed appear only
+when available. Actual speed retains three decimals, so a party's temporary
+1.545× correction is visible separately from its accepted shared target. Drop
+counts have no invented presented-frame denominator; unavailable facts show an
+em dash rather than guessed values. The physical render-window size may supply
+the viewport when native viewport dimensions are unavailable.
+
+The demuxer's packet cache is separate from the torrent's RAM piece pool.
+Torrent download rate converts the engine's bytes per second to byte-rate units;
+peer count, selected-file size, RAM usage/limit and buffer target come from the
+active engine. RAM-only is shown only when an actual nonzero RAM limit is known.
+Ordinary network and local media use generic source labels.
+
+Copy diagnostics copies the same technical whitelist plus Nova's version and
+platform. It excludes display titles, filenames, paths, URLs, account/profile
+names, info hashes, headers, credentials and peer addresses. Clipboard helpers
+run off the UI thread; Windows window ownership is captured before that handoff,
+and Android uses its thread-safe JNI clipboard path. A success notice appears
+only after the clipboard write succeeds. Stats adds no persisted or synced data.
