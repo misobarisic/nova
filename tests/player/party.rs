@@ -1052,3 +1052,77 @@ fn party_player_speed_menu_is_read_only_until_live_policy_allows_edits() {
         }
     }
 }
+
+#[test]
+fn party_transport_uses_pending_pause_feedback_before_native_scheduled_start() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::party_transport_uses_pending_pause_feedback_before_native_scheduled_start"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(120.0);
+    app.set_osd_visible(true);
+    app.set_is_paused(true);
+    app.set_party_active(true);
+    app.set_party_can_control(true);
+    app.set_party_has_media(true);
+    app.set_party_paused(true);
+    let toggles = Rc::new(RefCell::new(0));
+    let recorded = toggles.clone();
+    let weak = app.as_weak();
+    app.on_toggle_pause(move || {
+        let app = weak.upgrade().unwrap();
+        *recorded.borrow_mut() += 1;
+        app.set_party_paused(!app.get_party_paused());
+    });
+    app.window().show().unwrap();
+    settle();
+    for expected in [false, true, false] {
+        ElementHandle::find_by_element_id(&app, "PlayerOverlay::desktop_pause")
+            .next()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle();
+        assert_eq!(app.get_party_paused(), expected);
+        assert!(
+            app.get_is_paused(),
+            "Native decoder can remain paused for a scheduled start"
+        );
+    }
+    assert_eq!(*toggles.borrow(), 3);
+    let media_key = |text: &str| {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: text.into() });
+    };
+    media_key("\u{e101}"); // Play-only must see projected playback as already playing.
+    assert_eq!(*toggles.borrow(), 3);
+    media_key("\u{e102}"); // Pause-only immediately updates the same projection.
+    assert_eq!(*toggles.borrow(), 4);
+    assert!(app.get_party_paused());
+    app.set_party_can_control(false);
+    media_key("\u{e100}");
+    assert_eq!(
+        *toggles.borrow(),
+        4,
+        "Read-only guests never queue optimistic toggles"
+    );
+    app.set_party_active(false);
+    app.set_is_paused(true);
+    app.set_party_paused(false);
+    media_key("\u{e101}");
+    assert_eq!(
+        *toggles.borrow(),
+        5,
+        "Ordinary playback still uses native pause state"
+    );
+}

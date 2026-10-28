@@ -913,6 +913,14 @@ creator still serializes the shared timeline and media generations; invites,
 removal, wait-for-everyone, continue-without-waiting and ending the room remain
 creator-only. Guests see the accepted policy as read-only status.
 
+Authorized pause/resume clicks update the room and player transport icons as soon
+as the local queue accepts them. Rapid toggles use the latest pending intent,
+not an older acknowledgement. Adjacent pause requests coalesce without crossing
+seek, rate or media actions; a stale reply cannot clear a newer request. The
+projection is bound to the room, media generation, permissions and local source,
+and rolls back on rejection or invalidation. Native playback still follows the
+authoritative scheduled start and buffering holds, separately from icon feedback.
+
 In both modes every member chooses their own stream for the current accepted
 episode. Host-only guests can browse metadata but cannot open playback pickers
 for other episodes; guidance offers the current episode’s source picker or

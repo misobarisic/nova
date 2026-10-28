@@ -45,6 +45,9 @@ pub(super) struct State {
     generation: u64,
     busy: bool,
     pending: std::collections::VecDeque<Operation>,
+    pending_pause: Option<PauseIntent>,
+    next_pause_request: u64,
+    pause_epoch: u64,
     last_report: Option<Instant>,
     last_operation_was_report: bool,
     last_guest_control_finished: Option<Instant>,
@@ -88,7 +91,109 @@ impl ControlWakeup {
     }
 }
 
+/// UI transport intent is separate from native pause (which can be held for
+/// a scheduled start). A late acknowledgement belongs only to its exact owner.
+#[derive(Clone)]
+struct PauseIntent {
+    guard: PlaybackGuard,
+    control_revision: u64,
+    selection_revision: u64,
+    source_session: u64,
+    pause_epoch: u64,
+    request: u64,
+    paused: bool,
+}
+
+impl PauseIntent {
+    fn same_scope(&self, other: &Self) -> bool {
+        self.guard.activation == other.guard.activation
+            && self.guard.room_id == other.guard.room_id
+            && self.guard.generation == other.guard.generation
+            && party_source::same_media(&self.guard.media, &other.guard.media)
+            && self.control_revision == other.control_revision
+            && self.selection_revision == other.selection_revision
+            && self.source_session == other.source_session
+            && self.pause_epoch == other.pause_epoch
+    }
+
+    fn current(
+        &self,
+        activation: u64,
+        selection_revision: u64,
+        source_session: u64,
+        pause_epoch: u64,
+        room: Option<&RoomSnapshot>,
+    ) -> bool {
+        self.guard.activation == activation
+            && self.selection_revision == selection_revision
+            && self.source_session == source_session
+            && self.pause_epoch == pause_epoch
+            && room.is_some_and(|room| {
+                can_control(room)
+                    && room.media.is_some()
+                    && self.guard.room_id == room.room_id
+                    && self.guard.generation == room.generation
+                    && self.control_revision == room.control_revision
+                    && room.selected_media().is_some_and(|media| {
+                        party_source::same_media(&self.guard.media, &media.identity)
+                    })
+            })
+    }
+}
+
 impl State {
+    fn pause_projection(&mut self, source_session: u64) -> (bool, Option<RoomSnapshot>) {
+        let room = self.snapshot_for_sources();
+        let activation = self.generation;
+        let selection = self.selection_revision;
+        let pause_epoch = self.pause_epoch;
+        let current = |intent: &PauseIntent| {
+            intent.current(
+                activation,
+                selection,
+                source_session,
+                pause_epoch,
+                room.as_ref(),
+            )
+        };
+        if self
+            .pending_pause
+            .as_ref()
+            .is_some_and(|intent| !current(intent))
+        {
+            self.pending_pause = None;
+        }
+        self.pending
+            .retain(|operation| !matches!(operation, Operation::Pause(intent) if !current(intent)));
+        let paused = self
+            .pending_pause
+            .as_ref()
+            .map(|intent| intent.paused)
+            .unwrap_or_else(|| {
+                room.as_ref()
+                    .is_none_or(|room| !room.connected || room.ended || room.timeline.paused)
+            });
+        (paused, room)
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    fn invalidate_pause_intents(&mut self) {
+        // Suspension ends this foreground interval even if an already-popped
+        // worker starts only after the app returns to the foreground.
+        self.pause_epoch = self.pause_epoch.wrapping_add(1);
+        self.pending_pause = None;
+        self.pending
+            .retain(|operation| !matches!(operation, Operation::Pause(_)));
+    }
+
+    fn finish_pause(&mut self, completed: &PauseIntent) {
+        if self.pending_pause.as_ref().is_some_and(|latest| {
+            latest.request == completed.request && latest.same_scope(completed)
+        }) {
+            self.pending_pause = None;
+        }
+    }
+
     fn push_operation(&mut self, operation: Operation) -> bool {
         // Absolute slider moves supersede only an adjacent absolute move in
         // the same room state. Steps, resets and other actions keep ordering.
@@ -97,6 +202,13 @@ impl State {
                 self.pending.back()
             && generation == old_generation
             && revision == old_revision
+        {
+            *self.pending.back_mut().unwrap() = operation;
+            return true;
+        }
+        if let Operation::Pause(latest) = &operation
+            && let Some(Operation::Pause(previous)) = self.pending.back()
+            && latest.same_scope(previous)
         {
             *self.pending.back_mut().unwrap() = operation;
             return true;
@@ -148,6 +260,7 @@ impl State {
             Operation::Command(expected, ..)
             | Operation::PrepareMedia(expected, ..)
             | Operation::SelectMedia(expected, ..) => *expected == generation,
+            Operation::Pause(intent) => intent.guard.generation == generation,
             Operation::Report(report) => report.generation == generation,
             _ => true,
         });
@@ -253,6 +366,7 @@ impl PlaybackGuard {
 }
 
 enum Operation {
+    Pause(PauseIntent),
     Command(u64, u64, HostCommand),
     Policy(ControlPolicy),
     ClearMedia { browse: bool },
@@ -266,7 +380,10 @@ enum Operation {
 
 impl Operation {
     fn is_control(&self) -> bool {
-        matches!(self, Self::Command(..) | Self::PrepareMedia(..))
+        matches!(
+            self,
+            Self::Command(..) | Self::Pause(_) | Self::PrepareMedia(..)
+        )
     }
 }
 
@@ -781,6 +898,7 @@ impl Bridge {
         self.refresh_party_stream_recommendations();
         if let Some(app) = self.app() {
             app.set_party_active(false);
+            app.set_party_paused(true);
             app.set_party_can_control(false);
             app.set_party_can_choose_media(false);
             app.set_party_allow_everyone(false);
@@ -1471,8 +1589,9 @@ impl Bridge {
         if p.service.is_none() {
             return;
         }
-        let shared_control = matches!(operation, Operation::Command(..));
-        if !p.snapshot_for_sources().as_ref().is_some_and(|room| {
+        let room = p.snapshot_for_sources();
+        let shared_control = matches!(operation, Operation::Command(..) | Operation::Pause(_));
+        if !room.as_ref().is_some_and(|room| {
             if shared_control {
                 can_control(room)
             } else {
@@ -1480,14 +1599,83 @@ impl Bridge {
             }
         }) {
             drop(state);
+            self.party_publish_pause();
             if let Some(app) = self.app() {
                 app.set_party_error(text::tr("Only the host controls the shared timeline.").into());
             }
             return;
         }
-        p.push_operation(operation);
+        let operation =
+            if let Operation::Command(generation, revision, HostCommand::SetPaused(paused)) =
+                operation
+            {
+                let room = room.as_ref().unwrap();
+                if room.media.is_none()
+                    || generation != room.generation
+                    || revision != room.control_revision
+                {
+                    drop(state);
+                    self.party_publish_pause();
+                    self.party_selection_error(true);
+                    return;
+                }
+                let Some(request) = p.next_pause_request.checked_add(1) else {
+                    return;
+                };
+                p.next_pause_request = request;
+                Operation::Pause(PauseIntent {
+                    guard: PlaybackGuard {
+                        activation: p.generation,
+                        room_id: room.room_id.clone(),
+                        generation,
+                        media: room.media.as_ref().unwrap().identity.clone(),
+                    },
+                    control_revision: revision,
+                    selection_revision: p.selection_revision,
+                    source_session: self.player.screenshot_session(),
+                    pause_epoch: p.pause_epoch,
+                    request,
+                    paused,
+                })
+            } else {
+                operation
+            };
+        let pause = match &operation {
+            Operation::Pause(intent) => Some(intent.clone()),
+            _ => None,
+        };
+        let accepted = p.push_operation(operation);
+        if accepted && let Some(intent) = pause {
+            p.pending_pause = Some(intent);
+        }
         drop(state);
+        self.party_publish_pause();
+        if !accepted {
+            if let Some(app) = self.app() {
+                app.set_party_error(text::tr("party commands too frequent").into());
+            }
+            return;
+        }
         self.party_tick();
+    }
+
+    fn party_publish_pause(&self) {
+        if !self.party_active() {
+            return;
+        }
+        let (paused, room) = self
+            .shared
+            .lock()
+            .unwrap()
+            .party
+            .pause_projection(self.player.screenshot_session());
+        if let Some(app) = self.app() {
+            app.set_party_paused(paused);
+            if let Some(room) = room {
+                app.set_party_can_control(can_control(&room));
+            }
+            app.window().request_redraw();
+        }
     }
 
     /// Some local controls affect everyone; track, volume, screenshot and window
@@ -1497,16 +1685,15 @@ impl Bridge {
             return false;
         }
         let command = match action {
-            PlaybackAction::TogglePause => Some(HostCommand::SetPaused(
-                !self
+            PlaybackAction::TogglePause => {
+                let (paused, _) = self
                     .shared
                     .lock()
                     .unwrap()
                     .party
-                    .snapshot
-                    .as_ref()
-                    .is_none_or(|room| room.timeline.paused),
-            )),
+                    .pause_projection(self.player.screenshot_session());
+                Some(HostCommand::SetPaused(!paused))
+            }
             PlaybackAction::SetPaused(paused) => Some(HostCommand::SetPaused(*paused)),
             PlaybackAction::SeekAbsolute(position) if position.is_finite() => {
                 Some(HostCommand::SeekAbsolute(*position))
@@ -1572,6 +1759,7 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             let p = &mut state.party;
             p.resume_guard = true;
+            p.invalidate_pause_intents();
             p.pending.retain(|operation| {
                 matches!(
                     operation,
@@ -1620,6 +1808,7 @@ impl Bridge {
         if !remote_playback::is_foreground() {
             return;
         }
+        self.party_publish_pause();
         let snapshot = {
             let mut state = self.shared.lock().unwrap();
             let p = &mut state.party;
@@ -1808,11 +1997,62 @@ impl Bridge {
                 }
                 _ => None,
             };
+            let pause_request = match &operation {
+                Operation::Pause(intent) => Some(intent.clone()),
+                _ => None,
+            };
             let report_only = matches!(operation, Operation::Report(_));
+            let mut pause_skipped = false;
             let result = if !remote_playback::is_foreground() && report_only {
                 Ok(())
             } else {
                 match operation {
+                    Operation::Pause(intent) => {
+                        let (current, creator) = {
+                            let state = b.shared.lock().unwrap();
+                            let room = state.party.snapshot_for_sources();
+                            (
+                                intent.current(
+                                    state.party.generation,
+                                    state.party.selection_revision,
+                                    b.player.screenshot_session(),
+                                    state.party.pause_epoch,
+                                    room.as_ref(),
+                                ),
+                                room.as_ref()
+                                    .is_some_and(|room| room.role == PartyRole::Host),
+                            )
+                        };
+                        // Suspension/source replacement can retire a popped
+                        // request before its worker runs. Already-issued guest
+                        // requests remain subject to the room's authority.
+                        if current && remote_playback::is_foreground() {
+                            service
+                                .command_for_state(
+                                    intent.guard.generation,
+                                    intent.control_revision,
+                                    HostCommand::SetPaused(intent.paused),
+                                )
+                                .and_then(|()| {
+                                    // A creator's in-flight resume must not win
+                                    // after Android's suspension pause. The captured
+                                    // generation never pauses replacement media.
+                                    let suspended = !remote_playback::is_foreground()
+                                        || b.shared.lock().unwrap().party.pause_epoch
+                                            != intent.pause_epoch;
+                                    if creator && !intent.paused && suspended {
+                                        service.command_for_generation(
+                                            intent.guard.generation,
+                                            HostCommand::SetPaused(true),
+                                        )?;
+                                    }
+                                    Ok(())
+                                })
+                        } else {
+                            pause_skipped = true;
+                            Ok(())
+                        }
+                    }
                     Operation::Command(media_generation, revision, command) => {
                         service.command_for_state(media_generation, revision, command)
                     }
@@ -1854,6 +2094,9 @@ impl Bridge {
                     let p = &mut state.party;
                     if p.generation != generation {
                         return;
+                    }
+                    if let Some(intent) = pause_request.as_ref() {
+                        p.finish_pause(intent);
                     }
                     if guest_control {
                         // The host's limiter includes rejected controls. Waiting
@@ -1929,7 +2172,11 @@ impl Bridge {
                         }
                         p.snapshot = snapshot;
                     }
-                    if resumed && result.is_ok() && remote_playback::is_foreground() {
+                    if resumed
+                        && !pause_skipped
+                        && result.is_ok()
+                        && remote_playback::is_foreground()
+                    {
                         p.resume_guard = false;
                     }
                 }
@@ -1989,7 +2236,7 @@ impl Bridge {
         app.set_party_active(!room.ended);
         app.set_party_waiting(!room.waiting.is_empty() || !room.connected);
         app.set_party_wait_for_guests(room.wait_for_guests);
-        app.set_party_paused(room.timeline.paused);
+        self.party_publish_pause();
         app.set_party_target_speed(room.timeline.target_rate as f32);
         let media = room.selected_media();
         app.set_party_has_media(media.is_some());

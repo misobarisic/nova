@@ -1139,6 +1139,9 @@ export component PlayerOverlay {
 
     in-out property <bool> playback_started: false;
     in-out property <bool> is_paused: true;
+    // Party pause feedback follows the room/queued intent, while native pause
+    // can stay held until the authoritative scheduled start.
+    private property <bool> transport_paused: PartyBridge.active ? PartyBridge.paused : root.is_paused;
     in-out property <float> position: 0.0;
     in-out property <float> duration: 0.0;
     in property <float> buffered_until: 0.0;
@@ -1394,8 +1397,8 @@ export component PlayerOverlay {
     function media_key(text: string, repeated: bool) -> bool {
         if text == "\u{e100}" || text == "\u{e101}" || text == "\u{e102}" {
             if !repeated && root.timeline_control_allowed && root.playback_started
-                && (text == "\u{e100}" || (text == "\u{e101}" && root.is_paused)
-                    || (text == "\u{e102}" && !root.is_paused)) { root.toggle_pause(); }
+                && (text == "\u{e100}" || (text == "\u{e101}" && root.transport_paused)
+                    || (text == "\u{e102}" && !root.transport_paused)) { root.toggle_pause(); }
             return true;
         }
         if text == "\u{e103}" { if !repeated { root.close_player(); } return true; }
@@ -2701,14 +2704,14 @@ export component PlayerOverlay {
                     if (!root.guard_osd_control()) { return; }
                     root.kb_active = false; root.kb_idx = 1; root.osd_mouse_moved(); root.toggle_pause();
                 }
-                if root.is_paused: IcPlay {
+                if root.transport_paused: IcPlay {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     width: 40px;
                     height: 40px;
                     fill: Theme.current.text_bright;
                 }
-                if !root.is_paused: IcPause {
+                if !root.transport_paused: IcPause {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     width: 40px;
@@ -3008,14 +3011,14 @@ export component PlayerOverlay {
                             if (!root.guard_osd_control()) { return; }
                             root.kb_active = false; root.kb_idx = 1; root.osd_mouse_moved(); root.toggle_pause();
                         }
-                        if root.is_paused: IcPlay {
+                        if root.transport_paused: IcPlay {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
                             fill: InterfaceStyle.tv ? Theme.current.text_bright : #111827;
                         }
-                        if !root.is_paused: IcPause {
+                        if !root.transport_paused: IcPause {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 26px;

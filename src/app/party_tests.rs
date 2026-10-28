@@ -1279,6 +1279,8 @@ fn shared_policy_grants_guest_controls_with_captured_revision_but_keeps_admin_pr
                 let room = state.party.snapshot.as_mut().unwrap();
                 room.control_policy = ControlPolicy::Everyone;
                 room.control_revision = 7;
+                // Exercise room controls after the initial source-follow step.
+                state.party.followed_generation = Some(1);
             }
             bridge.party_publish();
             assert!(app.get_party_can_control());
@@ -1294,13 +1296,12 @@ fn shared_policy_grants_guest_controls_with_captured_revision_but_keeps_admin_pr
             {
                 let mut state = bridge.shared.lock().unwrap();
                 assert_eq!(state.party.pending.len(), 3);
-                assert!(
-                    state
-                        .party
-                        .pending
-                        .iter()
-                        .all(|operation| matches!(operation, Operation::Command(1, 7, _)))
-                );
+                assert!(state.party.pending.iter().all(|operation| match operation {
+                    Operation::Command(1, 7, _) => true,
+                    Operation::Pause(intent) =>
+                        intent.guard.generation == 1 && intent.control_revision == 7,
+                    _ => false,
+                }));
                 state.party.pending.clear();
             }
             for operation in [
@@ -2338,5 +2339,407 @@ fn slow_reports_allow_one_queued_control_before_the_next_overdue_heartbeat() {
     assert!(
         state.report_should_run(start + Duration::from_millis(2302)),
         "A control burst cannot displace the next deadline"
+    );
+}
+
+fn prepare_pause_party(bridge: &Bridge, app: &AppWindow, role: PartyRole) {
+    let _service = install_room(bridge, app, role);
+    if role == PartyRole::Guest {
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .party
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .control_policy = ControlPolicy::Everyone;
+    }
+    select_local_media(bridge, room(role).media.as_ref().unwrap());
+    assert!(bridge.begin_playback_request().is_current());
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_is_paused(true);
+    bridge.party_publish();
+}
+
+fn take_pause(bridge: &Bridge) -> PauseIntent {
+    match bridge
+        .shared
+        .lock()
+        .unwrap()
+        .party
+        .pending
+        .pop_front()
+        .unwrap()
+    {
+        Operation::Pause(intent) => intent,
+        _ => panic!("expected a source-owned pause request"),
+    }
+}
+
+#[test]
+fn rapid_party_toggles_project_the_latest_intent_before_acknowledgement() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::rapid_party_toggles_project_the_latest_intent_before_acknowledgement"
+        ),
+        |Fixture { app, bridge }| {
+            for role in [PartyRole::Host, PartyRole::Guest] {
+                bridge.shared.lock().unwrap().party = State::default();
+                prepare_pause_party(&bridge, &app, role);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::TogglePause)
+                    .unwrap();
+                assert!(
+                    !app.get_party_paused(),
+                    "Accepted local resume updates transport immediately"
+                );
+                assert!(
+                    app.get_is_paused(),
+                    "Native playback remains held for the room clock"
+                );
+                let first = take_pause(&bridge);
+                assert!(!first.paused);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::TogglePause)
+                    .unwrap();
+                assert!(app.get_party_paused());
+                let second_request = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .pending_pause
+                    .as_ref()
+                    .unwrap()
+                    .request;
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.party.snapshot.as_mut().unwrap().timeline.paused = false;
+                    state.party.finish_pause(&first);
+                    assert_eq!(
+                        state.party.pending_pause.as_ref().unwrap().request,
+                        second_request,
+                        "Old ACK cannot consume the newer pause"
+                    );
+                }
+                bridge.party_publish_pause();
+                assert!(
+                    app.get_party_paused(),
+                    "An older resume ACK cannot replace a newer pause icon"
+                );
+                bridge
+                    .dispatch_playback_action(PlaybackAction::TogglePause)
+                    .unwrap();
+                assert!(!app.get_party_paused());
+                assert_eq!(
+                    bridge.shared.lock().unwrap().party.pending.len(),
+                    1,
+                    "Adjacent queued toggles keep only the final state"
+                );
+                let latest = take_pause(&bridge);
+                assert!(latest.request > second_request);
+                assert!(!latest.paused);
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    let room = state.party.snapshot.as_mut().unwrap();
+                    room.timeline.paused = false;
+                    room.timeline.anchor_ms =
+                        nova_party::local_now_ms() + nova_party::START_LEAD_MS;
+                    state.party.finish_pause(&latest);
+                }
+                bridge.party_publish_pause();
+                assert!(
+                    !app.get_party_paused(),
+                    "Accepted scheduled resume uses the logical timeline"
+                );
+                assert!(
+                    app.get_is_paused(),
+                    "The icon does not wait for native scheduled unpause"
+                );
+                assert!(bridge.shared.lock().unwrap().party.pending_pause.is_none());
+            }
+        },
+    );
+}
+
+#[test]
+fn pause_rejections_roll_back_only_the_latest_matching_request() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::pause_rejections_roll_back_only_the_latest_matching_request"
+        ),
+        |Fixture { app, bridge }| {
+            prepare_pause_party(&bridge, &app, PartyRole::Guest);
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let rejected = take_pause(&bridge);
+            bridge.shared.lock().unwrap().party.finish_pause(&rejected);
+            bridge.party_publish_pause();
+            assert!(
+                app.get_party_paused(),
+                "Rejected resume restores confirmed pause"
+            );
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let older = take_pause(&bridge);
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let request = bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .pending_pause
+                .as_ref()
+                .unwrap()
+                .request;
+            bridge.shared.lock().unwrap().party.finish_pause(&older);
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .pending_pause
+                    .as_ref()
+                    .unwrap()
+                    .request,
+                request,
+                "An older rejection cannot erase newer queued intent"
+            );
+            let latest = take_pause(&bridge);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.snapshot.as_mut().unwrap().timeline.paused = false;
+                state.party.finish_pause(&latest);
+            }
+            bridge.party_publish_pause();
+            assert!(!app.get_party_paused());
+            assert!(bridge.shared.lock().unwrap().party.pending_pause.is_none());
+        },
+    );
+}
+
+#[test]
+fn pause_projection_expires_on_authority_room_and_source_changes_even_while_busy() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::pause_projection_expires_on_authority_room_and_source_changes_even_while_busy"
+        ),
+        |Fixture { app, bridge }| {
+            for change in [
+                "generation",
+                "room",
+                "revision",
+                "policy",
+                "disconnected",
+                "ended",
+                "identity",
+                "selection",
+                "source",
+                "leave",
+            ] {
+                bridge.shared.lock().unwrap().party = State::default();
+                prepare_pause_party(&bridge, &app, PartyRole::Guest);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::TogglePause)
+                    .unwrap();
+                assert!(!app.get_party_paused());
+                let owner = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .pending_pause
+                    .as_ref()
+                    .unwrap()
+                    .clone();
+                if change == "source" {
+                    bridge.player.close();
+                } else if change == "leave" {
+                    bridge.party_leave();
+                } else {
+                    let mut state = bridge.shared.lock().unwrap();
+                    if change == "selection" {
+                        state.party.selection_revision += 1;
+                    } else {
+                        let room = state.party.snapshot.as_mut().unwrap();
+                        match change {
+                            "generation" => room.generation += 2,
+                            "room" => room.room_id = "replacement-room".into(),
+                            "revision" => room.control_revision += 1,
+                            "policy" => room.control_policy = ControlPolicy::HostOnly,
+                            "disconnected" => room.connected = false,
+                            "ended" => room.ended = true,
+                            "identity" => {
+                                room.media.as_mut().unwrap().identity.title_id = "tt456".into()
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                bridge.party_publish_pause();
+                assert!(
+                    app.get_party_paused(),
+                    "{change}: stale optimistic resume must disappear"
+                );
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    assert!(state.party.pending_pause.is_none(), "{change}");
+                    assert!(
+                        !state
+                            .party
+                            .pending
+                            .iter()
+                            .any(|operation| matches!(operation, Operation::Pause(_))),
+                        "{change}: stale queued transport must not be sent"
+                    );
+                    state.party.finish_pause(&owner);
+                    assert!(
+                        state.party.pending_pause.is_none(),
+                        "{change}: late ACK cannot revive the projection"
+                    );
+                }
+                if matches!(change, "policy" | "disconnected" | "ended" | "leave") {
+                    assert!(!app.get_party_can_control(), "{change}");
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn pause_queue_coalesces_only_adjacent_owners_and_never_projects_dropped_requests() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::pause_queue_coalesces_only_adjacent_owners_and_never_projects_dropped_requests"
+        ),
+        |Fixture { app, bridge }| {
+            prepare_pause_party(&bridge, &app, PartyRole::Host);
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let first = take_pause(&bridge);
+            for barrier in [
+                Operation::Command(1, 0, HostCommand::SeekAbsolute(30.0)),
+                Operation::Command(1, 0, HostCommand::SetRate(1.5)),
+                Operation::PrepareMedia(1, 0, room(PartyRole::Host).media.unwrap()),
+            ] {
+                let mut later = first.clone();
+                later.request += 1;
+                later.paused = true;
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.pending.clear();
+                state.party.push_operation(Operation::Pause(first.clone()));
+                state.party.push_operation(barrier);
+                state.party.push_operation(Operation::Pause(later));
+                assert_eq!(state.party.pending.len(), 3);
+            }
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.pending.clear();
+                for _ in 0..31 {
+                    state
+                        .party
+                        .push_operation(Operation::Command(1, 0, HostCommand::StepRate(1)));
+                }
+                state.party.push_operation(Operation::Pause(first.clone()));
+                state.party.pending_pause = Some(first);
+            }
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            assert!(app.get_party_paused());
+            assert_eq!(
+                bridge.shared.lock().unwrap().party.pending.len(),
+                32,
+                "A full queue still accepts its adjacent final pause state"
+            );
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.pending.clear();
+                state.party.pending_pause = None;
+                for _ in 0..32 {
+                    state
+                        .party
+                        .push_operation(Operation::Command(1, 0, HostCommand::StepRate(1)));
+                }
+            }
+            bridge.party_publish_pause();
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            assert!(
+                app.get_party_paused(),
+                "Queue rejection cannot claim immediate acceptance"
+            );
+            assert!(bridge.shared.lock().unwrap().party.pending_pause.is_none());
+            assert!(!app.get_party_error().is_empty());
+        },
+    );
+}
+
+#[test]
+fn suspended_pause_owner_stays_retired_after_foreground_returns() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::suspended_pause_owner_stays_retired_after_foreground_returns"
+        ),
+        |Fixture { app, bridge }| {
+            prepare_pause_party(&bridge, &app, PartyRole::Host);
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let popped = take_pause(&bridge);
+            remote_playback::playback_foreground(false);
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .invalidate_pause_intents();
+            remote_playback::playback_foreground(true);
+            {
+                let state = bridge.shared.lock().unwrap();
+                let party = &state.party;
+                let room = party.snapshot_for_sources();
+                assert!(
+                    !popped.current(
+                        party.generation,
+                        party.selection_revision,
+                        bridge.player.screenshot_session(),
+                        party.pause_epoch,
+                        room.as_ref()
+                    ),
+                    "An old worker cannot replay a resume after returning to the same source and room"
+                );
+            }
+            bridge.party_publish_pause();
+            assert!(app.get_party_paused());
+            bridge
+                .dispatch_playback_action(PlaybackAction::TogglePause)
+                .unwrap();
+            let fresh = take_pause(&bridge);
+            assert!(!fresh.same_scope(&popped));
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.party.finish_pause(&popped);
+                assert_eq!(
+                    state.party.pending_pause.as_ref().unwrap().request,
+                    fresh.request,
+                    "An old interval's ACK cannot consume a fresh resume"
+                );
+            }
+        },
     );
 }
