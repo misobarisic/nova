@@ -51,11 +51,7 @@ fn initial_settings_view(
 }
 
 pub(super) fn initialize_settings_view(database_existed: bool) {
-    let view = initial_settings_view(
-        database_existed,
-        |key| storage::try_get_str(key),
-        |key, value| storage::try_set_str(key, value),
-    );
+    let view = initial_settings_view(database_existed, storage::try_get_str, storage::try_set_str);
     match view {
         Ok(view) => SETTINGS_ADVANCED.store(view.advanced(), Ordering::Release),
         Err(error) => {
