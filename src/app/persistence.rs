@@ -177,6 +177,8 @@ struct State {
     reserved: usize,
     next: u64,
     completed: u64,
+    sync_requested: u64,
+    sync_finished: u64,
     head_started: bool,
     error: Option<String>,
     retry: bool,
@@ -188,6 +190,16 @@ struct Queue {
     changed: Condvar,
 }
 impl Queue {
+    fn request_sync(&self) {
+        let mut state = self.state.lock().unwrap();
+        // One watermark covers repeated paused ticks without consuming queue
+        // capacity or starting another waiter. A failed head keeps it pending.
+        if !state.stop && !state.closing && state.next > state.sync_requested {
+            state.sync_requested = state.next;
+            self.changed.notify_all();
+        }
+    }
+
     fn reserve(self: &Arc<Self>, count: usize) -> Result<Reservation, String> {
         let mut state = self.state.lock().unwrap();
         if state.stop
@@ -261,7 +273,8 @@ impl Queue {
     fn flush(&self) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
         let target = state.next;
-        if state.completed >= target {
+        let sync_target = state.sync_requested;
+        if state.completed >= target && state.sync_finished >= sync_target {
             return Ok(());
         }
         if state.stop {
@@ -275,7 +288,7 @@ impl Queue {
             state.error = None;
             self.changed.notify_all();
         }
-        while state.completed < target {
+        while state.completed < target || state.sync_finished < sync_target {
             if let Some(error) = &state.error {
                 return Err(error.clone());
             }
@@ -295,6 +308,13 @@ impl Worker {
     fn spawn(
         save: impl Fn(&profiles::ProfileStore, &Snapshot) -> Result<(), String> + Send + 'static,
     ) -> std::io::Result<Self> {
+        Self::spawn_with_sync(save, nova_sync::flush_local_sync)
+    }
+
+    fn spawn_with_sync(
+        save: impl Fn(&profiles::ProfileStore, &Snapshot) -> Result<(), String> + Send + 'static,
+        notify_sync: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
         let queue = Arc::new(Queue {
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
@@ -308,6 +328,8 @@ impl Worker {
                     let (sequence, owner, snapshot) = {
                         let mut state = worker.state.lock().unwrap();
                         while !state.stop
+                            && !(state.sync_requested > state.sync_finished
+                                && state.completed >= state.sync_requested)
                             && (state.pending.is_empty() || (state.error.is_some() && !state.retry))
                         {
                             if state.error.is_some() {
@@ -325,6 +347,20 @@ impl Worker {
                         }
                         if state.stop {
                             break;
+                        }
+                        if state.sync_requested > state.sync_finished
+                            && state.completed >= state.sync_requested
+                        {
+                            let target = state.sync_requested;
+                            drop(state);
+                            // IN_WORKER makes the registered persistence
+                            // barrier a no-op here: the requested snapshots
+                            // have already committed on this ordered writer.
+                            notify_sync();
+                            let mut state = worker.state.lock().unwrap();
+                            state.sync_finished = target;
+                            worker.changed.notify_all();
+                            continue;
                         }
                         state.head_started = true;
                         state.retry = false;
@@ -436,6 +472,19 @@ pub(super) fn flush() -> Result<(), String> {
 pub(super) fn flush_report() {
     if let Err(error) = flush() {
         io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+    }
+}
+
+/// Hand off pause/completion/close sync without waiting on the event loop.
+/// Real lifecycle/profile barriers still use flush/flush_report. Notification
+/// follows successful persistence, including retries, on the existing writer.
+pub(super) fn request_local_sync() {
+    let queue = ACTIVE.lock().unwrap().clone();
+    if let Some(queue) = queue.filter(|_| !IN_WORKER.get()) {
+        queue.request_sync();
+    } else {
+        // Bootstrap/no-writer paths already persist synchronously.
+        nova_sync::flush_local_sync();
     }
 }
 pub(super) fn failed() -> bool {
@@ -604,6 +653,243 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn pause_progress_hands_sync_to_the_writer_without_waiting_for_disk() {
+        const ROOT: &str = "NOVA_PAUSE_PERSISTENCE_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-pause-persistence-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::persistence::tests::pause_progress_hands_sync_to_the_writer_without_waiting_for_disk", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, beginning) = mpsc::channel();
+        let (notified, notification) = mpsc::channel();
+        let owner = profiles::ProfileStore::capture();
+        let key = progress_map_key("series", "episode");
+        let notify_key = key.clone();
+        let worker = Worker::spawn_with_sync(
+            {
+                let gate = gate.clone();
+                move |owner, snapshot| {
+                    let _ = started.send(());
+                    let mut released = gate.0.lock().unwrap();
+                    while !*released {
+                        released = gate.1.wait(released).unwrap();
+                    }
+                    drop(released);
+                    snapshot.save(owner)
+                }
+            },
+            move || {
+                // Exercise the real registered barrier on the writer, where it
+                // must never recursively wait for this notification to finish.
+                nova_sync::flush_local_sync();
+                let raw = owner.read(EPISODE_PROGRESS_KEY).unwrap().unwrap();
+                let map: HashMap<String, EpisodeProgress> = serde_json::from_str(&raw).unwrap();
+                notified.send(map[&notify_key].position_secs).unwrap();
+            },
+        )
+        .unwrap();
+        *ACTIVE.lock().unwrap() = Some(worker.queue.clone());
+        nova_sync::set_persistence_barrier(Arc::new(|| {
+            flush()
+                .map_err(|error| storage::Error::new(storage::ErrorKind::Transaction, error).into())
+        }));
+        let (returned, waiting) = mpsc::channel();
+        let waited = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release = thread::spawn({
+            let gate = gate.clone();
+            let waited = waited.clone();
+            move || {
+                // Old synchronous pause code can finish only after this
+                // watchdog releases disk; that path deterministically fails.
+                if waiting.recv_timeout(Duration::from_secs(2)).is_err() {
+                    waited.store(true, Ordering::Release);
+                }
+                *gate.0.lock().unwrap() = true;
+                gate.1.notify_all();
+            }
+        });
+        worker.queue.enqueue(progress(1.0, true)).unwrap();
+        beginning.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_is_paused(true);
+        app.set_position(25.0);
+        app.set_duration(1000.0);
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode".into(),
+            last_saved_pos: 10.0,
+            last_saved_at: now_secs(),
+            ..Default::default()
+        });
+        bridge
+            .dispatch_playback_action(nova_playback_api::PlaybackAction::SetPaused(true))
+            .unwrap();
+        assert!(app.get_is_paused());
+        assert_eq!(
+            bridge.shared.lock().unwrap().progress[&key].position_secs,
+            25.0
+        );
+        for _ in 0..20 {
+            bridge.note_player_progress_from_ui();
+        }
+        assert!(
+            !waited.load(Ordering::Acquire),
+            "Pause UI must return before the writer is released"
+        );
+        assert!(
+            notification.try_recv().is_err(),
+            "Sync cannot observe a merely queued checkpoint"
+        );
+        {
+            let state = worker.queue.state.lock().unwrap();
+            assert_eq!(
+                state.next, 2,
+                "Stationary paused ticks must not enqueue repeated snapshots"
+            );
+            assert_eq!(state.sync_requested, 2);
+            assert_eq!(state.sync_finished, 0);
+        }
+        returned.send(()).unwrap();
+        release.join().unwrap();
+        worker.queue.flush().unwrap();
+        assert_eq!(
+            notification.recv_timeout(Duration::from_secs(5)).unwrap(),
+            25.0,
+            "Notification follows the durable pause snapshot"
+        );
+        assert!(
+            notification.try_recv().is_err(),
+            "Repeated pause ticks coalesce into one handoff"
+        );
+        drop(worker);
+    }
+
+    #[test]
+    fn sync_watermarks_survive_inflight_notification_and_coalesced_profile_saves() {
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let (began, beginning) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let (notified, notifications) = mpsc::channel();
+        let calls = std::cell::Cell::new(0);
+        let worker = Worker::spawn_with_sync(
+            {
+                let saved = saved.clone();
+                move |owner, snapshot| {
+                    saved
+                        .lock()
+                        .unwrap()
+                        .push((owner.id().to_string(), position(snapshot)));
+                    Ok(())
+                }
+            },
+            {
+                let saved = saved.clone();
+                move || {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 1 {
+                        began.send(()).unwrap();
+                        let _ = gate.recv_timeout(Duration::from_secs(5));
+                    }
+                    notified.send(saved.lock().unwrap().clone()).unwrap();
+                }
+            },
+        )
+        .unwrap();
+        profiles::with_context(profiles::context_for("alice"), || {
+            worker.queue.enqueue(progress(1.0, false)).unwrap()
+        });
+        worker.queue.request_sync();
+        beginning.recv_timeout(Duration::from_secs(5)).unwrap();
+        profiles::with_context(profiles::context_for("bob"), || {
+            worker.queue.enqueue(progress(2.0, true)).unwrap();
+            worker.queue.request_sync();
+            worker.queue.enqueue(progress(3.0, true)).unwrap();
+        });
+        assert_eq!(worker.queue.state.lock().unwrap().pending.len(), 1);
+        release.send(()).unwrap();
+        worker.queue.flush().unwrap();
+        assert_eq!(
+            notifications.recv_timeout(Duration::from_secs(5)).unwrap(),
+            vec![("alice".into(), 1.0)]
+        );
+        assert_eq!(
+            notifications.recv_timeout(Duration::from_secs(5)).unwrap(),
+            vec![("alice".into(), 1.0), ("bob".into(), 3.0)],
+            "Completing old notification cannot erase a newer request; a coalesced sequence satisfies the older watermark"
+        );
+        assert!(notifications.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_checkpoint_retains_sync_handoff_until_retry_commits() {
+        let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (attempted, attempts) = mpsc::channel();
+        let (notified, notification) = mpsc::channel();
+        let worker = Worker::spawn_with_sync(
+            {
+                let failing = failing.clone();
+                move |_, _| {
+                    attempted.send(()).unwrap();
+                    if failing.load(Ordering::Acquire) {
+                        Err("injected disk failure".into())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            move || {
+                notified.send(()).unwrap();
+            },
+        )
+        .unwrap();
+        worker.queue.enqueue(progress(1.0, false)).unwrap();
+        worker.queue.request_sync();
+        attempts.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(worker.queue.flush().is_err());
+        assert!(
+            notification.try_recv().is_err(),
+            "A failed transaction cannot notify sync"
+        );
+        assert_eq!(worker.queue.state.lock().unwrap().sync_requested, 1);
+        failing.store(false, Ordering::Release);
+        worker.queue.flush().unwrap();
+        notification.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(worker.queue.state.lock().unwrap().sync_finished, 1);
+    }
+
     fn progress(position: f64, periodic: bool) -> Snapshot {
         Snapshot::Progress(
             HashMap::from([(

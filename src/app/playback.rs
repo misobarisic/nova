@@ -2638,7 +2638,7 @@ impl Bridge {
             let reservation = due.then(|| persistence::reserve(1)).flatten();
             if reservation.is_none() {
                 if paused {
-                    nova_sync::flush_local_sync();
+                    persistence::request_local_sync();
                 }
                 // Still remember the latest observation for finalize.
                 let mut state = self.shared.lock().unwrap();
@@ -2698,7 +2698,7 @@ impl Bridge {
                 drop(state);
                 if paused || newly_watched {
                     write_progress_map(&map);
-                    nova_sync::flush_local_sync();
+                    persistence::request_local_sync();
                 } else {
                     nova_sync::playback_checkpoint(|| write_progress_map(&map));
                 }
@@ -2756,7 +2756,7 @@ impl Bridge {
                     write_progress_map(&map);
                 }
             }
-            nova_sync::flush_local_sync();
+            persistence::request_local_sync();
             if reservation.is_some() && watched_now {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }

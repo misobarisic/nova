@@ -46,8 +46,12 @@ Local edits request device sync after 2 seconds without another edit, with a
 10-second ceiling during continuous editing. Ordinary playback checkpoints use
 a fixed 2-minute automatic push deadline that later checkpoints do not postpone;
 the configured periodic sync remains a reliability fallback and may run sooner.
-Pause, stop, episode replacement and completion save the latest observed resume
-point and immediately request one pass for pending changes. Automatic requests
+Pause, stop and completion enqueue the latest observed resume point without
+waiting for disk on the UI thread. The ordered persistence worker requests one
+sync pass after that checkpoint commits; repeated requests share one bounded
+watermark, and failed writes retain the handoff until retry succeeds. Episode
+replacement, profile switching, Android backgrounding and orderly shutdown keep
+their synchronous durability barriers. Automatic requests
 retain unavailable peers’ backoff; the manual Sync now action still forces a retry.
 Repeated stationary paused ticks do not rewrite progress or request empty passes.
 
