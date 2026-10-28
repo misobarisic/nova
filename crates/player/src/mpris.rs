@@ -10,57 +10,9 @@ const PATH: &str = "/org/mpris/MediaPlayer2";
 const TRACK_PATH: &str = "/dev/misob/nova/track";
 const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 
-/// Display-only state supplied by the UI thread; source URLs stay private.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Snapshot {
-    pub track: Option<u64>,
-    pub title: String,
-    pub album: String,
-    pub playing: bool,
-    pub paused: bool,
-    pub can_play: bool,
-    pub can_seek: bool,
-    pub position: i64,
-    pub duration: i64,
-    pub volume: f64,
-    pub rate: f64,
-    pub minimum_rate: f64,
-    pub maximum_rate: f64,
-    pub seek_serial: u64,
-}
-
-impl Default for Snapshot {
-    fn default() -> Self {
-        Self {
-            track: None,
-            title: String::new(),
-            album: String::new(),
-            playing: false,
-            paused: false,
-            can_play: false,
-            can_seek: false,
-            position: 0,
-            duration: 0,
-            volume: 1.0,
-            rate: 1.0,
-            minimum_rate: f64::from(nova_config::PLAYBACK_SPEED_MIN),
-            maximum_rate: f64::from(nova_config::PLAYBACK_SPEED_MAX),
-            seek_serial: 0,
-        }
-    }
-}
+pub use crate::media_controls::{Command, Owner, Snapshot};
 
 impl Snapshot {
-    fn status(&self) -> &'static str {
-        if !self.playing {
-            "Stopped"
-        } else if self.paused {
-            "Paused"
-        } else {
-            "Playing"
-        }
-    }
-
     fn metadata(&self) -> HashMap<&'static str, OwnedValue> {
         let mut values = HashMap::new();
         if let Some(track) = self.track {
@@ -78,20 +30,7 @@ impl Snapshot {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Command {
-    Raise,
-    Play,
-    Pause,
-    TogglePause,
-    Stop,
-    Seek(i64),
-    SetPosition(i64),
-    SetVolume(f64),
-    SetRate(f64),
-}
-
-type Dispatch = Arc<dyn Fn(Option<u64>, Command) -> Result<(), String> + Send + Sync>;
+type Dispatch = Arc<dyn Fn(Option<Owner>, Command) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone)]
 struct PlayerInterface {
@@ -105,7 +44,7 @@ impl PlayerInterface {
         if state.track.is_none() {
             return Ok(());
         }
-        (self.dispatch)(state.track, command).map_err(zbus::fdo::Error::Failed)
+        (self.dispatch)(state.owner, command).map_err(zbus::fdo::Error::Failed)
     }
 }
 
@@ -144,7 +83,7 @@ impl PlayerInterface {
             return Ok(());
         }
         // Carry the validated identity through to the UI, where it is checked again.
-        (self.dispatch)(Some(track), Command::SetPosition(position))
+        (self.dispatch)(state.owner, Command::SetPosition(position))
             .map_err(zbus::fdo::Error::Failed)
     }
     fn open_uri(&self, _uri: &str) -> zbus::fdo::Result<()> {
@@ -280,7 +219,7 @@ pub struct Service {
 
 impl Service {
     pub fn start(
-        dispatch: impl Fn(Option<u64>, Command) -> Result<(), String> + Send + Sync + 'static,
+        dispatch: impl Fn(Option<Owner>, Command) -> Result<(), String> + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let state = Arc::new(Mutex::new(Snapshot::default()));
         let (wake, updates) = mpsc::sync_channel(1);
@@ -371,26 +310,4 @@ fn publish_changes(connection: &Connection, old: &Snapshot, new: &Snapshot) -> z
         connection.emit_signal(None::<&str>, PATH, PLAYER, "Seeked", &(new.position,))?;
     }
     Ok(())
-}
-
-impl crate::Player {
-    /// The live rate includes transient holds, unlike the saved session preference.
-    pub fn current_playback_speed(&self) -> f64 {
-        let rate = self
-            .state
-            .mpv
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|mpv| mpv.get_property::<f64>("speed").ok())
-            .filter(|rate| rate.is_finite() && *rate > 0.0);
-        rate.unwrap_or_else(|| f64::from(self.effective_playback_speed()))
-    }
-
-    /// Serial for accepted explicit seeks, independent of normal clock progression.
-    pub fn seek_serial(&self) -> u64 {
-        self.state
-            .seek_serial
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
 }

@@ -2743,3 +2743,102 @@ fn suspended_pause_owner_stays_retired_after_foreground_returns() {
         },
     );
 }
+
+#[test]
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
+fn system_media_party_controls_follow_shared_authority_without_saving_personal_speed() {
+    use nova_player::media_controls::Command;
+    isolated(
+        concat!(
+            module_path!(),
+            "::system_media_party_controls_follow_shared_authority_without_saving_personal_speed"
+        ),
+        |Fixture { app, bridge }| {
+            for role in [PartyRole::Host, PartyRole::Guest] {
+                bridge.shared.lock().unwrap().party = State::default();
+                prepare_pause_party(&bridge, &app, role);
+                bridge.mark_playback_opened(true);
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .timeline
+                    .target_rate = 1.55;
+                let saved = storage::get_str(playback_preferences::PREFERENCES_KEY);
+                bridge
+                    .dispatch_playback_action(PlaybackAction::TogglePause)
+                    .unwrap();
+                let snapshot = bridge.system_media_snapshot();
+                assert!(snapshot.can_play);
+                assert!(
+                    !snapshot.paused,
+                    "OS transport follows accepted local pause intent while native playback is held"
+                );
+                assert!(app.get_is_paused());
+                assert_eq!(
+                    snapshot.rate, 1.55,
+                    "OS rate is the accepted target, independent of drift correction"
+                );
+                bridge.handle_system_media(snapshot.owner.clone(), Command::SetRate(1.75));
+                assert!(bridge.shared.lock().unwrap().party.pending.iter().any(|operation| matches!(operation, Operation::Command(1, 0, HostCommand::SetRate(rate)) if *rate == 1.75)));
+                assert_eq!(
+                    storage::get_str(playback_preferences::PREFERENCES_KEY),
+                    saved
+                );
+                let queued = bridge.shared.lock().unwrap().party.pending.len();
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .control_revision += 1;
+                bridge.handle_system_media(snapshot.owner.clone(), Command::TogglePause);
+                assert_eq!(
+                    bridge.shared.lock().unwrap().party.pending.len(),
+                    queued,
+                    "An old policy revision cannot become a fresh toggle"
+                );
+                if role == PartyRole::Guest {
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .party
+                        .snapshot
+                        .as_mut()
+                        .unwrap()
+                        .control_policy = ControlPolicy::HostOnly;
+                    app.set_party_can_control(false);
+                    let readonly = bridge.system_media_snapshot();
+                    assert!(!readonly.can_play);
+                    assert!(!readonly.can_seek);
+                    bridge.handle_system_media(readonly.owner.clone(), Command::SetRate(1.0));
+                    assert_eq!(bridge.shared.lock().unwrap().party.pending.len(), queued);
+                    bridge.handle_system_media(readonly.owner, Command::Stop);
+                    assert!(!app.get_player_open());
+                    assert!(bridge.party_active());
+                    assert!(
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .party
+                            .snapshot
+                            .as_ref()
+                            .unwrap()
+                            .media
+                            .is_some(),
+                        "Guest Stop closes only its own source"
+                    );
+                }
+            }
+        },
+    );
+}

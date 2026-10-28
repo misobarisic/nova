@@ -5475,6 +5475,7 @@ dependencies = [
  "serde_json",
  "slint",
  "webp",
+ "windows",
  "zbus",
 ]
 

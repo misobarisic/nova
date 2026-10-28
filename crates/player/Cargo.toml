@@ -25,6 +25,8 @@ webp = "=0.3.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Isolate mpv from the state of Slint's shared OpenGL context.
 glow = "0.17"
+# Desktop SMTC attaches to Nova's HWND; COM stays on its dedicated worker.
+windows = { version = "0.62.2", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT"] }
 
 [dev-dependencies]
 i-slint-backend-testing = { workspace = true }

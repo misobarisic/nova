@@ -38,8 +38,12 @@ mod chapters;
 mod media_badges;
 mod media_probe;
 pub use media_probe::probe_local_duration;
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+pub mod media_controls;
 #[cfg(target_os = "linux")]
 pub mod mpris;
+#[cfg(target_os = "windows")]
+pub mod smtc;
 
 mod sleep_timer;
 pub use sleep_timer::elapsed_realtime_ms;
@@ -1257,7 +1261,7 @@ struct State {
     /// for a scrub and frozen.
     seek_pending: AtomicBool,
     /// Count accepted seeks so even tiny/paused seeks notify desktop media widgets.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     seek_serial: AtomicU64,
     /// A native setter can succeed without ever moving the demuxer. Bound the
     /// optimistic slider hold, including for paused and unseekable sources.
@@ -1597,7 +1601,7 @@ impl Player {
             allow_external: AtomicBool::new(true),
             start_pause_hold: AtomicBool::new(false),
             seek_pending: AtomicBool::new(false),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             seek_serial: AtomicU64::new(0),
             seek_deadline: Mutex::new(None),
             seek_buffer: Mutex::new(None),
@@ -2690,7 +2694,7 @@ impl Player {
         // acceptance does not guarantee the requested position is reachable.
         *self.state.seek_deadline.lock().unwrap() = Some(now + Duration::from_secs(5));
         self.state.seek_pending.store(true, Ordering::SeqCst);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         self.state.seek_serial.fetch_add(1, Ordering::Relaxed);
     }
 

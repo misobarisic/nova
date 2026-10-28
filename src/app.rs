@@ -831,9 +831,9 @@ mod home_catalog_fetch;
 mod intro_skip;
 mod last_stream;
 mod library;
+#[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
+mod media_controls;
 mod media_identity;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
-mod mpris;
 mod next_episode;
 mod onboarding;
 mod page_artwork;

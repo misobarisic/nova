@@ -365,7 +365,10 @@ instances do not replace each other's service.
 
 Commands use the same UI-thread dispatcher as the player controls. Resume
 confirmation, watch-party control permissions and local/remote playback ownership
-still apply; queued commands are discarded if their source has changed. Next and
+still apply; queued commands are discarded if their source, profile, room or
+control-policy revision has changed. Everyone rooms allow authorized guests as
+well as the creator; party pause feedback follows the pending/logical state and
+speed reports the accepted room target, without changing personal preferences. Next and
 Previous are unavailable because Nova does not expose an MPRIS playlist. Opening
 arbitrary URIs and quitting the application are unavailable. Stopping closes the
 local player through the usual progress-save path. Playback on a paired receiver
@@ -378,6 +381,29 @@ updates from the existing 250 ms UI timer; ordinary position progression does no
 emit property changes, while successful seeks and nonzero playback starts emit
 `Seeked`. The reported speed follows title overrides and temporary speed holds.
 A missing session bus disables this integration without interrupting playback.
+
+## Windows system media controls
+
+Windows desktop builds expose the same local title/episode, playback state,
+position, duration and accepted speed through System Media Transport Controls
+(SMTC). Media keys and Windows media widgets can play, pause, stop, seek and
+request a supported speed. Next/Previous, channel changes and arbitrary URI
+opening are unavailable. Volume continues through Windows' normal volume controls.
+Profile locks, cast/receiver ownership, source replacement, resume confirmation
+and party permissions use the same guarded dispatcher as Linux and Nova's OSD.
+Stopping a guest's source retains the room's accepted episode.
+
+The integration lazily attaches to Nova's top-level HWND after Winit creates it,
+using desktop `ISystemMediaTransportControlsInterop::GetForWindow`. A dedicated
+worker owns the COM apartment, event registrations, metadata/timeline updates
+and teardown. One bounded wake carries the newest snapshot, so native services
+cannot accumulate UI work. Timeline positions convert microseconds to Windows'
+100 ns ticks; normal playback refreshes every five seconds, with immediate
+updates on pause, seek, rate, source or duration changes. Closing, casting or
+locking the profile clears the metadata and disables the session. Worker cleanup
+unregisters handlers before releasing the apartment. No artwork is fetched and
+no stream URL, headers, credentials or local filenames are exported. Windows
+API failures disable the integration without interrupting playback.
 Windows and Android do not register the service.
 
 ## Buffered progress
