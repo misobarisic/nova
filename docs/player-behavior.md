@@ -645,8 +645,9 @@ regression: `tests/player/intro_skip.rs` in `ui_player`.
 
 ## Next-episode controls
 
-The footer's Lucide SkipForward button opens the next episode's stream selector
-at any point after episodic playback starts. It appears when the loaded episode
+The footer's Lucide SkipForward button starts the right-hand control group,
+before Subtitles, and opens the next episode's stream selector at any point
+after episodic playback starts. It appears when the loaded episode
 inventory contains a released, sequential successor with a usable season. Movies,
 final episodes, future releases, loading and remote playback do not offer it.
 The button saves normal progress and closes the current source through the same

@@ -125,9 +125,9 @@ fn footer_next_keyboard_tv_and_compact_geometry_preserve_other_controls() {
     let selected = Rc::new(RefCell::new(Vec::new()));
     let recorded = selected.clone();
     app.on_next_episode_streams(move |token| recorded.borrow_mut().push(token.to_string()));
-    // Desktop order follows pause, rewind, forward, volume, subtitles, audio,
-    // speed, then Next, regardless of its stable internal focus index.
-    for _ in 0..7 {
+    // Next starts the right-hand group, before subtitles, audio and speed.
+    // Desktop order reaches it after pause, rewind, forward and volume.
+    for _ in 0..4 {
         key(&app, slint::platform::Key::Tab);
     }
     key(&app, slint::platform::Key::Return);
@@ -147,7 +147,7 @@ fn footer_next_keyboard_tv_and_compact_geometry_preserve_other_controls() {
     app.global::<nova::InterfaceStyle>().set_tv(true);
     settle(&app);
     // TV mode resets to Pause; volume is absent and speed is in Playback.
-    for _ in 0..5 {
+    for _ in 0..3 {
         key(&app, slint::platform::Key::RightArrow);
     }
     key(&app, slint::platform::Key::Return);
@@ -169,12 +169,20 @@ fn footer_next_keyboard_tv_and_compact_geometry_preserve_other_controls() {
         assert!(p.x >= 0.0 && p.y >= 0.0);
         assert!(p.x + action.size().width <= width as f32 + 0.5);
         assert!(p.y + action.size().height <= height as f32 + 0.5);
+        if let Some(subtitles) =
+            ElementHandle::find_by_element_id(&app, "PlayerOverlay::subtitle_button").next()
+        {
+            assert!(
+                p.x + action.size().width <= subtitles.absolute_position().x + 0.5,
+                "Next must precede subtitles at {width}×{height}"
+            );
+        }
         let mut lane = Vec::new();
         for id in [
             "desktop_pause",
             "vol_group",
-            "speed_button",
             "next_episode_button",
+            "speed_button",
             "screenshot_button",
             "settings_gear",
             "fullscreen_button",

@@ -1495,9 +1495,9 @@ export component PlayerOverlay {
     }
     function tv_neighbour(index: int, direction: int) -> int {
         if root.next_episode_button_available {
-            if index == 6 && direction > 0 { return 16; }
-            if index == 7 && direction < 0 { return 16; }
-            if index == 16 { return direction > 0 ? 7 : 6; }
+            if index == 4 && direction > 0 { return 16; }
+            if index == 5 && direction < 0 { return 16; }
+            if index == 16 { return direction > 0 ? 5 : 4; }
         }
         return Math.clamp(index + direction, 1, 15);
     }
@@ -1631,13 +1631,13 @@ export component PlayerOverlay {
         if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, -1); }
         // With the new utility present, follow its actual left-to-right lane.
         if root.next_episode_button_available {
-            if root.kb_idx == 16 { return root.footer_speed_visible ? 13 : root.narrow ? (root.is_android ? 4 : 2) : 6; }
-            if root.kb_idx == 9 { return root.footer_next_enabled ? 16 : root.footer_speed_visible ? 13 : root.narrow ? (root.is_android ? 4 : 2) : 6; }
+            if root.kb_idx == 16 { return root.is_android ? 4 : 2; }
+            if root.kb_idx == 9 { return root.footer_speed_visible ? 13 : !root.narrow ? 6 : root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
             if root.kb_idx == 7 { return 9; }
             if root.kb_idx == 8 { return 7; }
             if root.kb_idx == 10 { return root.is_android ? 7 : 8; }
-            if root.kb_idx == 13 { return root.narrow ? (root.is_android ? 4 : 2) : 6; }
-            if root.kb_idx == 5 { return root.is_android ? 4 : 2; }
+            if root.kb_idx == 13 { return !root.narrow ? 6 : root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
+            if root.kb_idx == 5 { return root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
             if root.kb_idx == 2 { return root.narrow ? 1 : 4; }
             if root.kb_idx == 3 { return 1; }
         }
@@ -1663,12 +1663,12 @@ export component PlayerOverlay {
         if root.next_episode_button_available {
             if root.kb_idx == 1 { return root.narrow && !root.is_android ? 2 : 3; }
             if root.kb_idx == 2 || (root.kb_idx == 4 && root.is_android) {
-                return !root.narrow ? 5 : root.footer_speed_visible ? 13 : root.footer_next_enabled ? 16 : 9;
+                return root.footer_next_enabled ? 16 : !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9;
             }
             if root.kb_idx == 4 { return 2; }
-            if root.kb_idx == 6 { return root.footer_speed_visible ? 13 : root.footer_next_enabled ? 16 : 9; }
-            if root.kb_idx == 13 { return root.footer_next_enabled ? 16 : 9; }
-            if root.kb_idx == 16 { return 9; }
+            if root.kb_idx == 6 { return root.footer_speed_visible ? 13 : 9; }
+            if root.kb_idx == 13 { return 9; }
+            if root.kb_idx == 16 { return !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9; }
             if root.kb_idx == 9 { return 7; }
             if root.kb_idx == 7 { return root.is_android ? (root.next_episode_shown || root.skip_segment_shown ? 10 : 7) : 8; }
             if root.kb_idx == 8 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 8; }
@@ -3304,6 +3304,28 @@ export component PlayerOverlay {
                         vertical-alignment: center;
                     }
                     if !root.mobile_landscape: Rectangle { horizontal-stretch: 1; height: 40px; }
+                    if root.next_episode_button_available: next_episode_button := IconBtn {
+                        enabled: root.footer_next_enabled;
+                        accessible-role: button;
+                        accessible-label: @tr("Next episode");
+                        accessible-enabled: root.footer_next_enabled;
+                        accessible-action-default => { if root.guard_osd_control() { root.choose_footer_next(); } }
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
+                        focused: root.kb_active && root.kb_idx == 16 && root.open_popup == 0;
+                        clicked => {
+                            if !root.guard_osd_control() { return; }
+                            root.kb_active = false; root.kb_idx = 16;
+                            root.choose_footer_next();
+                        }
+                        Image {
+                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            width: 26px; height: 26px;
+                            source: @image-url("../../assets/icons/player/skip-forward.svg");
+                            colorize: Theme.current.text_bright;
+                        }
+                    }
                     // Subtitle button + popup anchored above it (right edge
                     // flush with the button, 8px gap). Wide only: on narrow
                     // layouts track selection lives in the settings panel.
@@ -3424,28 +3446,6 @@ export component PlayerOverlay {
                             root.settings_page = 4; root.open_popup = 4;
                         }
                         Text { text: PartyBridge.active ? PlaybackSpeed.label(PartyBridge.target_speed) : Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    if root.next_episode_button_available: next_episode_button := IconBtn {
-                        enabled: root.footer_next_enabled;
-                        accessible-role: button;
-                        accessible-label: @tr("Next episode");
-                        accessible-enabled: root.footer_next_enabled;
-                        accessible-action-default => { if root.guard_osd_control() { root.choose_footer_next(); } }
-                        base: Theme.current.player_control;
-                        border-width: self.focused ? 2px : 1px;
-                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
-                        focused: root.kb_active && root.kb_idx == 16 && root.open_popup == 0;
-                        clicked => {
-                            if !root.guard_osd_control() { return; }
-                            root.kb_active = false; root.kb_idx = 16;
-                            root.choose_footer_next();
-                        }
-                        Image {
-                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            width: 26px; height: 26px;
-                            source: @image-url("../../assets/icons/player/skip-forward.svg");
-                            colorize: Theme.current.text_bright;
-                        }
                     }
                     if !InterfaceStyle.tv: screenshot_button := Rectangle {
                         width: 40px; height: 40px; border-radius: 10px;
