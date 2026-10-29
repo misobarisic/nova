@@ -892,6 +892,8 @@ filter pills and Library Grid/List and Search/Close controls use 140 ms
 Page transitions. Hover/press follows `Anim.hover_fast`; focus rings and actions
 remain immediate. Disabling a motion category cancels its current tween so it
 cannot replay after re-enable. Smart-collection selection preserves rule rows.
+Dropdown closed/popup surfaces fade with hover feedback; the popup is-open
+state drives its chevron turn while opening, dismissal and selection stay immediate.
 
 
 > When adding a UI property/callback: declare it in the page component **and**

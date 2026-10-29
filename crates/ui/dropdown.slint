@@ -1,4 +1,5 @@
-import { Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { Theme, Anim, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { FeedbackProgress } from "feedback-motion.slint";
 import { ControlTouchArea } from "control-input.slint";
 
 // Touch-friendly dropdown replacing std-widgets ComboBox.
@@ -75,9 +76,11 @@ export component Dropdown inherits Rectangle {
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: InterfaceStyle.tv && closed_scope.has-focus ? 2px : 1px;
     border-color: InterfaceStyle.tv && closed_scope.has-focus ? Theme.current.focus_ring : Theme.current.control_border;
+    hover_feedback := FeedbackProgress { active: touch.feedback-active && root.enabled; motion: Anim.enabled && Anim.hover; duration: Anim.hover_fast; }
+    open_feedback := FeedbackProgress { active: popup.is-open; }
     background: root.prominent
-        ? (touch.feedback-active && root.enabled ? Theme.current.settings_control_hover : Theme.current.settings_control)
-        : (touch.feedback-active && root.enabled ? Theme.current.input_hover : Theme.current.popup);
+        ? Theme.current.settings_control_hover.mix(Theme.current.settings_control, hover_feedback.value)
+        : Theme.current.input_hover.mix(Theme.current.popup, hover_feedback.value);
 
     HorizontalLayout {
         padding-left: 12px;
@@ -95,11 +98,11 @@ export component Dropdown inherits Rectangle {
 
         if !root.prominent: Rectangle {
             width: 12px; height: 100%;
-            IcChevronDown { width: 12px; height: 12px; y: (parent.height - self.height) / 2; fill: Theme.current.text_muted; }
+            IcChevronDown { width: 12px; height: 12px; y: (parent.height - self.height) / 2; fill: Theme.current.text_muted; transform-rotation: open_feedback.value * 180deg; }
         }
         if root.prominent: Rectangle {
             width: 18px; height: 100%;
-            IcChevronDown { width: 18px; height: 18px; y: (parent.height - self.height) / 2; fill: Theme.current.text_secondary; }
+            IcChevronDown { width: 18px; height: 18px; y: (parent.height - self.height) / 2; fill: Theme.current.text_secondary; transform-rotation: open_feedback.value * 180deg; }
         }
     }
 
@@ -223,7 +226,9 @@ export component Dropdown inherits Rectangle {
                             border-radius: root.prominent ? 10px : 4px;
                             border-width: InterfaceStyle.tv && index == root.popup-index ? 2px : 0px;
                             border-color: Theme.current.focus_ring;
-                            background: index == root.current-index ? Theme.current.selection_wash : (item_touch.feedback-active ? Theme.current.control_hover : transparent);
+                            row_hover := FeedbackProgress { active: item_touch.feedback-active; motion: Anim.enabled && Anim.hover; duration: Anim.hover_fast; }
+                            row_selection := FeedbackProgress { active: index == root.current-index; }
+                            background: Theme.current.selection_wash.mix(Theme.current.control_hover.mix(transparent, row_hover.value), row_selection.value);
 
                             HorizontalLayout {
                                 padding-left: 8px;
@@ -231,7 +236,7 @@ export component Dropdown inherits Rectangle {
 
                                 Text {
                                     text: root.text_at(index);
-                                    color: root.prominent && index == root.current-index ? Theme.current.accent_soft : Theme.current.text_primary;
+                                    color: Theme.current.accent_soft.mix(Theme.current.text_primary, root.prominent ? row_selection.value : 0);
                                     font-size: InterfaceStyle.tv ? 20px : root.prominent ? 14px : 13px;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
