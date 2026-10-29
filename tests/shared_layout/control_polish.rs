@@ -228,3 +228,59 @@ fn calendar_selection_fades_in_retained_date_controls_with_immediate_picks() {
     tick(&app, 200);
     assert!(fill.computed_opacity() > 0.99);
 }
+
+#[test]
+fn detail_body_fade_retargets_tabs_and_snaps_when_page_motion_is_disabled() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::detail_body_fade_retargets_tabs_and_snaps_when_page_motion_is_disabled"
+    )) {
+        return;
+    }
+    let app = setup();
+    app.set_modal_visible(true);
+    app.set_modal_episodes(true);
+    app.set_selected_title("A series".into());
+    app.set_season_names(Rc::new(VecModel::from(vec!["Season 1".into()])).into());
+    app.set_episode_rows(
+        Rc::new(VecModel::from(vec![nova::EpisodeRow {
+            text: "Episode 1".into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.set_episode_total(1);
+    app.show().unwrap();
+    tick(&app, 300);
+    app.global::<nova::Anim>().set_transitions(true);
+    app.set_detail_tab(3);
+    assert_eq!(app.get_detail_tab(), 3);
+    tick(&app, 60);
+    let opacity = element(&app, "DetailPage::body_content").computed_opacity();
+    assert!(
+        opacity > 0.01 && opacity < 0.99,
+        "new body has an intermediate entrance frame: {opacity}"
+    );
+    app.set_detail_tab(0);
+    tick(&app, 40);
+    assert!(element(&app, "DetailPage::body_content").computed_opacity() < 0.99);
+    app.global::<nova::Anim>().set_transitions(false);
+    tick(&app, 10);
+    assert!(element(&app, "DetailPage::body_content").computed_opacity() > 0.99);
+    app.global::<nova::Anim>().set_transitions(true);
+    tick(&app, 10);
+    assert!(
+        element(&app, "DetailPage::body_content").computed_opacity() > 0.99,
+        "re-enabling page motion must not revive the previous entrance"
+    );
+    tick(&app, 250);
+    assert!(element(&app, "DetailPage::body_content").computed_opacity() > 0.99);
+    app.set_detail_tab(3);
+    tick(&app, 40);
+    app.global::<nova::Anim>().set_enabled(false);
+    tick(&app, 10);
+    assert!(element(&app, "DetailPage::body_content").computed_opacity() > 0.99);
+    app.global::<nova::Anim>().set_enabled(true);
+    tick(&app, 10);
+    assert!(element(&app, "DetailPage::body_content").computed_opacity() > 0.99);
+}

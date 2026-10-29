@@ -4,6 +4,7 @@ import { CatalogGroupingBridge, DetailInfo, InterfaceStyle, Theme, TrackingLinkR
 
 import { OfflineBridge, QueueBridge, DetailContent, DetailBridge, CalendarBridge } from "@NovaUiShared";
 import { TitleArtwork } from "title-artwork.slint";
+import { FeedbackProgress } from "feedback-motion.slint";
 import { DetailExtrasPanel } from "detail-extras.slint";
 
 
@@ -12,6 +13,28 @@ import { MenuSheet } from "menusheet.slint";
 import { TrackingButton } from "tracking-controls.slint";
 import { IcPlay, IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 
+
+// Only Detail needs a body entrance. Keep this out of the shared driver so
+// tuning a page transition does not rebuild every control consumer.
+component ContentEntrance inherits Rectangle {
+    width: 0px; height: 0px; visible: false;
+    in property <int> revision;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <bool> ready: true;
+    out property <float> value: root.motion ? fade.value : 1;
+    fade := FeedbackProgress {
+        active: root.ready;
+        motion: root.motion && root.ready;
+        duration: Anim.transition_fade;
+    }
+    changed revision => {
+        if root.motion { root.ready = false; reveal.start(); }
+    }
+    changed motion => { if !root.motion { reveal.stop(); root.ready = true; } }
+    // Mount the new body at its actual size before fading it in. No outgoing
+    // tree is retained and navigation/focus remain immediate.
+    reveal := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.ready = true; } }
+}
 
 // Circular, text-free icon button for the detail top bar (back, library,
 // categories). The caller drops the icon (and any badge) in as a child; the
@@ -200,6 +223,7 @@ export component DetailPage {
     in-out property <[string]> selected_genre_list: [];
     // Content tabs: 0 = Overview, 3 = Episodes. Tracking is a separate page.
     in-out property <int> detail_tab: 0;
+    body_fade := ContentEntrance { revision: root.detail_tab; }
     in-out property <string> episode_filter: "";
     in-out property <bool> in_library: false;
     in property <int> library_save_request: 0;
@@ -1250,8 +1274,9 @@ export component DetailPage {
                     }
 
                     // ---- Body: full-width content ---------------------
-                    HorizontalLayout {
+                    body_content := HorizontalLayout {
                         width: 100%;
+                        opacity: body_fade.value;
 
                         // Keep short content packed at the top. min-width 0
                         // prevents long stream labels from widening the page.
