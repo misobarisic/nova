@@ -46,6 +46,51 @@ fn disk_variants(dir: &Path) -> Vec<(PathBuf, DiskVariant)> {
 }
 
 #[test]
+fn local_cache_probe_never_joins_or_fails_an_active_download() {
+    let _serial = serial();
+    let dir = scratch("local-cache-priority");
+    let url = "https://unit.test/local-cache-priority";
+    let settings = settings();
+    let image_use = ImageUse::Fixed(Some(480));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_settings = settings.clone();
+    let download = std::thread::spawn(move || {
+        cached_pixels_with(&worker_dir, url, image_use, &worker_settings, || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Some(source_image(20, 30, false))
+        })
+    });
+    started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(
+        cached_display_pixels_at(&dir, url, image_use, &settings, LoadEpoch::capture()).is_none(),
+        "a cache miss must return while HTTP is still blocked"
+    );
+    release_tx.send(()).unwrap();
+    assert!(
+        download.join().unwrap().is_some(),
+        "the probe must not publish a failed flight to the downloader"
+    );
+    decoded_cache_clear();
+    let restored =
+        cached_display_pixels_at(&dir, url, image_use, &settings, LoadEpoch::capture()).unwrap();
+    assert_eq!((restored.width(), restored.height()), (20, 30));
+    assert!(
+        cached_display_pixels_at(
+            &dir,
+            url,
+            ImageUse::Fixed(Some(120)),
+            &settings,
+            LoadEpoch::capture()
+        )
+        .is_none(),
+        "a local probe must still respect the complete processing recipe"
+    );
+}
+
+#[test]
 fn presets_fixed_override_original_aspect_ratio_no_upscale_and_buffer_lengths() {
     let _serial = serial();
     let settings = settings();

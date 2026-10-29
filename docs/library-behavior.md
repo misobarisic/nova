@@ -220,6 +220,11 @@ replaces its row, preventing its old index from acting on a different show.
   Grid/list selection, search visibility/query and sort order survive detail
   navigation in AppWindow; these controls do not add persisted settings.
 - Posters paint from the decoded cache, placeholders until loaded.
+  Viewport changes are coalesced over 32 ms, including the final stationary
+  position and short scrolls. Only visible/preload rows start image work, with
+  at most four Library network requests at once. Decoded rows paint immediately;
+  two separate disk-only lanes restore stored posters while network requests
+  are busy. Distant textures are released.
   Badge/progress updates patch rows in place — no model rebuild, so loading
   posters are never interrupted. If progress changes filter membership, the
   model is rebuilt so displayed indices keep matching the visible entries.

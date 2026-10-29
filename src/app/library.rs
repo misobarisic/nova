@@ -1,6 +1,5 @@
 //! My Library: entries, categories and persistence.
 use super::media_identity::{IdentityIndex, TitleInventory, TitleKey};
-use super::posters::LibraryPosterRequest;
 use super::*;
 
 /// Presentation-only groups. The earliest saved physical source remains the
@@ -443,14 +442,6 @@ impl Bridge {
         self.migrate_viewing_activity();
         let card_snapshots = self.library_card_snapshots();
         self.remember_library_cards(&card_snapshots);
-        let poster_requests: Vec<LibraryPosterRequest> = card_snapshots
-            .iter()
-            .map(|snapshot| LibraryPosterRequest {
-                id: snapshot.id.clone(),
-                type_: snapshot.type_.clone(),
-                poster_url: snapshot.poster_url.clone(),
-            })
-            .collect();
         // Search and sorting replace the model frequently. Retain decoded
         // artwork by identity so existing titles do not flash placeholders.
         let artwork: HashMap<String, MediaCard> = self
@@ -490,7 +481,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_library(Rc::new(VecModel::from(cards)).into());
         }
-        self.dispatch_library_posters(&poster_requests);
+        self.dispatch_library_posters();
     }
 
     /// Project display fields from current entries and borrowed progress.
@@ -1777,24 +1768,16 @@ impl Bridge {
                 })
             })
         {
-            let mut requests = Vec::new();
             for (index, snapshot) in cards.into_iter().enumerate() {
-                if let Some(mut card) = model.row_data(index) {
-                    if !card.is_loaded {
-                        requests.push(LibraryPosterRequest {
-                            id: snapshot.id.clone(),
-                            type_: snapshot.type_.clone(),
-                            poster_url: snapshot.poster_url.clone(),
-                        });
-                    }
-                    if update_library_card_progress(&mut card, &snapshot) {
-                        model.set_row_data(index, card);
-                    }
+                if let Some(mut card) = model.row_data(index)
+                    && update_library_card_progress(&mut card, &snapshot)
+                {
+                    model.set_row_data(index, card);
                 }
             }
             // Retained identities can still have failed artwork. Revisiting
             // Library must retry those rows even when no model rebuild is needed.
-            self.dispatch_library_posters(&requests);
+            self.dispatch_library_posters();
             return;
         }
         let artwork: HashMap<_, _> = model
@@ -1807,27 +1790,12 @@ impl Bridge {
                 )
             })
             .collect();
-        let requests = cards
-            .iter()
-            .map(|snapshot| LibraryPosterRequest {
-                id: snapshot.id.clone(),
-                type_: snapshot.type_.clone(),
-                poster_url: snapshot.poster_url.clone(),
-            })
-            .collect::<Vec<_>>();
         let rows = cards
             .into_iter()
             .map(|snapshot| {
                 let poster = artwork
                     .get(&(snapshot.id.clone(), snapshot.poster_url.clone()))
-                    .cloned()
-                    .or_else(|| {
-                        decoded_cache_get(&image_cache_key(
-                            &snapshot.poster_url,
-                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
-                        ))
-                        .map(Image::from_rgba8)
-                    });
+                    .cloned();
                 let is_loaded = poster.is_some();
                 MediaCard {
                     id: snapshot.id.into(),
@@ -1848,7 +1816,7 @@ impl Bridge {
             })
             .collect::<Vec<_>>();
         app.set_library(Rc::new(VecModel::from(rows)).into());
-        self.dispatch_library_posters(&requests);
+        self.dispatch_library_posters();
     }
 }
 

@@ -584,6 +584,10 @@ impl Bridge {
     /// work goes on the high-priority channel so it jumps ahead of the
     /// background full-grid sweep.
     pub(super) fn fetch_card_poster(&self, library: bool, index: usize, url: String) {
+        if library {
+            self.dispatch_library_posters();
+            return;
+        }
         let display_key = (!library)
             .then(|| {
                 self.shared
@@ -945,22 +949,137 @@ impl Bridge {
         self.queue_detail_thumbnails(false, false, true);
     }
 
-    /// Load posters for the library grid off the UI thread: cached entries
-    /// decode quickly, misses are downloaded once and file-cached. Updates
-    /// are dropped if the card changed/vanished while the fetch ran.
-    pub(super) fn dispatch_library_posters(&self, entries: &[LibraryPosterRequest]) {
+    /// Disk-only work has its own two lanes. Slow HTTP requests for a previous
+    /// viewport must not hold up posters already stored on this device.
+    fn try_library_poster_cache(&self, entry: &LibraryPosterRequest) -> bool {
+        let key = (
+            entry.type_.clone(),
+            entry.id.clone(),
+            image_cache_key(
+                &entry.poster_url,
+                ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+            ),
+        );
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state
+                .library_poster_inflight
+                .iter()
+                .any(|(_, _, url)| *url == entry.poster_url)
+            {
+                return false;
+            }
+            if !state.cache_settings.cache_images
+                || state.library_poster_cache_checked.contains(&key)
+            {
+                return false;
+            }
+            if state.library_poster_cache_inflight.len() >= 2
+                || !state.library_poster_cache_inflight.insert(key.clone())
+            {
+                return true;
+            }
+        }
+        let bridge = self.clone();
+        let entry = entry.clone();
+        let revision = image_settings_revision();
+        thread::spawn(move || {
+            let pixels = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                nova_media::cache::cached_display_pixels(
+                    &entry.poster_url,
+                    ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                )
+            }))
+            .ok()
+            .flatten();
+            let _ = profiles::invoke_from_event_loop(move || {
+                let mut state = bridge.shared.lock().unwrap();
+                state.library_poster_cache_inflight.remove(&key);
+                let current = revision == image_settings_revision()
+                    && key.2
+                        == image_cache_key(
+                            &entry.poster_url,
+                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                        );
+                if current {
+                    state.library_poster_cache_checked.insert(key);
+                }
+                let window = state.library_poster_window.unwrap_or((0, 31));
+                drop(state);
+                if current
+                    && let Some(pixels) = pixels
+                    && let Some(app) = bridge.app()
+                {
+                    let model = app.get_library();
+                    let indices = requested_poster_indices(&model, &entry.id, &entry.poster_url)
+                        .into_iter()
+                        .filter(|index| *index >= window.0 && *index <= window.1)
+                        .collect::<Vec<_>>();
+                    paint_poster_rows(
+                        &model,
+                        &indices,
+                        &entry.id,
+                        &entry.poster_url,
+                        &Image::from_rgba8(pixels),
+                    );
+                }
+                bridge.dispatch_library_posters();
+            });
+        });
+        true
+    }
+
+    /// Only the current viewport may start work. Cached pixels paint before
+    /// the worker limit is considered, so returning to a row never waits for
+    /// unrelated network requests that were already running during a fling.
+    pub(super) fn dispatch_library_posters(&self) {
         let Some(app) = self.app() else { return };
         let model = app.get_library();
-        for entry in entries {
-            if model.iter().any(|row| {
-                row.id.as_str() == entry.id
-                    && row.poster_path.as_str() == entry.poster_url
-                    && row.is_loaded
-            }) {
+        if model.row_count() == 0 {
+            return;
+        }
+        let (first, last, identities) = {
+            let mut state = self.shared.lock().unwrap();
+            state
+                .library_poster_failures
+                .retain(|_, failed| failed.elapsed() < Duration::from_secs(30));
+            let count = model.row_count().min(state.library_displayed.len());
+            if count == 0 {
+                return;
+            }
+            let (first, last) = state.library_poster_window.unwrap_or((0, 31));
+            let last = last.min(count - 1);
+            let first = first.min(last);
+            (first, last, state.library_displayed[first..=last].to_vec())
+        };
+        let center = first + (last - first) / 2;
+        let mut indices = (first..=last).collect::<Vec<_>>();
+        indices.sort_by_key(|index| index.abs_diff(center));
+        for index in indices {
+            let Some(row) = model.row_data(index).filter(|row| !row.is_loaded) else {
+                continue;
+            };
+            let (type_, id) = &identities[index - first];
+            if row.id.as_str() != id {
+                continue;
+            }
+            let entry = LibraryPosterRequest {
+                id: id.clone(),
+                type_: type_.clone(),
+                poster_url: row.poster_path.to_string(),
+            };
+            if let Some(pixels) = decoded_cache_get(&image_cache_key(
+                &entry.poster_url,
+                ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+            )) {
+                app.invoke_set_library_poster(index as i32, Image::from_rgba8(pixels));
                 continue;
             }
             if entry.poster_url.is_empty() {
                 self.recover_library_artwork(&entry.id, "");
+                continue;
+            }
+            if self.try_library_poster_cache(&entry) {
                 continue;
             }
             let url = entry.poster_url.clone();
@@ -968,7 +1087,16 @@ impl Bridge {
             let key = (entry.type_.clone(), id.clone(), url.clone());
             let queued = {
                 let mut state = self.shared.lock().unwrap();
-                library_poster_request_ready(&state, entry)
+                state.library_poster_inflight.len() < 4
+                    && !state
+                        .library_poster_inflight
+                        .iter()
+                        .any(|(_, _, pending_url)| *pending_url == url)
+                    && !state
+                        .library_poster_failures
+                        .get(&key)
+                        .is_some_and(|failed| failed.elapsed() < Duration::from_secs(30))
+                    && library_poster_request_ready(&state, &entry)
                     && state.library_poster_inflight.insert(key.clone())
             };
             if !queued {
@@ -976,35 +1104,78 @@ impl Bridge {
             }
             let bridge = self.clone();
             let image_revision = image_settings_revision();
-            let entry_for_retry = entry.clone();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = crate::app::profiles::invoke_from_event_loop(move || {
                     let mut state = bridge.shared.lock().unwrap();
                     state.library_poster_inflight.remove(&key);
+                    if pixels.is_none() {
+                        state
+                            .library_poster_failures
+                            .insert(key.clone(), std::time::Instant::now());
+                    } else {
+                        state.library_poster_failures.remove(&key);
+                    }
                     let current = state.entries.iter().any(|entry| {
                         entry.type_ == key.0 && entry.id == id && entry.poster_url == url
                     });
+                    let window = state.library_poster_window.unwrap_or((0, 31));
                     drop(state);
-                    if !current {
-                        return;
+                    if current
+                        && image_settings_revision() == image_revision
+                        && let Some(app) = bridge.app()
+                    {
+                        let model = app.get_library();
+                        // Resolve current identity after filter changes, and
+                        // never reattach textures to rows scrolled out of view.
+                        let indices = requested_poster_indices(&model, &id, &url)
+                            .into_iter()
+                            .filter(|index| *index >= window.0 && *index <= window.1)
+                            .collect::<Vec<_>>();
+                        if let Some(pixels) = pixels {
+                            paint_poster_rows(
+                                &model,
+                                &indices,
+                                &id,
+                                &url,
+                                &Image::from_rgba8(pixels),
+                            );
+                        } else {
+                            bridge.recover_library_artwork(&id, &url);
+                        }
                     }
-                    if image_settings_revision() != image_revision {
-                        bridge.dispatch_library_posters(&[entry_for_retry]);
-                        return;
-                    }
-                    let Some(app) = bridge.app() else { return };
-                    let model = app.get_library();
-                    // Filtering/progress refreshes can reorder the model while
-                    // decoding. Resolve the current row, and reject old URLs.
-                    let indices = requested_poster_indices(&model, &id, &url);
-                    if let Some(pixels) = pixels {
-                        paint_poster_rows(&model, &indices, &id, &url, &Image::from_rgba8(pixels));
-                    } else {
-                        bridge.recover_library_artwork(&id, &url);
-                    }
+                    bridge.dispatch_library_posters();
                 });
             });
         }
+    }
+
+    pub(super) fn library_poster_visible_range(&self, first: usize, last: usize) {
+        let Some(app) = self.app() else { return };
+        let previous = {
+            let mut state = self.shared.lock().unwrap();
+            let previous = state.library_poster_window.replace((first, last));
+            if previous != Some((first, last)) {
+                state.library_poster_cache_checked.clear();
+            }
+            previous
+        };
+        if let Some((old_first, old_last)) = previous {
+            let keep_first = first.saturating_sub(UNLOAD_EXTRA_CARDS);
+            let keep_last = last.saturating_add(UNLOAD_EXTRA_CARDS);
+            let model = app.get_library();
+            for index in old_first.saturating_sub(UNLOAD_EXTRA_CARDS)
+                ..=old_last
+                    .saturating_add(UNLOAD_EXTRA_CARDS)
+                    .min(model.row_count().saturating_sub(1))
+            {
+                if (index < keep_first || index > keep_last)
+                    && model.row_data(index).is_some_and(|row| row.is_loaded)
+                {
+                    app.invoke_clear_library_poster(index as i32, Image::default());
+                }
+            }
+        }
+        self.dispatch_library_posters();
     }
 
     /// Old saved URLs can expire even when episodes/header text are cached.
@@ -1915,6 +2086,183 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
 #[cfg(test)]
 mod discover_artwork_tests {
     use super::*;
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn library_viewport_cache_bypasses_busy_workers_and_requests_stay_bounded() {
+        const ROOT: &str = "NOVA_LIBRARY_POSTER_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-library-posters-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root).env("XDG_CACHE_HOME", root.join("cache"))
+                .args(["--exact", "app::posters::discover_artwork_tests::library_viewport_cache_bypasses_busy_workers_and_requests_stay_bounded", "--nocapture"])
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        // Keep these four local requests blocked until the assertions finish.
+        // No addon or public network endpoint is involved in this fixture.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let entries = (0..120).map(|number| serde_json::from_value::<LibraryEntry>(serde_json::json!({
+            "id":format!("show-{number}"), "type_":"series", "name":format!("Show {number}"), "poster_url":format!("{base}/{number}.png")
+        })).unwrap()).collect::<Vec<_>>();
+        app.set_library(
+            Rc::new(VecModel::from(
+                entries
+                    .iter()
+                    .map(|entry| MediaCard {
+                        id: entry.id.clone().into(),
+                        poster_path: entry.poster_url.clone().into(),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.library_displayed = entries
+                .iter()
+                .map(|entry| (entry.type_.clone(), entry.id.clone()))
+                .collect();
+            state.entries = entries.clone();
+            state.library_poster_window = Some((90, 99));
+            state.library_poster_inflight = (0..4)
+                .map(|number| ("series".into(), format!("busy-{number}"), "busy".into()))
+                .collect();
+            state.library_poster_cache_checked = (91..=99)
+                .filter(|number| *number != 95)
+                .map(|number| {
+                    (
+                        "series".into(),
+                        format!("show-{number}"),
+                        image_cache_key(
+                            &entries[number].poster_url,
+                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                        ),
+                    )
+                })
+                .collect();
+        }
+        let mut png = std::io::Cursor::new(vec![]);
+        image::DynamicImage::new_rgba8(2, 3)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        assert!(
+            nova_media::cache::cached_pixels_with(
+                &poster_cache_dir(),
+                &entries[95].poster_url,
+                ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                &nova_config::active_cache_settings(),
+                || Some(png.into_inner())
+            )
+            .is_some()
+        );
+        decoded_cache_clear();
+        let pixels = SharedPixelBuffer::<Rgba8Pixel>::new(2, 3);
+        for number in [0, 90] {
+            decoded_cache_insert(
+                &image_cache_key(
+                    &entries[number].poster_url,
+                    ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                ),
+                pixels.clone(),
+            );
+        }
+        bridge.dispatch_library_posters();
+        assert!(
+            app.get_library().row_data(90).unwrap().is_loaded,
+            "cache hit must paint despite four blocked workers"
+        );
+        assert!(
+            !app.get_library().row_data(0).unwrap().is_loaded,
+            "offscreen cache hits must not allocate textures"
+        );
+        let started = std::time::Instant::now();
+        let weak = app.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(10),
+            move || {
+                if weak
+                    .upgrade()
+                    .unwrap()
+                    .get_library()
+                    .row_data(95)
+                    .unwrap()
+                    .is_loaded
+                    || started.elapsed() > Duration::from_secs(3)
+                {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        app.run().unwrap();
+        timer.stop();
+        assert!(
+            app.get_library().row_data(95).unwrap().is_loaded,
+            "disk hit must bypass the four blocked network lanes too"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .library_poster_inflight
+            .clear();
+        bridge.dispatch_library_posters();
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(
+                state.library_poster_inflight.len(),
+                4,
+                "large viewport still has a four-worker ceiling"
+            );
+            assert!(
+                state
+                    .library_poster_inflight
+                    .iter()
+                    .all(|(_, id, _)| (91..=99).any(|number| *id == format!("show-{number}")))
+            );
+        }
+        bridge.library_poster_visible_range(0, 5);
+        assert!(
+            app.get_library().row_data(0).unwrap().is_loaded,
+            "returning viewport wins over stale requests"
+        );
+        assert!(
+            !app.get_library().row_data(90).unwrap().is_loaded,
+            "old viewport releases its texture"
+        );
+        assert_eq!(
+            bridge.shared.lock().unwrap().library_poster_inflight.len(),
+            4
+        );
+        drop(listener);
+    }
     #[cfg(feature = "desktop")]
     #[test]
     fn artwork_recovery_and_detail_refresh() {

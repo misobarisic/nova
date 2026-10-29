@@ -399,7 +399,26 @@ export component LibraryPage {
     // Model refreshes preserve the user's viewport. The saved keyboard card
     // can be far from a later pointer scroll; only explicit keyboard movement
     // should reveal it via kb_follow.
-    changed library => { root.kb_clamp_idx(); }
+    changed library => { root.kb_clamp_idx(); root.schedule_posters(); }
+    changed cols => { root.schedule_posters(); }
+    changed row_stride => { root.schedule_posters(); }
+    // Coalesce motion to one small viewport update per frame pair. Unlike a
+    // distance threshold, the final update always runs after a short scroll.
+    function schedule_posters() { if !poster_window.running { poster_window.start(); } }
+    poster_window := Timer {
+        interval: 32ms;
+        running: true;
+        triggered => {
+            self.stop();
+            if root.library.length > 0 && root.row_stride > 0px && root.cols > 0 {
+                let first_row = Math.max(0, Math.floor((root.header_cover - lib_scroll.content-y - root.grid-top) / root.row_stride));
+                let rows = Math.ceil(lib_scroll.visible-height / root.row_stride);
+                let first = Math.min(root.library.length - 1, Math.max(0, (first_row - 2) * root.cols));
+                let last = Math.min(root.library.length - 1, (first_row + rows + 2) * root.cols - 1);
+                root.library_visible_range(first, Math.max(first, last));
+            }
+        }
+    }
     changed category_index => { root.kb_f = root.category_index; }
     property <length> selected_filter_left: 0px;
     property <length> selected_filter_width: 0px;
@@ -547,24 +566,10 @@ export component LibraryPage {
                     // native Flickable animation, so a two-way link keeps
                     // restoration and coast updates in sync without feedback.
                     content-y <=> root.scroll_y;
-                    // Preload + unload reporting (Bridge::visible_range):
-                    // same row_stride and ±2-row preload window as
-                    // Discover; see DiscoverPage for the scheme.
-                    property <int> reported_first: -1000000;
                     changed content-y => {
-                        if (root.library.length > 0) {
-                            let first_row = Math.max(0, Math.floor((root.header_cover - self.content-y - root.grid-top) / root.row_stride));
-                            let vis_rows = Math.ceil(self.visible-height / root.row_stride);
-                            let first_idx = Math.max(0, (first_row - 2) * root.cols);
-                            let last_idx = Math.min(root.library.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
-                            if (self.reported_first < -100000) {
-                                self.reported_first = first_idx;
-                            } else if (Math.abs(first_idx - self.reported_first) > 48) {
-                                self.reported_first = first_idx;
-                                root.library_visible_range(first_idx, last_idx);
-                            }
-                        }
+                        root.schedule_posters();
                     }
+                    changed visible-height => { root.schedule_posters(); }
 
                     // Left align the grid like the reference, including when
                     // only one title is saved; wide screens add more columns.

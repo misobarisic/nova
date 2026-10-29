@@ -345,6 +345,10 @@ struct Shared {
     pending_artwork_recovery:
         HashMap<(String, String, String, String), Vec<posters::CatalogPosterRepair>>,
     library_poster_inflight: HashSet<(String, String, String)>,
+    library_poster_window: Option<(usize, usize)>,
+    library_poster_failures: HashMap<(String, String, String), std::time::Instant>,
+    library_poster_cache_inflight: HashSet<(String, String, String)>,
+    library_poster_cache_checked: HashSet<(String, String, String)>,
     /// Session-only refresh state, independent of legacy header/episode caches.
     metadata_prefetch: HashMap<(String, String), MetadataPrefetch>,
     /// Aggregate background episode-inventory budget (revision, next batch).

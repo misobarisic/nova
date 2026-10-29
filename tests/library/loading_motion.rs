@@ -47,6 +47,36 @@ fn setup() -> (nova::AppWindow, Rc<RefCell<Vec<(i32, i32)>>>) {
 }
 
 #[test]
+fn short_scroll_and_stationary_return_report_posters() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::short_scroll_and_stationary_return_report_posters"
+    )) {
+        return;
+    }
+    let (app, windows) = setup();
+    assert!(
+        !windows.borrow().is_empty(),
+        "initial viewport must load without scrolling"
+    );
+    let before = windows.borrow().len();
+    app.set_library_scroll_y(-1600.0);
+    settle(&app, 8);
+    assert!(
+        windows.borrow().len() > before,
+        "a scroll of fewer than 48 cards must still report"
+    );
+    assert!(windows.borrow().last().unwrap().0 > 0);
+    app.set_library_scroll_y(0.0);
+    settle(&app, 8);
+    assert_eq!(
+        windows.borrow().last().unwrap().0,
+        0,
+        "stationary return must restore unloaded posters"
+    );
+}
+
+#[test]
 fn fast_mouse_and_touch_flicks_decelerate_without_opening_cards() {
     if !crate::isolation::run(concat!(
         module_path!(),

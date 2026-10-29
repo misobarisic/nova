@@ -927,7 +927,6 @@ fn load_recipe(
 ) -> Option<Pixels> {
     let recipe = ImageRecipe::resolve(image_use, settings);
     let disk = settings.cache_images;
-    let key = image_recipe_cache_key(url, recipe);
     {
         let _mutation = CACHE_MUTATION.read().unwrap();
         let lock = url_lock(dir, url);
@@ -941,29 +940,8 @@ fn load_recipe(
             }
             return Some(newer);
         }
-        if let Some(pixels) = decoded_cache_get(&key)
-            && (!disk || register_cached_use_locked(dir, url, image_use, recipe))
-        {
+        if let Some(pixels) = cached_recipe_locked(dir, url, image_use, recipe, disk) {
             return Some(pixels);
-        }
-        // A memory entry from a disk-disabled load has no source bytes to save.
-        // Fetch its source rather than recompressing the decoded lossy image.
-        if disk {
-            let path = recipe_disk_path(dir, url, recipe);
-            if let Some(mut variant) = read_variant(&path)
-                && let Some(pixels) = variant_pixels(&variant, url, recipe)
-            {
-                if !variant.metadata.uses.contains(&image_use) {
-                    variant.metadata.uses.push(image_use);
-                    if write_variant(&path, &variant).is_ok() {
-                        invalidate_registration_snapshots(dir, url, &[image_use]);
-                        retire_use_history(dir, url, &[image_use], &path);
-                    }
-                }
-                gc::record_existing(&path, &variant.metadata);
-                decoded_cache_insert(&key, pixels.clone());
-                return Some(pixels);
-            }
         }
     }
     let processed = download().and_then(|bytes| process_source(bytes, recipe));
@@ -979,6 +957,71 @@ fn load_recipe(
         return None;
     }
     publish_processed_locked(dir, url, &[image_use], disk, ticket, processed)
+}
+
+fn cached_recipe_locked(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    recipe: ImageRecipe,
+    disk: bool,
+) -> Option<Pixels> {
+    let key = image_recipe_cache_key(url, recipe);
+    if let Some(pixels) = decoded_cache_get(&key)
+        && (!disk || register_cached_use_locked(dir, url, image_use, recipe))
+    {
+        return Some(pixels);
+    }
+    // A memory entry from a disk-disabled load has no source bytes to save.
+    // Fetch its source rather than recompressing the decoded lossy image.
+    if disk {
+        let path = recipe_disk_path(dir, url, recipe);
+        if let Some(mut variant) = read_variant(&path)
+            && let Some(pixels) = variant_pixels(&variant, url, recipe)
+        {
+            if !variant.metadata.uses.contains(&image_use) {
+                variant.metadata.uses.push(image_use);
+                if write_variant(&path, &variant).is_ok() {
+                    invalidate_registration_snapshots(dir, url, &[image_use]);
+                    retire_use_history(dir, url, &[image_use], &path);
+                }
+            }
+            gc::record_existing(&path, &variant.metadata);
+            decoded_cache_insert(&key, pixels.clone());
+            return Some(pixels);
+        }
+    }
+    None
+}
+
+/// Restore local pixels without joining or creating a network flight. A miss
+/// is not a failed download and must never be published to HTTP subscribers.
+pub fn cached_display_pixels(url: &str, image_use: impl Into<ImageUse>) -> Option<Pixels> {
+    let epoch = LoadEpoch::capture();
+    let (settings, revision) = nova_config::image_settings_snapshot();
+    if revision != epoch.settings {
+        return None;
+    }
+    let dir = poster_cache_dir();
+    cached_display_pixels_at(&dir, url, image_use.into(), &settings, epoch)
+}
+
+fn cached_display_pixels_at(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    settings: &CacheSettings,
+    epoch: LoadEpoch,
+) -> Option<Pixels> {
+    let recipe = ImageRecipe::resolve(image_use, settings);
+    let _mutation = CACHE_MUTATION.read().unwrap();
+    let lock = url_lock(dir, url);
+    let _guard = lock.lock().unwrap();
+    if !epoch.current() {
+        return None;
+    }
+    let pixels = cached_recipe_locked(dir, url, image_use, recipe, settings.cache_images);
+    if epoch.current() { pixels } else { None }
 }
 
 pub fn display_pixels(url: &str, image_use: impl Into<ImageUse>) -> Option<Pixels> {

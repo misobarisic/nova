@@ -392,6 +392,10 @@ impl Bridge {
         if f > l {
             return;
         }
+        if library {
+            self.library_poster_visible_range(f, l);
+            return;
+        }
         if !library && !searching {
             {
                 let mut state = self.shared.lock().unwrap();
