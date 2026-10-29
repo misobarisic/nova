@@ -1,0 +1,102 @@
+// Library gestures keep direct manipulation but bound the release velocity.
+// Native Flickable's unbounded fling can cross hundreds of saved titles.
+export component LibraryScroll inherits Rectangle {
+    clip: true;
+    in property <length> content-height;
+    in-out property <length> content-y;
+    out property <length> visible-width: root.width;
+    out property <length> visible-height: root.height;
+    private property <length> drag_origin;
+    private property <length> previous_y;
+    private property <duration> previous_tick;
+    // Logical pixels per second, represented as a length for Slint arithmetic.
+    private property <length> velocity;
+    private property <duration> coast_tick;
+    private property <bool> dragging;
+    private property <Point> active_press;
+
+    function bounded(y: length) -> length {
+        return Math.clamp(y, Math.min(0px, root.height - root.content-height), 0px);
+    }
+    public function stop() { coast.stop(); root.velocity = 0px; }
+    changed content-height => {
+        root.stop();
+        if root.content-height > 0px && root.height > 0px { root.content-y = root.bounded(root.content-y); }
+    }
+    changed height => {
+        root.stop();
+        if root.content-height > 0px && root.height > 0px { root.content-y = root.bounded(root.content-y); }
+    }
+    coast := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            let now = animation-tick();
+            let elapsed = Math.clamp(now - root.coast_tick, 1ms, 48ms);
+            root.coast_tick = now;
+            let speed = Math.max(0px, Math.abs(root.velocity) - 9000px * elapsed / 1000ms);
+            let next_velocity = root.velocity < 0px ? -speed : speed;
+            let next = root.bounded(root.content-y + (root.velocity + next_velocity) / 2 * elapsed / 1000ms);
+            if speed == 0px || next == root.content-y { self.stop(); }
+            root.content-y = next;
+            root.velocity = next_velocity;
+        }
+    }
+    // The outer TouchArea handles wheel events only after child controls have
+    // had their turn. The gesture recognizer preserves taps and cancels card
+    // presses when a drag is recognized, including native touchscreen input.
+    TouchArea {
+        width: 100%; height: 100%;
+        scroll-event(event) => {
+            root.stop();
+            root.content-y = root.bounded(root.content-y + event.delta-y * 0.6);
+            accept
+        }
+        swipe := SwipeGestureHandler {
+            width: 100%; height: 100%;
+            handle-swipe-up: root.content-height > root.height;
+            handle-swipe-down: root.content-height > root.height;
+            changed pressed-position => {
+                // Changed handlers may run after moved/swiped. Do not let a
+                // delayed press notification cancel that gesture's new coast.
+                if self.pressed-position != root.active_press { root.stop(); }
+            }
+            moved => {
+                if self.swiping {
+                    // Initialize synchronously: a deferred `changed swiping`
+                    // handler would count the first movement twice.
+                    if !root.dragging {
+                        root.stop();
+                        root.dragging = true;
+                        root.active_press = self.pressed-position;
+                        root.drag_origin = root.content-y;
+                        root.previous_y = self.pressed-position.y;
+                        root.previous_tick = animation-tick();
+                    }
+                    let now = animation-tick();
+                    let elapsed = now - root.previous_tick;
+                    if elapsed > 0ms {
+                        let limit = root.height * 4;
+                        root.velocity = Math.clamp((self.current-position.y - root.previous_y) * 1000ms / elapsed, -limit, limit);
+                    }
+                    root.content-y = root.bounded(root.drag_origin + self.current-position.y - self.pressed-position.y);
+                    root.previous_y = self.current-position.y;
+                    root.previous_tick = now;
+                }
+            }
+            swiped => {
+                root.dragging = false;
+                if animation-tick() - root.previous_tick <= 80ms && Math.abs(root.velocity) > 40px {
+                    root.coast_tick = animation-tick();
+                    coast.start();
+                }
+            }
+            cancelled => { root.dragging = false; root.stop(); }
+            Rectangle {
+                x: 0px; y: root.content-y;
+                width: root.width; height: root.content-height;
+                @children
+            }
+        }
+    }
+}

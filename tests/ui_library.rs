@@ -20,3 +20,6 @@ mod scroll_restore;
 
 #[path = "library/search_animation.rs"]
 mod search_animation;
+
+#[path = "library/loading_motion.rs"]
+mod loading_motion;

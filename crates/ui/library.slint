@@ -1,5 +1,5 @@
 import { SmartCollectionsBridge, InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
-import { ScrollView } from "scrollview.slint";
+import { LibraryScroll } from "library-scroll.slint";
 import { SmartCollectionsRail } from "smart-collections.slint";
 import { PillButton } from "settings-controls.slint";
 
@@ -336,22 +336,21 @@ export component LibraryPage {
     property <bool> restoring_viewport: true;
     property <bool> keyboard_scroll_pending: false;
     function prepare_keyboard_scroll() {
+        lib_scroll.stop();
         if root.restoring_viewport {
             if root.grid_ready { root.restoring_viewport = false; }
             else { root.keyboard_scroll_pending = true; }
         }
     }
     changed list_view => {
+        lib_scroll.stop();
         if !root.restoring_viewport {
             lib_scroll.content-y = 0px;
             root.kb_follow();
         }
     }
-    changed scroll_y => {
-        if (Math.abs(lib_scroll.content-y - root.scroll_y) > 0.5px) {
-            lib_scroll.content-y = root.scroll_y;
-        }
-    }
+    changed query => { lib_scroll.stop(); }
+    changed sort_index => { lib_scroll.stop(); }
     // The grid has actually measured: `cols`/`item-width` are the divisors of
     // every row calculation below, so a scroll adjustment must not run while
     // they are still 0 — it would compute a nonsense row and jump the listing.
@@ -416,6 +415,7 @@ export component LibraryPage {
         }
     }
     changed library_filter_category => {
+        lib_scroll.stop();
         if (root.library_filter_category == "") {
             root.kb_f = -1;
         }
@@ -539,22 +539,19 @@ export component LibraryPage {
                     }
                 }
 
-                lib_scroll := ScrollView {
+                lib_scroll := LibraryScroll {
                     width: 100%;
                     height: 100%;
-                    // Touch devices scroll by dragging (there is no
-                    // wheel): the fluent-style ScrollView disables
-                    // drag-pan by default, so opt in explicitly.
-                    mouse-drag-pan-enabled: true;
-                    // One-way mirror, see DiscoverPage: Flickable drops
-                    // viewport bindings on press, so mirror explicitly.
-                    init => { self.content-y = root.scroll_y; }
+                    content-height: library_content.preferred-height;
+                    // This scroller owns a normal property rather than a
+                    // native Flickable animation, so a two-way link keeps
+                    // restoration and coast updates in sync without feedback.
+                    content-y <=> root.scroll_y;
                     // Preload + unload reporting (Bridge::visible_range):
                     // same row_stride and ±2-row preload window as
                     // Discover; see DiscoverPage for the scheme.
                     property <int> reported_first: -1000000;
                     changed content-y => {
-                        root.scroll_y = self.content-y;
                         if (root.library.length > 0) {
                             let first_row = Math.max(0, Math.floor((root.header_cover - self.content-y - root.grid-top) / root.row_stride));
                             let vis_rows = Math.ceil(self.visible-height / root.row_stride);
@@ -571,7 +568,7 @@ export component LibraryPage {
 
                     // Left align the grid like the reference, including when
                     // only one title is saved; wide screens add more columns.
-                    HorizontalLayout {
+                    library_content := HorizontalLayout {
                         width: 100%;
                         // Keep the first row's pointer hover lift inside the
                         // ScrollView's clip, just like Home's landing rails.
