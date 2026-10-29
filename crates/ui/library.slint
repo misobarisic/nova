@@ -3,6 +3,7 @@ import { LibraryScroll } from "library-scroll.slint";
 import { FeedbackProgress } from "feedback-motion.slint";
 import { SmartCollectionsRail } from "smart-collections.slint";
 import { PillButton } from "settings-controls.slint";
+import { Spinner } from "std-widgets.slint";
 
 import { KbMark } from "kbnav.slint";
 import { Dropdown } from "dropdown.slint";
@@ -27,6 +28,25 @@ export component LibraryPage {
     preferred-height: 100%;
 
     in-out property <[MediaCard]> library: [];
+    in property <bool> view_loading: false;
+    private property <bool> results_motion: Anim.enabled && Anim.transitions;
+    private property <float> results_alpha: root.view_loading ? 0 : 1;
+    private property <length> results_offset: root.view_loading ? 12px : 0px;
+    // Match Search's incoming result fade/rise. Hiding the outgoing grid is
+    // immediate; poster updates and ordinary scrolling never replay this.
+    animate results_alpha { duration: root.view_loading || !root.results_motion ? 0ms : Anim.transition_fade; easing: ease-out; }
+    animate results_offset { duration: root.view_loading || !root.results_motion ? 0ms : Anim.transition_slide; easing: ease-out; }
+    changed results_motion => {
+        if !root.results_motion {
+            root.results_alpha = root.view_loading ? 0 : 1;
+            root.results_offset = root.view_loading ? 12px : 0px;
+        }
+    }
+    changed view_loading => {
+        root.results_alpha = root.view_loading ? 0 : 1;
+        root.results_offset = root.view_loading ? 12px : 0px;
+        if root.view_loading { lib_scroll.stop(); root.close_menu(); }
+    }
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> library_filter_category: "";
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
@@ -114,7 +134,7 @@ export component LibraryPage {
     }
 
     function open_lib_menu(idx: int, watched: bool) {
-        if (idx < 0 || idx >= root.library.length) { return; }
+        if (root.view_loading || idx < 0 || idx >= root.library.length) { return; }
         root.menu_idx = idx;
         root.menu_id = root.library[idx].id;
         root.menu_watched = watched;
@@ -326,7 +346,7 @@ export component LibraryPage {
         } else if (root.kb_zone == 1) {
             root.kb_cycle_filter(1);
         } else {
-            if (root.kb_idx >= 0 && root.kb_idx < root.library.length) {
+            if (!root.view_loading && root.kb_idx >= 0 && root.kb_idx < root.library.length) {
                 root.library_item_picked(root.kb_idx);
             }
         }
@@ -575,6 +595,9 @@ export component LibraryPage {
                     // Left align the grid like the reference, including when
                     // only one title is saved; wide screens add more columns.
                     library_content := HorizontalLayout {
+                        visible: !root.view_loading;
+                        opacity: root.results_motion ? root.results_alpha : 1;
+                        y: root.results_motion ? root.results_offset : 0px;
                         width: 100%;
                         // Keep the first row's pointer hover lift inside the
                         // ScrollView's clip, just like Home's landing rails.
@@ -1114,7 +1137,16 @@ export component LibraryPage {
                     background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
                 }
             // Empty state
-            if root.library.length == 0: VerticalLayout {
+            if root.view_loading: Rectangle {
+                y: root.header_cover;
+                width: 100%; height: Math.max(1px, parent.height - root.header_cover);
+                Spinner {
+                    width: self.preferred-width; height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            if !root.view_loading && root.library.length == 0: VerticalLayout {
                 y: root.header_cover;
                 width: 100%;
                 height: Math.max(1px, parent.height - root.header_cover);

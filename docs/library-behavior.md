@@ -250,6 +250,13 @@ replaces its row, preventing its old index from acting on a different show.
   the hitbox. Search/Close icons crossfade independently of the field reveal.
   These follow Enable animations; hover/press fades separately follow Hover
   effects. Selection, filtering, focus and layout changes remain immediate.
+- A pending filter/search/sort hides its previous cards immediately while
+  retaining their artwork for reuse. A spinner replaces the stale grid until
+  the latest request publishes; the incoming results fade and rise using
+  Search's transition durations. Filter controls remain usable, rapid changes
+  keep the grid hidden until the newest result arrives, and poster updates do
+  not replay the entrance. Disabling animations or page transitions settles
+  the reveal immediately. Empty hints appear only after the request finishes.
 - Column floor comes from Settings → Display (min columns), applied live.
   Grid/list selection, search visibility/query and sort order survive detail
   navigation in AppWindow; these controls do not add persisted settings.

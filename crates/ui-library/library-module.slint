@@ -12,6 +12,7 @@ export component LibraryModule inherits Window {
     page := LibraryPage {
         width: 100%; height: 100%;
         library <=> LibraryBridge.library;
+        view_loading <=> LibraryBridge.view_loading;
         category_rows <=> LibraryBridge.category_rows;
         category_names <=> LibraryBridge.category_names;
         category_labels <=> LibraryBridge.category_labels;
@@ -46,10 +47,10 @@ export component LibraryModule inherits Window {
         more_picked() => { LibraryBridge.more_picked(); }
         about_picked() => { LibraryBridge.about_picked(); }
         library_filter_picked(arg0) => { LibraryBridge.library_filter_picked(arg0); }
-        library_item_picked(arg0) => { LibraryBridge.library_item_picked(arg0); }
-        remove_library_item(arg0) => { LibraryBridge.remove_library_item(arg0); }
-        library_watch_action(arg0, arg1) => { LibraryBridge.library_watch_action(arg0, arg1); }
-        library_status_action(arg0, arg1) => { LibraryBridge.library_status_action(arg0, arg1); }
+        library_item_picked(arg0) => { if !LibraryBridge.view_loading { LibraryBridge.library_item_picked(arg0); } }
+        remove_library_item(arg0) => { if !LibraryBridge.view_loading { LibraryBridge.remove_library_item(arg0); } }
+        library_watch_action(arg0, arg1) => { if !LibraryBridge.view_loading { LibraryBridge.library_watch_action(arg0, arg1); } }
+        library_status_action(arg0, arg1) => { if !LibraryBridge.view_loading { LibraryBridge.library_status_action(arg0, arg1); } }
         library_visible_range(arg0, arg1) => { LibraryBridge.library_visible_range(arg0, arg1); }
     }
 }

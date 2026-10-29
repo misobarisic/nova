@@ -23,6 +23,127 @@ fn toggle(app: &nova::AppWindow) {
     element(app, "library_search_button")
         .mock_single_click(slint::platform::PointerEventButton::Left);
 }
+
+#[test]
+fn pending_filters_hide_stale_cards_then_reveal_new_results_without_replaying_on_posters() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::pending_filters_hide_stale_cards_then_reveal_new_results_without_replaying_on_posters"
+    )) {
+        return;
+    }
+    use slint::{Model, ModelRc, VecModel};
+    use std::{cell::Cell, rc::Rc};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_library(true);
+    let picks = Rc::new(Cell::new(0));
+    let count = picks.clone();
+    app.on_library_item_picked(move |_| count.set(count.get() + 1));
+    let rows = || {
+        ModelRc::new(VecModel::from(vec![nova::MediaCard {
+            id: "saved".into(),
+            title: "Saved title".into(),
+            ..Default::default()
+        }]))
+    };
+    app.set_library(rows());
+    app.show().unwrap();
+    for (width, list) in [(390, false), (1280, false), (390, true), (1280, true)] {
+        app.window().set_size(slint::PhysicalSize::new(width, 844));
+        app.set_library_list_view(list);
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        tick(&app, 400);
+        let content = element(&app, "library_content");
+        let origin = content.absolute_position();
+        let card = element(&app, "library_card");
+        let position = card.absolute_position();
+        let position = slint::LogicalPosition::new(position.x + 20.0, position.y + 20.0);
+        app.set_library_view_loading(true);
+        tick(&app, 10);
+        assert!(
+            ElementHandle::find_by_element_id(&app, "LibraryPage::library_card")
+                .next()
+                .is_none(),
+            "old cards must disappear while pending"
+        );
+        for event in [
+            slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+            slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        assert_eq!(picks.get(), 0, "hidden stale results must not activate");
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "Spinner").count(),
+            1
+        );
+        app.set_library(rows());
+        app.set_library_view_loading(false);
+        tick(&app, 30);
+        assert!(content.computed_opacity() > 0.0 && content.computed_opacity() < 1.0);
+        assert!(
+            content.absolute_position().y > origin.y + 0.5,
+            "incoming results rise like Search"
+        );
+        // Another filter selected during its entrance hides immediately.
+        app.set_library_view_loading(true);
+        tick(&app, 10);
+        app.set_library_view_loading(false);
+        tick(&app, 500);
+        assert!((content.computed_opacity() - 1.0).abs() < 0.01);
+        assert!((content.absolute_position().y - origin.y).abs() < 0.5);
+        let model = app.get_library();
+        let mut row = model.row_data(0).unwrap();
+        row.is_loaded = true;
+        model.set_row_data(0, row);
+        tick(&app, 20);
+        assert!(
+            (content.computed_opacity() - 1.0).abs() < 0.01,
+            "poster updates must not replay entrance"
+        );
+        // Category and master switches both settle immediately and stay settled
+        // after re-enabling, including the following filter's transition.
+        for master in [false, true] {
+            app.set_library_view_loading(true);
+            tick(&app, 10);
+            app.set_library_view_loading(false);
+            tick(&app, 30);
+            if master {
+                app.global::<nova::Anim>().set_enabled(false);
+            } else {
+                app.global::<nova::Anim>().set_transitions(false);
+            }
+            tick(&app, 10);
+            assert!((content.computed_opacity() - 1.0).abs() < 0.01);
+            app.global::<nova::Anim>().set_enabled(true);
+            app.global::<nova::Anim>().set_transitions(true);
+            tick(&app, 10);
+            assert!((content.computed_opacity() - 1.0).abs() < 0.01);
+        }
+    }
+    app.set_library_view_loading(true);
+    app.set_library(Default::default());
+    tick(&app, 10);
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "Spinner").count(),
+        1
+    );
+    app.set_library_view_loading(false);
+    tick(&app, 400);
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "Spinner").count(),
+        0
+    );
+}
 #[test]
 fn search_expands_and_fades_then_closes_with_motion_settings_respected() {
     if !crate::isolation::run(concat!(

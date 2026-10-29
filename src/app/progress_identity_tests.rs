@@ -59,6 +59,23 @@ fn settled(before: u64) {
     persistence::flush().unwrap();
 }
 
+fn settled_library_view(app: &AppWindow) {
+    let started = std::time::Instant::now();
+    let weak = app.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(3),
+        move || {
+            assert!(started.elapsed() < Duration::from_secs(20));
+            if !weak.upgrade().unwrap().get_library_view_loading() {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    slint::run_event_loop().unwrap();
+}
+
 #[test]
 fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership() {
     const ROOT: &str = "NOVA_PROGRESS_IDENTITY_TEST_ROOT";
@@ -160,6 +177,33 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     assert!(
         !app.get_show_home() && !app.get_show_library(),
         "late data cannot replay navigation after leaving Home"
+    );
+    let retained = app.get_library();
+    for query in ["superseded search", "no matching saved title"] {
+        app.set_library_query(query.into());
+        bridge.request_library_view();
+        assert!(
+            app.get_library_view_loading(),
+            "pending results hide synchronously"
+        );
+        assert!(
+            app.get_library() == retained,
+            "keep artwork while hiding stale rows"
+        );
+    }
+    settled_library_view(&app);
+    assert_eq!(
+        app.get_library().row_count(),
+        0,
+        "publish only the latest requested view"
+    );
+    app.set_library_query("".into());
+    bridge.request_library_view();
+    assert!(app.get_library_view_loading());
+    settled_library_view(&app);
+    assert!(
+        app.get_library().row_count() > 0,
+        "warm views settle the loading state too"
     );
     let painted = app.get_library().row_data(0).unwrap().id.to_string();
     // The current filter can change before its next publication. Activation

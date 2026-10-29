@@ -3,6 +3,7 @@ import { LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, MediaCard, Cat
 // These aliases exist once for the lifetime of AppWindow, avoiding remount cycles.
 export component LibraryBindings {
     in-out property <[MediaCard]> library <=> LibraryBridge.library;
+    in-out property <bool> view_loading <=> LibraryBridge.view_loading;
     in-out property <[CategoryRow]> category_rows <=> LibraryBridge.category_rows;
     in-out property <[string]> category_names <=> LibraryBridge.category_names;
     in-out property <[string]> category_labels <=> LibraryBridge.category_labels;

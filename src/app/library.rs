@@ -1835,6 +1835,11 @@ impl Bridge {
         let Some(view) = super::progress_projection::View::capture(self) else {
             return;
         };
+        // Retain the model's artwork, but immediately stop presenting its old
+        // rows as results for the newly selected filter/search/sort.
+        if let Some(app) = self.app() {
+            app.set_library_view_loading(true);
+        }
         let owner = self.shared.lock().unwrap().library_view.clone();
         {
             let mut pending = owner.0.lock().unwrap();
@@ -1938,6 +1943,9 @@ impl Bridge {
                         return;
                     }
                     bridge.publish_progress_cards(cards);
+                    if let Some(app) = bridge.app() {
+                        app.set_library_view_loading(false);
+                    }
                 });
                 if queued.is_err() {
                     owner.0.lock().unwrap().running = false;

@@ -444,6 +444,7 @@ export component AppWindow inherits Window {
     }
     LibraryBindings {
         library <=> root.library;
+        view_loading <=> root.library_view_loading;
         category_rows <=> root.category_rows;
         category_names <=> root.library_category_names;
         category_labels <=> root.library_category_labels;
@@ -1753,6 +1754,7 @@ export component AppWindow inherits Window {
     in-out property <string> home_catalog_add_error: "";
     // Library filter: empty string = show all, otherwise filter by category.
     in-out property <string> library_filter_category: "";
+    in-out property <bool> library_view_loading: false;
     in-out property <string> library_query: "";
     in-out property <int> library_sort: 0;
     in-out property <bool> library_list_view: false;
