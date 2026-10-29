@@ -458,8 +458,7 @@ export component SettingsAddonsModule inherits Window {
                         for caption[i] in [@tr("All"), @tr("Catalogs"), @tr("Streams"), @tr("Subtitles")]: LibraryFilterChip {
                             label: caption;
                             selected: SettingsBridge.addon_browser_filter == i;
-                            border-width: self.has-focus || (root.browse_keyboard && SettingsBridge.addon_browser_control == 4 && SettingsBridge.addon_browser_filter == i) ? 2px : 1px;
-                            border-color: self.has-focus || (root.browse_keyboard && SettingsBridge.addon_browser_control == 4 && SettingsBridge.addon_browser_filter == i) ? Theme.current.focus_ring : self.selected ? Theme.current.accent : Theme.current.border_strong;
+                            focused: root.browse_keyboard && SettingsBridge.addon_browser_control == 4 && SettingsBridge.addon_browser_filter == i;
                             keyboard-focusable: true; arrow-navigation: true;
                             touch_feedback: SettingsBridge.is_android;
                             picked => { SettingsBridge.addon_browser_filter = i; SettingsBridge.addon_browser_filter_changed(); }

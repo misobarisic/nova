@@ -216,6 +216,11 @@ replaces its row, preventing its old index from acting on a different show.
   settings make the expansion immediate. On narrow screens the field opens
   on its own row below the sort/view/search-icon row; wide layouts keep it
   above the filters.
+- Category/saved-collection pills and Grid/List selection use 140 ms control
+  feedback; pill fill, border, text colour and weight crossfade without moving
+  the hitbox. Search/Close icons crossfade independently of the field reveal.
+  These follow Enable animations; hover/press fades separately follow Hover
+  effects. Selection, filtering, focus and layout changes remain immediate.
 - Column floor comes from Settings → Display (min columns), applied live.
   Grid/list selection, search visibility/query and sort order survive detail
   navigation in AppWindow; these controls do not add persisted settings.

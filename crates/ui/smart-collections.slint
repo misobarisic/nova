@@ -62,11 +62,10 @@ export component SmartCollectionsRail inherits Rectangle {
             LibraryFilterChip {
                 property <bool> keyboard_selected: scope.has-focus && root.choice == 0;
                 changed keyboard_selected => { if self.keyboard_selected { root.reveal(self.x, self.width); } }
-                label: @tr("All titles"); selected: SmartCollectionsBridge.selected_id == ""; touch_feedback: root.touch_menus; border-width: scope.has-focus && root.choice == 0 ? 2px : 1px; border-color: scope.has-focus && root.choice == 0 ? Theme.current.focus_ring : Theme.current.border_strong; picked => { SmartCollectionsBridge.selected(""); } reveal(left, w) => { root.reveal(left, w); } }
+                label: @tr("All titles"); selected: SmartCollectionsBridge.selected_id == ""; touch_feedback: root.touch_menus; focused: scope.has-focus && root.choice == 0; picked => { SmartCollectionsBridge.selected(""); } reveal(left, w) => { root.reveal(left, w); } }
             for rule[index] in SmartCollectionsBridge.rows: LibraryFilterChip {
                 label: rule.name; selected: SmartCollectionsBridge.selected_id == rule.id; touch_feedback: root.touch_menus;
-                border-width: scope.has-focus && root.choice == index + 1 ? 2px : 1px;
-                border-color: scope.has-focus && root.choice == index + 1 ? Theme.current.focus_ring : Theme.current.border_strong;
+                focused: scope.has-focus && root.choice == index + 1;
                 private property <length> viewport_width: rail.width;
                 changed viewport_width => { if self.selected { root.reveal(self.x, self.width); } }
                 property <bool> keyboard_selected: scope.has-focus && root.choice == index + 1;

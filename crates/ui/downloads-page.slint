@@ -525,7 +525,7 @@ export component DownloadsPage inherits Rectangle {
                             property <bool> tv-highlight: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index;
                             changed tv-highlight => { if self.tv-highlight { root.reveal_filter(self.x, self.width); } }
                             border-width: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index ? 3px : 1px;
-                            border-color: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index ? Theme.current.focus_ring : Theme.current.border_strong;
+                            focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index;
                             picked => { root.filter_changed(index); }
                             reveal(left, w) => { root.reveal_filter(left, w); }
                         }

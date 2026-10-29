@@ -1,5 +1,6 @@
 import { SmartCollectionsBridge, InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
 import { LibraryScroll } from "library-scroll.slint";
+import { FeedbackProgress } from "feedback-motion.slint";
 import { SmartCollectionsRail } from "smart-collections.slint";
 import { PillButton } from "settings-controls.slint";
 
@@ -1043,7 +1044,8 @@ export component LibraryPage {
                                             x: mode ? 44px : 0px;
                                             width: 44px;
                                             height: InterfaceStyle.tv ? 56px : 44px;
-                                            background: root.list_view == mode ? Theme.current.selection_wash : transparent;
+                                            mode_feedback := FeedbackProgress { active: root.list_view == mode; }
+                                            background: Theme.current.selection_wash.mix(transparent, mode_feedback.value);
                                             border-width: root.kb_active && root.kb_zone == 3 && root.toolbar_control == (mode ? 2 : 1) ? 3px : 0px;
                                             border-color: Theme.current.focus_ring;
                                             border-radius: InterfaceStyle.tv ? 22px : 0px;
@@ -1053,13 +1055,13 @@ export component LibraryPage {
                                                 x: 12px; y: 12px; width: 20px; height: 20px;
                                                 viewbox-width: 24; viewbox-height: 24;
                                                 commands: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z";
-                                                fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                                fill: Theme.current.accent_vivid.mix(Theme.current.text_hint, mode_feedback.value);
                                             }
                                             if mode: Path {
                                                 x: 12px; y: 12px; width: 20px; height: 20px;
                                                 viewbox-width: 24; viewbox-height: 24;
                                                 commands: "M3 4h3v3H3zm5 0h13v3H8zM3 10h3v3H3zm5 0h13v3H8zM3 16h3v3H3zm5 0h13v3H8z";
-                                                fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                                fill: Theme.current.accent_vivid.mix(Theme.current.text_hint, mode_feedback.value);
                                             }
                                             TouchArea {
                                                 mouse-cursor: pointer;
@@ -1073,16 +1075,23 @@ export component LibraryPage {
                                         border-radius: 22px;
                                         border-width: 1px;
                                         border-color: root.kb_active && root.kb_zone == 3 && root.toolbar_control == 3 ? Theme.current.focus_ring : Theme.current.border_strong;
-                                        background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
+                                        search_feedback := FeedbackProgress { active: root.search_open; }
+                                        search_hover := FeedbackProgress {
+                                            active: root.touch_menus ? search_button_touch.pressed : search_button_touch.has-hover;
+                                            motion: Anim.enabled && Anim.hover; duration: Anim.hover_fast;
+                                        }
+                                        background: Theme.current.control_hover.mix(Theme.current.hero_control, search_hover.value);
                                         accessible-role: button;
                                         accessible-label: @tr("Search library");
-                                        if !root.search_open: IcSearch {
+                                        search_icon := IcSearch {
                                             x: 12px; y: 12px; width: 20px; height: 20px;
                                             fill: Theme.current.text_primary;
+                                            opacity: 1 - search_feedback.value;
                                         }
-                                        if root.search_open: IcClose {
+                                        search_close_icon := IcClose {
                                             x: 12px; y: 12px; width: 20px; height: 20px;
                                             fill: Theme.current.text_primary;
+                                            opacity: search_feedback.value;
                                         }
                                         search_button_touch := TouchArea {
                                             mouse-cursor: pointer;

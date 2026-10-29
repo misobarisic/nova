@@ -1,8 +1,10 @@
 import { Theme, Anim, InterfaceStyle } from "@NovaUiShared";
+import { FeedbackProgress } from "feedback-motion.slint";
 
 export component LibraryFilterChip inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
+    in property <bool> focused: false;
     in property <bool> touch_feedback: false;
     in property <bool> keyboard-focusable: false;
     // Standalone rails can follow selection with native focus; Library keeps
@@ -24,12 +26,21 @@ export component LibraryFilterChip inherits Rectangle {
     // Selection changes weight, but must not shift adjacent pills or their rail.
     width: chip_measure.preferred-width + 28px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    border-width: chip_focus.has-focus ? 2px : 1px;
-    border-color: chip_focus.has-focus ? Theme.current.focus_ring : root.selected ? Theme.current.accent : Theme.current.border_strong;
+    private property <bool> focus-visible: root.focused || chip_focus.has-focus;
+    border-width: root.focus-visible ? 2px : 1px;
+    border-color: root.focus-visible ? Theme.current.focus_ring : Theme.current.border_strong;
     // Android keeps the touch pointer over the last tapped item after Up.
     // Pressed clears on release/cancel; desktop still has real hover.
-    background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? chip_touch.pressed : chip_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
-    animate background { duration: Anim.hover_fast; }
+    selection := FeedbackProgress { active: root.selected; }
+    hover := FeedbackProgress { active: root.touch_feedback ? chip_touch.pressed : chip_touch.has-hover; motion: Anim.enabled && Anim.hover; duration: Anim.hover_fast; }
+    background: Theme.current.control_hover.mix(Theme.current.hero_control, hover.value);
+    selection_fill := Rectangle {
+        width: 100%; height: 100%; border-radius: root.border-radius;
+        background: Theme.current.primary_button;
+        border-width: root.border-width;
+        border-color: root.focus-visible ? Theme.current.focus_ring : Theme.current.accent;
+        opacity: selection.value;
+    }
     accessible-role: button;
     accessible-label: root.label;
     chip_measure := Text {
@@ -37,11 +48,24 @@ export component LibraryFilterChip inherits Rectangle {
         text: root.label; font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
     }
     chip_text := Text {
+        width: 100%; height: 100%;
         text: root.label;
-        color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
-        animate color { duration: Anim.hover_fast; }
+        color: Theme.current.text_secondary;
+        opacity: 1 - selection.value;
+        accessible-role: none;
         font-size: InterfaceStyle.tv ? 20px : 13px;
-        font-weight: root.selected ? 600 : 400;
+        font-weight: 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    chip_selected_text := Text {
+        width: 100%; height: 100%;
+        text: root.label;
+        color: Theme.current.on_accent;
+        opacity: selection.value;
+        accessible-role: none;
+        font-size: InterfaceStyle.tv ? 20px : 13px;
+        font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
     }

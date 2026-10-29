@@ -96,19 +96,34 @@ impl Bridge {
         if selected_rule.is_none() {
             collections.set_selected_id(SharedString::default());
         }
-        collections.set_rows(
-            Rc::new(VecModel::from(
-                rules
-                    .into_iter()
-                    .take(MAX_COLLECTIONS)
-                    .map(|rule| SmartCollectionRow {
-                        id: rule.id.into(),
-                        name: rule.name.into(),
-                    })
-                    .collect::<Vec<_>>(),
-            ))
-            .into(),
-        );
+        let rows = rules
+            .into_iter()
+            .take(MAX_COLLECTIONS)
+            .map(|rule| SmartCollectionRow {
+                id: rule.id.into(),
+                name: rule.name.into(),
+            })
+            .collect::<Vec<_>>();
+        let current = collections.get_rows();
+        // A selection changes the shared selected_id, not the collection
+        // inventory. Keep these delegates alive so their feedback can tween.
+        if let Some(model) = current
+            .as_any()
+            .downcast_ref::<VecModel<SmartCollectionRow>>()
+            && model.row_count() == rows.len()
+            && rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| model.row_data(index).is_some_and(|old| old.id == row.id))
+        {
+            for (index, row) in rows.into_iter().enumerate() {
+                if model.row_data(index).is_none_or(|old| old.name != row.name) {
+                    model.set_row_data(index, row);
+                }
+            }
+        } else {
+            collections.set_rows(Rc::new(VecModel::from(rows)).into());
+        }
     }
 
     pub(super) fn selected_smart_collection(&self) -> Option<SmartCollection> {
