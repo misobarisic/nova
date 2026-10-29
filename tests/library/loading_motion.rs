@@ -136,12 +136,12 @@ fn fast_mouse_and_touch_flicks_decelerate_without_opening_cards() {
             TouchPhase::Ended,
             touch,
         );
-        settle(&app, 75);
+        settle(&app, 180);
         let after = app.get_library_scroll_y();
         assert!(after < at_release - 10.0, "a quick flick still coasts");
         assert!(
-            at_release - after < scroll.size().height * 1.4,
-            "a flick must remain bounded to a little over one viewport"
+            at_release - after < scroll.size().height * if touch_profile { 3.0 } else { 1.4 },
+            "a flick must remain bounded to a few viewports"
         );
         settle(&app, 10);
         assert!(
@@ -226,19 +226,48 @@ fn gentle_android_flick_keeps_momentum_through_duplicate_samples_but_a_hold_stop
                 phase,
             }))
     };
-    for held in [false, true] {
+    for (held, lift_offset, reverse, coalesced) in [
+        (false, 0.0, false, false),
+        (false, 2.0, false, false),
+        (false, -6.0, false, false),
+        (true, 0.0, false, false),
+        (false, 0.0, true, false),
+        (false, 0.0, false, true),
+    ] {
         app.set_library_scroll_y(-1000.0);
         settle(&app, 8);
         touch(start, TouchPhase::Started);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
         for step in 1..=6 {
-            touch(
-                LogicalPosition::new(start.x, start.y - step as f32 * 12.0),
-                TouchPhase::Moved,
-            );
+            if coalesced {
+                // Several native events can arrive between Slint frame ticks.
+                for part in 1..=4 {
+                    touch(
+                        LogicalPosition::new(
+                            start.x,
+                            start.y - ((step - 1) * 12 + part * 3) as f32,
+                        ),
+                        TouchPhase::Moved,
+                    );
+                }
+            } else {
+                touch(
+                    LogicalPosition::new(start.x, start.y - step as f32 * 12.0),
+                    TouchPhase::Moved,
+                );
+            }
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
         }
-        let end = LogicalPosition::new(start.x, start.y - 72.0);
+        let end = LogicalPosition::new(
+            start.x,
+            start.y - if reverse { 48.0 } else { 72.0 + lift_offset },
+        );
+        let direction = if reverse { -1.0 } else { 1.0 };
+        // A tiny final movement must not replace the gesture's recent speed.
+        // A deliberate reversal, however, must coast in the new direction.
+        if lift_offset != 0.0 || reverse {
+            touch(end, TouchPhase::Moved);
+        }
         // Android can repeat an unchanged MOVE just before UP. This should
         // not replace a fresh 600 px/s movement sample with zero velocity.
         touch(end, TouchPhase::Moved);
@@ -259,17 +288,31 @@ fn gentle_android_flick_keeps_momentum_through_duplicate_samples_but_a_hold_stop
             );
         } else {
             assert!(
-                released - after > 45.0,
+                (released - after) * direction > 45.0,
                 "a moderate touch flick needs a visible coast after release"
             );
             settle(&app, 4);
             assert!(
-                app.get_library_scroll_y() < after - 5.0,
+                (after - app.get_library_scroll_y()) * direction > 5.0,
                 "momentum must ease down rather than stop after a few frames"
             );
+            settle(&app, 24);
+            let coasting = app.get_library_scroll_y();
+            settle(&app, 4);
+            assert!(
+                (coasting - app.get_library_scroll_y()) * direction
+                    > if lift_offset < 0.0 { 1.0 } else { 5.0 },
+                "a moderate flick must retain a gradual tail beyond half a second"
+            );
         }
-        settle(&app, 75);
+        settle(&app, 180);
         let stopped = app.get_library_scroll_y();
+        if !held {
+            assert!(
+                (released - stopped) * direction > if lift_offset < 0.0 { 100.0 } else { 180.0 },
+                "a moderate flick should travel a useful distance beyond release"
+            );
+        }
         settle(&app, 10);
         assert!((app.get_library_scroll_y() - stopped).abs() < 0.5);
     }

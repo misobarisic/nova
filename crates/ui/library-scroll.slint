@@ -11,6 +11,12 @@ export component LibraryScroll inherits Rectangle {
     private property <length> drag_origin;
     private property <length> previous_y;
     private property <duration> previous_tick;
+    private property <length> recent_y;
+    private property <duration> recent_tick;
+    private property <length> middle_y;
+    private property <duration> middle_tick;
+    private property <length> older_y;
+    private property <duration> older_tick;
     // Logical pixels per second, represented as a length for Slint arithmetic.
     private property <length> velocity;
     private property <duration> coast_tick;
@@ -21,6 +27,41 @@ export component LibraryScroll inherits Rectangle {
         return Math.clamp(y, Math.min(0px, root.height - root.content-height), 0px);
     }
     public function stop() { coast.stop(); root.velocity = 0px; }
+    function reset_samples(y: length, tick: duration) {
+        root.recent_y = y; root.middle_y = y; root.older_y = y;
+        root.recent_tick = tick; root.middle_tick = tick; root.older_tick = tick;
+    }
+    function sample_velocity(y: length, now: duration) {
+        let elapsed = now - root.previous_tick;
+        if elapsed <= 0ms { return; }
+        if ControlInput.touch-feedback && elapsed > 80ms {
+            root.reset_samples(y, now);
+            root.velocity = 0px;
+            return;
+        }
+        let delta = y - root.previous_y;
+        // A deliberate reversal starts a new velocity window; a tiny lift-off
+        // wobble should not discard the rest of the gesture's movement.
+        if ControlInput.touch-feedback && ((delta < 0px && root.velocity > 0px) || (delta > 0px && root.velocity < 0px)) && Math.abs(delta) > 8px {
+            root.reset_samples(root.previous_y, root.previous_tick);
+        }
+        // Keep a short time window rather than the final event alone. Android
+        // may deliver several MOVE events in one frame or a tiny last movement.
+        let use_older = ControlInput.touch-feedback && now - root.older_tick <= 80ms;
+        let use_middle = ControlInput.touch-feedback && now - root.middle_tick <= 80ms;
+        let anchor_y = use_older ? root.older_y : use_middle ? root.middle_y : ControlInput.touch-feedback ? root.recent_y : root.previous_y;
+        let anchor_tick = use_older ? root.older_tick : use_middle ? root.middle_tick : ControlInput.touch-feedback ? root.recent_tick : root.previous_tick;
+        let sample_time = now - anchor_tick;
+        if sample_time > 0ms {
+            let limit = root.height * 4;
+            root.velocity = Math.clamp((y - anchor_y) * 1000ms / sample_time, -limit, limit);
+        }
+        if ControlInput.touch-feedback && now - root.recent_tick >= 24ms {
+            root.older_y = root.middle_y; root.older_tick = root.middle_tick;
+            root.middle_y = root.recent_y; root.middle_tick = root.recent_tick;
+            root.recent_y = y; root.recent_tick = now;
+        }
+    }
     changed content-height => {
         root.stop();
         if root.content-height > 0px && root.height > 0px { root.content-y = root.bounded(root.content-y); }
@@ -38,9 +79,9 @@ export component LibraryScroll inherits Rectangle {
             root.coast_tick = now;
             // Touch needs a gentle low-speed tail rather than the desktop
             // drag brake. Velocity-dependent friction still bounds a fast
-            // fling to roughly 1.25 viewports after release.
+            // fling to roughly 2.8 viewports after release.
             let friction = ControlInput.touch-feedback
-                ? Math.max(root.height * 1.5, Math.abs(root.velocity) * 3)
+                ? Math.max(root.height * 0.4, Math.abs(root.velocity) * 1.4)
                 : 9000px;
             let speed = Math.max(0px, Math.abs(root.velocity) - friction * elapsed / 1000ms);
             let next_velocity = root.velocity < 0px ? -speed : speed;
@@ -80,14 +121,11 @@ export component LibraryScroll inherits Rectangle {
                         root.drag_origin = root.content-y;
                         root.previous_y = self.pressed-position.y;
                         root.previous_tick = animation-tick();
+                        root.reset_samples(self.current-position.y, root.previous_tick);
                     }
                     let now = animation-tick();
-                    let elapsed = now - root.previous_tick;
                     if self.current-position.y != root.previous_y {
-                        if elapsed > 0ms {
-                            let limit = root.height * 4;
-                            root.velocity = Math.clamp((self.current-position.y - root.previous_y) * 1000ms / elapsed, -limit, limit);
-                        }
+                        root.sample_velocity(self.current-position.y, now);
                         // Some touch drivers repeat the final position just
                         // before Up. Preserve the last real velocity sample;
                         // its age still rejects a genuine hold before release.
