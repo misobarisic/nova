@@ -113,7 +113,8 @@ fn fast_mouse_and_touch_flicks_decelerate_without_opening_cards() {
         .unwrap();
     let p = scroll.absolute_position();
     let start = LogicalPosition::new(p.x + scroll.size().width / 2.0, 550.0);
-    for touch in [false, true] {
+    for (touch_profile, touch) in [(false, false), (true, false), (true, true)] {
+        app.set_touch_menus(touch_profile);
         app.set_library_scroll_y(0.0);
         settle(&app, 8);
         pointer(&app, start, TouchPhase::Started, touch);
@@ -135,12 +136,12 @@ fn fast_mouse_and_touch_flicks_decelerate_without_opening_cards() {
             TouchPhase::Ended,
             touch,
         );
-        settle(&app, 60);
+        settle(&app, 75);
         let after = app.get_library_scroll_y();
         assert!(after < at_release - 10.0, "a quick flick still coasts");
         assert!(
-            at_release - after < 800.0,
-            "a flick must settle within about one screen, not hundreds of entries"
+            at_release - after < scroll.size().height * 1.4,
+            "a flick must remain bounded to a little over one viewport"
         );
         settle(&app, 10);
         assert!(
@@ -197,5 +198,79 @@ fn desktop_wheel_uses_full_delta_immediately_without_added_momentum() {
             (app.get_library_scroll_y() - expected).abs() < 0.5,
             "wheel input must not accumulate an app-generated coast"
         );
+    }
+}
+
+#[test]
+fn gentle_android_flick_keeps_momentum_through_duplicate_samples_but_a_hold_stops_it() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::gentle_android_flick_keeps_momentum_through_duplicate_samples_but_a_hold_stops_it"
+    )) {
+        return;
+    }
+    use i_slint_core::{input::TouchPhase, platform::InternalEvent};
+    let (app, _) = setup();
+    let scroll = ElementHandle::find_by_element_id(&app, "LibraryPage::lib_scroll")
+        .next()
+        .unwrap();
+    let start = LogicalPosition::new(
+        scroll.absolute_position().x + scroll.size().width / 2.0,
+        550.0,
+    );
+    let touch = |position: LogicalPosition, phase| {
+        app.window()
+            .dispatch_event(WindowEvent::internal(InternalEvent::Touch {
+                id: 11,
+                position: i_slint_core::lengths::logical_point_from_api(position),
+                phase,
+            }))
+    };
+    for held in [false, true] {
+        app.set_library_scroll_y(-1000.0);
+        settle(&app, 8);
+        touch(start, TouchPhase::Started);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        for step in 1..=6 {
+            touch(
+                LogicalPosition::new(start.x, start.y - step as f32 * 12.0),
+                TouchPhase::Moved,
+            );
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+        }
+        let end = LogicalPosition::new(start.x, start.y - 72.0);
+        // Android can repeat an unchanged MOVE just before UP. This should
+        // not replace a fresh 600 px/s movement sample with zero velocity.
+        touch(end, TouchPhase::Moved);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(if held {
+            160
+        } else {
+            10
+        }));
+        touch(end, TouchPhase::Moved);
+        let released = app.get_library_scroll_y();
+        touch(end, TouchPhase::Ended);
+        settle(&app, 12);
+        let after = app.get_library_scroll_y();
+        if held {
+            assert!(
+                (after - released).abs() < 0.5,
+                "holding still before release must discard old momentum"
+            );
+        } else {
+            assert!(
+                released - after > 45.0,
+                "a moderate touch flick needs a visible coast after release"
+            );
+            settle(&app, 4);
+            assert!(
+                app.get_library_scroll_y() < after - 5.0,
+                "momentum must ease down rather than stop after a few frames"
+            );
+        }
+        settle(&app, 75);
+        let stopped = app.get_library_scroll_y();
+        settle(&app, 10);
+        assert!((app.get_library_scroll_y() - stopped).abs() < 0.5);
     }
 }

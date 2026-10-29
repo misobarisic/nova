@@ -1,3 +1,5 @@
+import { ControlInput } from "@NovaUiShared";
+
 // Library gestures keep direct manipulation but bound the release velocity.
 // Native Flickable's unbounded fling can cross hundreds of saved titles.
 export component LibraryScroll inherits Rectangle {
@@ -34,7 +36,13 @@ export component LibraryScroll inherits Rectangle {
             let now = animation-tick();
             let elapsed = Math.clamp(now - root.coast_tick, 1ms, 48ms);
             root.coast_tick = now;
-            let speed = Math.max(0px, Math.abs(root.velocity) - 9000px * elapsed / 1000ms);
+            // Touch needs a gentle low-speed tail rather than the desktop
+            // drag brake. Velocity-dependent friction still bounds a fast
+            // fling to roughly 1.25 viewports after release.
+            let friction = ControlInput.touch-feedback
+                ? Math.max(root.height * 1.5, Math.abs(root.velocity) * 3)
+                : 9000px;
+            let speed = Math.max(0px, Math.abs(root.velocity) - friction * elapsed / 1000ms);
             let next_velocity = root.velocity < 0px ? -speed : speed;
             let next = root.bounded(root.content-y + (root.velocity + next_velocity) / 2 * elapsed / 1000ms);
             if speed == 0px || next == root.content-y { self.stop(); }
@@ -75,13 +83,18 @@ export component LibraryScroll inherits Rectangle {
                     }
                     let now = animation-tick();
                     let elapsed = now - root.previous_tick;
-                    if elapsed > 0ms {
-                        let limit = root.height * 4;
-                        root.velocity = Math.clamp((self.current-position.y - root.previous_y) * 1000ms / elapsed, -limit, limit);
+                    if self.current-position.y != root.previous_y {
+                        if elapsed > 0ms {
+                            let limit = root.height * 4;
+                            root.velocity = Math.clamp((self.current-position.y - root.previous_y) * 1000ms / elapsed, -limit, limit);
+                        }
+                        // Some touch drivers repeat the final position just
+                        // before Up. Preserve the last real velocity sample;
+                        // its age still rejects a genuine hold before release.
+                        root.previous_y = self.current-position.y;
+                        root.previous_tick = now;
                     }
                     root.content-y = root.bounded(root.drag_origin + self.current-position.y - self.pressed-position.y);
-                    root.previous_y = self.current-position.y;
-                    root.previous_tick = now;
                 }
             }
             swiped => {
