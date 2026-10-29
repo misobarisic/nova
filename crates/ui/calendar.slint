@@ -6,6 +6,7 @@ import { SideNav } from "sidenav.slint";
 import { PageHeader } from "page-header.slint";
 import { MenuSheet } from "menusheet.slint";
 import { SectionHeader } from "settings-controls.slint";
+import { FeedbackProgress } from "feedback-motion.slint";
 
 
 component PlannerButton inherits Rectangle {
@@ -17,13 +18,15 @@ component PlannerButton inherits Rectangle {
     callback picked();
     height: InterfaceStyle.tv ? 56px : 44px;
     min-width: InterfaceStyle.tv ? 56px : 44px;
-    background: root.selected ? Theme.current.accent : Theme.current.control;
+    selection := FeedbackProgress { active: root.selected; }
+    background: Theme.current.control;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: (scope.has-focus || root.tv-focused) ? 2px : 1px;
     border-color: (scope.has-focus || root.tv-focused) ? Theme.current.text_bright : Theme.current.control_hover;
     accessible-role: button;
     accessible-label: root.label;
-    Text { vertical-stretch: 0; min-width: 0; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; font-size: InterfaceStyle.tv ? 20px : 13px; }
+    selection_fill := Rectangle { width: 100%; height: 100%; background: Theme.current.accent; border-radius: root.border-radius; border-width: root.border-width; border-color: root.border-color; opacity: selection.value; }
+    Text { vertical-stretch: 0; min-width: 0; text: root.label; color: Theme.current.on_accent.mix(Theme.current.text_bright, selection.value); horizontal-alignment: center; vertical-alignment: center; font-size: InterfaceStyle.tv ? 20px : 13px; }
     scope := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
     TouchArea { mouse-cursor: pointer; clicked => { scope.focus(); root.picked(); } }
 }
@@ -40,20 +43,22 @@ component PlannerDay inherits Rectangle {
     min-width: 0px;
     preferred-width: 0px;
     horizontal-stretch: 1;
-    background: root.item.cell.selected ? Theme.current.accent : Theme.current.control;
+    selection := FeedbackProgress { active: root.item.cell.selected; }
+    background: Theme.current.control;
     border-width: root.item.cell.today || (scope.has-focus || root.tv-focused) ? 2px : 1px;
     border-color: root.item.cell.today || (scope.has-focus || root.tv-focused) ? Theme.current.text_bright : Theme.current.control_hover;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     accessible-role: button;
     accessible-label: root.item.weekday + " " + root.item.cell.day;
+    selection_fill := Rectangle { width: 100%; height: 100%; background: Theme.current.accent; border-radius: root.border-radius; border-width: root.border-width; border-color: root.border-color; opacity: selection.value; }
     VerticalLayout {
         padding: root.compact ? 3px : 8px; spacing: 4px;
         if root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.weekday; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center; }
         HorizontalLayout {
-            Text { vertical-stretch: 0; min-width: 0; text: root.item.cell.day; color: root.item.cell.selected ? Theme.current.on_accent : root.item.cell.in_month ? Theme.current.text_bright : Theme.current.text_muted; font-size: InterfaceStyle.tv ? 22px : root.compact ? 12px : 15px; }
-            if root.item.cell.count > 0: Text { vertical-stretch: 0; min-width: 0; text: root.compact ? "•" : root.item.cell.count; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.accent; horizontal-alignment: right; font-size: InterfaceStyle.tv ? 18px : 12px; }
+            Text { vertical-stretch: 0; min-width: 0; text: root.item.cell.day; color: Theme.current.on_accent.mix(root.item.cell.in_month ? Theme.current.text_bright : Theme.current.text_muted, selection.value); font-size: InterfaceStyle.tv ? 22px : root.compact ? 12px : 15px; }
+            if root.item.cell.count > 0: Text { vertical-stretch: 0; min-width: 0; text: root.compact ? "•" : root.item.cell.count; color: Theme.current.on_accent.mix(Theme.current.accent, selection.value); horizontal-alignment: right; font-size: InterfaceStyle.tv ? 18px : 12px; }
         }
-        if !root.compact && !root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.preview; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; overflow: elide; wrap: word-wrap; }
+        if !root.compact && !root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.preview; color: Theme.current.on_accent.mix(Theme.current.text_muted, selection.value); font-size: InterfaceStyle.tv ? 17px : 11px; overflow: elide; wrap: word-wrap; }
         Rectangle { vertical-stretch: 1; }
     }
     scope := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(root.item.cell.epoch); } accept } else { reject } } }

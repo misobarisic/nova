@@ -18,6 +18,31 @@ fn calendar_today_days() -> i64 {
     calendar_day_at(chrono::Local::now())
 }
 
+fn retain_calendar_days(
+    current: slint::ModelRc<CalendarDay>,
+    rows: Vec<CalendarDay>,
+) -> slint::ModelRc<CalendarDay> {
+    if let Some(model) = current.as_any().downcast_ref::<VecModel<CalendarDay>>()
+        && model.row_count() == rows.len()
+        && rows.iter().enumerate().all(|(index, row)| {
+            model
+                .row_data(index)
+                .is_some_and(|old| old.cell.epoch == row.cell.epoch)
+        })
+    {
+        // Date selection/count updates keep their original controls and focus;
+        // navigating to another date inventory still replaces the model.
+        for (index, row) in rows.into_iter().enumerate() {
+            if model.row_data(index).as_ref() != Some(&row) {
+                model.set_row_data(index, row);
+            }
+        }
+        current
+    } else {
+        Rc::new(VecModel::from(rows)).into()
+    }
+}
+
 impl Bridge {
     pub(super) fn show_downloads_page(&self) {
         self.shared
@@ -368,8 +393,8 @@ impl Bridge {
         );
         app.set_calendar_rows(Rc::new(VecModel::from(visible_rows)).into());
         app.set_calendar_later(Rc::new(VecModel::from(later_rows)).into());
-        app.set_calendar_cells(Rc::new(VecModel::from(cells)).into());
-        app.set_calendar_week(Rc::new(VecModel::from(week)).into());
+        app.set_calendar_cells(retain_calendar_days(app.get_calendar_cells(), cells));
+        app.set_calendar_week(retain_calendar_days(app.get_calendar_week(), week));
         let (year, month, _) = civil_from_days(first);
         app.set_calendar_title(
             if app.get_calendar_view() == 1 {
@@ -473,6 +498,33 @@ fn calendar_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn date_selection_updates_retained_controls_and_new_month_replaces_them() {
+        let day = |epoch, selected| CalendarDay {
+            cell: crate::CalCell {
+                epoch,
+                selected,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let first: slint::ModelRc<CalendarDay> =
+            Rc::new(VecModel::from(vec![day(1, true), day(2, false)])).into();
+        let selected = retain_calendar_days(first.clone(), vec![day(1, false), day(2, true)]);
+        assert!(!first.row_data(0).unwrap().cell.selected);
+        assert!(
+            first.row_data(1).unwrap().cell.selected,
+            "date selection must update the retained model rather than recreate the controls"
+        );
+        let next_month =
+            retain_calendar_days(selected.clone(), vec![day(31, true), day(32, false)]);
+        assert_eq!(selected.row_data(0).unwrap().cell.epoch, 1);
+        assert_eq!(
+            next_month.row_data(0).unwrap().cell.epoch,
+            31,
+            "a changed date inventory must not reuse mismatched actions"
+        );
+    }
     fn date(year: i64, month: u32, day: u32) -> i64 {
         days_from_civil(year, month, day)
     }

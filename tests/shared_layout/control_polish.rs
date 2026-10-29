@@ -1,6 +1,6 @@
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{
-    ComponentHandle, VecModel,
+    ComponentHandle, Model, VecModel,
     platform::{PointerEventButton, WindowEvent},
 };
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -165,4 +165,66 @@ fn library_selection_and_search_animate_without_delaying_actions_or_replaying_di
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn calendar_selection_fades_in_retained_date_controls_with_immediate_picks() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::calendar_selection_fades_in_retained_date_controls_with_immediate_picks"
+    )) {
+        return;
+    }
+    let app = setup();
+    app.set_show_calendar(true);
+    app.set_calendar_view(0);
+    let rows = Rc::new(VecModel::from(
+        (0..42)
+            .map(|epoch| nova::CalendarDay {
+                cell: nova::CalCell {
+                    epoch,
+                    day: epoch + 1,
+                    in_month: true,
+                    selected: epoch == 0,
+                    ..Default::default()
+                },
+                weekday: "Mon".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    ));
+    app.set_calendar_cells(rows.clone().into());
+    let picked = Rc::new(Cell::new(-1));
+    let recorded = picked.clone();
+    let model = rows.clone();
+    app.on_calendar_pick(move |day| {
+        recorded.set(day);
+        for index in 0..model.row_count() {
+            let mut row = model.row_data(index).unwrap();
+            row.cell.selected = row.cell.epoch == day;
+            model.set_row_data(index, row);
+        }
+    });
+    app.show().unwrap();
+    tick(&app, 300);
+    let target = button(&app, "Mon 2");
+    let fill = child(&app, &target, "PlannerDay::selection_fill");
+    let geometry = (target.absolute_position(), target.size());
+    assert!(fill.computed_opacity() < 0.01);
+    click(&app, &target);
+    assert_eq!(picked.get(), 1);
+    tick(&app, 50);
+    assert!(fill.computed_opacity() > 0.02 && fill.computed_opacity() < 0.98);
+    assert_eq!((target.absolute_position(), target.size()), geometry);
+    app.global::<nova::Anim>().set_enabled(false);
+    tick(&app, 10);
+    assert!(fill.computed_opacity() > 0.99);
+    app.global::<nova::Anim>().set_enabled(true);
+    tick(&app, 10);
+    assert!(
+        fill.computed_opacity() > 0.99,
+        "date selection must stay settled immediately after re-enable"
+    );
+    tick(&app, 200);
+    assert!(fill.computed_opacity() > 0.99);
 }
