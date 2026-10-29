@@ -2299,7 +2299,7 @@ impl Bridge {
                     .get(&progress_map_key(&c.series_id, &v.id))
                     .is_some_and(|p| p.watched)
             };
-            let badge = continue_badge(started, &c.episode_id, &episodes, is_watched);
+            let badge = continue_badge(&c.series_id, started, &c.episode_id, &episodes, is_watched);
             let art_url = home_card_art_url(&e.poster_url, video, episode_artwork);
             drafts.push(ContinueRowDraft {
                 id: c.series_id.clone(),
@@ -2588,7 +2588,7 @@ impl Bridge {
                     .get(&progress_map_key(&e.id, &v.id))
                     .is_some_and(|p| p.watched)
             };
-            if let Some((i, days)) = next_upcoming_episode(&episodes, is_watched, today) {
+            if let Some((i, days)) = next_upcoming_episode(&e.id, &episodes, is_watched, today) {
                 upcoming.push(UpcomingEntry {
                     series_id: e.id.clone(),
                     type_: e.type_.clone(),
@@ -3702,11 +3702,13 @@ pub(super) fn cal_cells(
 // Upcoming represents a series once, using its nearest announced episode.
 // Catalog episode order is not guaranteed to match the release dates.
 pub(super) fn next_upcoming_episode(
+    series_id: &str,
     episodes: &[Video],
     watched: impl Fn(&Video) -> bool,
     today: i64,
 ) -> Option<(usize, i64)> {
-    let (future, available, available_watched) = upcoming_tally(episodes, watched, today);
+    let (future, available, available_watched) =
+        upcoming_tally(series_id, episodes, watched, today);
     if available == 0 || available_watched < available {
         return None;
     }
@@ -3727,6 +3729,7 @@ pub(super) fn next_upcoming_episode(
 /// progress; `episode_id` the offered episode; `is_watched` resolves any
 /// episode against the progress map.
 fn continue_badge(
+    series_id: &str,
     started: bool,
     episode_id: &str,
     episodes: &[Video],
@@ -3735,8 +3738,10 @@ fn continue_badge(
     if started {
         return 0;
     }
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let backlog = episodes.iter().any(|v| {
         v.id != episode_id
+            && policy.includes(&v.id, v.season)
             && episode_has_air_date(v)
             && episode_is_out(v, today_days())
             && !is_watched(v)
@@ -3757,6 +3762,13 @@ pub(crate) fn continue_resume_id(
     episodes: Option<&[Video]>,
     progress: &HashMap<String, EpisodeProgress>,
 ) -> Option<String> {
+    if type_ != "movie" {
+        let policy = nova_config::progress::active_progress_policy(item_id);
+        let video = episodes.and_then(|rows| rows.iter().find(|v| v.id == latest.episode_id));
+        if !policy.includes(&latest.episode_id, video.and_then(|v| v.season)) {
+            return watch_now_episode(item_id, episodes?, progress).map(|v| v.id.clone());
+        }
+    }
     // Completion stays sticky in stored progress. Only a captured playback
     // opening can turn that record into a resumable rewatch; a manual mark at
     // an old partial position must still advance to the next episode.
@@ -3881,10 +3893,12 @@ fn new_episode_ids(
     episodes: &[Video],
     progress: &HashMap<String, EpisodeProgress>,
 ) -> Vec<String> {
+    let policy = nova_config::progress::active_progress_policy(id);
     let mut ids: Vec<_> = episodes
         .iter()
         .filter(|v| {
-            episode_has_air_date(v)
+            policy.includes(&v.id, v.season)
+                && episode_has_air_date(v)
                 && episode_is_out(v, today_days())
                 && !progress
                     .get(&progress_map_key(id, &v.id))
@@ -4188,11 +4202,11 @@ mod tests {
         .unwrap();
         let today = days_from_civil(2026, 10, 10);
         assert_eq!(
-            next_upcoming_episode(&episodes, |v| v.id == "aired", today)
+            next_upcoming_episode("test", &episodes, |v| v.id == "aired", today)
                 .map(|(i, _)| episodes[i].id.as_str()),
             Some("next")
         );
-        assert!(next_upcoming_episode(&episodes, |_| false, today).is_none());
+        assert!(next_upcoming_episode("test", &episodes, |_| false, today).is_none());
     }
 
     #[test]
@@ -5970,7 +5984,13 @@ mod tests {
             Some("e1".into())
         );
         assert_eq!(
-            continue_badge(genuine_partial_rewatch(&record), "e1", &episodes, |_| true),
+            continue_badge(
+                "test",
+                genuine_partial_rewatch(&record),
+                "e1",
+                &episodes,
+                |_| true
+            ),
             0
         );
         assert_eq!(continue_remaining(Some(&record)), "50 min left");
@@ -6031,13 +6051,16 @@ mod tests {
         ];
         let watched = |v: &Video| ["s1:1:1", "s1:1:2"].contains(&v.id.as_str());
         // Unstarted offer with older episodes still unwatched → next up.
-        assert_eq!(continue_badge(false, "s1:1:2", &eps, watched), 1);
+        assert_eq!(continue_badge("test", false, "s1:1:2", &eps, watched), 1);
         // Unstarted offer with everything else watched → new episode.
         let all_watched = |_: &Video| true;
-        assert_eq!(continue_badge(false, "s1:1:3", &eps, all_watched), 2);
+        assert_eq!(
+            continue_badge("test", false, "s1:1:3", &eps, all_watched),
+            2
+        );
         // Started offer → resume, no badge either way.
-        assert_eq!(continue_badge(true, "s1:1:2", &eps, watched), 0);
-        assert_eq!(continue_badge(true, "s1:1:3", &eps, all_watched), 0);
+        assert_eq!(continue_badge("test", true, "s1:1:2", &eps, watched), 0);
+        assert_eq!(continue_badge("test", true, "s1:1:3", &eps, all_watched), 0);
     }
 
     #[test]
@@ -6271,7 +6294,7 @@ pub(super) fn prepare_progress_home(
                 .is_some_and(|p| p.watched)
         };
         if e.type_ != "movie"
-            && let Some((index, air_days)) = next_upcoming_episode(videos, watched, today)
+            && let Some((index, air_days)) = next_upcoming_episode(&e.id, videos, watched, today)
         {
             upcoming.push(UpcomingEntry {
                 series_id: e.id.clone(),
@@ -6379,7 +6402,7 @@ pub(super) fn prepare_progress_home(
                 let started = record.is_some_and(|p| {
                     (!p.watched && p.position_secs > 0.0) || genuine_partial_rewatch(p)
                 });
-                let badge = continue_badge(started, &c.episode_id, videos, |v| {
+                let badge = continue_badge(&c.series_id, started, &c.episode_id, videos, |v| {
                     state
                         .progress
                         .get(&progress_map_key(&c.series_id, &v.id))

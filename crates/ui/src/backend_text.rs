@@ -1723,6 +1723,25 @@ pub fn left(remaining: usize) -> String {
     }
 }
 
+pub fn specials(count: usize) -> String {
+    if croatian() {
+        format!(
+            "{count} {}",
+            plural(
+                count as u64,
+                "specijalna epizoda",
+                "specijalne epizode",
+                "specijalnih epizoda"
+            )
+        )
+    } else {
+        format!(
+            "{count} {}",
+            if count == 1 { "special" } else { "specials" }
+        )
+    }
+}
+
 /// Compact remaining playback time on Home cards.
 pub fn minutes_left(minutes: u64) -> String {
     if croatian() {

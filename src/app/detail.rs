@@ -1808,6 +1808,7 @@ impl Bridge {
 
     pub(super) fn current_episode_page(&self) -> (usize, usize, Vec<EpisodeRow>) {
         struct RowSeed {
+            progress_excluded: bool,
             id: SharedString,
             artwork_identity: SharedString,
             text: SharedString,
@@ -1831,6 +1832,7 @@ impl Bridge {
             }
             let date_relative = state.cache_settings.date_relative;
             let show_unwatched = state.cache_settings.show_unwatched_thumbs;
+            let progress_policy = state.cache_settings.progress_policy(&m.id);
             let season = visible_seasons[m.season_index.min(visible_seasons.len() - 1)];
             // The card filter box narrows the same season list the picker
             // shows (episode_picked resolves through this same filter).
@@ -1883,6 +1885,7 @@ impl Bridge {
                     let show_thumb = !protected
                         && Self::episode_thumb_visible(show_unwatched, watched, progress);
                     RowSeed {
+                        progress_excluded: !progress_policy.includes(&v.id, v.season),
                         id: v.id.as_str().into(),
                         artwork_identity: detail_artwork_identity(
                             m,
@@ -1945,6 +1948,7 @@ impl Bridge {
                     }
                 };
                 EpisodeRow {
+                    progress_excluded: seed.progress_excluded,
                     id: seed.id,
                     displayed_artwork_identity: if has_thumb {
                         seed.artwork_identity.clone()
@@ -1971,6 +1975,7 @@ impl Bridge {
     /// Render the current filtered page, preserving correctly identified live
     /// images even when their pixels have been evicted from the shared cache.
     pub(super) fn apply_episode_rows(&self) {
+        self.refresh_progress_scope_ui();
         self.refresh_catalog_detail_season_names();
         let Some(app) = self.app() else {
             return;
@@ -2283,6 +2288,12 @@ impl Bridge {
                     })
                     .count();
                 SeasonCard {
+                    progress_excluded: state
+                        .cache_settings
+                        .progress_policy(&m.id)
+                        .title
+                        .excluded_seasons
+                        .contains(&s),
                     id: s.to_string().into(),
                     displayed_artwork_identity: if has_thumb {
                         artwork_identity.as_str().into()
@@ -2559,6 +2570,10 @@ impl Bridge {
     /// 3 mark this + all previous (season order) watched, 4 clear resume
     /// position (keeps an existing watched flag).
     pub(super) fn episode_watch_action(&self, index: usize, action: i32) {
+        if action == 6 {
+            self.toggle_episode_progress_scope(index);
+            return;
+        }
         let Some((series_id, episode_id, ordered)) = self.resolve_filtered_episode(index) else {
             return;
         };
@@ -2653,6 +2668,10 @@ impl Bridge {
     /// Watching only ever touches released episodes — unaired ones stay
     /// untouched (they surface on Home → Upcoming instead).
     pub(super) fn season_watch_action(&self, index: usize, action: i32) {
+        if action == 3 {
+            self.toggle_season_progress_scope(index);
+            return;
+        }
         let today = today_days();
         let (series_id, episode_ids, watched_flags): (String, Vec<String>, Vec<bool>) = {
             let state = self.shared.lock().unwrap();

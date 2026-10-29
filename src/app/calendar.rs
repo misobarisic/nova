@@ -200,6 +200,7 @@ impl Bridge {
             }
             let videos = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
             let selected = calendar_releases(
+                &e.id,
                 &videos,
                 app.get_calendar_all(),
                 |v| {
@@ -473,14 +474,17 @@ fn in_period(day: i64, period: (i64, i64)) -> bool {
     day >= period.0 && day < period.1
 }
 fn calendar_releases(
+    series_id: &str,
     videos: &[Video],
     all: bool,
     watched: impl Fn(&Video) -> bool,
     today: i64,
 ) -> Vec<(String, i64)> {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     if all {
         videos
             .iter()
+            .filter(|v| policy.includes(&v.id, v.season))
             .filter_map(|v| {
                 v.released
                     .as_deref()
@@ -489,7 +493,7 @@ fn calendar_releases(
             })
             .collect()
     } else {
-        next_upcoming_episode(videos, watched, today)
+        next_upcoming_episode(series_id, videos, watched, today)
             .map(|(index, day)| vec![(videos[index].id.clone(), day)])
             .unwrap_or_default()
     }
@@ -562,17 +566,17 @@ mod tests {
         .unwrap();
         let today = date(2026, 10, 11);
         assert_eq!(
-            calendar_releases(&videos, true, |_| false, today),
+            calendar_releases("test", &videos, true, |_| false, today),
             vec![
                 ("past".into(), date(2026, 9, 12)),
                 ("future".into(), date(2026, 11, 12))
             ]
         );
         assert_eq!(
-            calendar_releases(&videos, false, |_| true, today),
+            calendar_releases("test", &videos, false, |_| true, today),
             vec![("future".into(), date(2026, 11, 12))]
         );
-        assert!(calendar_releases(&videos, false, |_| false, today).is_empty());
+        assert!(calendar_releases("test", &videos, false, |_| false, today).is_empty());
     }
     #[test]
     fn month_steps_clamp_dates_across_leap_years_and_year_boundaries() {

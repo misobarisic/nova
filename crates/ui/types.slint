@@ -95,6 +95,7 @@ export struct DownloadRow {
 }
 
 export struct EpisodeRow {
+    progress_excluded: bool,
     id: string,
     artwork_identity: string,
     displayed_artwork_identity: string,
@@ -222,6 +223,7 @@ export struct SyncInvite {
 /// One season card in the detail-page season picker grid (art-backed like
 /// the reference season wall; season 0 renders as "Specials").
 export struct SeasonCard {
+    progress_excluded: bool,
     id: string,
     artwork_identity: string,
     displayed_artwork_identity: string,

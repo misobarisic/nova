@@ -5745,3 +5745,28 @@ msgstr "Izvorne preuzete slike; kompresija je isključena."
 #: settings.slint image-cache-module.slint player-module.slint
 msgid "Edit filters"
 msgstr "Uredite filtre"
+
+# Specials and viewing progress scope.
+msgid "Include specials in progress"
+msgstr "Uključi specijalne epizode u napredak"
+
+msgid "Count specials toward show completion, next episodes and release reminders. Individual shows can override this."
+msgstr "Računaj specijalne epizode pri dovršavanju serije, odabiru sljedeće epizode i podsjetnicima na izdanja. Pojedine serije mogu imati drukčiji odabir."
+
+msgid "Progress options"
+msgstr "Opcije napretka"
+
+msgid "Use global specials preference"
+msgstr "Koristi opću postavku specijalnih epizoda"
+
+msgid "Exclude specials from progress"
+msgstr "Izuzmi specijalne epizode iz napretka"
+
+msgid "Restore all episode and season exclusions"
+msgstr "Ukloni sva izuzeća epizoda i sezona"
+
+msgid "Include in progress"
+msgstr "Uključi u napredak"
+
+msgid "Exclude from progress"
+msgstr "Izuzmi iz napretka"

@@ -101,6 +101,8 @@ export global SettingsSearch {
                 if self.matches(metadata) { return metadata; }
                 let spoiler = self.candidate("spoiler_protection", @tr("Spoiler protection"), "Spoiler protection unwatched titles descriptions artwork", 6, -1);
                 if self.matches(spoiler) { return spoiler; }
+                let specials = self.candidate("include_specials_in_progress", @tr("Include specials in progress"), "Include exclude specials progress completion extras", 6, -2);
+                if self.matches(specials) { return specials; }
                 let thumbnails = self.candidate("show_unwatched_thumbs", @tr("Show unwatched thumbnails"), "Show unwatched thumbnails", 6, 2);
                 if self.matches(thumbnails) { return thumbnails; }
                 let discover = self.candidate("discover_min_cols", @tr("Discover grid columns"), "Discover grid columns", 6, 3);

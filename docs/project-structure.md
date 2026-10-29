@@ -392,6 +392,19 @@ Defines the shared state and the UI bridge:
 
 ### `src/app/*` module map
 
+`progress_scope.rs` owns per-show viewing-scope actions and Detail bridge state;
+`crates/config/src/progress.rs` owns `TitleProgress` / `ProgressPolicy`. Specials
+(explicit season 0) default out of progress. Profile settings fields
+`include_specials_in_progress` and `title_progress` retain global/title choices,
+episode exclusions/inclusions and season exclusions in the existing settings
+JSON/sync domain, independently of real watched history and tracker delivery.
+Settings → Display changes the default; Detail → Library options → Progress
+options overrides a show. Individual episode/season actions are shown and
+accepted only while the effective specials preference is on. Completion,
+counts, automatic successors, Home, Calendar and owner-scoped headless release
+events use this scope. See `docs/library-behavior.md` and
+`tests/settings_preferences/progress_scope.rs`.
+
 | File | Responsibility |
 |---|---|
 | `player_stats.rs` | Read-only Stats for nerds aggregation and source/profile-owned UI publication. While the panel is visible, one process-wide RAII sampling permit runs native diagnostics plus active-torrent counters off the UI at most once per second; closing/reopening, switching profiles/sources or replacing Android activities cannot overlap workers or accept stale deliveries. `DeviceRuntime` owns the controller, and `run.rs` wires visibility/copy callbacks and the existing timer. Actual packet cache and torrent RAM-pool values stay separate; optional facts remain unknown. Copy diagnostics uses the same technical whitelist plus app version/platform, captures the Windows clipboard HWND on the UI thread and runs clipboard I/O under a separate bounded permit; success appears only after a successful write. No source URL, filename, title, account, info hash, credential or peer address is exported, persisted or synced. Pure formatting/owner/race/privacy tests live beside the controller. |
@@ -1716,6 +1729,7 @@ unit/documentation coverage.
 | Discover reveal / filter-drag regressions | `tests/discover/reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover/search_ui.rs` (browse/results navigation), `tests/discover/search_isolation.rs` (empty-search isolation, context motion and browse restoration) |
 | Home / Discover / Library clipping and responsive grids | `crates/ui/{home,discover,library}.slint` (measured headings, viewport widths, pointer-only hover and grid origins; Home's desktop landing viewport reaches the bottom edge), `tests/shared_layout/page_layout_fit.rs` |
 | Control and Detail tab animations | `crates/ui/feedback-motion.slint`, `filter-chip.slint`, `library.slint`, `dropdown.slint`, `calendar.slint`, `detail.slint`; 140ms master-only selection, separately gated hover and 220ms active-body entrance. `src/app/{calendar,smart_collections}.rs` preserve unchanged delegates. `tests/shared_layout/control_polish.rs` covers frame sampling and live motion switches. |
+| Specials and episode progress scope | `crates/config/src/progress.rs`, `src/app/progress_scope.rs`, `episodes.rs`, `watch_state.rs`; default-off global preference and per-show/episode/season controls use existing settings sync. Menus: `detail.slint`, `ui-detail-episodes/episodes-module.slint`; Settings: Display; headless reminders: `release_reminders.rs::events`. UI regressions: `tests/settings_preferences/progress_scope.rs`. |
 | Library scroll damping | `crates/ui/library-scroll.slint` owns bounded mouse/touch fling momentum and reduced wheel deltas; `crates/ui/library.slint` keeps keyboard and restored offsets linked. `tests/library/loading_motion.rs` covers mouse, native touch, wheel and cancelled card presses. |
 | Library poster loading | `crates/ui/library.slint` reports short scrolls and final stationary viewports over 32 ms. `src/app/posters.rs` limits Library to four network and two disk workers, restores decoded cache hits immediately, and guards deliveries by current identity and recipe independently of Discover generations. `crates/media/src/cache.rs::cached_display_pixels` never creates or joins a network flight. Tests cover busy workers, disk hits, unloading and artwork repair. |
 | Library filter performance | `src/app/library.rs::ViewState` caches compact derived rows and coalesces profile-owned filter/search/sort preparation; `progress_projection.rs` seeds it and revision/proof/day/rule guards reject stale results. `crates/ui/library.slint` constructs card contents only near the viewport. Inline Library/projection regressions compare grouped status, query, sort and smart-filter results against the original policy. |

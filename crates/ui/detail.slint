@@ -723,6 +723,9 @@ export component DetailPage {
     // 0 episode, 1 season, 2 library entry). Pure UI state: the actions reuse the
     // callbacks above with the stored index.
     property <int> menu_kind: -1;
+    in property <bool> progress_include_specials;
+    in property <int> progress_override_index;
+    callback progress_scope_changed(int);
     property <int> menu_idx: 0;
     property <bool> menu_flag: false;
     property <float> menu_progress: 0.0;
@@ -750,6 +753,7 @@ export component DetailPage {
         { label: @tr("Remove from library"), enabled: true },
         { label: root.library_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.library_activity_action > 0 },
         { label: @tr("Release reminders"), enabled: !root.is_movie },
+        { label: @tr("Progress options"), enabled: !root.is_movie },
     ];
 
     function open_library_menu() {
@@ -768,6 +772,7 @@ export component DetailPage {
         else if (a == 6) { root.library_action(4); }
         else if (a == 7) { root.library_action(root.library_activity_action == 4 ? 6 : 5); }
         else if (a == 8) { root.menu_kind = 3; }
+        else if (a == 9) { root.menu_kind = 4; }
     }
 
     function request_stream_action(id: string) {
@@ -778,7 +783,7 @@ export component DetailPage {
     }
 
     function close_menu() {
-        let restore_keyboard = root.menu_kind == 3;
+        let restore_keyboard = root.menu_kind == 3 || root.menu_kind == 4;
         root.menu_kind = -1;
         if (InterfaceStyle.tv || restore_keyboard) { nav_scope.focus(); }
     }
@@ -1472,7 +1477,15 @@ export component DetailPage {
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
             sheet_title: @tr("Episode options");
-            items: [
+            items: root.progress_include_specials ? [
+                { label: root.menu_flag ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched"), enabled: true },
+                { label: @tr("Mark episode and previous as watched"), enabled: !root.menu_flag },
+                { label: @tr("Clear resume position"), enabled: !root.menu_flag && root.menu_progress > 0 },
+                { label: @tr("Open episode"), enabled: true },
+                { label: @tr("Add to watch queue"), enabled: true },
+                { label: @tr("Reveal episode spoilers"), enabled: true },
+                { label: root.episode_rows[root.menu_idx - root.episode_page_start].progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress"), enabled: true },
+            ] : [
                     { label: root.menu_flag ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched"), enabled: true },
                     { label: @tr("Mark episode and previous as watched"), enabled: !root.menu_flag },
                 { label: @tr("Clear resume position"), enabled: !root.menu_flag && root.menu_progress > 0 },
@@ -1492,7 +1505,7 @@ export component DetailPage {
                     root.episode_picked(root.menu_idx);
                 } else {
                     if a == 4 { QueueBridge.add_episode(root.menu_idx); }
-                    else { root.episode_watch_action(root.menu_idx, 5); }
+                    else { root.episode_watch_action(root.menu_idx, a == 6 ? 6 : 5); }
                 }
                 root.close_menu();
             }
@@ -1517,7 +1530,12 @@ export component DetailPage {
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
             sheet_title: @tr("Season options");
-            items: [
+            items: root.progress_include_specials ? [
+                { label: root.menu_flag ? @tr("Mark season as unwatched") : @tr("Mark season as watched"), enabled: true },
+                { label: @tr("Select season"), enabled: true },
+                { label: @tr("Download season"), enabled: true },
+                { label: root.season_cards[root.menu_idx].progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress"), enabled: true },
+            ] : [
                 { label: root.menu_flag ? @tr("Mark season as unwatched") : @tr("Mark season as watched"), enabled: true },
                 { label: @tr("Select season"), enabled: true },
                 { label: @tr("Download season"), enabled: true },
@@ -1525,6 +1543,8 @@ export component DetailPage {
             picked(a) => {
                 if (a == 0) {
                     root.season_watch_action(root.menu_idx, 0);
+                } else if (a == 3) {
+                    root.season_watch_action(root.menu_idx, 3);
                 } else if (a == 2) {
                     DetailBridge.season_download_menu = root.menu_idx;
                 } else {
@@ -1535,6 +1555,22 @@ export component DetailPage {
                 }
                 root.close_menu();
             }
+            closed => { root.close_menu(); }
+        }
+        progress_options_sheet := MenuSheet {
+            open: root.menu_kind == 4 && !root.is_movie;
+            keyboard_navigation: true;
+            width: 100%; height: 100%;
+            safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
+            sheet_title: @tr("Progress options");
+            selected_index: root.progress_override_index;
+            items: [
+                { label: @tr("Use global specials preference"), enabled: true },
+                { label: @tr("Exclude specials from progress"), enabled: true },
+                { label: @tr("Include specials in progress"), enabled: true },
+                { label: @tr("Restore all episode and season exclusions"), enabled: true },
+            ];
+            picked(index) => { root.progress_scope_changed(index); root.close_menu(); }
             closed => { root.close_menu(); }
         }
         reminder_options_sheet := MenuSheet {

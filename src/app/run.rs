@@ -745,6 +745,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_episode_watch_action(move |idx, a| b.episode_watch_action(idx as usize, a));
+    let b = bridge.clone();
+    app.on_progress_scope_changed(move |index| b.change_progress_scope(index));
 
     let b = bridge.clone();
     app.on_season_watch_action(move |idx, a| b.season_watch_action(idx as usize, a));

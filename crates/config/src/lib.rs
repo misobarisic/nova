@@ -8,6 +8,7 @@ pub use catalog_grouping::{
     CatalogGroupingKey, CatalogGroupingMode, CatalogGroupingOverride, CatalogSurface,
 };
 pub mod playback_preferences;
+pub mod progress;
 pub mod smart_collections;
 pub mod stream_filters;
 pub use smart_collections::{SmartCollection, SmartMediaType, SmartWatchState};
@@ -871,6 +872,11 @@ cache_settings_type! {
     /// Hide unwatched episode artwork, titles and overviews across this profile.
     #[serde(default)]
     pub spoiler_protection: bool,
+    /// Optional extras do not keep a regular series in Watching by default.
+    #[serde(default)]
+    pub include_specials_in_progress: bool,
+    #[serde(default)]
+    pub title_progress: std::collections::BTreeMap<String, progress::TitleProgress>,
     /// Maximum decoded image cache size in megabytes.
     #[serde(default = "default_lru_mb")]
     pub lru_cache_mb: u32,
@@ -1172,6 +1178,8 @@ impl Default for CacheSettings {
             date_relative: true,
             show_unwatched_thumbs: true,
             spoiler_protection: false,
+            include_specials_in_progress: false,
+            title_progress: Default::default(),
             // Keep in step with `default_lru_mb` (the serde default used for
             // settings files written before the field existed).
             lru_cache_mb: 128,

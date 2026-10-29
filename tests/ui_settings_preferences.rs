@@ -63,6 +63,8 @@ mod listening;
 #[path = "settings_preferences/source_recovery.rs"]
 mod source_recovery;
 
+#[path = "settings_preferences/progress_scope.rs"]
+mod progress_scope;
 #[path = "settings_preferences/spoiler.rs"]
 mod spoiler;
 

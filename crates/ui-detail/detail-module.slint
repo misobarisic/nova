@@ -103,6 +103,9 @@ export component DetailModule inherits Window {
         touch_menus <=> DetailBridge.touch_menus;
         library_watched <=> DetailBridge.library_watched;
         library_activity_action <=> DetailBridge.library_activity_action;
+        progress_include_specials: DetailBridge.progress_include_specials;
+        progress_override_index: DetailBridge.progress_override_index;
+        progress_scope_changed(index) => { DetailBridge.progress_scope_changed(index); }
         tracking_show() => { DetailBridge.tracking_show(); }
         tracking_close() => { DetailBridge.tracking_close(); }
         tracking_search(arg0, arg1) => { DetailBridge.tracking_search(arg0, arg1); }

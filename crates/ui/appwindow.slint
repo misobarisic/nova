@@ -573,6 +573,8 @@ export component AppWindow inherits Window {
         upcoming_x <=> root.home_upcoming_x;
     }
     DetailBindings {
+        progress_include_specials <=> root.progress_include_specials;
+        progress_override_index <=> root.progress_override_index;
         list_services_title_selected <=> root.list_services_title_selected;
         list_services_title_connected <=> root.list_services_title_connected;
         list_services_title_busy <=> root.list_services_title_busy;
@@ -695,6 +697,7 @@ export component AppWindow inherits Window {
         cache_date_relative <=> root.cache_date_relative;
         cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
         spoiler_protection <=> root.spoiler_protection;
+        include_specials_in_progress <=> root.include_specials_in_progress;
         cache_lru_mb <=> root.cache_lru_mb;
         cache_disk_limit_index <=> root.cache_disk_limit_index;
         cache_disk_limit_names <=> root.cache_disk_limit_names;
@@ -1202,6 +1205,9 @@ export component AppWindow inherits Window {
     in-out property <bool> in_library: false;
     in-out property <int> detail_library_save_request: 0;
     in-out property <bool> detail_library_watched: false;
+    in-out property <bool> progress_include_specials;
+    in-out property <int> progress_override_index;
+    callback progress_scope_changed(int);
     in-out property <int> detail_library_activity_action: 0;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
     // --- Home (landing page, Continue Watching) ------------------------
@@ -1555,6 +1561,7 @@ export component AppWindow inherits Window {
     in-out property <bool> cache_date_relative: true;
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <bool> spoiler_protection: false;
+    in-out property <bool> include_specials_in_progress: false;
     in-out property <float> cache_lru_mb: 128.0;
     in-out property <int> cache_disk_limit_index: 3;
     in-out property <[string]> cache_disk_limit_names: [@tr("Unlimited"), "256 MiB", "512 MiB", "1 GiB", "2 GiB", "4 GiB", "8 GiB"];
@@ -2417,6 +2424,7 @@ export component AppWindow inherits Window {
     public function detail_bridge_episode_toggle_watched(i: int) { root.episode_toggle_watched(i); }
     public function detail_bridge_episode_watch_action(i: int, a: int) { root.episode_watch_action(i, a); }
     public function detail_bridge_season_watch_action(i: int, a: int) { root.season_watch_action(i, a); }
+    public function detail_bridge_progress_scope_changed(i: int) { root.progress_scope_changed(i); }
     public function detail_bridge_stream_picked(i: int) { root.stream_picked(i); }
     public function detail_bridge_stream_page_picked(p: int) { root.stream_page_picked(p); }
     public function detail_bridge_stream_action_requested(id: string) { root.stream_action_requested(id); }

@@ -209,6 +209,7 @@ mod episode_helpers_tests {
         let mut map = HashMap::new();
         map.insert(progress_map_key("s", "s:1:1"), prog("s", "s:1:1", true, 1));
         let (future, available, watched) = upcoming_tally(
+            "test",
             &eps,
             |v| {
                 map.get(&progress_map_key("s", &v.id))
@@ -220,7 +221,8 @@ mod episode_helpers_tests {
         assert_eq!(future[0].0, 2);
         assert_eq!((available, watched), (1, 1));
         // All dateless: nothing to count anywhere.
-        let (future, available, watched) = upcoming_tally(&eps[1..2], |_| false, today_days());
+        let (future, available, watched) =
+            upcoming_tally("test", &eps[1..2], |_| false, today_days());
         assert!(future.is_empty());
         assert_eq!((available, watched), (0, 0));
     }
@@ -237,10 +239,10 @@ mod episode_helpers_tests {
         eps[2].released = Some("2020-01-02".to_string());
         let mut map = HashMap::new();
         map.insert(progress_map_key("s", "s:1:1"), prog("s", "s:1:1", true, 1));
-        // Season 2 is not out yet; the special (season 0) is offered last.
+        // Season 2 is not out yet; specials do not surface automatically by default.
         assert_eq!(
             next_episode_to_watch("s", &eps, &map).map(|v| v.id.as_str()),
-            Some("s:0:1")
+            None
         );
         // An empty list never panics.
         assert!(next_episode_to_watch("s", &[], &map).is_none());
@@ -305,7 +307,7 @@ mod playback_tests {
     }
 
     #[test]
-    fn library_counts_whole_known_series_and_only_watched_episodes() {
+    fn library_counts_regular_known_series_and_only_watched_episodes() {
         let mut eps = vec![
             video("s:1:1", 1, 1, "Aired"),
             video("s:1:2", 1, 2, "Dateless"),
@@ -314,7 +316,7 @@ mod playback_tests {
         ];
         eps[0].released = Some("2020-01-01".into());
         eps[2].released = Some("2099-01-01".into());
-        assert_eq!(library_episode_counts("s", &eps, &HashMap::new()), (0, 4));
+        assert_eq!(library_episode_counts("s", &eps, &HashMap::new()), (0, 3));
         let mut map = HashMap::new();
         for id in ["s:1:1", "s:0:1", "stale"] {
             map.insert(progress_map_key("s", id), entry("s", id, 0.0, 0.0, true, 1));
@@ -329,21 +331,21 @@ mod playback_tests {
             progress_map_key("other", "s:1:3"),
             entry("other", "s:1:3", 0.0, 0.0, true, 3),
         );
-        assert_eq!(library_episode_counts("s", &eps, &map), (2, 4));
+        assert_eq!(library_episode_counts("s", &eps, &map), (1, 3));
         assert_eq!(library_episode_counts("s", &[], &map), (0, 0));
         eps.push(eps[0].clone());
-        assert_eq!(library_episode_counts("s", &eps, &map), (2, 4));
+        assert_eq!(library_episode_counts("s", &eps, &map), (1, 3));
         for v in &eps {
             map.insert(
                 progress_map_key("s", &v.id),
                 entry("s", &v.id, 0.0, 0.0, true, 4),
             );
         }
-        assert_eq!(library_episode_counts("s", &eps, &map), (4, 4));
+        assert_eq!(library_episode_counts("s", &eps, &map), (3, 3));
         map.get_mut(&progress_map_key("s", "s:1:1"))
             .unwrap()
             .watched = false;
-        assert_eq!(library_episode_counts("s", &eps, &map), (3, 4));
+        assert_eq!(library_episode_counts("s", &eps, &map), (2, 3));
     }
 
     #[test]
@@ -570,7 +572,10 @@ mod playback_tests {
         eps4.push(video("s:0:1", 0, 1, "Special"));
         assert!(!series_fully_watched("s", &eps4, &map));
         assert_eq!(auto_bucket("s", &eps4, &map), "Completed");
-        assert_eq!(library_badge_for("s", &eps4, &map), "Caught up · 1 unaired");
+        assert_eq!(
+            library_badge_for("s", &eps4, &map),
+            "Caught up · 1 unaired · 1 special"
+        );
         // Built-in names are reserved and distinct from user categories.
         assert!(BUILTIN_FILTERS.contains(&"Watching"));
         assert_eq!(WatchStatus::default(), WatchStatus::Auto);
@@ -611,8 +616,9 @@ mod playback_tests {
         assert_eq!(library_badge_for("m", &[], &map2), "▶ Resume");
         assert_eq!(auto_bucket("m", &[], &map2), "Watching");
         assert!(!series_fully_watched("m", &[], &map2));
-        // Dateless-only list, untouched: silent badge, Plan to Watch.
-        let eps = vec![video("s:0:1", 0, 1, "Special")];
+        // Dateless regular episode, untouched: silent badge, Plan to Watch.
+        // Metadata, rather than the ID or name, defines a special.
+        let eps = vec![video("s:0:1", 1, 1, "Special")];
         assert_eq!(library_badge_for("s", &eps, &HashMap::new()), "");
         assert_eq!(auto_bucket("s", &eps, &HashMap::new()), "Plan to Watch");
         assert!(!series_fully_watched("s", &eps, &HashMap::new()));

@@ -2690,6 +2690,17 @@ impl Bridge {
         write_settings(&settings);
         if publish_models {
             self.settings_to_ui();
+            if local.include_specials_in_progress != settings.include_specials_in_progress
+                || local.title_progress != settings.title_progress
+            {
+                self.refresh_progress_scope_ui();
+                self.apply_episode_rows();
+                self.apply_season_cards();
+                self.request_progress_projection();
+                release_reminders::cancel_profile_notifications(
+                    profiles::ProfileStore::capture().id(),
+                );
+            }
             if local.spoiler_protection != settings.spoiler_protection
                 || local.show_unwatched_thumbs != settings.show_unwatched_thumbs
             {

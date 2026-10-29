@@ -2,6 +2,9 @@ import { DetailInfo, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, Ca
 
 // The host keeps backend-owned state; the page shares this exact object.
 export global DetailBridge {
+    in-out property <bool> progress_include_specials;
+    in-out property <int> progress_override_index;
+    callback progress_scope_changed(int);
     in-out property <int> season_download_menu: -1;
     in-out property <bool> season_download_active;
     in-out property <bool> season_download_review;

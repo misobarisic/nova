@@ -343,6 +343,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_episode_toggle_watched => invoke_detail_bridge_episode_toggle_watched(arg0),
             on_episode_watch_action => invoke_detail_bridge_episode_watch_action(arg0, arg1),
             on_season_watch_action => invoke_detail_bridge_season_watch_action(arg0, arg1),
+            on_progress_scope_changed => invoke_detail_bridge_progress_scope_changed(arg0),
             on_stream_picked => invoke_detail_bridge_stream_picked(arg0),
             on_stream_page_picked => invoke_detail_bridge_stream_page_picked(arg0),
             on_stream_action_requested => invoke_detail_bridge_stream_action_requested(arg0),

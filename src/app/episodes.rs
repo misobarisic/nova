@@ -108,6 +108,26 @@ pub(crate) fn library_badge_for(
     episodes: &[Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> String {
+    let badge = library_badge_in_scope(series_id, episodes, map);
+    let policy = nova_config::progress::active_progress_policy(series_id);
+    let specials = episodes.iter().filter(|v| v.season == Some(0)).count();
+    if !policy.include_specials && specials > 0 {
+        if badge.is_empty() {
+            text::specials(specials)
+        } else {
+            format!("{badge} · {}", text::specials(specials))
+        }
+    } else {
+        badge
+    }
+}
+
+fn library_badge_in_scope(
+    series_id: &str,
+    episodes: &[Video],
+    map: &HashMap<String, EpisodeProgress>,
+) -> String {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let safe_label = |v: &Video| {
         if active_cache_settings().spoiler_protection {
             episode_se_label(v)
@@ -120,6 +140,9 @@ pub(crate) fn library_badge_for(
         // No episode list: report a resume point when one exists.
         let mut best: Option<&EpisodeProgress> = None;
         for p in map.values().filter(|p| is_ours(p)) {
+            if !policy.includes(&p.episode_id, None) {
+                continue;
+            }
             if p.watched {
                 continue;
             }
@@ -155,6 +178,9 @@ pub(crate) fn library_badge_for(
     // resume slot below — that progress is explicit, not automatic).
     let mut aired_total = 0usize;
     for v in episodes {
+        if !policy.includes(&v.id, v.season) {
+            continue;
+        }
         if !episode_is_out(v, today) {
             unaired += 1;
             continue;
@@ -257,9 +283,13 @@ pub(crate) fn next_episode_to_watch<'a>(
     episodes: &'a [Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> Option<&'a Video> {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let today = today_days();
     for season in ordered_seasons(episodes) {
         for v in season_episodes(episodes, season) {
+            if !policy.includes(&v.id, v.season) {
+                continue;
+            }
             if !episode_is_out(v, today) {
                 continue;
             }
@@ -284,10 +314,13 @@ pub(crate) fn watch_now_episode<'a>(
     episodes: &'a [Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> Option<&'a Video> {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let today = today_days();
     episodes
         .iter()
-        .filter(|v| v.season.is_some() && episode_is_out(v, today))
+        .filter(|v| {
+            v.season.is_some() && episode_is_out(v, today) && policy.includes(&v.id, v.season)
+        })
         .filter_map(|v| {
             let p = map.get(&progress_map_key(series_id, &v.id))?;
             resumable_position(p.position_secs, p.duration_secs, p.watched).then_some((v, p))
@@ -305,8 +338,15 @@ pub(crate) fn watch_action_label(
     map: &HashMap<String, EpisodeProgress>,
 ) -> String {
     let prefix = format!("{series_id}\u{1}");
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let continuing = map.iter().any(|(key, progress)| {
         key.starts_with(&prefix)
+            && policy.includes(
+                &progress.episode_id,
+                episodes
+                    .and_then(|rows| rows.iter().find(|v| v.id == progress.episode_id))
+                    .and_then(|v| v.season),
+            )
             && (progress.watched || progress.position_secs > 0.0 || progress.play_count > 0)
     });
     let target = episodes.and_then(|videos| watch_now_episode(series_id, videos, map));
@@ -323,14 +363,19 @@ pub(crate) fn watch_action_label(
 /// join the unaired tail nor hold back the caught-up check; only a manual
 /// start surfaces them, through Continue Watching's resume).
 pub(crate) fn upcoming_tally(
+    series_id: &str,
     episodes: &[Video],
     is_watched: impl Fn(&Video) -> bool,
     today: i64,
 ) -> (Vec<(usize, i64)>, usize, usize) {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let mut future: Vec<(usize, i64)> = Vec::new();
     let mut available = 0usize;
     let mut available_watched = 0usize;
     for (i, v) in episodes.iter().enumerate() {
+        if !policy.includes(&v.id, v.season) {
+            continue;
+        }
         let Some(days) = v.released.as_deref().and_then(iso_days) else {
             continue;
         };
@@ -345,7 +390,7 @@ pub(crate) fn upcoming_tally(
     }
     (future, available, available_watched)
 }
-/// Whether every known episode is watched, including future and dateless
+/// Whether every known in-scope episode is watched, including future and dateless
 /// episodes. Used for dateless-only completion; the Completed bucket and
 /// library bulk-action toggle otherwise use currently available episodes.
 pub(crate) fn series_fully_watched(
@@ -353,14 +398,20 @@ pub(crate) fn series_fully_watched(
     episodes: &[Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> bool {
-    !episodes.is_empty()
-        && episodes.iter().all(|v| {
+    let policy = nova_config::progress::active_progress_policy(series_id);
+    let mut included = episodes
+        .iter()
+        .filter(|v| policy.includes(&v.id, v.season))
+        .peekable();
+    included.peek().is_some()
+        && included.all(|v| {
             map.get(&progress_map_key(series_id, &v.id))
                 .is_some_and(|p| p.watched)
         })
 }
-/// Card progress uses the whole known episode list, including specials,
-/// dateless episodes and announced future episodes. Partial playback does
+/// Card progress uses the known in-scope episode list, including dateless
+/// episodes and announced future episodes. Specials follow the effective
+/// global/title preference. Partial playback does
 /// not count as a watched episode; stale progress outside this list does not
 /// inflate the numerator. Unknown totals stay hidden until metadata arrives.
 pub(crate) fn library_episode_counts(
@@ -368,7 +419,12 @@ pub(crate) fn library_episode_counts(
     episodes: &[Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> (i32, i32) {
-    let ids: HashSet<&str> = episodes.iter().map(|v| v.id.as_str()).collect();
+    let policy = nova_config::progress::active_progress_policy(series_id);
+    let ids: HashSet<&str> = episodes
+        .iter()
+        .filter(|v| policy.includes(&v.id, v.season))
+        .map(|v| v.id.as_str())
+        .collect();
     let watched = ids
         .iter()
         .filter(|id| {

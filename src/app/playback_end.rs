@@ -84,8 +84,8 @@ struct Automatic {
     since: Option<Instant>,
 }
 
-fn automatic_successor(videos: &[Video], current: &str) -> Option<Video> {
-    let next = next_episode::successor(videos, current, today_days())?;
+fn automatic_successor(series_id: &str, videos: &[Video], current: &str) -> Option<Video> {
+    let next = next_episode::successor(series_id, videos, current, today_days())?;
     (episode_has_air_date(next) && episode_is_out(next, today_days())).then(|| next.clone())
 }
 
@@ -240,6 +240,7 @@ impl Bridge {
             return None;
         }
         next_episode::successor(
+            &context.session.title,
             &self.playback_end_videos(context),
             &context.session.episode,
             today_days(),
@@ -400,7 +401,7 @@ impl Bridge {
             .or_else(|| read_episodes_cache_for(&context.session.type_, &context.session.title))?;
         // Automatic playback needs positive release evidence; the explicit
         // source picker remains available for dateless provider episodes.
-        automatic_successor(&videos, &context.session.episode)
+        automatic_successor(&context.session.title, &videos, &context.session.episode)
     }
 
     fn refresh_automatic_next(&self, context: &Context, app: &AppWindow) -> bool {
@@ -894,9 +895,13 @@ impl Bridge {
             return;
         }
         let videos = self.playback_end_videos(&context);
-        let Some(next) =
-            next_episode::successor(&videos, &context.session.episode, today_days()).cloned()
-        else {
+        let Some(next) = next_episode::successor(
+            &context.session.title,
+            &videos,
+            &context.session.episode,
+            today_days(),
+        )
+        .cloned() else {
             return;
         };
         let matches = self
@@ -1184,13 +1189,13 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        assert_eq!(automatic_successor(&videos, "1").unwrap().id, "2");
+        assert_eq!(automatic_successor("test", &videos, "1").unwrap().id, "2");
         for date in [None, Some("unknown".into()), Some("2099-01-01".into())] {
             let mut videos = videos.clone();
             videos[1].released = date;
-            assert!(automatic_successor(&videos, "1").is_none());
+            assert!(automatic_successor("test", &videos, "1").is_none());
         }
-        assert!(automatic_successor(&videos, "3").is_none());
+        assert!(automatic_successor("test", &videos, "3").is_none());
     }
 
     #[test]

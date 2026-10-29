@@ -281,6 +281,7 @@ fn events(
     let progress: HashMap<String, EpisodeProgress> = load(owner, EPISODE_PROGRESS_KEY)?;
     let subs = subscriptions(owner)?;
     let protect_spoilers = spoiler::owner_enabled(owner);
+    let settings: CacheSettings = load(owner, "settings")?;
     let mut result = Vec::new();
     let mut undated = 0;
     for title in titles {
@@ -303,7 +304,11 @@ fn events(
             .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
             .transpose()?
             .unwrap_or_default();
+        let policy = settings.progress_policy(&title.id);
         for video in videos {
+            if !policy.includes(&video.id, video.season) {
+                continue;
+            }
             let Some(time) = video.released.as_deref().and_then(ReleaseTime::parse) else {
                 undated += 1;
                 continue;
@@ -1777,6 +1782,45 @@ mod tests {
                 .summary
                 .contains("Secret ending")
         );
+        // Headless events use this owner's durable scope, never whichever
+        // profile happens to be active in the foreground process.
+        owner
+            .write(
+                &episodes_key("series", "show"),
+                r#"[
+            {"id":"show:1:1","season":1,"episode":1,"released":"2026-10-23"},
+            {"id":"show:0:1","season":0,"episode":1,"released":"2026-10-23"}
+        ]"#,
+            )
+            .unwrap();
+        assert_eq!(events(&owner, false, "", None).unwrap().0.len(), 1);
+        let mut settings = CacheSettings {
+            include_specials_in_progress: true,
+            ..Default::default()
+        };
+        owner
+            .write("settings", &serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(events(&owner, false, "", None).unwrap().0.len(), 2);
+        settings
+            .title_progress
+            .entry("show".into())
+            .or_default()
+            .include_specials = Some(false);
+        owner
+            .write("settings", &serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(events(&owner, false, "", None).unwrap().0.len(), 1);
+        settings
+            .title_progress
+            .get_mut("show")
+            .unwrap()
+            .excluded_episodes
+            .insert("show:1:1".into());
+        owner
+            .write("settings", &serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert!(events(&owner, false, "", None).unwrap().0.is_empty());
     }
 
     fn event(id: &str, raw: &str) -> Event {

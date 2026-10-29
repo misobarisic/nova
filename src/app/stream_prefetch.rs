@@ -312,6 +312,7 @@ impl Bridge {
                                             .filter(|m| m.id == target.series)
                                             .and_then(|m| {
                                                 next_episode::successor(
+                                                    &m.id,
                                                     &m.videos,
                                                     &p.episode_id,
                                                     today_days(),

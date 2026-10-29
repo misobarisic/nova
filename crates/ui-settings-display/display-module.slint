@@ -118,6 +118,19 @@ export component SettingsDisplayModule inherits Window {
                     }
                 }
             }
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "include_specials_in_progress";
+                    row-title: @tr("Include specials in progress");
+                    row-desc: @tr("Count specials toward show completion, next episodes and release reminders. Individual shows can override this.");
+                    ToggleSwitch {
+                        name: @tr("Include specials in progress");
+                        checked <=> SettingsBridge.include_specials_in_progress;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == -2 && SettingsBridge.kb_active;
+                        toggled => { root.select_grouping(-2); SettingsContent.schedule_setting("include_specials_in_progress"); }
+                    }
+                }
+            }
             SectionHeader { label: @tr("Discover layout"); }
             SettingsCard {
                 SettingsRow {

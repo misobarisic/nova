@@ -867,6 +867,7 @@ mod profiles;
 #[cfg(all(test, feature = "desktop"))]
 mod progress_identity_tests;
 mod progress_projection;
+mod progress_scope;
 mod recommendations;
 mod release_reminders;
 #[cfg(target_os = "android")]

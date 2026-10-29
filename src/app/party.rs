@@ -1234,7 +1234,7 @@ impl Bridge {
             else {
                 return;
             };
-            if !next_episode::successor(&modal.videos, &current.episode_id, today_days())
+            if !next_episode::successor(&modal.id, &modal.videos, &current.episode_id, today_days())
                 .is_some_and(|next| next.id == episode)
             {
                 return;

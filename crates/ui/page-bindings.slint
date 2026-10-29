@@ -79,6 +79,8 @@ export component HomeBindings {
 }
 
 export component DetailBindings {
+    in-out property <bool> progress_include_specials <=> DetailBridge.progress_include_specials;
+    in-out property <int> progress_override_index <=> DetailBridge.progress_override_index;
     in-out property <bool> season_download_active <=> DetailBridge.season_download_active;
     in-out property <bool> season_download_review <=> DetailBridge.season_download_review;
     in-out property <string> season_download_status <=> DetailBridge.season_download_status;
@@ -204,6 +206,7 @@ export component SettingsBindings {
     in-out property <bool> cache_date_relative <=> SettingsBridge.cache_date_relative;
     in-out property <bool> cache_show_unwatched_thumbs <=> SettingsBridge.cache_show_unwatched_thumbs;
     in-out property <bool> spoiler_protection <=> SettingsBridge.spoiler_protection;
+    in-out property <bool> include_specials_in_progress <=> SettingsBridge.include_specials_in_progress;
     in-out property <float> cache_lru_mb <=> SettingsBridge.cache_lru_mb;
     in-out property <bool> cache_prefetch_metadata <=> SettingsBridge.cache_prefetch_metadata;
     in-out property <string> tmdb_api_key <=> SettingsBridge.tmdb_api_key;

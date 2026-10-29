@@ -566,9 +566,10 @@ impl Bridge {
             let ids = if e.type_ == "movie" {
                 vec![e.id.clone()]
             } else if target {
+                let policy = nova_config::progress::active_progress_policy(&e.id);
                 episodes
                     .iter()
-                    .filter(|v| episode_is_out(v, today))
+                    .filter(|v| episode_is_out(v, today) && policy.includes(&v.id, v.season))
                     .map(|v| v.id.clone())
                     .collect::<Vec<_>>()
             } else {

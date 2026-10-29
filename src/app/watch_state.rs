@@ -19,7 +19,7 @@ pub(crate) fn read_viewing_activity() -> HashMap<String, ViewingActivity> {
     read_json(VIEWING_ACTIVITY_KEY).unwrap_or_default()
 }
 
-/// Only scheduled releases surface automatically. Dateless extras still
+/// Only in-scope scheduled releases surface automatically. Dateless episodes in scope still
 /// resume when explicitly started, and a wholly watched dateless list completes.
 pub(crate) fn available_completed(
     id: &str,
@@ -30,6 +30,7 @@ pub(crate) fn available_completed(
     if episodes.is_empty() {
         return false;
     }
+    let policy = nova_config::progress::active_progress_policy(id);
     let watched = |v: &Video| {
         progress
             .get(&progress_map_key(id, &v.id))
@@ -37,12 +38,15 @@ pub(crate) fn available_completed(
     };
     let available: Vec<_> = episodes
         .iter()
-        .filter(|v| episode_has_air_date(v) && episode_is_out(v, today))
+        .filter(|v| {
+            policy.includes(&v.id, v.season) && episode_has_air_date(v) && episode_is_out(v, today)
+        })
         .collect();
     let unfinished = episodes.iter().any(|v| {
-        progress
-            .get(&progress_map_key(id, &v.id))
-            .is_some_and(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
+        policy.includes(&v.id, v.season)
+            && progress
+                .get(&progress_map_key(id, &v.id))
+                .is_some_and(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
     });
     !unfinished
         && if available.is_empty() {
@@ -125,17 +129,29 @@ pub(crate) fn activity_bucket(
     activity: Option<&ViewingActivity>,
     today: i64,
 ) -> &'static str {
+    let policy = nova_config::progress::active_progress_policy(id);
+    let excluded: HashSet<_> = episodes
+        .iter()
+        .filter(|v| !policy.includes(&v.id, v.season))
+        .map(|v| v.id.as_str())
+        .collect();
+    let record_in_scope = |p: &EpisodeProgress| {
+        p.series_id == id
+            && !excluded.contains(p.episode_id.as_str())
+            && policy.includes(&p.episode_id, None)
+    };
     if available_completed(id, episodes, progress, today) {
         "Completed"
     } else if activity.is_some_and(|a| a.phase == ViewingPhase::AwaitingReturn)
         && !progress.values().any(|p| {
-            p.series_id == id && resumable_position(p.position_secs, p.duration_secs, p.watched)
+            record_in_scope(p) && resumable_position(p.position_secs, p.duration_secs, p.watched)
         })
     {
         // Missing coverage or a future-only response cannot reactivate a
         // completed viewing run. The durable checkpoint remains authoritative.
         if episodes.iter().any(|v| {
-            episode_has_air_date(v)
+            policy.includes(&v.id, v.season)
+                && episode_has_air_date(v)
                 && episode_is_out(v, today)
                 && !progress
                     .get(&progress_map_key(id, &v.id))
@@ -145,7 +161,7 @@ pub(crate) fn activity_bucket(
         } else {
             "Completed"
         }
-    } else if progress.values().any(|p| p.series_id == id) {
+    } else if progress.values().any(record_in_scope) {
         "Watching"
     } else {
         "Plan to Watch"
@@ -164,9 +180,17 @@ pub(crate) fn reconcile_viewing_activity(
 ) {
     for entry in entries.iter().filter(|e| e.type_ != "movie") {
         let episodes = episodes_for(entry);
+        let policy = nova_config::progress::active_progress_policy(&entry.id);
+        let excluded: HashSet<_> = episodes
+            .iter()
+            .filter(|v| !policy.includes(&v.id, v.season))
+            .map(|v| v.id.as_str())
+            .collect();
         let complete = available_completed(&entry.id, &episodes, progress, today);
         let changed = progress.iter().any(|(key, p)| {
             p.series_id == entry.id
+                && !excluded.contains(p.episode_id.as_str())
+                && policy.includes(&p.episode_id, None)
                 && (p.watched || p.position_secs >= RESUME_MIN_SECS || p.unwatched_at_secs > 0)
                 && old.get(key).is_none_or(|previous| {
                     previous.watched != p.watched

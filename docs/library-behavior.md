@@ -57,6 +57,29 @@ evidence; stale or ambiguous alias links are ignored.
 
 ## Automatic buckets (the filter bar)
 
+Specials (explicit season 0 metadata) are excluded from viewing progress by
+default, including existing installations. Settings → Display → Include specials
+in progress changes the profile default. Detail → Library options → Progress
+options offers Use global specials preference / Exclude / Include for that show.
+While the effective preference includes specials, episode and season options
+offer Exclude from progress / Include in progress. The backend also enforces
+this gate for stale menus. Restore all episode and season exclusions remains
+available from Progress options; exclusions are retained while specials are off.
+
+The same scope controls completion, remaining/unaired and watched/total counts,
+automatic Continue Watching and next-episode targets, Upcoming, Calendar and
+release reminders/exports. Excluded episodes remain visible and manually
+playable, with their real watched/resume history intact. Their presence never
+creates synthetic watched records or tracker progress. Ignored specials have a
+separate “1 special” / “3 specials” caption. New regular episodes still reopen a
+completed show. Unknown seasons are not inferred to be specials from their ID,
+title or missing date. Per-show exclusions use source episode IDs and explicit
+season numbers; an explicitly included episode may override an excluded season.
+
+`include_specials_in_progress` and `title_progress` live in the existing
+profile-scoped settings JSON and settings sync domain, including backups and
+device overrides. They do not change the sync wire schema or watched records.
+
 The horizontal pill order is fixed: **All, Watching, New episodes, Completed,
 On Hold, Dropped, Plan to Watch**, then user categories. Labels are localized.
 The New episodes filter uses `builtin:new_episodes`, keeping existing user
@@ -124,8 +147,8 @@ new activity domains. External tracking statuses remain independent.
 Cards show the localized bucket as an artwork pill, an overflow button, a
 single-line title, year/type metadata and optional playback text. The small
 rail and “watched / total” count appear only when at least one known episode
-is marked watched. The total includes the whole cached list (specials,
-dateless and announced episodes); partial playback and stale progress for
+is marked watched. The total includes the cached list within the effective
+progress scope (including dateless and announced episodes); partial playback and stale progress for
 unknown episode IDs do not inflate the count. Movies and unknown totals have
 no episode rail. Completed series can have an incomplete rail when future or dateless episodes remain.
 

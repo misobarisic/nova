@@ -22,16 +22,24 @@ fn near_end(position: f64, duration: f64) -> bool {
 }
 
 // A successor is relative to the playing episode, never to watched history.
-// Don't leap over an unaired immediate successor to offer a later episode.
-pub(super) fn successor<'a>(videos: &'a [Video], current: &str, today: i64) -> Option<&'a Video> {
+// Don't leap over an unaired in-scope successor to offer a later episode.
+pub(super) fn successor<'a>(
+    series_id: &str,
+    videos: &'a [Video],
+    current: &str,
+    today: i64,
+) -> Option<&'a Video> {
+    let policy = nova_config::progress::active_progress_policy(series_id);
     let ordered: Vec<_> = ordered_seasons(videos)
         .into_iter()
-        .filter(|season| *season > 0)
         .flat_map(|season| season_episodes(videos, season))
         .filter(|v| v.episode_number().is_some_and(|n| n > 0))
         .collect();
     let index = ordered.iter().position(|v| v.id == current)?;
-    let next = *ordered.get(index + 1)?;
+    let next = *ordered
+        .iter()
+        .skip(index + 1)
+        .find(|v| policy.includes(&v.id, v.season))?;
     episode_is_out(next, today).then_some(next)
 }
 
@@ -64,7 +72,7 @@ fn footer_successor(state: &Shared, today: i64) -> Option<(u64, String, String)>
         .modal_item
         .as_ref()
         .filter(|modal| modal.id == playing.series_id && modal.type_ != "movie")?;
-    let next = successor(&modal.videos, &playing.episode_id, today)?;
+    let next = successor(&modal.id, &modal.videos, &playing.episode_id, today)?;
     modal
         .seasons
         .iter()
@@ -145,7 +153,13 @@ impl Bridge {
                     .map(|m| &m.videos)?;
                 // Detached receivers have inventory but no local source-picker
                 // context. Only offer actions that choose_next_episode can run.
-                successor(videos, &playing.episode_id, today_days()).cloned()
+                successor(
+                    &playing.series_id,
+                    videos,
+                    &playing.episode_id,
+                    today_days(),
+                )
+                .cloned()
             });
             next.and_then(|next| {
                 let playing = state.playback.as_mut()?;
@@ -215,7 +229,8 @@ impl Bridge {
             else {
                 return;
             };
-            let Some(next) = successor(&modal.videos, &playing.episode_id, today_days()) else {
+            let Some(next) = successor(&modal.id, &modal.videos, &playing.episode_id, today_days())
+            else {
                 return;
             };
             let key = stream_prefetch::PlaybackKey {
@@ -298,7 +313,7 @@ impl Bridge {
                     return None;
                 }
                 let modal = state.modal_item.as_ref().filter(|m| m.id == p.series_id)?;
-                let next = successor(&modal.videos, &p.episode_id, today_days())?;
+                let next = successor(&modal.id, &modal.videos, &p.episode_id, today_days())?;
                 (next.id == p.next_episode_id
                     && modal
                         .seasons
@@ -378,10 +393,10 @@ mod tests {
             video("special", 0, 1),
             video("s1e1", 1, 1),
         ];
-        assert_eq!(successor(&videos, "s1e1", 0).unwrap().id, "s1e2");
-        assert_eq!(successor(&videos, "s1e2", 0).unwrap().id, "s2e1");
+        assert_eq!(successor("test", &videos, "s1e1", 0).unwrap().id, "s1e2");
+        assert_eq!(successor("test", &videos, "s1e2", 0).unwrap().id, "s2e1");
         for id in ["s2e1", "special", "missing"] {
-            assert!(successor(&videos, id, 0).is_none());
+            assert!(successor("test", &videos, id, 0).is_none());
         }
     }
 
@@ -389,9 +404,12 @@ mod tests {
     fn unaired_successor_blocks_offer_but_missing_date_is_available() {
         let mut videos = vec![video("one", 1, 1), video("two", 1, 2), video("three", 1, 3)];
         videos[1].released = Some("2099-01-01".into());
-        assert!(successor(&videos, "one", today_days()).is_none());
+        assert!(successor("test", &videos, "one", today_days()).is_none());
         videos[1].released = None;
-        assert_eq!(successor(&videos, "one", today_days()).unwrap().id, "two");
+        assert_eq!(
+            successor("test", &videos, "one", today_days()).unwrap().id,
+            "two"
+        );
     }
 
     #[test]

@@ -385,6 +385,7 @@ impl Bridge {
             app.set_cache_date_relative(settings.date_relative);
             app.set_cache_show_unwatched_thumbs(settings.show_unwatched_thumbs);
             app.set_spoiler_protection(settings.spoiler_protection);
+            app.set_include_specials_in_progress(settings.include_specials_in_progress);
             app.set_cache_lru_mb(settings.lru_cache_mb as f32);
             app.set_cache_prefetch_metadata(settings.prefetch_metadata);
             app.set_tmdb_api_key(settings.tmdb_api_key.clone().into());
@@ -645,6 +646,8 @@ impl Bridge {
                 catalog_grouping_overrides: state.cache_settings.catalog_grouping_overrides.clone(),
                 stream_filters: state.cache_settings.stream_filters.clone(),
                 smart_collections: state.cache_settings.smart_collections.clone(),
+                title_progress: state.cache_settings.title_progress.clone(),
+                include_specials_in_progress: app.get_include_specials_in_progress(),
                 tmdb_api_key: app.get_tmdb_api_key().trim().to_owned(),
                 cache_images: app.get_cache_images(),
                 image_disk_cache_limit_mb: DISK_CACHE_LIMITS
@@ -777,8 +780,11 @@ impl Bridge {
         app.set_home_backdrop_size(settings.home_backdrop_size.index());
         app.set_detail_backdrop_size(settings.detail_backdrop_size.index());
         app.set_hero_title_alignment(settings.hero_title_alignment.index());
-        {
+        let progress_scope_changed = {
             let mut state = self.shared.lock().unwrap();
+            let progress_scope_changed = state.cache_settings.include_specials_in_progress
+                != settings.include_specials_in_progress
+                || state.cache_settings.title_progress != settings.title_progress;
             let spoiler_changed = state.cache_settings.spoiler_protection
                 != settings.spoiler_protection
                 || state.cache_settings.show_unwatched_thumbs != settings.show_unwatched_thumbs;
@@ -797,7 +803,8 @@ impl Bridge {
             if remote_changed {
                 self.remote_control_policy_changed(settings.remote_control_enabled);
             }
-        }
+            progress_scope_changed
+        };
         self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         set_active_cache_settings(settings.clone());
         self.player.update_audio_processing(&settings);
@@ -805,6 +812,13 @@ impl Bridge {
             self.refresh_stream_filter_settings();
         }
         self.refresh_catalog_grouping_policy();
+        if progress_scope_changed {
+            self.refresh_progress_scope_ui();
+            self.apply_episode_rows();
+            self.apply_season_cards();
+            self.request_progress_projection();
+            release_reminders::cancel_profile_notifications(profiles::ProfileStore::capture().id());
+        }
         self.invalidate_home_pending_logo();
         if !applying() {
             self.player.update_playback_defaults(&settings);

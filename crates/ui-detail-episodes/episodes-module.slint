@@ -303,6 +303,10 @@ export component DetailEpisodesModule inherits Window {
                                         activated => { DetailBridge.season_watch_action(i, 0); }
                                     }
                                     MenuItem { title: @tr("Download season"); activated => { DetailBridge.season_download_menu = i; } }
+                                    for action in DetailBridge.progress_include_specials ? [s.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress")] : []: MenuItem {
+                                        title: action;
+                                        activated => { DetailBridge.season_watch_action(i, 3); }
+                                    }
                                     MenuSeparator {}
                                     MenuItem {
                                         title: @tr("Select season");
@@ -559,6 +563,10 @@ export component DetailEpisodesModule inherits Window {
                                     DetailBridge.kb_active = false;
                                     DetailBridge.episode_picked(DetailBridge.episode_page_start + i);
                                 }
+                            }
+                            for action in DetailBridge.progress_include_specials ? [e.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress")] : []: MenuItem {
+                                title: action;
+                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 6); }
                             }
                         }
 
