@@ -1501,8 +1501,11 @@ impl Bridge {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
-                    .is_none()
+                // Shared pixels may arrive after this blank model was built.
+                // Cache residency alone does not publish them into the row.
+                !row.is_loaded
+                    || decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                        .is_none()
             })
             .map(|(index, row)| {
                 let type_ = row_sources
@@ -1574,8 +1577,9 @@ impl Bridge {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
-                    .is_none()
+                !row.is_loaded
+                    || decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                        .is_none()
             })
             .map(|(index, row)| {
                 let type_ = row_sources
@@ -2086,6 +2090,125 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
 #[cfg(test)]
 mod discover_artwork_tests {
     use super::*;
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn home_paints_posters_cached_after_blank_rows_are_created_without_scrolling() {
+        const ROOT: &str = "NOVA_HOME_CACHED_POSTER_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-home-posters-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args([
+                    "--exact",
+                    "app::posters::discover_artwork_tests::home_paints_posters_cached_after_blank_rows_are_created_without_scrolling",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        set_active_cache_settings(CacheSettings {
+            cache_images: false,
+            ..Default::default()
+        });
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let rows = (0..6)
+            .map(|i| ContinueRow {
+                id: format!("home-{i}").into(),
+                art_url: format!("https://example.invalid/home-cached-{i}.png").into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        app.set_home_continue(Rc::new(VecModel::from(rows[..2].to_vec())).into());
+        app.set_home_new_episodes(Rc::new(VecModel::from(rows[2..4].to_vec())).into());
+        let upcoming = rows[4..]
+            .iter()
+            .map(|row| UpcomingRow {
+                id: row.id.clone(),
+                art_url: row.art_url.clone(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        app.set_home_upcoming(Rc::new(VecModel::from(upcoming.clone())).into());
+        app.set_home_cal_day(Rc::new(VecModel::from(upcoming)).into());
+        // A Library worker can warm shared pixels after Home's blank models
+        // were constructed but before their artwork requests are dispatched.
+        for row in rows {
+            decoded_cache_insert(
+                &sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)),
+                SharedPixelBuffer::new(2, 3),
+            );
+        }
+        bridge.dispatch_continue_posters();
+        bridge.dispatch_upcoming_posters();
+        let loaded = |app: &AppWindow| {
+            app.get_home_continue().iter().all(|row| row.is_loaded)
+                && app.get_home_new_episodes().iter().all(|row| row.is_loaded)
+                && app.get_home_upcoming().iter().all(|row| row.is_loaded)
+                && app.get_home_cal_day().iter().all(|row| row.is_loaded)
+        };
+        let started = std::time::Instant::now();
+        let weak = app.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(10),
+            move || {
+                if loaded(&weak.upgrade().unwrap()) || started.elapsed() > Duration::from_secs(2) {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        app.run().unwrap();
+        timer.stop();
+        assert!(
+            loaded(&app),
+            "stationary Home must paint every cached poster"
+        );
+        assert_eq!(
+            app.get_home_continue()
+                .row_data(1)
+                .unwrap()
+                .poster
+                .size()
+                .width,
+            2
+        );
+        assert_eq!(
+            app.get_home_upcoming()
+                .row_data(1)
+                .unwrap()
+                .poster
+                .size()
+                .height,
+            3
+        );
+    }
+
     #[cfg(feature = "desktop")]
     #[test]
     fn library_viewport_cache_bypasses_busy_workers_and_requests_stay_bounded() {
