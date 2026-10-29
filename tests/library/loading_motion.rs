@@ -157,7 +157,45 @@ fn fast_mouse_and_touch_flicks_decelerate_without_opening_cards() {
     });
     settle(&app, 8);
     assert!(
-        (app.get_library_scroll_y() + 1072.0).abs() < 1.0,
-        "wheel scrolling is damped without adding fling acceleration"
+        (app.get_library_scroll_y() + 1120.0).abs() < 1.0,
+        "wheel scrolling uses its full delta without adding fling acceleration"
     );
+}
+
+#[test]
+fn desktop_wheel_uses_full_delta_immediately_without_added_momentum() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::desktop_wheel_uses_full_delta_immediately_without_added_momentum"
+    )) {
+        return;
+    }
+    let (app, _) = setup();
+    app.set_touch_menus(false);
+    let scroll = ElementHandle::find_by_element_id(&app, "LibraryPage::lib_scroll")
+        .next()
+        .unwrap();
+    let position = LogicalPosition::new(
+        scroll.absolute_position().x + scroll.size().width / 2.0,
+        550.0,
+    );
+    app.set_library_scroll_y(-1000.0);
+    settle(&app, 8);
+    for delta in [-120.0, -37.5, 60.0] {
+        let expected = app.get_library_scroll_y() + delta;
+        app.window().dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: delta,
+        });
+        assert!(
+            (app.get_library_scroll_y() - expected).abs() < 0.5,
+            "the complete wheel delta applies immediately"
+        );
+        settle(&app, 12);
+        assert!(
+            (app.get_library_scroll_y() - expected).abs() < 0.5,
+            "wheel input must not accumulate an app-generated coast"
+        );
+    }
 }

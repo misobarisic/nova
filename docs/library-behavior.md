@@ -232,8 +232,8 @@ replaces its row, preventing its old index from acting on a different show.
   and stay pinned; returning to the top restores the hero. A fixed scroll
   viewport and header placeholder avoid touch-scroll jitter.
 - Drags follow the pointer directly. Release momentum has a bounded initial
-  speed and stronger deceleration; wheel deltas are reduced so a single flick
-  cannot launch a long accelerated run through saved titles.
+  speed and stronger deceleration. Mouse-wheel deltas apply immediately at
+  100%, without app-added easing or coast.
 - Search opens/closes with the same expansion and fade durations as Detail’s
   episode search. Focus moves into the input after 80 ms; motion-disabled
   settings make the expansion immediate. On narrow screens the field opens

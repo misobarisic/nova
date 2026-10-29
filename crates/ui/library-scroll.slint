@@ -49,7 +49,7 @@ export component LibraryScroll inherits Rectangle {
         width: 100%; height: 100%;
         scroll-event(event) => {
             root.stop();
-            root.content-y = root.bounded(root.content-y + event.delta-y * 0.6);
+            root.content-y = root.bounded(root.content-y + event.delta-y);
             accept
         }
         swipe := SwipeGestureHandler {
