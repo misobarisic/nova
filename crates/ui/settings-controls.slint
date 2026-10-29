@@ -49,8 +49,10 @@ export component PillButton inherits Rectangle {
     animate background { duration: Anim.hover_fast; }
 
     pill_lbl := Text {
-        x: root.wrap_label ? 14px : 0px;
-        width: root.wrap_label ? Math.max(1px, root.width - 28px) : root.width;
+        // Match the padding used to size the button above. Reserving 28px
+        // inside a compact button sized with 20px even splits short words.
+        x: root.wrap_label ? (root.compact ? 10px : 14px) : 0px;
+        width: root.wrap_label ? Math.max(1px, root.width - (root.compact ? 20px : 28px)) : root.width;
         height: root.height;
         wrap: root.wrap_label ? word-wrap : no-wrap;
         text: label;

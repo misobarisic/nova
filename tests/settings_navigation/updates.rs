@@ -7,6 +7,13 @@ slint::slint! {
     import { UpdateNotice } from "../../crates/ui/update-notice.slint";
     export component NoticeHarness inherits Window {
         width: 500px; height: 400px;
+        default-font-family: "Roboto";
+        in property <string> measure_later;
+        in property <string> measure_release;
+        out property <length> later_label_width: later_measure.preferred-width;
+        out property <length> release_label_width: release_measure.preferred-width;
+        later_measure := Text { visible: false; width: 0px; height: 0px; text: root.measure_later; font-size: 13px; }
+        release_measure := Text { visible: false; width: 0px; height: 0px; text: root.measure_release; font-size: 13px; }
         out property <int> background_clicks: 0;
         TouchArea { width: 100%; height: 100%; clicked => { root.background_clicks += 1; } }
         UpdateNotice {
@@ -73,6 +80,66 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, label)
         .last()
         .unwrap_or_else(|| panic!("missing action {label}"))
+}
+
+#[test]
+fn compact_update_actions_leave_room_for_unbroken_labels() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::compact_update_actions_leave_room_for_unbroken_labels"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    // Keep production as the most recently created window so the mock
+    // backend's element queries inspect its item tree, not the reference.
+    let measure = NoticeHarness::new().unwrap();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_app_version("v0.0.50".into());
+    app.set_update_checks_enabled(true);
+    app.set_update_available(true);
+    app.set_update_latest_version("v0.0.51".into());
+    app.set_update_notice_visible(true);
+    app.set_is_android(true);
+    app.show().unwrap();
+    for (language, later, release) in [
+        ("en", "Later", "View release"),
+        ("hr", "Kasnije", "Otvori izdanje"),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        measure.set_measure_later(later.into());
+        measure.set_measure_release(release.into());
+        for width in [320, 360, 412, 640] {
+            app.window().set_size(slint::PhysicalSize::new(width, 640));
+            settle(&app);
+            for (label, required) in [
+                (later, measure.get_later_label_width()),
+                (release, measure.get_release_label_width()),
+            ] {
+                let action = button(&app, label);
+                let origin = action.absolute_position();
+                let size = action.size();
+                let text = ElementHandle::find_by_element_id(&app, "PillButton::pill_lbl")
+                    .find(|item| {
+                        let position = item.absolute_position();
+                        position.x >= origin.x
+                            && position.x < origin.x + size.width
+                            && position.y >= origin.y
+                            && position.y < origin.y + size.height
+                    })
+                    .unwrap();
+                assert!(
+                    text.size().width + 0.5 >= required,
+                    "{label} has insufficient label space at {width}px: {} < {required}",
+                    text.size().width
+                );
+                assert!(
+                    size.height <= 44.5,
+                    "{label} should fit on one line at {width}px: {size:?}"
+                );
+            }
+        }
+    }
 }
 
 fn key(app: &nova::AppWindow, key: slint::platform::Key) {
