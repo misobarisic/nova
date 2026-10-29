@@ -358,6 +358,7 @@ struct Shared {
     /// Typed identities in the painted Library order; actions never rederive
     /// smart filters or sorting just to resolve an already displayed card.
     library_displayed: Vec<media_identity::TitleKey>,
+    library_view: library::ViewState,
     /// Current image-cache settings (mirrored from the KV store).
     cache_settings: CacheSettings,
     playback_preference_edits:

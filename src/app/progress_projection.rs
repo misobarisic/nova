@@ -70,7 +70,7 @@ pub(super) struct View {
 }
 
 impl View {
-    fn capture(bridge: &Bridge) -> Option<Self> {
+    pub(super) fn capture(bridge: &Bridge) -> Option<Self> {
         let app = bridge.app()?;
         Some(Self {
             filter: app.get_library_filter_category().to_string(),
@@ -214,6 +214,7 @@ impl<'a> Metadata<'a> {
 }
 
 struct Prepared {
+    library_view: library::CachedView,
     display_groups: Arc<library::LibraryDisplayGroups>,
     proof_stamp: library::DisplayProofStamp,
     proof_identities: Vec<(media_identity::TitleKey, u64)>,
@@ -275,7 +276,15 @@ fn prepare_with_aliases(
             metadata.episodes(type_, id).as_ref().clone()
         })
     });
-    let cards = library::prepare_progress_cards(&data, view, metadata, activity, &groups);
+    let library_view = library::prepare_cached_view(
+        &data,
+        view,
+        metadata,
+        activity,
+        &groups,
+        proof_modal.clone(),
+    );
+    let cards = library_view.select(view);
     let home = home::prepare_progress_home(&mut data, metadata, activity, new_hidden, &groups);
     watch_history::prepare_progress_history(&mut data, metadata, hidden);
     // This map covers filtered-out Library titles as well as visible cards.
@@ -295,6 +304,7 @@ fn prepare_with_aliases(
         })
         .collect();
     Prepared {
+        library_view,
         display_groups: groups,
         proof_stamp,
         proof_identities: data
@@ -631,6 +641,7 @@ impl Bridge {
             app.set_detail_library_activity_action(action);
         }
         self.publish_progress_cards(prepared.cards);
+        self.cache_library_view(prepared.library_view);
         self.publish_progress_home(prepared.home);
         self.ensure_recommendations_loaded();
         #[cfg(test)]

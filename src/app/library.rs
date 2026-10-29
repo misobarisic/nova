@@ -5,7 +5,7 @@ use super::*;
 /// Presentation-only groups. The earliest saved physical source remains the
 /// representative, independently of filters, sort order and sync arrival order.
 /// Unknown legacy dates sort first; typed native IDs break every date tie.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct LibraryDisplayGroups {
     representatives: HashMap<TitleKey, TitleKey>,
     members: HashMap<TitleKey, Vec<TitleKey>>,
@@ -431,7 +431,7 @@ impl Bridge {
             app.set_library_scroll_y(0.0);
             app.set_library_kb_idx(0);
         }
-        self.apply_library_to_ui();
+        self.request_library_view();
     }
 
     /// Refresh the Slint `library` model from `Shared.entries`.
@@ -1378,9 +1378,11 @@ impl Bridge {
     pub(super) fn filter_library(&self, category: &str) {
         if let Some(app) = self.app() {
             app.set_library_filter_category(SharedString::from(category));
+            app.set_library_scroll_y(0.0);
+            app.set_library_kb_idx(0);
         }
         self.sync_library_category_index();
-        self.apply_library_to_ui();
+        self.request_library_view();
     }
 
     /// Index of the active library category filter within the category
@@ -1648,6 +1650,7 @@ struct LibraryViewOptions<'a> {
     sort: i32,
 }
 
+#[derive(Clone)]
 pub(super) struct LibraryCardSnapshot {
     id: String,
     type_: String,
@@ -1663,8 +1666,289 @@ pub(super) struct LibraryCardSnapshot {
     watched: bool,
 }
 
-/// Cache-only worker projection. No Slint models or shared-state locks are
-/// touched while resolving automatic filters and smart collection rules.
+#[derive(Clone, Default)]
+pub(super) struct ViewState(Arc<Mutex<PendingView>>);
+
+#[derive(Default)]
+struct PendingView {
+    generation: u64,
+    view: super::progress_projection::View,
+    running: bool,
+    cached: Option<CachedView>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ViewStamp {
+    revision: u64,
+    proof: DisplayProofStamp,
+    day: i64,
+    modal: Option<TitleKey>,
+    smart: Option<nova_config::SmartCollection>,
+}
+
+impl ViewStamp {
+    fn new(view: &super::progress_projection::View, modal: Option<TitleKey>) -> Self {
+        Self {
+            revision: super::progress_projection::revision(),
+            proof: display_proof_stamp(),
+            day: today_days(),
+            modal,
+            smart: view.smart.clone(),
+        }
+    }
+    fn current(&self) -> bool {
+        self.revision == super::progress_projection::revision()
+            && self.proof == display_proof_stamp()
+            && self.day == today_days()
+    }
+}
+
+/// Compact derived rows, not episode inventories. Changing a filter reuses
+/// these facts until Library/progress/metadata/policy or the local day changes.
+#[derive(Clone)]
+pub(super) struct CachedView {
+    stamp: ViewStamp,
+    index: Arc<ViewIndex>,
+}
+
+struct ViewIndex {
+    all: Vec<LibraryCandidate>,
+    cards: HashMap<TitleKey, LibraryCardSnapshot>,
+    eligible: HashSet<TitleKey>,
+    groups: LibraryDisplayGroups,
+}
+
+impl CachedView {
+    pub(super) fn select(
+        &self,
+        view: &super::progress_projection::View,
+    ) -> Vec<LibraryCardSnapshot> {
+        let index = &self.index;
+        let matches = index
+            .groups
+            .matching_query(&index.all, &view.query.trim().to_lowercase());
+        let candidates = index
+            .all
+            .iter()
+            .filter(|entry| {
+                let key = (entry.type_.clone(), entry.id.clone());
+                index.eligible.contains(&key)
+                    && matches.contains(&index.groups.representative(&entry.type_, &entry.id))
+                    && (view.filter.is_empty()
+                        || if BUILTIN_FILTERS.contains(&view.filter.as_str()) {
+                            index.cards.get(&key).is_some_and(|card| {
+                                card.status == builtin_filter_label(&view.filter)
+                            })
+                        } else {
+                            entry.categories.contains(&view.filter)
+                        })
+            })
+            .cloned()
+            .collect();
+        order_library_candidates(
+            index.groups.project_candidates(candidates, &index.all),
+            view.sort,
+        )
+        .into_iter()
+        .filter_map(|entry| index.cards.get(&(entry.type_, entry.id)).cloned())
+        .collect()
+    }
+}
+
+pub(super) fn prepare_cached_view(
+    state: &Shared,
+    view: &super::progress_projection::View,
+    metadata: &super::progress_projection::Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+    groups: &LibraryDisplayGroups,
+    modal: Option<TitleKey>,
+) -> CachedView {
+    let stamp = ViewStamp::new(view, modal);
+    let all = state
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
+        .collect::<Vec<_>>();
+    let mut cards = HashMap::new();
+    let mut eligible = HashSet::new();
+    let owner = profiles::ProfileStore::capture();
+    for candidate in &all {
+        if !profile_policy::allows_title(&owner, &candidate.type_, &candidate.id) {
+            continue;
+        }
+        let entry = &state.entries[candidate.entry_index];
+        let cached = metadata.title(&entry.type_, &entry.id);
+        let episodes = cached
+            .episodes
+            .as_deref()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let key = (entry.type_.clone(), entry.id.clone());
+        if view.smart.as_ref().is_none_or(|rule| {
+            smart_collections::matches_library_entry(
+                rule,
+                entry,
+                cached.header.as_deref(),
+                episodes,
+                &state.progress,
+            )
+        }) {
+            eligible.insert(key.clone());
+        }
+        if let Some(card) =
+            project_library_card(entry, candidate, episodes, &state.progress, activity)
+        {
+            cards.insert(key, card);
+        }
+    }
+    CachedView {
+        stamp,
+        index: Arc::new(ViewIndex {
+            all,
+            cards,
+            eligible,
+            groups: groups.clone(),
+        }),
+    }
+}
+
+impl Bridge {
+    pub(super) fn cache_library_view(&self, cached: CachedView) {
+        let Some(view) = super::progress_projection::View::capture(self) else {
+            return;
+        };
+        let state = self.shared.lock().unwrap();
+        let modal = state
+            .modal_item
+            .as_ref()
+            .map(|item| (item.type_.clone(), item.id.clone()));
+        if cached.stamp == ViewStamp::new(&view, modal) {
+            state.library_view.0.lock().unwrap().cached = Some(cached);
+        }
+    }
+
+    /// Filter/search/sort callbacks only capture input. A warm view needs no
+    /// metadata I/O, and a cold view never blocks the event loop on decoding.
+    pub(super) fn request_library_view(&self) {
+        let Some(view) = super::progress_projection::View::capture(self) else {
+            return;
+        };
+        let owner = self.shared.lock().unwrap().library_view.clone();
+        {
+            let mut pending = owner.0.lock().unwrap();
+            pending.generation = pending.generation.wrapping_add(1);
+            pending.view = view;
+            if pending.running {
+                return;
+            }
+            pending.running = true;
+        }
+        let bridge = self.clone();
+        let context = profiles::capture();
+        thread::spawn(move || {
+            loop {
+                if !profiles::is_current(&context) {
+                    owner.0.lock().unwrap().running = false;
+                    return;
+                }
+                let (generation, view) = {
+                    let pending = owner.0.lock().unwrap();
+                    (pending.generation, pending.view.clone())
+                };
+                let modal = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .map(|item| (item.type_.clone(), item.id.clone()));
+                let stamp = ViewStamp::new(&view, modal.clone());
+                let current = || profiles::is_current(&context) && stamp.current();
+                let cached = owner
+                    .0
+                    .lock()
+                    .unwrap()
+                    .cached
+                    .as_ref()
+                    .filter(|cached| cached.stamp == stamp)
+                    .cloned();
+                let cached = cached.or_else(|| {
+                    let data = super::progress_projection::snapshot(&bridge, current)?;
+                    let metadata = super::progress_projection::Metadata::new(
+                        |type_, id| {
+                            (
+                                read_episodes_cache_for(type_, id),
+                                read_meta_header_for(type_, id),
+                            )
+                        },
+                        current,
+                    );
+                    let identities = data
+                        .entries
+                        .iter()
+                        .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry.added_at_secs))
+                        .collect();
+                    let groups = display_groups_for_identities(
+                        identities,
+                        modal.as_ref(),
+                        &mut |type_, id| metadata.episodes(type_, id).as_ref().clone(),
+                    );
+                    Some(prepare_cached_view(
+                        &data,
+                        &view,
+                        &metadata,
+                        &read_viewing_activity(),
+                        &groups,
+                        modal.clone(),
+                    ))
+                });
+                let Some(cached) = cached.filter(|_| current()) else {
+                    continue;
+                };
+                {
+                    let mut pending = owner.0.lock().unwrap();
+                    pending.cached = Some(cached.clone());
+                    if pending.generation != generation {
+                        continue;
+                    }
+                }
+                let cards = cached.select(&view);
+                let callback_owner = owner.clone();
+                let queued = profiles::invoke_from_event_loop(move || {
+                    let matches = {
+                        let mut pending = callback_owner.0.lock().unwrap();
+                        pending.running = false;
+                        pending.generation == generation
+                    };
+                    let modal = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .map(|item| (item.type_.clone(), item.id.clone()));
+                    if !matches
+                        || cached.stamp != ViewStamp::new(&view, modal)
+                        || super::progress_projection::View::capture(&bridge).as_ref()
+                            != Some(&view)
+                    {
+                        bridge.request_library_view();
+                        return;
+                    }
+                    bridge.publish_progress_cards(cards);
+                });
+                if queued.is_err() {
+                    owner.0.lock().unwrap().running = false;
+                }
+                return;
+            }
+        });
+    }
+}
+
+/// Cache-only worker projection retained as a policy oracle for regressions.
+#[cfg(test)]
 pub(super) fn prepare_progress_cards(
     state: &Shared,
     view: &super::progress_projection::View,
@@ -2015,6 +2299,81 @@ fn builtin_filter_label(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_filter_index_reuses_metadata_and_matches_legacy_grouped_filters() {
+        let (mut entries, inventories) = grouped_identity_fixture();
+        entries.extend((0..400).map(|number| serde_json::from_value(serde_json::json!({
+            "id": format!("large-{number}"), "type_":"series", "name": format!("Saved {number}"),
+            "year": format!("{}", 2000 + number % 25), "categories":["Favorites"],
+            "imported_tracking_status": match number % 3 { 0 => "planning", 1 => "watching", _ => "completed" }
+        })).unwrap()));
+        let state = Shared {
+            entries,
+            ..Default::default()
+        };
+        let groups = prepare_display_groups(&state.entries, |_, id| {
+            inventories.get(id).cloned().unwrap_or_default()
+        });
+        let reads = std::cell::Cell::new(0);
+        let metadata = super::super::progress_projection::Metadata::new(
+            |_, id| {
+                reads.set(reads.get() + 1);
+                (Some(inventories.get(id).cloned().unwrap_or_default()), None)
+            },
+            || true,
+        );
+        let view = super::super::progress_projection::View::default();
+        let cache = prepare_cached_view(&state, &view, &metadata, &HashMap::new(), &groups, None);
+        let prepared_reads = reads.get();
+        for filter in [
+            "",
+            "Plan to Watch",
+            "Watching",
+            "Completed",
+            "Anime",
+            "Favorites",
+        ] {
+            for query in ["", "native", "saved 3"] {
+                for sort in 0..=2 {
+                    let view = super::super::progress_projection::View {
+                        filter: filter.into(),
+                        query: query.into(),
+                        sort,
+                        ..Default::default()
+                    };
+                    let selected = cache.select(&view);
+                    assert_eq!(
+                        reads.get(),
+                        prepared_reads,
+                        "warm filter must not reopen metadata"
+                    );
+                    let oracle = super::super::progress_projection::Metadata::new(
+                        |_, id| (Some(inventories.get(id).cloned().unwrap_or_default()), None),
+                        || true,
+                    );
+                    let expected =
+                        prepare_progress_cards(&state, &view, &oracle, &HashMap::new(), &groups);
+                    let facts = |cards: Vec<LibraryCardSnapshot>| {
+                        cards
+                            .into_iter()
+                            .map(|card| {
+                                (
+                                    card.type_,
+                                    card.id,
+                                    card.status,
+                                    card.watched,
+                                    card.watched_count,
+                                    card.episode_count,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(facts(selected), facts(expected), "{filter} {query} {sort}");
+                }
+            }
+        }
+    }
 
     fn grouped_identity_fixture() -> (Vec<LibraryEntry>, HashMap<String, Vec<Video>>) {
         let mut entries: Vec<LibraryEntry> = serde_json::from_value(serde_json::json!([

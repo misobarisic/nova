@@ -228,6 +228,14 @@ replaces its row, preventing its old index from acting on a different show.
   Badge/progress updates patch rows in place — no model rebuild, so loading
   posters are never interrupted. If progress changes filter membership, the
   model is rebuilt so displayed indices keep matching the visible entries.
+- Filter/search/sort changes use a coalesced profile-owned worker. A compact
+  index reuses derived status, counts and grouping without reopening episode
+  metadata on each selection. Library/progress/metadata/policy changes, a new
+  local day or a changed smart rule invalidate it; stale results cannot replace
+  a newer selection. Existing posters remain painted during preparation.
+  The grid keeps lightweight row geometry for the full result but constructs
+  card contents only near the viewport, avoiding a full library of menus and
+  text controls on every filter change.
 - Backing out of an entry restores the absolute scroll offset; a fully hidden
   focused card is revealed, a partially visible one is left alone.
 - Keyboard zones cover page navigation, saved-collection/category filters,
