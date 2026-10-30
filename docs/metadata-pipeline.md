@@ -332,6 +332,11 @@ are withheld, and stale routing aliases are stripped after inventory changes.
 No progress records or sync schemas are rewritten.
 
 Detail, Home hydration and prefetch use the same cache writer and merged list.
+Successful Detail refreshes also update the open episode inventory for ended
+shows. An open stream view or a restored later season keeps its navigation
+while receiving the refreshed list, so visible episode rows and Library
+completion use the same coverage. Metadata corrections do not change watched
+flags.
 The existing episode cache provides continuity when a metadata response changes
 its fingerprint or when a primary provider starts supplying a season previously
 added from another provider. Confirmed supplemental mappings remain in the

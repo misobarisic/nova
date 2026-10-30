@@ -1334,8 +1334,8 @@ impl Bridge {
 
     /// Main thread: apply fresh episode metadata. The list is swapped in
     /// while the user is still on the unselected top-level episode list; a
-    /// deeper view (a season chosen or streams shown) keeps its position but
-    /// still receives the fresh videos in place when the show is unfinished.
+    /// deeper view (a season chosen or streams shown) keeps its position and
+    /// receives the fresh videos in place, including for ended shows.
     /// When no addon can provide episodes, fall back to plain streams unless
     /// a cached list is already being shown.
     #[cfg(test)]
@@ -1406,12 +1406,10 @@ impl Bridge {
         if let Some(item) = found.as_ref() {
             self.tracking_metadata(id.clone(), modal_type.clone(), &item.videos);
         }
-        // Unfinished shows may have new or changed episodes and descriptions
-        // since the cache was written: their header text is overwritten (not
-        // gap-filled) and fresh videos swap in even past the top-level list.
-        // Finished shows keep the cheap cached behavior for text — but art
-        // is rechecked on every successful fetch regardless of status (see
-        // `refresh_images`): posters change upstream for ended shows too.
+        // Unfinished shows overwrite header text rather than only filling
+        // gaps. Ended status does not freeze episode coverage: both kinds
+        // receive the same fresh inventory that the worker saved for Library.
+        // Art is also rechecked regardless of status (see `refresh_images`).
         let unfinished = found
             .as_ref()
             .is_some_and(|item| !Self::series_finished(item.status.as_deref()));
@@ -1496,20 +1494,15 @@ impl Bridge {
                         videos.len()
                     );
                     self.show_episode_picker(id, videos);
-                } else if unfinished {
-                    // Background refresh for an unfinished show arriving past
-                    // the top-level list (or onto a restored non-zero
-                    // season): swap the videos in place so descriptions stay
-                    // fresh without moving the user's season/tab/streams.
+                } else {
+                    // Even ended shows can gain corrected episode coverage.
+                    // Keep this view on the same inventory as Library without
+                    // moving the user's selected season, tab or stream view.
                     eprintln!(
                         "nova: detail refresh {modal_type}/{id}: status={status:?}, in-place update, {} videos",
                         videos.len()
                     );
                     self.update_episode_videos(id, videos);
-                } else {
-                    eprintln!(
-                        "nova: detail refresh {modal_type}/{id}: status={status:?}, kept cached list (deeper view of a finished show)"
-                    );
                 }
                 if unfinished {
                     // Refresh checks for the already-cached thumbnails (the
@@ -5912,6 +5905,9 @@ mod tests {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
+            if std::env::var_os("NOVA_DETAIL_BACKUP_REPLAY").is_some() {
+                print!("{}", String::from_utf8_lossy(&output.stdout));
+            }
             return;
         };
         let root = PathBuf::from(root);
@@ -5939,6 +5935,174 @@ mod tests {
             player,
             downloads,
         );
+        // Optional local replay keeps personal backup data and credentials out
+        // of repository fixtures. The ordinary regression below remains fully
+        // self-contained; this branch exercises the same UI with real records.
+        if let Some(path) = std::env::var_os("NOVA_DETAIL_BACKUP_REPLAY") {
+            #[derive(serde::Deserialize)]
+            struct ReplayCase {
+                meta: MetaItem,
+                remote_watched: String,
+                expected_watched: i32,
+                expected_total: i32,
+                missing_episode: String,
+            }
+            #[derive(serde::Deserialize)]
+            struct Replay {
+                library: Vec<LibraryEntry>,
+                progress: HashMap<String, EpisodeProgress>,
+                activity: HashMap<String, ViewingActivity>,
+                settings: CacheSettings,
+                cases: Vec<ReplayCase>,
+            }
+            let replay: Replay = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            set_active_cache_settings(replay.settings.clone());
+            write_json(VIEWING_ACTIVITY_KEY, &replay.activity);
+            write_progress_map(&replay.progress);
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.entries = replay.library.clone();
+                state.progress = replay.progress.clone();
+                state.cache_settings = replay.settings;
+            }
+            println!(
+                "backup replay: {} library entries, {} progress records",
+                replay.library.len(),
+                replay.progress.len()
+            );
+            for case in replay.cases {
+                let id = &case.meta.preview.id;
+                let entry = replay.library.iter().find(|entry| entry.id == *id).unwrap();
+                let remote_videos = case
+                    .meta
+                    .videos
+                    .iter()
+                    .map(|video| nova_stremio::Video {
+                        id: video.id.clone(),
+                        season: video.season,
+                        episode: video.episode.or(video.number),
+                        released_ms: video
+                            .released
+                            .as_deref()
+                            .and_then(nova_stremio::released_timestamp_ms),
+                    })
+                    .collect::<Vec<_>>();
+                let remote =
+                    nova_stremio::decode_watched(&case.remote_watched, &remote_videos).unwrap();
+                let remote_ids = remote
+                    .iter()
+                    .filter(|(_, watched)| **watched)
+                    .map(|(id, _)| id.as_str())
+                    .collect::<HashSet<_>>();
+                let archived_ids = replay
+                    .progress
+                    .values()
+                    .filter(|row| row.series_id == *id && row.watched)
+                    .map(|row| row.episode_id.as_str())
+                    .collect::<HashSet<_>>();
+                assert_eq!(
+                    remote_ids, archived_ids,
+                    "remote/backup watched IDs for {id}"
+                );
+                let season = case
+                    .meta
+                    .videos
+                    .iter()
+                    .find(|video| video.id == case.missing_episode)
+                    .unwrap()
+                    .season
+                    .unwrap();
+                for stale_cache in [false, true] {
+                    let mut initial = case.meta.clone();
+                    if stale_cache {
+                        // The archive has no episode cache. Simulate an older
+                        // inventory missing this row, without altering history.
+                        initial
+                            .videos
+                            .retain(|video| video.id != case.missing_episode);
+                    }
+                    write_meta_header_for("series", id, &meta_header_from_item(&initial));
+                    write_episodes_cache_for("series", id, &initial.videos);
+                    bridge.open_library_entry(entry.clone());
+                    let season_index = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .unwrap()
+                        .seasons
+                        .iter()
+                        .position(|value| *value == season)
+                        .unwrap();
+                    bridge.season_picked(season_index);
+                    if stale_cache {
+                        assert!(app.get_episode_rows().iter().all(|row| row.watched));
+                        let token = {
+                            let mut state = bridge.shared.lock().unwrap();
+                            let modal = state.modal_item.as_mut().unwrap();
+                            modal.request_id = modal
+                                .videos
+                                .iter()
+                                .rfind(|video| video.season == Some(season))
+                                .unwrap()
+                                .id
+                                .clone();
+                            modal.open_token.clone()
+                        };
+                        app.set_episode_context("Selected episode".into());
+                        app.set_stream_selector_open(true);
+                        let mut fresh = case.meta.clone();
+                        fresh.videos = write_episode_meta_cache_for("series", id, &fresh);
+                        bridge.apply_episode_meta(id.clone(), Some(fresh), true, token);
+                        assert!(app.get_stream_selector_open());
+                        assert_eq!(app.get_season_combo_idx(), season_index as i32);
+                    }
+                    bridge.refresh_detail_library_watched();
+                    let counts = {
+                        let state = bridge.shared.lock().unwrap();
+                        let modal = state.modal_item.as_ref().unwrap();
+                        let cached = read_episodes_cache_for("series", id).unwrap();
+                        assert_eq!(
+                            modal
+                                .videos
+                                .iter()
+                                .map(|video| &video.id)
+                                .collect::<Vec<_>>(),
+                            cached.iter().map(|video| &video.id).collect::<Vec<_>>()
+                        );
+                        assert!(
+                            state.progress == replay.progress,
+                            "backup history changed for {id}"
+                        );
+                        let counts = library_episode_counts(id, &cached, &state.progress);
+                        assert_eq!(counts, (case.expected_watched, case.expected_total));
+                        assert!(!library_title_completed(
+                            "series",
+                            id,
+                            &cached,
+                            &state.progress,
+                            today_days()
+                        ));
+                        counts
+                    };
+                    assert!(!app.get_detail_library_watched());
+                    let row = app
+                        .get_episode_rows()
+                        .iter()
+                        .find(|row| row.id.as_str() == case.missing_episode)
+                        .unwrap();
+                    assert!(!row.watched, "missing episode painted watched for {id}");
+                    println!(
+                        "backup replay: {id}, simulated_stale_cache={stale_cache}, watched={}/{}, missing={} unchecked, history unchanged",
+                        counts.0, counts.1, case.missing_episode
+                    );
+                    app.set_modal_visible(false);
+                    bridge.modal_closed();
+                }
+            }
+            return;
+        }
         let preview: MetaPreview = serde_json::from_value(serde_json::json!({
             "id": "entry", "type": "series", "name": "Featured entry",
             "releaseInfo": "2020", "genres": ["Catalog genre"],
@@ -6208,6 +6372,93 @@ mod tests {
             .clone();
         bridge.apply_episode_meta("cold-resume".into(), Some(resume_item), false, token);
         assert_season_only(1);
+        close();
+        // Ended shows can gain corrected episode coverage too. A refresh
+        // must not leave a completely watched old list beside an incomplete
+        // Library card calculated from the newly persisted inventory.
+        let mut ended: MetaItem = serde_json::from_value(serde_json::json!({
+            "id":"ended-refresh", "type":"series", "name":"Ended show", "status":"Ended",
+            "videos":[
+                {"id":"ended:1:1", "season":1, "episode":1, "released":"2000-01-01"},
+                {"id":"ended:2:1", "season":2, "episode":1, "released":"2000-01-02"},
+                {"id":"ended:2:3", "season":2, "episode":3, "released":"2000-01-04"}
+            ]
+        }))
+        .unwrap();
+        write_meta_header_for("series", "ended-refresh", &meta_header_from_item(&ended));
+        write_episodes_cache_for("series", "ended-refresh", &ended.videos);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            for video in &ended.videos {
+                Bridge::set_episode_watched_locked(
+                    &mut state.progress,
+                    "ended-refresh",
+                    &video.id,
+                    true,
+                );
+            }
+        }
+        bridge.open_preview(ended.preview.clone(), 0, false, None, false);
+        bridge.season_picked(1);
+        assert!(app.get_episode_rows().iter().all(|row| row.watched));
+        let (token, progress_before) = {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.request_id = "ended:2:3".into();
+            (modal.open_token.clone(), state.progress.clone())
+        };
+        app.set_episode_context("S2 E3".into());
+        app.set_stream_selector_open(true);
+        ended.videos.push(
+            serde_json::from_value(serde_json::json!({
+                "id":"ended:2:2", "season":2, "episode":2, "released":"2000-01-03"
+            }))
+            .unwrap(),
+        );
+        // The metadata worker saves this before delivering the UI callback.
+        ended.videos = write_episode_meta_cache_for("series", "ended-refresh", &ended);
+        bridge.apply_episode_meta("ended-refresh".into(), Some(ended), true, token);
+        {
+            let state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_ref().unwrap();
+            assert_eq!(modal.videos.len(), 4);
+            assert_eq!(
+                modal
+                    .videos
+                    .iter()
+                    .map(|video| &video.id)
+                    .collect::<Vec<_>>(),
+                read_episodes_cache_for("series", &modal.id)
+                    .unwrap()
+                    .iter()
+                    .map(|video| &video.id)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(modal.seasons[modal.season_index], 2);
+            assert_eq!(modal.request_id, "ended:2:3");
+            assert_eq!(
+                state.progress, progress_before,
+                "metadata never edits watched history"
+            );
+            assert_eq!(
+                library_episode_counts(&modal.id, &modal.videos, &state.progress),
+                (3, 4)
+            );
+            assert!(!library_title_completed(
+                "series",
+                &modal.id,
+                &modal.videos,
+                &state.progress,
+                today_days()
+            ));
+        }
+        assert!(app.get_stream_selector_open());
+        assert_eq!(app.get_season_combo_idx(), 1);
+        let rows = app.get_episode_rows();
+        assert_eq!(rows.row_count(), 3);
+        let missing = rows.iter().find(|row| row.id == "ended:2:2").unwrap();
+        assert!(!missing.watched);
+        assert_eq!(rows.iter().filter(|row| row.watched).count(), 2);
         close();
         // A first visit has no target yet, so it offers episode selection
         // while loading, rather than advertising a speculative Start action.
