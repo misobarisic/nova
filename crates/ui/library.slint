@@ -583,9 +583,8 @@ export component LibraryPage {
                     width: 100%;
                     height: 100%;
                     content-height: library_content.preferred-height;
-                    // This scroller owns a normal property rather than a
-                    // native Flickable animation, so a two-way link keeps
-                    // restoration and coast updates in sync without feedback.
+                    // The wrapper mirrors native offsets without feeding them
+                    // back into Flickable and cancelling its momentum.
                     content-y <=> root.scroll_y;
                     changed content-y => {
                         root.schedule_posters();

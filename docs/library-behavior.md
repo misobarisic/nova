@@ -231,15 +231,12 @@ replaces its row, preventing its old index from acting on a different show.
   Search, category filters, sorting and grid/list controls move to the top
   and stay pinned; returning to the top restores the hero. A fixed scroll
   viewport and header placeholder avoid touch-scroll jitter.
-- Drags follow the pointer directly. Release momentum has a bounded initial
-  speed. Android/touch uses velocity-dependent friction with a gentle low-speed
-  tail; a fast fling still coasts no more than roughly 2.8 viewports. Release
-  speed uses a short movement window, so coalesced events and tiny lift-off
-  movements do not replace a whole flick with its final sample. Deliberate
-  reversals reset the window. Duplicate stationary samples do not erase fresh
-  movement, but holding still before release cancels old momentum. Desktop
-  mouse drags retain their stronger brake.
-  Mouse-wheel deltas apply immediately at 100%, without app-added easing or coast.
+- My Library uses Slint's native Flickable engine, like Home, for touch/mouse
+  drags, release momentum, gesture cancellation and smooth wheel scrolling.
+  There is no Library-specific velocity cap, damping or wheel multiplier.
+  The wrapper mirrors native offsets into retained page state without
+  cancelling momentum; keyboard navigation, filter changes and restoration
+  can still stop or reposition the viewport.
 - Search opens/closes with the same expansion and fade durations as Detail’s
   episode search. Focus moves into the input after 80 ms; motion-disabled
   settings make the expansion immediate. On narrow screens the field opens
