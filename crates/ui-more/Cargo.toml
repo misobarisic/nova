@@ -10,6 +10,7 @@ links = "novauimore"
 test = false
 
 [dependencies]
+nova-ui-base = { workspace = true }
 slint = { workspace = true }
 i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }
 nova-ui-shared = { path = "../ui-shared" }

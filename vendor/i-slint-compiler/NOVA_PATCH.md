@@ -11,9 +11,9 @@ modified local path dependency.
 
 The modified upstream sources are `generator/rust.rs` (compiled root
 attachment), `passes/remove_aliases.rs` (preserving consumer property storage
-across compiled-library boundaries), and `passes.rs` (shared source translation
-catalogs). Workspace Slint dependencies are pinned
-exactly to 1.18.0 so native field layouts and the embedding constructor match.
+across compiled-library boundaries), `passes.rs` (shared source translation
+catalogs), and `typeloader.rs` (Cargo source-library directory metadata). Workspace
+Slint dependencies are pinned exactly to 1.18.0 so native field layouts and the embedding constructor match.
 
 ## Why this patch exists
 
@@ -171,3 +171,16 @@ checks. Default-target workspace Clippy (`--locked -- -D warnings`) and
 request; checking generated Rust does not validate focus, popup, rendering or
 teardown behavior. See the production measurements in
 [`crates/ui/experiments/modules/README.md`](../../crates/ui/experiments/modules/README.md).
+
+## Source-only UI libraries
+
+Nova Kit's `nova-ui-base` exports Slint source files rather than another native
+shared-globals bundle. `find_file_in_library_path` first honors explicit library
+paths, then accepts Cargo's `DEP_<LIBRARY>_SLINT_SOURCE_DIR` metadata as the source
+directory for `@Library/file.slint` imports. Its existing file loader and import
+semantics remain unchanged. Nova's root build script forwards this directory to
+rustc so inline `slint!` fixtures resolve the same files as page build scripts.
+The source controls continue to import the existing compiled `NovaUiShared`
+globals, preserving canonical types, global state and embedded factories.
+Other consumers can use ordinary `CompilerConfiguration::with_library_paths`
+with the kit's exported source directory and their own compatible host contract.

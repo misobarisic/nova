@@ -9,3 +9,6 @@
 # Paths in this file resolve relative to the Nova checkout root.
 [patch."https://github.com/misobarisic/nova-kit"]
 nova-storage = { path = "../nova-kit/crates/storage" }
+addons = { path = "../nova-kit/crates/addons" }
+nova-download = { path = "../nova-kit/crates/download" }
+nova-ui-base = { path = "../nova-kit/crates/ui-base" }

@@ -129,6 +129,7 @@ dependencies = [
 [[package]]
 name = "addons"
 version = "0.1.0"
+source = "git+https://github.com/misobarisic/nova-kit?rev=63141dfc6abd39a247edde1f33ebaeb59dc7229a#63141dfc6abd39a247edde1f33ebaeb59dc7229a"
 dependencies = [
  "percent-encoding",
  "reqwest",
@@ -5327,6 +5328,7 @@ dependencies = [
  "nova-torrent",
  "nova-tracking",
  "nova-ui",
+ "nova-ui-base",
  "nova-ui-shared",
  "parking_lot",
  "qrcode",
@@ -5393,6 +5395,7 @@ dependencies = [
 [[package]]
 name = "nova-download"
 version = "0.1.0"
+source = "git+https://github.com/misobarisic/nova-kit?rev=63141dfc6abd39a247edde1f33ebaeb59dc7229a#63141dfc6abd39a247edde1f33ebaeb59dc7229a"
 dependencies = [
  "aws-lc-rs",
  "httpdate",
@@ -5514,7 +5517,7 @@ dependencies = [
 [[package]]
 name = "nova-storage"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=d520df46af697d53f3ae1218fbdaa611faf836f4#d520df46af697d53f3ae1218fbdaa611faf836f4"
+source = "git+https://github.com/misobarisic/nova-kit?rev=63141dfc6abd39a247edde1f33ebaeb59dc7229a#63141dfc6abd39a247edde1f33ebaeb59dc7229a"
 dependencies = [
  "redb",
  "serde",
@@ -5592,6 +5595,7 @@ version = "0.1.0"
 dependencies = [
  "i-slint-core",
  "nova-config",
+ "nova-ui-base",
  "nova-ui-calendar",
  "nova-ui-detail",
  "nova-ui-discover",
@@ -5608,10 +5612,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-ui-base"
+version = "0.1.0"
+source = "git+https://github.com/misobarisic/nova-kit?rev=63141dfc6abd39a247edde1f33ebaeb59dc7229a#63141dfc6abd39a247edde1f33ebaeb59dc7229a"
+
+[[package]]
 name = "nova-ui-calendar"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5622,6 +5632,7 @@ name = "nova-ui-detail"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-detail-episodes",
  "nova-ui-detail-streams",
  "nova-ui-detail-tracking",
@@ -5636,6 +5647,7 @@ name = "nova-ui-detail-episodes"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5646,6 +5658,7 @@ name = "nova-ui-detail-streams"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5656,6 +5669,7 @@ name = "nova-ui-detail-tracking"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5666,6 +5680,7 @@ name = "nova-ui-detail-tracking-entry"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5676,6 +5691,7 @@ name = "nova-ui-discover"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5686,6 +5702,7 @@ name = "nova-ui-home"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5696,6 +5713,7 @@ name = "nova-ui-library"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5706,6 +5724,7 @@ name = "nova-ui-more"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5716,6 +5735,7 @@ name = "nova-ui-onboarding"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5726,6 +5746,7 @@ name = "nova-ui-player-osd"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5736,6 +5757,7 @@ name = "nova-ui-settings"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-settings-addons",
  "nova-ui-settings-categories",
  "nova-ui-settings-display",
@@ -5759,6 +5781,7 @@ name = "nova-ui-settings-addons"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5769,6 +5792,7 @@ name = "nova-ui-settings-categories"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5779,6 +5803,7 @@ name = "nova-ui-settings-display"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5789,6 +5814,7 @@ name = "nova-ui-settings-downloaded-episodes"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5799,6 +5825,7 @@ name = "nova-ui-settings-downloads"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5809,6 +5836,7 @@ name = "nova-ui-settings-home"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5819,6 +5847,7 @@ name = "nova-ui-settings-image-cache"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5829,6 +5858,7 @@ name = "nova-ui-settings-look-feel"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5839,6 +5869,7 @@ name = "nova-ui-settings-p2p"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5849,6 +5880,7 @@ name = "nova-ui-settings-player"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5859,6 +5891,7 @@ name = "nova-ui-settings-sync"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5869,6 +5902,7 @@ name = "nova-ui-settings-theme"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5879,6 +5913,7 @@ name = "nova-ui-settings-tracking"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "nova-ui-shared",
  "slint",
  "slint-build",
@@ -5889,6 +5924,7 @@ name = "nova-ui-shared"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "nova-ui-base",
  "slint",
  "slint-build",
 ]

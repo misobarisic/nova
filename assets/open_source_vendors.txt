@@ -20,11 +20,12 @@ NOVA APPLICATION AND SHARED CRATES
 The core app packages below share GPL-3.0-or-later. The generated Cargo catalog
 lists the complete runtime dependency set in Settings → About:
 - nova (root package, src/)
-- addons (crates/addons/)
+- addons (nova-kit/crates/addons/, separate shared workspace)
 - nova-ui (crates/ui/)
+- nova-ui-base (nova-kit/crates/ui-base/, shared Slint sources)
 - nova-storage (nova-kit/crates/storage/, separate shared workspace)
 - nova-config (crates/config/)
-- nova-download (crates/download/)
+- nova-download (nova-kit/crates/download/, separate shared workspace)
 - nova-torrent (crates/torrent/)
 - nova-media (crates/media/)
 - nova-providers (crates/providers/)

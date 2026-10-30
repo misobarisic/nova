@@ -19,6 +19,12 @@ fn main() {
             println!("cargo:rustc-env={key}={value}");
         }
     }
+    // Inline Slint fixtures use the same source-package lookup as build scripts.
+    let key = "DEP_NOVAUIBASE_SLINT_SOURCE_DIR";
+    println!("cargo:rerun-if-env-changed={key}");
+    if let Ok(value) = env::var(key) {
+        println!("cargo:rustc-env={key}={value}");
+    }
     // Shared bridge declarations contain experimental ComponentFactory types.
     println!("cargo:rustc-env=SLINT_ENABLE_EXPERIMENTAL_FEATURES=1");
     // The Slint UI is compiled by the `nova-ui` crate's build script. This
@@ -140,10 +146,8 @@ fn generate_license_catalog() {
         "assets/fonts/LICENSE.txt",
         "assets/fonts/NotoColorEmoji-LICENSE.txt",
         "assets/icons/player/LICENSE",
-        "crates/addons/Cargo.toml",
         "crates/ui/Cargo.toml",
         "crates/config/Cargo.toml",
-        "crates/download/Cargo.toml",
         "crates/torrent/Cargo.toml",
         "crates/media/Cargo.toml",
         "crates/providers/Cargo.toml",

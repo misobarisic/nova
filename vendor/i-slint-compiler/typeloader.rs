@@ -1764,7 +1764,13 @@ impl TypeLoader {
             .collect_tuple()
             .map(|(library, path)| (library, Some(path)))
             .unwrap_or((maybe_library_import, None));
-        self.compiler_config.library_paths.get(library).and_then(|library_path| {
+        // Cargo source-only UI packages expose their directory without creating
+        // another native globals bundle. This also works in inline slint! tests,
+        // where a build-time CompilerConfiguration cannot be supplied.
+        self.compiler_config.library_paths.get(library).cloned().or_else(|| {
+            std::env::var_os(format!("DEP_{}_SLINT_SOURCE_DIR", library.to_uppercase()))
+                .map(PathBuf::from)
+        }).and_then(|library_path| {
             let path = match file {
                 // "@library/file.slint" -> "/path/to/library/" + "file.slint"
                 Some(file) => library_path.join(file),

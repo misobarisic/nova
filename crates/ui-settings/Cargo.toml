@@ -10,6 +10,7 @@ links = "novasettings"
 test = false
 
 [dependencies]
+nova-ui-base = { workspace = true }
 slint = { workspace = true }
 # The page embeds SVG assets, including when checked without an app renderer.
 i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }

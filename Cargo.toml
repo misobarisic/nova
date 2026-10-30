@@ -2,7 +2,6 @@
 # Patched dependency retains a standalone focused test suite.
 exclude = ["vendor/librqbit"]
 members = [
-    "crates/addons",
     "crates/providers",
     "crates/ui",
     "crates/ui-settings",
@@ -33,7 +32,6 @@ members = [
     "crates/ui-player-osd",
     "crates/ui-onboarding",
     "crates/config",
-    "crates/download",
     "crates/torrent",
     "crates/media",
     "crates/player",
@@ -78,8 +76,11 @@ i-slint-compiler = { path = "vendor/i-slint-compiler" }
 librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e38562e7e373bc58bbbb20b68e58c71fef" }
 
 [workspace.dependencies]
-# Shared storage; local development aliases opt into the sibling checkout.
-nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "d520df46af697d53f3ae1218fbdaa611faf836f4" }
+# Shared kit crates; local development aliases opt into the sibling checkout.
+addons = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a", default-features = false }
+nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
+nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
+nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
 
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
@@ -127,18 +128,19 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 semver = "1"
 parking_lot = { version = "0.12.5", features = ["arc_lock"] }
-# Addon protocol (URL building + response parsing). HTTP lives in nova-media.
-addons = { path = "crates/addons", default-features = false }
+# Addon protocol (URL building + response parsing), provided by nova-kit.
+addons = { workspace = true, default-features = false }
 nova-providers = { path = "crates/providers" }
 # Leaf/sub-crates (see their manifests): UI, storage, settings+paths, media,
 # player, torrent.
 nova-ui = { path = "crates/ui", default-features = false }
 # Inline UI test fixtures import the same compiled globals as the page leaves.
 nova-ui-shared = { path = "crates/ui-shared" }
+nova-ui-base = { workspace = true }
 nova-storage = { workspace = true }
 nova-config = { path = "crates/config" }
 nova-media = { path = "crates/media" }
-nova-download = { path = "crates/download" }
+nova-download = { workspace = true }
 nova-player = { path = "crates/player" }
 nova-playback-api = { path = "crates/playback-api" }
 nova-cast = { path = "crates/cast" }

@@ -22,13 +22,13 @@ webp = "=0.3.1"
 
 # --- Desktop (non-Android) -------------------------------------------------
 [target.'cfg(not(target_os = "android"))'.dependencies]
-addons = { path = "../addons", features = ["client"] }
+addons = { workspace = true, features = ["client"] }
 reqwest = { version = "0.13.4", features = ["blocking"] }
 
 # --- Android ---------------------------------------------------------------
 # rustls stack (OpenSSL does not cross-compile); blocking reqwest only.
 [target.'cfg(target_os = "android")'.dependencies]
-addons = { path = "../addons", default-features = false }
+addons = { workspace = true, default-features = false }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
 webpki-roots = "1"
