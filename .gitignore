@@ -1,4 +1,5 @@
 /target/
+/.cargo/local-kit.toml
 /pkg/
 web-console.log
 

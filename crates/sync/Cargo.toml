@@ -17,7 +17,7 @@ license.workspace = true
 [dependencies]
 nova-playback-api = { path = "../playback-api" }
 nova-config = { path = "../config" }
-nova-storage = { path = "../storage" }
+nova-storage = { workspace = true }
 anyhow = "1"
 tracing = { workspace = true }
 serde = { version = "1", features = ["derive"] }
@@ -41,4 +41,4 @@ iroh = "1.2"
 
 [dev-dependencies]
 # The store-persistence integration test seeds a legacy blob and inspects rows.
-nova-storage = { path = "../storage" }
+nova-storage = { workspace = true }

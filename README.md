@@ -61,12 +61,23 @@ provide the platform toolchains and dependencies.
 ```sh
 nix develop                    # desktop toolchain and native dependencies
 cargo run --locked             # run the desktop app
-cargo dev                      # hot-reloading UI preview (Linux debug only)
+
+# Local nova-kit checkout must be beside Nova; copy the override once:
+cp .cargo/local-kit.example.toml .cargo/local-kit.toml
+cargo dev                      # build with local nova-kit
+cargo dev-run                  # build and run with local nova-kit
+cargo dev-release              # optimized build with local nova-kit
+cargo dev-release-run          # optimized build and run with local nova-kit
 
 cargo check --workspace --locked
 cargo test --workspace --locked
 cargo test -p nova-sync --lib --locked
 ```
+
+All four development aliases use the ignored project-local Cargo override; no
+global Cargo configuration is needed. Ordinary Cargo commands and CI omit the
+override and fetch the pinned Git revision from GitHub. Local patches can change
+`Cargo.lock`; keep those local lockfile changes out of commits.
 
 For an Android release build:
 

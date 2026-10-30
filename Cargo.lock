@@ -5514,11 +5514,11 @@ dependencies = [
 [[package]]
 name = "nova-storage"
 version = "0.1.0"
+source = "git+https://github.com/misobarisic/nova-kit?rev=d520df46af697d53f3ae1218fbdaa611faf836f4#d520df46af697d53f3ae1218fbdaa611faf836f4"
 dependencies = [
  "redb",
  "serde",
  "serde_json",
- "tempfile",
  "zstd",
 ]
 

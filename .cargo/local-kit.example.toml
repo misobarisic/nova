@@ -1,0 +1,11 @@
+# Optional local override for the pinned nova-kit Git dependency.
+# Copy to .cargo/local-kit.toml and run:
+#   cargo dev                  # build
+#   cargo dev-run              # build and run
+#   cargo dev-release          # optimized build
+#   cargo dev-release-run      # optimized build and run
+# Or build without running:
+#   cargo --config .cargo/local-kit.toml build
+# Paths in this file resolve relative to the Nova checkout root.
+[patch."https://github.com/misobarisic/nova-kit"]
+nova-storage = { path = "../nova-kit/crates/storage" }

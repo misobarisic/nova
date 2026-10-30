@@ -16,13 +16,13 @@ features; it lists all runtime Cargo crates and their selected SPDX license
 terms. The following inventory covers native and asset components that are not
 represented by Cargo metadata.
 
-NOVA WORKSPACE CRATES
+NOVA APPLICATION AND SHARED CRATES
 The core app packages below share GPL-3.0-or-later. The generated Cargo catalog
 lists the complete runtime dependency set in Settings → About:
 - nova (root package, src/)
 - addons (crates/addons/)
 - nova-ui (crates/ui/)
-- nova-storage (crates/storage/)
+- nova-storage (nova-kit/crates/storage/, separate shared workspace)
 - nova-config (crates/config/)
 - nova-download (crates/download/)
 - nova-torrent (crates/torrent/)

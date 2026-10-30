@@ -142,7 +142,6 @@ fn generate_license_catalog() {
         "assets/icons/player/LICENSE",
         "crates/addons/Cargo.toml",
         "crates/ui/Cargo.toml",
-        "crates/storage/Cargo.toml",
         "crates/config/Cargo.toml",
         "crates/download/Cargo.toml",
         "crates/torrent/Cargo.toml",

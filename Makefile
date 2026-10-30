@@ -44,9 +44,10 @@ linux-build-release:
 linux-run:
 	cargo run
 
-# The `cargo dev` alias enables Slint's interpreter-backed Linux preview.
+# Retained preview feature currently uses compiled UI with a build warning.
+# Keep this target independent of the optional local nova-kit override.
 linux-run-preview:
-	cargo dev
+	cargo run --features live-preview
 
 linux-run-release:
 	cargo run --profile $(RELEASE_PROFILE)

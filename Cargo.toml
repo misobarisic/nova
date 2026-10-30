@@ -32,7 +32,6 @@ members = [
     "crates/ui-more",
     "crates/ui-player-osd",
     "crates/ui-onboarding",
-    "crates/storage",
     "crates/config",
     "crates/download",
     "crates/torrent",
@@ -79,6 +78,9 @@ i-slint-compiler = { path = "vendor/i-slint-compiler" }
 librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e38562e7e373bc58bbbb20b68e58c71fef" }
 
 [workspace.dependencies]
+# Shared storage; local development aliases opt into the sibling checkout.
+nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "d520df46af697d53f3ae1218fbdaa611faf836f4" }
+
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
 # software renderer and desktop-only extras.
@@ -133,7 +135,7 @@ nova-providers = { path = "crates/providers" }
 nova-ui = { path = "crates/ui", default-features = false }
 # Inline UI test fixtures import the same compiled globals as the page leaves.
 nova-ui-shared = { path = "crates/ui-shared" }
-nova-storage = { path = "crates/storage" }
+nova-storage = { workspace = true }
 nova-config = { path = "crates/config" }
 nova-media = { path = "crates/media" }
 nova-download = { path = "crates/download" }

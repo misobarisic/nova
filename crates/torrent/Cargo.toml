@@ -9,7 +9,7 @@ license.workspace = true
 
 [dependencies]
 nova-config = { path = "../config" }
-nova-storage = { path = "../storage" }
+nova-storage = { workspace = true }
 librqbit = { version = "9", default-features = false, features = ["http-api", "disable-upload", "rust-tls", "tracing-subscriber-utils"] }
 librqbit-dualstack-sockets = { version = "0.7", features = ["axum"] }
 anyhow = "1"

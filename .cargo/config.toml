@@ -12,8 +12,10 @@
 # linker = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang"
 # ar = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
 
-# Retained development alias. The compiled page factories currently require
-# AOT UI; `live-preview` warns until a dynamic bridge is available.
-# See Cargo.toml / crates/ui/build.rs.
+# Local development uses the sibling nova-kit checkout. Copy
+# local-kit.example.toml to local-kit.toml once before using these aliases.
 [alias]
-dev = "run --features live-preview"
+dev = ["build", "--config", ".cargo/local-kit.toml"]
+dev-run = ["run", "--config", ".cargo/local-kit.toml"]
+dev-release = ["build", "--config", ".cargo/local-kit.toml", "--profile", "dev-release"]
+dev-release-run = ["run", "--config", ".cargo/local-kit.toml", "--profile", "dev-release"]
