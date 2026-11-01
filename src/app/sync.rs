@@ -780,6 +780,7 @@ const SETTINGS_GROUP_CACHE: &[&str] = &[
     "enabled",
     "format",
     "quality",
+    "avif_quality",
     "detail_poster_max_side",
     "detail_backdrop_max_side",
     "episode_thumbnail_max_side",
@@ -4907,7 +4908,9 @@ mod tests {
     fn settings_fields_split_per_field_and_group_cache() {
         let settings = CacheSettings {
             image_disk_cache_limit_mb: Some(2048),
+            format: CacheImageFormat::Avif,
             quality: 91,
+            avif_quality: 78,
             detail_poster_max_side: Some(720),
             detail_backdrop_max_side: None,
             episode_thumbnail_max_side: Some(360),
@@ -4937,7 +4940,9 @@ mod tests {
         // Cache settings are coupled into one whole-record blob.
         let cache: serde_json::Value =
             serde_json::from_str(fields.get("cache").expect("cache group")).unwrap();
+        assert_eq!(cache["format"], "avif");
         assert_eq!(cache["quality"], 91);
+        assert_eq!(cache["avif_quality"], 78);
         assert!(cache.get("image_disk_cache_limit_mb").is_none());
         let unlimited = merge_settings_fields(
             &settings,
@@ -4966,6 +4971,7 @@ mod tests {
             serde_json::Value::Null
         );
         assert!(!fields.contains_key("quality"));
+        assert!(!fields.contains_key("avif_quality"));
         // Categories use their own union domain; player and display choices
         // below are device-specific.
         assert!(!fields.contains_key("categories"));

@@ -8,6 +8,8 @@
 #   cargo --config .cargo/local-kit.toml build
 # Paths in this file resolve relative to the Nova checkout root.
 [patch."https://github.com/misobarisic/nova-kit"]
+nova-cache = { path = "../nova-kit/crates/cache" }
+nova-image = { path = "../nova-kit/crates/image" }
 nova-storage = { path = "../nova-kit/crates/storage" }
 addons = { path = "../nova-kit/crates/addons" }
 nova-download = { path = "../nova-kit/crates/download" }

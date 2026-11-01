@@ -77,10 +77,12 @@ librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e
 
 [workspace.dependencies]
 # Shared kit crates; local development aliases opt into the sibling checkout.
-addons = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a", default-features = false }
-nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
-nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
-nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "63141dfc6abd39a247edde1f33ebaeb59dc7229a" }
+nova-cache = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70" }
+nova-image = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70" }
+addons = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70", default-features = false }
+nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70" }
+nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70" }
+nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "138f29e33d4f7d8ae9204b6bd6118eb458740f70" }
 
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default

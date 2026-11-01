@@ -293,15 +293,28 @@ fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.len() > LOGO_BYTES {
         return None;
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(LOGO_SOURCE_SIDE);
-    limits.max_image_height = Some(LOGO_SOURCE_SIDE);
-    limits.max_alloc = Some(8 * 1024 * 1024);
-    let mut reader = image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    reader.limits(limits);
-    let image = reader.decode().ok()?;
+    let image = if image::guess_format(bytes).ok() == Some(image::ImageFormat::Avif) {
+        // Keep directory logos under their own stricter caps before handing
+        // their bounded PNG thumbnail to the normal artwork-cache pipeline.
+        let limits = nova_image::DecodeLimits {
+            max_encoded_bytes: LOGO_BYTES,
+            max_width: LOGO_SOURCE_SIDE,
+            max_height: LOGO_SOURCE_SIDE,
+            max_pixels: u64::from(LOGO_SOURCE_SIDE) * u64::from(LOGO_SOURCE_SIDE),
+            max_decoded_bytes: 8 * 1024 * 1024,
+        };
+        image::DynamicImage::ImageRgba8(nova_image::decode_avif(bytes, limits).ok()?)
+    } else {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(LOGO_SOURCE_SIDE);
+        limits.max_image_height = Some(LOGO_SOURCE_SIDE);
+        limits.max_alloc = Some(8 * 1024 * 1024);
+        let mut reader = image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?;
+        reader.limits(limits);
+        reader.decode().ok()?
+    };
     let scaled = image.resize(
         LOGO_DISPLAY_SIDE,
         LOGO_DISPLAY_SIDE,
@@ -516,5 +529,24 @@ mod tests {
         let valid = thumbnail(&png(256, 128)).unwrap();
         let decoded = image::load_from_memory(&valid).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (64, 32));
+    }
+
+    #[test]
+    fn avif_logos_use_shared_decoder_under_the_existing_directory_limits() {
+        let avif = |width, height| {
+            nova_image::encode_avif(
+                width,
+                height,
+                &vec![127; width as usize * height as usize * 4],
+                85,
+                nova_image::DecodeLimits::default(),
+            )
+            .unwrap()
+        };
+        assert!(thumbnail(&avif(LOGO_SOURCE_SIDE + 1, 1)).is_none());
+        let encoded = thumbnail(&avif(128, 64)).unwrap();
+        let pixels = image::load_from_memory(&encoded).unwrap().into_rgba8();
+        assert_eq!(pixels.dimensions(), (64, 32));
+        assert!(pixels.pixels().all(|pixel| pixel[3] == 127));
     }
 }

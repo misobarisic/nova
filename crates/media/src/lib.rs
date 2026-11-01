@@ -1,8 +1,6 @@
-//! Media layer: HTTP transport and the decoded/poster image cache.
+//! Media layer: platform HTTP transport and Nova adapters to nova-kit's image cache.
 //!
-//! Split out of the app crate so poster loading, the disk cache and the
-//! network retry policy can be reused without pulling in the whole catalog
-//! app. The reverse dependency (transport decoding through the cache
-//! pipeline) is internal to this crate.
+//! Transport stays local; decoded artwork, processed disk variants, cache policy
+//! and maintenance are shared through `nova-cache`.
 pub mod cache;
 pub mod net;

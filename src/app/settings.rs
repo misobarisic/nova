@@ -1,5 +1,6 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
+use nova_config::DISK_CACHE_LIMITS;
 
 /// Installation-local presentation only: never a CacheSettings/sync/profile field.
 pub(super) const SETTINGS_VIEW_KEY: &str = "ui:settings_view";
@@ -122,16 +123,6 @@ impl DiskUsageScan {
     }
 }
 
-const DISK_CACHE_LIMITS: [Option<u32>; 7] = [
-    None,
-    Some(256),
-    Some(512),
-    Some(1024),
-    Some(2048),
-    Some(4096),
-    Some(8192),
-];
-
 static CACHE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(super) fn cancel_cache_rewrite() {
@@ -184,6 +175,7 @@ pub(crate) fn allow_setting_field(field: &str) {
                 "enabled",
                 "format",
                 "quality",
+                "avif_quality",
                 "detail_poster_max_side",
                 "detail_backdrop_max_side",
                 "episode_thumbnail_max_side",
@@ -368,8 +360,10 @@ impl Bridge {
             app.set_cache_format_index(match settings.format {
                 CacheImageFormat::Jpeg => 0,
                 CacheImageFormat::Webp => 1,
+                CacheImageFormat::Avif => 2,
             });
             app.set_cache_quality(settings.quality as f32);
+            app.set_cache_avif_quality(settings.avif_quality as f32);
             app.set_detail_poster_resolution_index(resolution_index(
                 settings.detail_poster_max_side,
             ));
@@ -422,6 +416,7 @@ impl Bridge {
             app.set_screenshot_format_index(settings.screenshot_format.index());
             app.set_screenshot_jpeg_quality(settings.screenshot_jpeg_quality.clamp(1, 100) as f32);
             app.set_screenshot_webp_quality(settings.screenshot_webp_quality.clamp(1, 100) as f32);
+            app.set_screenshot_avif_quality(settings.screenshot_avif_quality.clamp(1, 100) as f32);
             app.set_screenshot_show_folder(settings.screenshot_show_folder);
             app.set_default_audio_language(settings.default_audio_language.clone().into());
             app.set_default_subtitle_language(settings.default_subtitle_language.clone().into());
@@ -633,10 +628,10 @@ impl Bridge {
             return;
         };
         let quality = (app.get_cache_quality().round() as i32).clamp(1, 100) as u8;
-        let format = if app.get_cache_format_index() <= 0 {
-            CacheImageFormat::Jpeg
-        } else {
-            CacheImageFormat::Webp
+        let format = match app.get_cache_format_index() {
+            ..=0 => CacheImageFormat::Jpeg,
+            2 => CacheImageFormat::Avif,
+            _ => CacheImageFormat::Webp,
         };
         let settings = {
             let state = self.shared.lock().unwrap();
@@ -657,6 +652,7 @@ impl Bridge {
                 enabled: app.get_cache_enabled(),
                 format,
                 quality,
+                avif_quality: (app.get_cache_avif_quality().round() as i32).clamp(1, 100) as u8,
                 detail_poster_max_side: resolution_value(app.get_detail_poster_resolution_index()),
                 detail_backdrop_max_side: resolution_value(
                     app.get_detail_backdrop_resolution_index(),
@@ -715,6 +711,8 @@ impl Bridge {
                 screenshot_jpeg_quality: (app.get_screenshot_jpeg_quality().round() as i32)
                     .clamp(1, 100) as u8,
                 screenshot_webp_quality: (app.get_screenshot_webp_quality().round() as i32)
+                    .clamp(1, 100) as u8,
+                screenshot_avif_quality: (app.get_screenshot_avif_quality().round() as i32)
                     .clamp(1, 100) as u8,
                 screenshot_show_folder: app.get_screenshot_show_folder(),
                 default_audio_language: app.get_default_audio_language().to_string(),
@@ -2222,24 +2220,24 @@ mod tests {
         assert_eq!(hidden.get("local"), Some(&2));
         bridge.assert_desired_addon_regression();
 
-        app.set_screenshot_format_index(3);
+        app.set_screenshot_format_index(4);
         app.set_screenshot_jpeg_quality(67.0);
         app.set_screenshot_webp_quality(92.0);
+        app.set_screenshot_avif_quality(74.0);
         app.set_screenshot_show_folder(true);
         app.invoke_settings_edited("screenshot_format".into());
         bridge.persist_settings();
         let saved = read_settings();
-        assert_eq!(
-            saved.screenshot_format,
-            nova_config::ScreenshotFormat::WebpLossy
-        );
+        assert_eq!(saved.screenshot_format, nova_config::ScreenshotFormat::Avif);
         assert_eq!(saved.screenshot_jpeg_quality, 67);
         assert_eq!(saved.screenshot_webp_quality, 92);
+        assert_eq!(saved.screenshot_avif_quality, 74);
         assert!(saved.screenshot_show_folder);
         for (field, value) in [
-            ("screenshot_format", "\"webp_lossy\""),
+            ("screenshot_format", "\"avif\""),
             ("screenshot_jpeg_quality", "67"),
             ("screenshot_webp_quality", "92"),
+            ("screenshot_avif_quality", "74"),
             ("screenshot_show_folder", "true"),
         ] {
             assert_eq!(
@@ -2256,17 +2254,21 @@ mod tests {
         app.set_screenshot_format_index(0);
         app.set_screenshot_jpeg_quality(10.0);
         app.set_screenshot_webp_quality(20.0);
+        app.set_screenshot_avif_quality(30.0);
         app.set_screenshot_show_folder(false);
         bridge.settings_to_ui();
-        assert_eq!(app.get_screenshot_format_index(), 3);
+        assert_eq!(app.get_screenshot_format_index(), 4);
         assert_eq!(app.get_screenshot_jpeg_quality(), 67.0);
         assert_eq!(app.get_screenshot_webp_quality(), 92.0);
+        assert_eq!(app.get_screenshot_avif_quality(), 74.0);
         assert!(app.get_screenshot_show_folder());
 
         // Unsupported enum values affect only their field, and remain raw on
         // disk when an unrelated supported setting is changed.
         let mut raw = serde_json::to_value(read_settings()).unwrap();
         raw["language"] = "future-language".into();
+        raw["screenshot_format"] = "future-image-codec".into();
+        raw["screenshot_avif_quality"] = 101.into();
         raw["date_relative"] = false.into();
         storage::try_set_str("settings", &raw.to_string()).unwrap();
         let mut recovered = read_settings();
@@ -2276,6 +2278,8 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&storage::try_get_str("settings").unwrap().unwrap()).unwrap();
         assert_eq!(saved["language"], "future-language");
+        assert_eq!(saved["screenshot_format"], "future-image-codec");
+        assert_eq!(saved["screenshot_avif_quality"], 101);
         assert_eq!(saved["date_relative"], true);
         {
             let mut store = owner.lock().unwrap();

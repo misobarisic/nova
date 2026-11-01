@@ -2035,3 +2035,15 @@ msgstr "Replay ending…"
 
 msgid "This source cannot resume at your previous position. Start over, or cancel to choose another source."
 msgstr ""
+
+msgid "AVIF"
+msgstr "AVIF"
+
+msgid "AVIF quality"
+msgstr "AVIF quality"
+
+msgid "JPEG, WebP or AVIF for compressed artwork."
+msgstr "JPEG, WebP or AVIF for compressed artwork."
+
+msgid "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."
+msgstr "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."

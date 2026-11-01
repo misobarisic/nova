@@ -8,6 +8,7 @@ license.workspace = true
 # mpv/render/JNI surface doesn't recompile on app-logic edits. Never built on
 # any other target.
 [dependencies]
+nova-image = { workspace = true }
 nova-config = { path = "../config" }
 nova-ui = { path = "../ui" }
 slint = { workspace = true }

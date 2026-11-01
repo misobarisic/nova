@@ -98,7 +98,7 @@ pub fn default_true() -> bool {
 
 /// Default LRU cache size in MB (decoded images kept in memory).
 fn default_lru_mb() -> u32 {
-    128
+    nova_cache::config::CacheSettings::default().lru_cache_mb
 }
 
 /// Default minimum grid columns (Discover / Library).
@@ -115,6 +115,19 @@ fn default_screenshot_quality() -> u8 {
     85
 }
 
+fn deserialize_image_quality<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u8, D::Error> {
+    let quality = u8::deserialize(deserializer)?;
+    if (1..=100).contains(&quality) {
+        Ok(quality)
+    } else {
+        Err(serde::de::Error::custom(
+            "image quality must be between 1 and 100",
+        ))
+    }
+}
+
 /// Screenshot encoding is independent of artwork cache compression.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +137,7 @@ pub enum ScreenshotFormat {
     Jpeg,
     WebpLossless,
     WebpLossy,
+    Avif,
 }
 
 impl ScreenshotFormat {
@@ -132,6 +146,7 @@ impl ScreenshotFormat {
             1 => Self::Jpeg,
             2 => Self::WebpLossless,
             3 => Self::WebpLossy,
+            4 => Self::Avif,
             _ => Self::Png,
         }
     }
@@ -142,6 +157,7 @@ impl ScreenshotFormat {
             Self::Jpeg => 1,
             Self::WebpLossless => 2,
             Self::WebpLossy => 3,
+            Self::Avif => 4,
         }
     }
 
@@ -150,6 +166,7 @@ impl ScreenshotFormat {
             Self::Png => "png",
             Self::Jpeg => "jpg",
             Self::WebpLossless | Self::WebpLossy => "webp",
+            Self::Avif => "avif",
         }
     }
 
@@ -158,6 +175,7 @@ impl ScreenshotFormat {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
             Self::WebpLossless | Self::WebpLossy => "image/webp",
+            Self::Avif => "image/avif",
         }
     }
 }
@@ -437,12 +455,11 @@ pub struct HomeRow {
 // Image-cache settings
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CacheImageFormat {
-    Jpeg,
-    Webp,
-}
+pub use nova_cache::config::{CacheImageFormat, DISK_CACHE_LIMITS, IMAGE_RESOLUTION_PRESETS};
+use nova_cache::config::{
+    default_avif_quality, default_cache_image_format, default_cache_image_quality,
+    default_image_disk_cache_limit,
+};
 
 /// Global and per-title intro/recap behavior. Timings are never required to play.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,29 +802,8 @@ impl DesktopExternalApp {
     }
 }
 
-impl CacheImageFormat {
-    pub fn label(&self) -> &'static str {
-        match self {
-            CacheImageFormat::Jpeg => "JPEG",
-            CacheImageFormat::Webp => "WebP",
-        }
-    }
-}
-
 // Keep a single field declaration for serialization and the migration decoder.
 // The remote derive constructs CacheSettings after legacy JSON has been normalized.
-const fn default_image_disk_cache_limit() -> Option<u32> {
-    Some(1024)
-}
-
-const fn default_cache_image_format() -> CacheImageFormat {
-    CacheImageFormat::Webp
-}
-
-const fn default_cache_image_quality() -> u8 {
-    50
-}
-
 macro_rules! cache_settings_type {
     ($($fields:tt)*) => {
         #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -853,6 +849,9 @@ cache_settings_type! {
     /// Encoding quality 1-100 (WebP lossy / JPEG).
     #[serde(default = "default_cache_image_quality")]
     pub quality: u8,
+    /// AVIF uses an independent quality so switching formats keeps both preferences.
+    #[serde(default = "default_avif_quality", deserialize_with = "deserialize_image_quality")]
+    pub avif_quality: u8,
     /// Longest side of Detail posters; None preserves original dimensions.
     pub detail_poster_max_side: Option<u32>,
     /// Longest side of Detail banners; None preserves original dimensions.
@@ -988,6 +987,8 @@ cache_settings_type! {
     pub screenshot_jpeg_quality: u8,
     #[serde(default = "default_screenshot_quality")]
     pub screenshot_webp_quality: u8,
+    #[serde(default = "default_screenshot_quality", deserialize_with = "deserialize_image_quality")]
+    pub screenshot_avif_quality: u8,
     /// Save under Pictures/Nova/<show> instead of Pictures/Nova.
     #[serde(default)]
     pub screenshot_show_folder: bool,
@@ -1083,8 +1084,6 @@ cache_settings_type! {
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-pub const IMAGE_RESOLUTION_PRESETS: &[u32] = &[240, 360, 480, 720, 960, 1024, 1280, 1920, 2560];
-
 impl<'de> Deserialize<'de> for CacheSettings {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let mut value = serde_json::Value::deserialize(deserializer)?;
@@ -1112,31 +1111,7 @@ impl<'de> Deserialize<'de> for CacheSettings {
                 .entry("background_style")
                 .or_insert_with(|| serde_json::json!(BackgroundStyle::from_true_black(legacy)));
         }
-        let legacy_player =
-            if object.get("downscale").and_then(serde_json::Value::as_bool) == Some(true) {
-                serde_json::json!(1024)
-            } else {
-                serde_json::Value::Null
-            };
-        for (key, fallback) in [
-            ("detail_poster_max_side", serde_json::json!(480)),
-            ("detail_backdrop_max_side", serde_json::json!(960)),
-            ("episode_thumbnail_max_side", serde_json::json!(360)),
-            ("player_episode_backdrop_max_side", legacy_player),
-        ] {
-            let setting = object.entry(key).or_insert(fallback);
-            if !setting.is_null()
-                && !setting.as_u64().is_some_and(|n| {
-                    IMAGE_RESOLUTION_PRESETS
-                        .iter()
-                        .any(|preset| u64::from(*preset) == n)
-                })
-            {
-                return Err(serde::de::Error::custom(format!(
-                    "invalid image resolution for {key}"
-                )));
-            }
-        }
+        nova_cache::config::normalize_image_settings(object).map_err(serde::de::Error::custom)?;
         CacheSettingsWire::deserialize(value).map_err(serde::de::Error::custom)
     }
 }
@@ -1159,6 +1134,7 @@ const fn default_status_bar_gradient() -> u32 {
 
 impl Default for CacheSettings {
     fn default() -> Self {
+        let images = nova_cache::config::CacheSettings::default();
         Self {
             catalog_grouping_default: CatalogGroupingMode::Original,
             catalog_grouping_overrides: Vec::new(),
@@ -1166,15 +1142,16 @@ impl Default for CacheSettings {
             stream_filters: StreamFilterRules::default(),
             smart_collections: Vec::new(),
             tmdb_api_key: String::new(),
-            cache_images: true,
-            image_disk_cache_limit_mb: default_image_disk_cache_limit(),
-            enabled: true,
-            format: default_cache_image_format(),
-            quality: default_cache_image_quality(),
-            detail_poster_max_side: Some(480),
-            detail_backdrop_max_side: Some(960),
-            episode_thumbnail_max_side: Some(360),
-            player_episode_backdrop_max_side: None,
+            cache_images: images.cache_images,
+            image_disk_cache_limit_mb: images.image_disk_cache_limit_mb,
+            enabled: images.enabled,
+            format: images.format,
+            quality: images.quality,
+            avif_quality: images.avif_quality,
+            detail_poster_max_side: images.detail_poster_max_side,
+            detail_backdrop_max_side: images.detail_backdrop_max_side,
+            episode_thumbnail_max_side: images.episode_thumbnail_max_side,
+            player_episode_backdrop_max_side: images.player_episode_backdrop_max_side,
             date_relative: true,
             show_unwatched_thumbs: true,
             spoiler_protection: false,
@@ -1182,7 +1159,7 @@ impl Default for CacheSettings {
             title_progress: Default::default(),
             // Keep in step with `default_lru_mb` (the serde default used for
             // settings files written before the field existed).
-            lru_cache_mb: 128,
+            lru_cache_mb: images.lru_cache_mb,
             prefetch_metadata: false,
             categories: Vec::new(),
             discover_min_cols: 2,
@@ -1212,6 +1189,7 @@ impl Default for CacheSettings {
             screenshot_format: ScreenshotFormat::Png,
             screenshot_jpeg_quality: default_screenshot_quality(),
             screenshot_webp_quality: default_screenshot_quality(),
+            screenshot_avif_quality: default_screenshot_quality(),
             screenshot_show_folder: false,
             default_audio_language: String::new(),
             default_subtitle_language: String::new(),
@@ -1337,13 +1315,32 @@ impl CacheSettings {
             .collect()
     }
 
+    /// Reusable image policy, while profile, playback and sync settings stay local.
+    pub fn image_cache_settings(&self) -> nova_cache::config::CacheSettings {
+        self.into()
+    }
+
     /// Encoding summary for compatibility with callers displaying the configuration.
     pub fn config_key(&self) -> String {
-        let format = match self.format {
-            CacheImageFormat::Jpeg => "jpeg",
-            CacheImageFormat::Webp => "webp",
-        };
-        format!("{format}:q{}", self.quality)
+        self.image_cache_settings().config_key()
+    }
+}
+
+impl From<&CacheSettings> for nova_cache::config::CacheSettings {
+    fn from(settings: &CacheSettings) -> Self {
+        Self {
+            cache_images: settings.cache_images,
+            image_disk_cache_limit_mb: settings.image_disk_cache_limit_mb,
+            enabled: settings.enabled,
+            format: settings.format,
+            quality: settings.quality,
+            avif_quality: settings.avif_quality,
+            detail_poster_max_side: settings.detail_poster_max_side,
+            detail_backdrop_max_side: settings.detail_backdrop_max_side,
+            episode_thumbnail_max_side: settings.episode_thumbnail_max_side,
+            player_episode_backdrop_max_side: settings.player_episode_backdrop_max_side,
+            lru_cache_mb: settings.lru_cache_mb,
+        }
     }
 }
 
@@ -1391,7 +1388,7 @@ static CURRENT_CACHE_SETTINGS: LazyLock<Mutex<CacheSettings>> =
 
 /// Cheap hit-path policy check without cloning the full settings snapshot.
 pub fn disk_image_cache_enabled() -> bool {
-    CURRENT_CACHE_SETTINGS.lock().unwrap().cache_images
+    nova_cache::config::disk_image_cache_enabled()
 }
 
 /// The active image-cache settings.
@@ -1404,28 +1401,15 @@ pub fn image_settings_snapshot() -> (CacheSettings, u64) {
     (settings.clone(), image_settings_revision())
 }
 
-/// Store the active image-cache settings (the decoded LRU budget is a
-/// separate concern — see `nova-media`).
-static IMAGE_SETTINGS_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 /// Revision used to discard image completions started before a recipe change.
 pub fn image_settings_revision() -> u64 {
-    IMAGE_SETTINGS_REVISION.load(std::sync::atomic::Ordering::Acquire)
+    nova_cache::config::image_settings_revision()
 }
 
+/// Keep the complete profile snapshot and the shared image policy in step.
 pub fn set_cache_settings(settings: CacheSettings) {
     let mut current = CURRENT_CACHE_SETTINGS.lock().unwrap();
-    if current.cache_images != settings.cache_images
-        || current.enabled != settings.enabled
-        || current.format != settings.format
-        || current.quality != settings.quality
-        || current.detail_poster_max_side != settings.detail_poster_max_side
-        || current.detail_backdrop_max_side != settings.detail_backdrop_max_side
-        || current.episode_thumbnail_max_side != settings.episode_thumbnail_max_side
-        || current.player_episode_backdrop_max_side != settings.player_episode_backdrop_max_side
-    {
-        IMAGE_SETTINGS_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    }
+    nova_cache::config::set_cache_settings(settings.image_cache_settings());
     *current = settings;
 }
 
@@ -2272,15 +2256,17 @@ mod tests {
         assert_eq!(settings.screenshot_format, ScreenshotFormat::Png);
         assert_eq!(settings.screenshot_jpeg_quality, 85);
         assert_eq!(settings.screenshot_webp_quality, 85);
+        assert_eq!(settings.screenshot_avif_quality, 85);
         assert!(!settings.screenshot_show_folder);
         assert_eq!(
             settings.screenshot_format,
             CacheSettings::default().screenshot_format
         );
-        for index in 0..4 {
+        for index in 0..5 {
             settings.screenshot_format = ScreenshotFormat::from_index(index);
             settings.screenshot_jpeg_quality = 67;
             settings.screenshot_webp_quality = 92;
+            settings.screenshot_avif_quality = 73;
             settings.screenshot_show_folder = true;
             let restored: CacheSettings =
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
@@ -2288,11 +2274,115 @@ mod tests {
             assert_eq!(restored.screenshot_format.index(), index);
         }
     }
+
+    #[test]
+    fn avif_screenshots_have_stable_metadata_and_reject_invalid_quality() {
+        assert_eq!(ScreenshotFormat::Avif.index(), 4);
+        assert_eq!(ScreenshotFormat::Avif.extension(), "avif");
+        assert_eq!(ScreenshotFormat::Avif.mime_type(), "image/avif");
+        assert_eq!(
+            serde_json::to_value(ScreenshotFormat::Avif).unwrap(),
+            "avif"
+        );
+        for quality in [
+            serde_json::json!(0),
+            serde_json::json!(101),
+            serde_json::json!(256),
+            serde_json::json!(-1),
+            serde_json::json!(85.5),
+            serde_json::json!("85"),
+            serde_json::Value::Null,
+        ] {
+            assert!(
+                serde_json::from_value::<CacheSettings>(serde_json::json!({
+                    "screenshot_avif_quality": quality
+                }))
+                .is_err()
+            );
+        }
+        for quality in [1, 85, 100] {
+            let settings: CacheSettings = serde_json::from_value(serde_json::json!({
+                "screenshot_format": "avif", "screenshot_avif_quality": quality
+            }))
+            .unwrap();
+            assert_eq!(settings.screenshot_avif_quality, quality);
+        }
+    }
 }
 
 #[cfg(test)]
 mod image_resolution_tests {
     use super::*;
+
+    #[test]
+    fn avif_cache_quality_is_independent_and_old_json_keeps_existing_preferences() {
+        let old: CacheSettings = serde_json::from_value(serde_json::json!({
+            "format": "jpeg", "quality": 67
+        }))
+        .unwrap();
+        assert_eq!(old.quality, 67);
+        assert_eq!(old.avif_quality, 85);
+        let mut avif = old.clone();
+        avif.format = CacheImageFormat::Avif;
+        avif.avif_quality = 91;
+        assert_eq!(avif.config_key(), "avif:q91");
+        assert_eq!(
+            nova_cache::ImageRecipe::resolve(nova_cache::ImageUse::DetailPoster, &avif).quality,
+            91
+        );
+        let encoded = serde_json::to_value(&avif).unwrap();
+        assert_eq!(encoded["format"], "avif");
+        assert_eq!(encoded["quality"], 67);
+        assert_eq!(encoded["avif_quality"], 91);
+        let mut restored: CacheSettings = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored, avif);
+        restored.format = CacheImageFormat::Jpeg;
+        assert_eq!(restored.config_key(), "jpeg:q67");
+        assert_eq!(
+            nova_cache::ImageRecipe::resolve(nova_cache::ImageUse::DetailPoster, &restored).quality,
+            67
+        );
+        for quality in [0, 101, 256] {
+            assert!(
+                serde_json::from_value::<CacheSettings>(
+                    serde_json::json!({"avif_quality": quality})
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn shared_image_policy_preserves_the_flat_profile_settings() {
+        let original = serde_json::json!({
+            "cache_images": false,
+            "image_disk_cache_limit_mb": null,
+            "enabled": true,
+            "format": "jpeg",
+            "quality": 79,
+            "avif_quality": 88,
+            "detail_poster_max_side": 1920,
+            "detail_backdrop_max_side": null,
+            "episode_thumbnail_max_side": 240,
+            "player_episode_backdrop_max_side": 1024,
+            "lru_cache_mb": 64,
+            "spoiler_protection": true,
+            "sync_overrides": {"quality": 55}
+        });
+        let profile: CacheSettings = serde_json::from_value(original.clone()).unwrap();
+        let shared: nova_cache::config::CacheSettings =
+            serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(profile.image_cache_settings(), shared);
+        assert_eq!(
+            nova_cache::ImageRecipe::resolve(nova_cache::ImageUse::DetailPoster, &profile).max_side,
+            Some(1920)
+        );
+        let saved = serde_json::to_value(profile).unwrap();
+        for (key, expected) in original.as_object().unwrap() {
+            assert_eq!(&saved[key], expected, "profile field {key} changed");
+        }
+        assert!(saved.get("image_cache_settings").is_none());
+    }
 
     fn settings(extra: serde_json::Value) -> serde_json::Value {
         let mut value = serde_json::json!({"enabled":false,"format":"webp","quality":85});

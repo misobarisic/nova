@@ -2698,8 +2698,10 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         | "episode_thumbnail_max_side"
         | "player_episode_backdrop_max_side" => format!("{number} px"),
         "quality"
+        | "avif_quality"
         | "screenshot_jpeg_quality"
         | "screenshot_webp_quality"
+        | "screenshot_avif_quality"
         | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" => match value.as_u64() {
             Some(0) => tr("Square").into(),
@@ -2730,6 +2732,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some("jpeg") => "JPEG".into(),
             Some("webp_lossless") => tr("WebP (lossless)").into(),
             Some("webp_lossy") => tr("WebP (lossy)").into(),
+            Some("avif") => "AVIF".into(),
             _ => value.to_string(),
         },
         "subtitle_style" => {
@@ -2838,6 +2841,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
                 match s {
                     "jpeg" => "JPEG",
                     "webp" => "WebP",
+                    "avif" => "AVIF",
                     "en" | "English" => "English",
                     "hr" | "Croatian" => "Hrvatski",
                     "Resume" | "resume" => tr("Resume"),

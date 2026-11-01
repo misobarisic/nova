@@ -5770,3 +5770,15 @@ msgstr "Uključi u napredak"
 
 msgid "Exclude from progress"
 msgstr "Izuzmi iz napretka"
+
+msgid "AVIF"
+msgstr "AVIF"
+
+msgid "AVIF quality"
+msgstr "AVIF kvaliteta"
+
+msgid "JPEG, WebP or AVIF for compressed artwork."
+msgstr "JPEG, WebP ili AVIF za komprimirane slike."
+
+msgid "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."
+msgstr "PNG i WebP bez gubitaka čuvaju svaki piksel. JPEG, WebP s gubicima i AVIF koriste postavku kvalitete."

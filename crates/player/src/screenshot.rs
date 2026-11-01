@@ -325,12 +325,13 @@ impl Player {
         let format = settings.screenshot_format;
         let quality = match format {
             ScreenshotFormat::Jpeg => settings.screenshot_jpeg_quality,
+            ScreenshotFormat::Avif => settings.screenshot_avif_quality,
             _ => settings.screenshot_webp_quality,
         }
         .clamp(1, 100);
         let temporary = Temporary::new(&temporary_base()?)?;
         // mpv's existing composition path captures lossless pixels first;
-        // only the requested lossy/WebP output is re-encoded on this worker.
+        // only the requested lossy/WebP/AVIF output is re-encoded on this worker.
         let image = temporary.0.join("frame.png");
         let output = temporary.0.join(format!("saved.{}", format.extension()));
         let (job, position_seconds) = {
@@ -512,8 +513,25 @@ pub(super) fn write_image(
                 .map_err(|_| ScreenshotError::SaveFailed)?;
             std::io::Write::flush(&mut output).map_err(|_| ScreenshotError::SaveFailed)?;
         }
+        ScreenshotFormat::Avif => {
+            let encoded = nova_image::encode_avif(width, height, pixels, quality, avif_limits())
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::write_all(&mut output, &encoded)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::flush(&mut output).map_err(|_| ScreenshotError::SaveFailed)?;
+        }
     }
     Ok(())
+}
+
+fn avif_limits() -> nova_image::DecodeLimits {
+    nova_image::DecodeLimits {
+        max_width: 8192,
+        max_height: 8192,
+        max_pixels: 33_554_432,
+        max_decoded_bytes: 33_554_432 * 4,
+        ..Default::default()
+    }
 }
 
 fn verify_image(path: &Path) -> Result<(), ScreenshotError> {
@@ -903,15 +921,13 @@ mod tests {
             ScreenshotFormat::Jpeg,
             ScreenshotFormat::WebpLossless,
             ScreenshotFormat::WebpLossy,
+            ScreenshotFormat::Avif,
         ] {
             let source = temporary.0.join("stage.png");
             fs::write(&source, &png).unwrap();
             let output = temporary.0.join(filename(format));
             transcode_png(&source, &output, format, 85).unwrap();
-            assert_eq!(
-                image::open(&output).unwrap().into_rgba8().dimensions(),
-                (32, 18)
-            );
+            assert_eq!(decode_output(&output, format).dimensions(), (32, 18));
             if format == ScreenshotFormat::Png {
                 assert_eq!(fs::read(output).unwrap(), png);
             }
@@ -946,6 +962,14 @@ mod tests {
         );
         assert!(a.ends_with(".png"));
     }
+    fn decode_output(path: &Path, format: ScreenshotFormat) -> image::RgbaImage {
+        if format == ScreenshotFormat::Avif {
+            nova_image::decode_avif(&fs::read(path).unwrap(), avif_limits()).unwrap()
+        } else {
+            image::open(path).unwrap().into_rgba8()
+        }
+    }
+
     fn fixture_pixels() -> (u32, u32, Vec<u8>) {
         let (width, height) = (96, 64);
         let pixels = (0..height)
@@ -974,14 +998,18 @@ mod tests {
             assert_eq!(decoded.dimensions(), (width, height));
             assert_eq!(decoded.as_raw(), &pixels);
         }
-        for format in [ScreenshotFormat::Jpeg, ScreenshotFormat::WebpLossy] {
+        for format in [
+            ScreenshotFormat::Jpeg,
+            ScreenshotFormat::WebpLossy,
+            ScreenshotFormat::Avif,
+        ] {
             let mut errors = Vec::new();
             let mut encoded = Vec::new();
             for quality in [20, 95] {
                 let path = temp.0.join(filename(format));
                 write_image(&path, width, height, &pixels, format, quality).unwrap();
                 encoded.push(fs::read(&path).unwrap());
-                let decoded = image::open(path).unwrap().into_rgba8();
+                let decoded = decode_output(&path, format);
                 assert_eq!(decoded.dimensions(), (width, height));
                 errors.push(
                     decoded
@@ -1015,6 +1043,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn avif_preserves_alpha_and_rejects_invalid_pixel_layouts() {
+        let temp = Temporary::new(&std::env::temp_dir()).unwrap();
+        let (width, height) = (8, 6);
+        let pixels = (0..width * height)
+            .flat_map(|i| [40, 130, 210, (i * 5) as u8])
+            .collect::<Vec<_>>();
+        let path = temp.0.join(filename(ScreenshotFormat::Avif));
+        write_image(&path, width, height, &pixels, ScreenshotFormat::Avif, 85).unwrap();
+        let encoded = fs::read(&path).unwrap();
+        let dimensions = nova_image::inspect_avif(&encoded, avif_limits()).unwrap();
+        assert_eq!((dimensions.width, dimensions.height), (width, height));
+        let decoded = decode_output(&path, ScreenshotFormat::Avif);
+        assert_eq!(decoded.dimensions(), (width, height));
+        assert!(
+            decoded
+                .as_raw()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(pixels.as_chunks::<4>().0)
+                .all(|(actual, source)| actual[3] == source[3])
+        );
+        for (width, height, bytes) in [
+            (0, 1, &pixels[..]),
+            (8193, 1, &pixels[..]),
+            (8, 6, &pixels[..4]),
+        ] {
+            assert_eq!(
+                write_image(&path, width, height, bytes, ScreenshotFormat::Avif, 85),
+                Err(ScreenshotError::SaveFailed)
+            );
+        }
     }
 
     #[test]
@@ -1085,6 +1148,7 @@ mod tests {
             ScreenshotFormat::Jpeg,
             ScreenshotFormat::WebpLossless,
             ScreenshotFormat::WebpLossy,
+            ScreenshotFormat::Avif,
         ] {
             let source = temp.0.join(filename(format));
             write_image(&source, width, height, &pixels, format, 85).unwrap();
@@ -1102,10 +1166,7 @@ mod tests {
                         .to_string_lossy()
                         .starts_with("My_Show_Name_S03E02_00h00m00s500ms_")
                 );
-                assert_eq!(
-                    image::open(path).unwrap().into_rgba8().dimensions(),
-                    (width, height)
-                );
+                assert_eq!(decode_output(path, format).dimensions(), (width, height));
                 assert_eq!(fs::read(path).unwrap(), fs::read(&source).unwrap());
             }
         }
