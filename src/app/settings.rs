@@ -363,13 +363,11 @@ impl Bridge {
                 CacheImageFormat::Jpeg => 0,
                 CacheImageFormat::Webp => 1,
                 CacheImageFormat::Avif => 2,
-                CacheImageFormat::JxlLossless => 3,
-                CacheImageFormat::JxlLossy => 4,
+                CacheImageFormat::JxlLossless | CacheImageFormat::JxlLossy => 3,
             });
             app.set_cache_quality(settings.quality as f32);
             app.set_cache_avif_quality(settings.avif_quality as f32);
             app.set_cache_jxl_quality(settings.jxl_quality as f32);
-            app.set_cache_jxl_lossless_jpeg(settings.jxl_lossless_jpeg);
             app.set_detail_poster_resolution_index(resolution_index(
                 settings.detail_poster_max_side,
             ));
@@ -638,8 +636,7 @@ impl Bridge {
         let format = match app.get_cache_format_index() {
             ..=0 => CacheImageFormat::Jpeg,
             2 => CacheImageFormat::Avif,
-            3 => CacheImageFormat::JxlLossless,
-            4 => CacheImageFormat::JxlLossy,
+            3 => CacheImageFormat::JxlLossy,
             _ => CacheImageFormat::Webp,
         };
         let settings = {
@@ -663,7 +660,7 @@ impl Bridge {
                 quality,
                 avif_quality: (app.get_cache_avif_quality().round() as i32).clamp(1, 100) as u8,
                 jxl_quality: (app.get_cache_jxl_quality().round() as i32).clamp(1, 100) as u8,
-                jxl_lossless_jpeg: app.get_cache_jxl_lossless_jpeg(),
+                jxl_lossless_jpeg: false,
                 detail_poster_max_side: resolution_value(app.get_detail_poster_resolution_index()),
                 detail_backdrop_max_side: resolution_value(
                     app.get_detail_backdrop_resolution_index(),
@@ -2233,7 +2230,6 @@ mod tests {
         assert_eq!(hidden.get("local"), Some(&2));
         bridge.assert_desired_addon_regression();
 
-        app.set_cache_jxl_lossless_jpeg(true);
         app.set_screenshot_format_index(6);
         app.set_screenshot_jpeg_quality(67.0);
         app.set_screenshot_webp_quality(92.0);
@@ -2251,7 +2247,7 @@ mod tests {
         assert_eq!(saved.screenshot_webp_quality, 92);
         assert_eq!(saved.screenshot_avif_quality, 74);
         assert_eq!(saved.screenshot_jxl_quality, 76);
-        assert!(saved.jxl_lossless_jpeg);
+        assert!(!saved.jxl_lossless_jpeg);
         assert!(saved.screenshot_show_folder);
         for (field, value) in [
             ("screenshot_format", "\"jxl_lossy\""),

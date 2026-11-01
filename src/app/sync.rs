@@ -854,6 +854,7 @@ pub(super) fn settings_group_fields(record: &str) -> Option<&'static [&'static s
 fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
     let mut migrated = settings.clone();
     stream_filters::migrate_overrides(&mut migrated);
+    migrated.normalize_image_cache_policy();
     let settings = &migrated;
     let Ok(raw) = serde_json::to_string(settings) else {
         return Vec::new();
@@ -1064,6 +1065,7 @@ fn retain_migrated_home_layout(settings: &mut CacheSettings, records: &[(String,
 fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> CacheSettings {
     let mut migrated = base.clone();
     stream_filters::migrate_overrides(&mut migrated);
+    migrated.normalize_image_cache_policy();
     let base = &migrated;
     let serde_json::Value::Object(mut map) = stream_filters::settings_value(base) else {
         return base.clone();
@@ -4907,6 +4909,47 @@ mod tests {
     }
 
     #[test]
+    fn legacy_lossless_cache_sync_and_overrides_remain_lossy() {
+        let mut local = CacheSettings {
+            format: CacheImageFormat::JxlLossless,
+            jxl_lossless_jpeg: true,
+            ..Default::default()
+        };
+        local
+            .sync_overrides
+            .insert("format".into(), serde_json::json!("jxl_lossless"));
+        local
+            .sync_overrides
+            .insert("jxl_lossless_jpeg".into(), serde_json::json!(true));
+        let records: Vec<_> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        let cache: serde_json::Value =
+            serde_json::from_str(&records.iter().find(|(key, _)| key == "cache").unwrap().1)
+                .unwrap();
+        assert_eq!(cache["format"], "jxl_lossy");
+        assert_eq!(cache["jxl_lossless_jpeg"], false);
+        let legacy = vec![(
+            "cache".into(),
+            serde_json::json!({
+                "format": "jxl_lossless", "jxl_lossless_jpeg": true, "jxl_quality": 71
+            })
+            .to_string(),
+        )];
+        for base in [&local, &CacheSettings::default()] {
+            let merged = merge_settings_fields(base, &legacy);
+            assert_eq!(merged.format, CacheImageFormat::JxlLossy);
+            assert!(!merged.jxl_lossless_jpeg);
+            assert_eq!(merged.jxl_quality, 71);
+            if !merged.sync_overrides.is_empty() {
+                assert_eq!(merged.sync_overrides["format"], "jxl_lossy");
+                assert_eq!(merged.sync_overrides["jxl_lossless_jpeg"], false);
+            }
+        }
+    }
+
+    #[test]
     fn settings_fields_split_per_field_and_group_cache() {
         let settings = CacheSettings {
             image_disk_cache_limit_mb: Some(2048),
@@ -4948,7 +4991,7 @@ mod tests {
         assert_eq!(cache["quality"], 91);
         assert_eq!(cache["avif_quality"], 78);
         assert_eq!(cache["jxl_quality"], 79);
-        assert_eq!(cache["jxl_lossless_jpeg"], true);
+        assert_eq!(cache["jxl_lossless_jpeg"], false);
         assert!(cache.get("image_disk_cache_limit_mb").is_none());
         let unlimited = merge_settings_fields(
             &settings,

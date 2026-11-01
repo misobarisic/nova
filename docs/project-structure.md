@@ -1149,7 +1149,8 @@ remains an explicit action.
 
 New settings enable disk image caching and WebP compression at quality 50.
 Missing image-cache fields use these defaults; explicitly saved cache switches,
-formats and quality values remain unchanged.
+lossy formats and quality values remain unchanged; legacy lossless JPEG XL cache
+recipes migrate to lossy JPEG XL.
 The byte-budgeted decoded LRU and disk cache share a key made from source URL
 and the resolved processing recipe, so consumers with identical recipes share
 decoded entries. Each disk variant is one atomic `.variant` file: `NVIMAGE2`
@@ -1157,8 +1158,10 @@ magic, a length-prefixed JSON header, then processed encoded bytes. The
 versioned header stores source URL, registered uses, dimensions, resolved
 recipe and a checksum of the encoded payload. No separate metadata/use files or
 original-image backup are retained. Source pixels are transient and are
-resized before Slint receives them. Compression uses JPEG, WebP, AVIF or explicit lossless/lossy JPEG XL at the
-selected quality (AVIF and lossy JPEG XL retain independent quality preferences; lossless JPEG XL hides quality), with PNG fallback for alpha that JPEG cannot preserve;
+resized before Slint receives them. Nova cache compression uses lossy JPEG, WebP,
+AVIF or JPEG XL at the selected quality, with quality directly after format in
+the controls (AVIF and JPEG XL retain independent quality preferences). PNG
+fallback preserves alpha that JPEG cannot preserve;
 resizing without compression writes PNG, while Original with compression off
 keeps source bytes. Disk caching off is a pure in-memory mode. Same-recipe fetches coalesce,
 and a fresh download is encoded and decoded at the recipe's quality before
@@ -1426,7 +1429,7 @@ driver or playback validation.
   - `ui_player.rs` / `player/{gestures,double_tap,hold_motion}.rs` — the player backdrop's double-tap seeks ∓10 s without waking hidden controls, flashing between taps, or toggling playback (side singles wait 280 ms; centre taps act at once), a 500 ms hold previews 2×, owns subsequent finger motion without waking controls or stepping levels, release restores the stored rate, and Android swipes step brightness/volume without seeking (brightness/volume callbacks stubbed, OSD stays up).
   - `library/scroll_restore.rs` — Detail/stream return retains the My Library offset on every layout frame; pointer return-target updates, subsequent scrolling, root-tab recreation and model refreshes preserve it at phone/desktop widths in grid/list views. Only explicit keyboard movement reveals the selected row, after initial viewport restoration.
   - `detail_episodes/sticky_controls.rs` — real wheel scrolling pins the retained Episodes toolbar and Tracking manual search, with safe-area geometry, short-landscape search and Tracking submission; native previews use `NOVA_DETAIL_STICKY_PREVIEW_DIR`.
-  - `settings_preferences/screenshot_format.rs` — screenshot format/folder and cache dropdowns including both JPEG XL modes, separate JPEG/WebP/AVIF/JPEG XL quality and bounds, lossless slider visibility, save callbacks, TV/keyboard navigation and narrow/wide geometry. It also covers permanent AppWindow bridge ownership after unmount and English/Croatian codec-quality search prerequisites. Encoder, native mpv capture, exact AVIF alpha and safe publication tests live in `crates/player/src/screenshot.rs`.
+  - `settings_preferences/screenshot_format.rs` — screenshot format/folder with both JPEG XL modes and the lossy-only cache dropdown, separate JPEG/WebP/AVIF/JPEG XL quality and bounds, screenshot lossless slider visibility and cache quality adjacency, save callbacks, TV/keyboard navigation and narrow/wide geometry. It also covers permanent AppWindow bridge ownership after unmount and English/Croatian codec-quality search prerequisites. Encoder, native mpv capture, exact AVIF alpha and safe publication tests live in `crates/player/src/screenshot.rs`.
   - `settings_navigation/sticky_controls.rs` — animated overview and compact submenu Back/title, retained overview search/shortcuts and Installed Addons search/filter pinning, safe-area geometry, overview fades contained between shortcuts and the first group heading, retained search, filter callbacks and compact Back; native previews use `NOVA_SETTINGS_STICKY_PREVIEW_DIR`.
   - `detail_episodes/episode_bar.rs` — the fullscreen episode selector’s Back chevron stays centered in its 44px header control, with season/episode, episode title and series title in that order.
   - `library/category_filters.rs` — automatic category pills render with no user categories, dispatch their stored filter identifiers and keep the selected pill visible after resizing.
@@ -1858,7 +1861,7 @@ unit/documentation coverage.
 | Stream-card title/metadata/size pills / priority and touch paging / downloads / provider HLS bundles / desktop action popup vs touch sheet | `nova-kit/crates/download/src/{lib,http,hls}.rs` (durable HTTP resume validators), `src/app/downloads.rs` (queue cancellation, runtime-only resolver downloads and artifact recovery), `crates/torrent/src/lib.rs`, `src/app/streams.rs` (`StreamCardText`, size extraction), `src/app/detail.rs::{compute_stream_view,apply_stream_filter_with_focus}` and its stream-selector regression (late owner batches across pages, touch paging and keyboard identity), `crates/ui/stream-selector.slint` (`StreamList`, shared action model), `tests/streams_layout/card_layout.rs`, `tests/streams_layout/downloads_ui.rs`, `tests/shared_layout/desktop_action_menus.rs`, `tests/streams_layout/selector_landscape.rs` |
 | Image disk limit / batched recency / size eviction / cleanup scheduling | `nova-kit/crates/cache/src/cache_gc.rs`, `crates/media/src/cache.rs` (Nova adapter), `src/app/cache_gc.rs`, `src/app/plugin_cache.rs`, `crates/config/src/lib.rs`, `tests/settings_preferences/image_resolution.rs`, `src/app/sync.rs` (independent setting and override regression) |
 | Stored-data compression / incremental Library and progress saves | `nova-kit/crates/storage/src/{lib,codec,collections}.rs`, `src/app/persistence.rs` (`reserve` before Library/history mutations, ordered retry retention, pause sync watermarks and delayed-writer/overflow regressions), `src/app/sync.rs::persist_sync_snapshot`, `crates/sync/src/{local,store,protocol}.rs`; `docs/repository-follow-ons.md` contains codec measurements and remaining candidates |
-| Image use/resolution controls, processed variants, cache re-encode/clear | `crates/config/src/lib.rs` (flat profile settings and shared policy adapter), `nova-kit/crates/cache/src/{config,lib}.rs` (`ImageRecipe::resolve`, `cached_pixels_with`, `display_pixels`, `.variant` envelope, `rewrite_cache_dir_with_progress`, `clear_poster_cache_dir`), `crates/media/src/cache.rs` (transport adapter), `src/app/{posters,settings}.rs`, `crates/ui-settings-image-cache/image-cache-module.slint`, `crates/ui/settings-controls.slint`, `tests/settings_preferences/image_resolution.rs`; per-URL locks, clear/settings epoch guards, per-recipe publication tickets and maintenance registration watches protect cache updates; settings keep the existing atomic JSON and sync group |
+| Image use/resolution controls, processed variants, cache re-encode/clear | `crates/config/src/lib.rs` (flat profile settings, lossy-only Nova cache normalization at persistence/sync/runtime boundaries and shared policy adapter), `nova-kit/crates/cache/src/{config,lib}.rs` (`ImageRecipe::resolve`, `cached_pixels_with`, `display_pixels`, `.variant` envelope, `rewrite_cache_dir_with_progress`, `clear_poster_cache_dir`), `crates/media/src/cache.rs` (transport adapter), `src/app/{posters,settings}.rs`, `crates/ui-settings-image-cache/image-cache-module.slint`, `crates/ui/settings-controls.slint`, `tests/settings_preferences/image_resolution.rs`; per-URL locks, clear/settings epoch guards, per-recipe publication tickets and maintenance registration watches protect cache updates; settings keep the existing atomic JSON and sync group |
 | HTTP / images / Android blanks after successful decoding | `crates/media/src/net.rs` (platform transports), `nova-kit/crates/cache/src/lib.rs` (actual resized pixel dimensions, shared encoding, per-entry locks, recipe coalescing, transient publication tickets, maintenance registration watches and atomic writes), `nova-kit/crates/cache/src/cache_tests.rs` (pixel-layout and cache-pipeline coverage), `src/app/posters.rs`; sync transfers URLs, while each device decodes its own images |
 | Prompt sync after edits / playback handoff | `crates/sync/src/{lib,local}.rs` (change scheduling, actual-mutation signal, backoff-preserving wake), `src/app/{sync,playback,detail}.rs`, Android Pause bridge in `src/lib.rs` and player position mirror in `crates/player/src/lib.rs`; timing documented in `docs/player-behavior.md`. |
 | Stremio account / native-source bindings / duplicate imported episode cards / two-way library and watched/resume sync / pending mappings / selected-title and full-library scope / exclusions / animated account cards | `crates/stremio/src/{api,library}.rs`, `src/app/{stremio,stremio_apply,stremio_events,stremio_metadata,stremio_selection}.rs`, `src/app/{stremio_tests,stremio_ingress_tests,stremio_session_tests,stremio_selection_tests}.rs`, `src/app/home.rs::{home_episode_identity,retain_home_episode}`, `crates/providers/src/metadata.rs::enrich_addon_response_with_budget`, `crates/ui/{stremio,tracking-account-card,tracking,stremio-title}.slint`, `assets/icons/services/README.md`, `src/app/{sync,run}.rs`; [Stremio sync](stremio-sync.md) |
@@ -1900,17 +1903,20 @@ unit/documentation coverage.
 
 JPEG XL is shared through Kit `nova-image`: Reader's actual bounded jxl-oxide
 0.12.6 decoder and scalar single-threaded jixel 0.5.2 RGBA encoding. Nova's image
-cache accepts JXL sources and explicit `jxl_lossless`/`jxl_lossy` recipes. Local
-and synced cache JSON add `jxl_quality` (default 85) to the existing atomic cache
-group; recipe keys for previous formats are unchanged. Player screenshot formats
-append indices 5/6, preserving indices 0–4, and store device-local
-`screenshot_jxl_quality` (default 85). Lossless modes hide/skip quality controls;
-lossy modes retain independent values across selections. Settings use Nova's
-existing Dropdown, NumericSetting, search highlighting and TV keyboard routes.
-The cache format dropdown avoids squeezing five codec choices into one row.
-JNI MediaStore publication already accepts the selected format MIME/extension.
-
-JPEG XL artwork settings include `jxl_lossless_jpeg`, an off-by-default device/cache preference in the normal image-cache sync group. Kit transcodes supported JPEGs reversibly only when their dimensions need no resize; other inputs use normal format/quality. The toggle uses cache keyboard row 12 and is searchable.
+cache accepts JXL sources and uses the lossy `jxl_lossy` recipe. The cache dropdown
+contains JPEG, WebP, AVIF and one JPEG XL choice; quality always follows format.
+Local and synced cache JSON retain `jxl_quality` (default 85) in the existing
+atomic cache group; previous-format recipe keys are unchanged. `nova-config`
+normalizes legacy `jxl_lossless` to `jxl_lossy` and forces the compatibility field
+`jxl_lossless_jpeg` false, including stored override baselines, serialization and
+the runtime Kit adapter. Sync applies the same normalization before publication.
+Kit retains both JPEG XL recipes and reversible JPEG support for other consumers.
+Player screenshot formats keep indices 5/6 and their explicit lossless/lossy
+choices, with independent `screenshot_jxl_quality` (default 85). Screenshot
+lossless modes hide/skip quality; lossy modes retain independent values across
+selections. Settings use Nova's existing Dropdown, NumericSetting, search
+highlighting and TV keyboard routes. JNI MediaStore publication accepts the
+selected format MIME/extension.
 
 Library and Discover headers show titles without descriptive subtitles. The
 Discover/search input uses “Search movies, shows…” with the bundled translation.

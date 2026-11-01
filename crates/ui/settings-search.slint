@@ -149,14 +149,8 @@ export global SettingsSearch {
                 if self.matches(compression) { return compression; }
                 let format = self.candidate("format", @tr("Format"), "Format JPEG WebP AVIF JPEG XL JXL", 5, 2);
                 if self.matches(format) { return format; }
-                if SettingsBridge.cache_format_index != 3 {
-                    let quality = self.candidate(SettingsBridge.cache_format_index == 4 ? "jxl_quality" : SettingsBridge.cache_format_index == 2 ? "avif_quality" : "quality", SettingsBridge.cache_format_index == 4 ? @tr("JPEG XL quality") : SettingsBridge.cache_format_index == 2 ? @tr("AVIF quality") : @tr("Quality"), SettingsBridge.cache_format_index == 4 ? "JPEG XL JXL quality" : SettingsBridge.cache_format_index == 2 ? "AVIF quality" : "Quality JPEG quality WebP quality", 5, 3);
-                    if self.matches(quality) { return quality; }
-                }
-                if SettingsBridge.cache_format_index == 3 || SettingsBridge.cache_format_index == 4 {
-                    let transcode = self.candidate("jxl_lossless_jpeg", @tr("Losslessly transcode JPEG"), "Losslessly transcode JPEG JPG bitstream preserve original", 5, 12);
-                    if self.matches(transcode) { return transcode; }
-                }
+                let quality = self.candidate(SettingsBridge.cache_format_index == 3 ? "jxl_quality" : SettingsBridge.cache_format_index == 2 ? "avif_quality" : "quality", SettingsBridge.cache_format_index == 3 ? @tr("JPEG XL quality") : SettingsBridge.cache_format_index == 2 ? @tr("AVIF quality") : @tr("Quality"), SettingsBridge.cache_format_index == 3 ? "JPEG XL JXL quality" : SettingsBridge.cache_format_index == 2 ? "AVIF quality" : "Quality JPEG quality WebP quality", 5, 3);
+                if self.matches(quality) { return quality; }
                 let jxl = self.candidate("format", @tr("JPEG XL quality") + " › " + @tr("Format"), "JPEG XL JXL quality", 5, 2);
                 if self.matches(jxl) { return jxl; }
                 let avif = self.candidate("format", @tr("AVIF quality") + " › " + @tr("Format"), "AVIF quality", 5, 2);

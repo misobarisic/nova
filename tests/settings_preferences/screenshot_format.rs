@@ -1,7 +1,7 @@
 //! Screenshot preferences stay independent and usable in both Settings layouts.
 #![cfg(not(feature = "live-preview"))]
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 fn settle(app: &nova::AppWindow) {
@@ -284,34 +284,35 @@ fn cache_avif_selection_preserves_other_quality_and_permanent_bridge() {
         assert_eq!(app.get_cache_quality(), 64.0);
         assert_eq!(app.get_cache_avif_quality(), 1.0);
         app.set_cache_jxl_quality(85.0);
-        app.set_cache_jxl_lossless_jpeg(false);
-        choose_control(
-            &app,
-            "SettingsImageCacheModule::cache_format",
-            "JPEG XL (lossless)",
+        assert_eq!(
+            app.get_cache_format_names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>(),
+            ["JPEG", "WebP", "AVIF", "JPEG XL"]
         );
+        choose_control(&app, "SettingsImageCacheModule::cache_format", "JPEG XL");
         assert_eq!(app.get_cache_format_index(), 3);
+        let quality = item(&app, "SettingsImageCacheModule::cache_jxl_quality");
+        assert!(quality.absolute_position().x >= 0.0);
+        assert!(quality.absolute_position().x + quality.size().width <= width as f32);
         assert!(
-            ElementHandle::find_by_element_id(&app, "SettingsImageCacheModule::cache_jxl_quality")
+            crate::destinations::find(&app, "setting:jxl_lossless_jpeg")
                 .next()
-                .is_none()
+                .is_none(),
+            "the cache never exposes reversible JPEG compression"
         );
         bridge.set_kb_zone(5);
         app.set_kb_active(true);
         bridge.invoke_focus_shell();
         content.set_kb_hr(2);
         key(&app, slint::platform::Key::DownArrow);
-        assert_eq!(content.get_kb_hr(), 12, "JXL exposes the transcode toggle");
-        key(&app, slint::platform::Key::RightArrow);
-        assert!(app.get_cache_jxl_lossless_jpeg());
+        assert_eq!(content.get_kb_hr(), 3, "quality follows the format");
         key(&app, slint::platform::Key::DownArrow);
-        assert_eq!(content.get_kb_hr(), 4, "lossless skips quality");
-        choose_control(
-            &app,
-            "SettingsImageCacheModule::cache_format",
-            "JPEG XL (lossy)",
-        );
-        assert_eq!(app.get_cache_format_index(), 4);
+        assert_eq!(content.get_kb_hr(), 4, "resolution follows quality");
+        key(&app, slint::platform::Key::UpArrow);
+        assert_eq!(content.get_kb_hr(), 3);
+
         bridge.set_kb_zone(5);
         app.set_kb_active(true);
         bridge.invoke_focus_shell();
@@ -392,8 +393,8 @@ fn codec_quality_search_reveals_correct_control_in_both_languages() {
                 jxl_query,
                 "screenshot_jxl_quality",
             ),
-            (2, "settings:image-cache", 6, 3, jxl_query, "format"),
-            (2, "settings:image-cache", 6, 4, jxl_query, "jxl_quality"),
+            (2, "settings:image-cache", 6, 0, jxl_query, "format"),
+            (2, "settings:image-cache", 6, 3, jxl_query, "jxl_quality"),
             (5, "settings:player", 0, 0, query, "screenshot_format"),
             (5, "settings:player", 4, 0, query, "screenshot_avif_quality"),
             (2, "settings:image-cache", 4, 0, query, "format"),

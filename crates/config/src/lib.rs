@@ -852,7 +852,7 @@ cache_settings_type! {
     /// Encode processed variants lossily when enabled; otherwise resizing is lossless.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_cache_image_format")]
+    #[serde(default = "default_cache_image_format", serialize_with = "serialize_lossy_cache_format")]
     pub format: CacheImageFormat,
     /// Encoding quality 1-100 (WebP lossy / JPEG).
     #[serde(default = "default_cache_image_quality")]
@@ -862,7 +862,8 @@ cache_settings_type! {
     pub avif_quality: u8,
     #[serde(default = "default_screenshot_quality", deserialize_with = "deserialize_image_quality")]
     pub jxl_quality: u8,
-    #[serde(default)]
+    /// Legacy compatibility field; Nova always disables reversible JPEG caching.
+    #[serde(default, serialize_with = "serialize_disabled_cache_transcode")]
     pub jxl_lossless_jpeg: bool,
     /// Longest side of Detail posters; None preserves original dimensions.
     pub detail_poster_max_side: Option<u32>,
@@ -1094,7 +1095,7 @@ cache_settings_type! {
     #[serde(default)]
     pub hero_title_alignment: HeroTitleAlignment,
     /// Device-local overrides, retaining a shared baseline for unseeded fields.
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_cache_overrides")]
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -1126,7 +1127,10 @@ impl<'de> Deserialize<'de> for CacheSettings {
                 .or_insert_with(|| serde_json::json!(BackgroundStyle::from_true_black(legacy)));
         }
         nova_cache::config::normalize_image_settings(object).map_err(serde::de::Error::custom)?;
-        CacheSettingsWire::deserialize(value).map_err(serde::de::Error::custom)
+        let mut settings =
+            CacheSettingsWire::deserialize(value).map_err(serde::de::Error::custom)?;
+        settings.normalize_image_cache_policy();
+        Ok(settings)
     }
 }
 
@@ -1159,11 +1163,11 @@ impl Default for CacheSettings {
             cache_images: images.cache_images,
             image_disk_cache_limit_mb: images.image_disk_cache_limit_mb,
             enabled: images.enabled,
-            format: images.format,
+            format: lossy_cache_format(images.format),
             quality: images.quality,
             avif_quality: images.avif_quality,
             jxl_quality: images.jxl_quality,
-            jxl_lossless_jpeg: images.jxl_lossless_jpeg,
+            jxl_lossless_jpeg: false,
             detail_poster_max_side: images.detail_poster_max_side,
             detail_backdrop_max_side: images.detail_backdrop_max_side,
             episode_thumbnail_max_side: images.episode_thumbnail_max_side,
@@ -1332,6 +1336,15 @@ impl CacheSettings {
             .collect()
     }
 
+    /// Nova's cache controls expose lossy formats only. Keep the Kit variants and
+    /// legacy JSON fields readable, while preventing old disk/sync/override data
+    /// from restoring a lossless cache recipe.
+    pub fn normalize_image_cache_policy(&mut self) {
+        self.format = lossy_cache_format(self.format);
+        self.jxl_lossless_jpeg = false;
+        normalize_cache_overrides(&mut self.sync_overrides);
+    }
+
     /// Reusable image policy, while profile, playback and sync settings stay local.
     pub fn image_cache_settings(&self) -> nova_cache::config::CacheSettings {
         self.into()
@@ -1343,17 +1356,61 @@ impl CacheSettings {
     }
 }
 
+fn lossy_cache_format(format: CacheImageFormat) -> CacheImageFormat {
+    match format {
+        CacheImageFormat::JxlLossless => CacheImageFormat::JxlLossy,
+        other => other,
+    }
+}
+
+fn normalize_cache_overrides(
+    overrides: &mut std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    if let Some(format) = overrides.get_mut("format")
+        && *format == serde_json::json!(CacheImageFormat::JxlLossless)
+    {
+        *format = serde_json::json!(CacheImageFormat::JxlLossy);
+    }
+    if let Some(transcode) = overrides.get_mut("jxl_lossless_jpeg") {
+        *transcode = serde_json::json!(false);
+    }
+}
+
+// Persistence must also reject programmatically constructed lossless recipes.
+fn serialize_lossy_cache_format<S: serde::Serializer>(
+    format: &CacheImageFormat,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    lossy_cache_format(*format).serialize(serializer)
+}
+
+fn serialize_disabled_cache_transcode<S: serde::Serializer>(
+    _: &bool,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    false.serialize(serializer)
+}
+
+fn serialize_cache_overrides<S: serde::Serializer>(
+    overrides: &std::collections::BTreeMap<String, serde_json::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut overrides = overrides.clone();
+    normalize_cache_overrides(&mut overrides);
+    overrides.serialize(serializer)
+}
+
 impl From<&CacheSettings> for nova_cache::config::CacheSettings {
     fn from(settings: &CacheSettings) -> Self {
         Self {
             cache_images: settings.cache_images,
             image_disk_cache_limit_mb: settings.image_disk_cache_limit_mb,
             enabled: settings.enabled,
-            format: settings.format,
+            format: lossy_cache_format(settings.format),
             quality: settings.quality,
             avif_quality: settings.avif_quality,
             jxl_quality: settings.jxl_quality,
-            jxl_lossless_jpeg: settings.jxl_lossless_jpeg,
+            jxl_lossless_jpeg: false,
             detail_poster_max_side: settings.detail_poster_max_side,
             detail_backdrop_max_side: settings.detail_backdrop_max_side,
             episode_thumbnail_max_side: settings.episode_thumbnail_max_side,
@@ -1426,7 +1483,8 @@ pub fn image_settings_revision() -> u64 {
 }
 
 /// Keep the complete profile snapshot and the shared image policy in step.
-pub fn set_cache_settings(settings: CacheSettings) {
+pub fn set_cache_settings(mut settings: CacheSettings) {
+    settings.normalize_image_cache_policy();
     let mut current = CURRENT_CACHE_SETTINGS.lock().unwrap();
     nova_cache::config::set_cache_settings(settings.image_cache_settings());
     *current = settings;
@@ -1643,6 +1701,56 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_lossless_cache_settings_migrate_without_changing_captures() {
+        for format in ["jxl_lossless", "jxl_lossy"] {
+            let settings: CacheSettings = serde_json::from_value(serde_json::json!({
+                "format": format,
+                "jxl_quality": 73,
+                "jxl_lossless_jpeg": true,
+                "screenshot_format": "jxl_lossless",
+                "sync_overrides": {
+                    "format": "jxl_lossless",
+                    "jxl_lossless_jpeg": true,
+                    "quality": 62
+                }
+            }))
+            .unwrap();
+            assert_eq!(settings.format, CacheImageFormat::JxlLossy);
+            assert_eq!(settings.jxl_quality, 73);
+            assert!(!settings.jxl_lossless_jpeg);
+            assert_eq!(settings.screenshot_format, ScreenshotFormat::JxlLossless);
+            assert_eq!(settings.sync_overrides["format"], "jxl_lossy");
+            assert_eq!(settings.sync_overrides["jxl_lossless_jpeg"], false);
+            assert_eq!(settings.sync_overrides["quality"], 62);
+        }
+    }
+
+    #[test]
+    fn programmatic_lossless_cache_settings_cannot_reach_storage_or_kit() {
+        let mut settings = CacheSettings {
+            format: CacheImageFormat::JxlLossless,
+            jxl_lossless_jpeg: true,
+            screenshot_format: ScreenshotFormat::JxlLossless,
+            ..Default::default()
+        };
+        settings
+            .sync_overrides
+            .insert("format".into(), serde_json::json!("jxl_lossless"));
+        settings
+            .sync_overrides
+            .insert("jxl_lossless_jpeg".into(), serde_json::json!(true));
+        let policy = settings.image_cache_settings();
+        assert_eq!(policy.format, CacheImageFormat::JxlLossy);
+        assert!(!policy.jxl_lossless_jpeg);
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["format"], "jxl_lossy");
+        assert_eq!(saved["jxl_lossless_jpeg"], false);
+        assert_eq!(saved["sync_overrides"]["format"], "jxl_lossy");
+        assert_eq!(saved["sync_overrides"]["jxl_lossless_jpeg"], false);
+        assert_eq!(saved["screenshot_format"], "jxl_lossless");
+    }
 
     #[test]
     fn image_cache_defaults_apply_only_to_missing_preferences() {
