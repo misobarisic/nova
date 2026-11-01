@@ -207,6 +207,10 @@ mod tests {
             "Completed"
         );
         assert_eq!(library_episode_counts("show", &videos, &progress), (2, 2));
+        assert!(!library_badge_for("show", &videos, &HashMap::new()).contains("special"));
+        let mut unfinished = progress.clone();
+        unfinished.remove(&progress_map_key("show", "two"));
+        assert!(!library_badge_for("show", &videos, &unfinished).contains("special"));
         assert_eq!(library_badge_for("show", &videos, &progress), "2 specials");
         assert!(next_episode_to_watch("show", &videos, &progress).is_none());
         assert!(next_episode::successor("show", &videos, "two", today_days()).is_none());

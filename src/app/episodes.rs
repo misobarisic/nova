@@ -111,7 +111,12 @@ pub(crate) fn library_badge_for(
     let badge = library_badge_in_scope(series_id, episodes, map);
     let policy = nova_config::progress::active_progress_policy(series_id);
     let specials = episodes.iter().filter(|v| v.season == Some(0)).count();
-    if !policy.include_specials && specials > 0 {
+    // Extras become useful after the main show is caught up. Keep fresh and
+    // partly watched cards focused on their regular-episode progress.
+    if !policy.include_specials
+        && specials > 0
+        && available_completed(series_id, episodes, map, today_days())
+    {
         if badge.is_empty() {
             text::specials(specials)
         } else {

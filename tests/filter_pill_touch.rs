@@ -61,8 +61,8 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     let app = PillHarness::new().unwrap();
     app.show().unwrap();
     let original = app.global::<Theme>().get_current();
-    // Selection fades without changing natural pill width, and rapid changes
-    // retarget from the current fill instead of completing a stale selection.
+    // Library selection paints a separate overlay. The base press-feedback
+    // layer and natural width stay stable as that overlay enters or leaves.
     let width = app.get_library_width();
     let base = app.get_library_fill();
     let advance = |ms| {
@@ -73,8 +73,7 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     };
     app.set_selected(true);
     advance(50);
-    assert_ne!(app.get_library_fill(), base);
-    assert_ne!(app.get_library_fill(), original.primary_button);
+    assert_eq!(app.get_library_fill(), base);
     assert_eq!(app.get_library_width(), width);
     app.set_selected(false);
     advance(150);
@@ -84,7 +83,7 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
         app.global::<Anim>().set_hover(hover);
         app.set_selected(true);
         advance(1);
-        assert_eq!(app.get_library_fill(), original.primary_button);
+        assert_eq!(app.get_library_fill(), base);
         app.set_selected(false);
         advance(1);
         assert_eq!(app.get_library_fill(), base);
@@ -153,8 +152,12 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
             touch(&app, position, TouchPhase::Ended);
             assert_eq!(
                 fill(),
-                palette.primary_button,
-                "the selected pill keeps its gradient"
+                if library {
+                    palette.hero_control.into()
+                } else {
+                    palette.primary_button.clone()
+                },
+                "selection must not leave stale press feedback in the base layer"
             );
             app.set_selected(false);
 

@@ -15,6 +15,26 @@ fn click(_app: &nova::AppWindow, item: ElementHandle) {
     item.mock_single_click(slint::platform::PointerEventButton::Left);
     settle();
 }
+fn open_card_menu(app: &nova::AppWindow, index: usize) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let card = elements(app, "library_card").remove(index);
+    let p = card.absolute_position();
+    let size = card.size();
+    let position = slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+    app.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    // Admit the press through Flickable before its child's hold timer runs.
+    for _ in 0..18 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+    }
+    app.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    settle();
+}
 fn label(app: &nova::AppWindow, text: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, text)
         .last()
@@ -74,6 +94,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
             settle();
             let cards = elements(&app, "library_card");
             assert_eq!(cards.len(), 4);
+            assert!(elements(&app, "library_card_menu").is_empty());
             if width < 700 {
                 let bottom = elements(&app, "bottom").remove(0);
                 assert!(bottom.computed_opacity() > 0.99);
@@ -111,7 +132,6 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
                 "library_metadata",
                 "library_episode_count",
                 "library_caption",
-                "library_card_menu",
             ] {
                 for child in elements(&app, name) {
                     let p = child.absolute_position();
@@ -146,14 +166,18 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     let actions = Rc::new(RefCell::new(Vec::new()));
     let record = actions.clone();
     app.on_library_watch_action(move |i, a| record.borrow_mut().push((i, a)));
-    click(&app, elements(&app, "library_card_menu").remove(1));
+    open_card_menu(&app, 1);
     click(&app, label(&app, "Mark watched"));
     assert_eq!(*actions.borrow(), [(1, 1)]);
-    assert_eq!(*opened.borrow(), [1], "menu taps must not open the title");
+    assert_eq!(
+        *opened.borrow(),
+        [1],
+        "holding a card must not open the title"
+    );
     let statuses = Rc::new(RefCell::new(Vec::new()));
     let record = statuses.clone();
     app.on_library_status_action(move |i, a| record.borrow_mut().push((i, a)));
-    click(&app, elements(&app, "library_card_menu").remove(1));
+    open_card_menu(&app, 1);
     click(&app, label(&app, "Change status"));
     click(&app, label(&app, "Mark as Plan to Watch"));
     assert_eq!(*statuses.borrow(), [(1, 5)]);
@@ -165,7 +189,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
         ("Mark dropped", 2),
         ("Back to automatic", 0),
     ] {
-        click(&app, elements(&app, "library_card_menu").remove(1));
+        open_card_menu(&app, 1);
         click(&app, label(&app, "Change status"));
         click(&app, label(&app, label_text));
         assert_eq!(statuses.borrow().last(), Some(&(1, code)));
@@ -203,7 +227,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     assert!(app.get_library_query().is_empty());
     assert_eq!(*changes.borrow(), 4);
 
-    click(&app, elements(&app, "library_card_menu").remove(1));
+    open_card_menu(&app, 1);
     assert!(
         ElementHandle::find_by_accessible_label(&app, "Mark watched")
             .next()

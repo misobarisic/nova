@@ -11,7 +11,7 @@ import { Dropdown } from "dropdown.slint";
 import { MenuSheet } from "menusheet.slint";
 import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
-import { IcMoreHoriz, IcSearch, IcClose } from "icons.slint";
+import { IcSearch, IcClose } from "icons.slint";
 
 
 import { SearchField } from "searchfield.slint";
@@ -783,29 +783,6 @@ export component LibraryPage {
                                         font-weight: 600;
                                         vertical-alignment: center;
                                         overflow: elide;
-                                    }
-                                }
-
-                                library_card_menu := Rectangle {
-                                    x: parent.width - self.width - 4px; y: 6px;
-                                    width: Math.min(34px, parent.width - 8px); height: 34px;
-                                    border-radius: 17px;
-                                    background: menu_touch.has-hover ? Theme.current.hero_control_hover : Theme.current.hero_control;
-                                    accessible-role: button;
-                                    accessible-label: @tr("Library options");
-                                    IcMoreHoriz {
-                                        x: 7px; y: 7px; width: 20px; height: 20px;
-                                        fill: Theme.current.text_bright;
-                                    }
-                                    menu_touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if (root.touch_menus) {
-                                                root.open_lib_menu(i, card.watched);
-                                            } else {
-                                                lib_ctx.show({ x: library_card_menu.x, y: library_card_menu.y + library_card_menu.height });
-                                            }
-                                        }
                                     }
                                 }
 
