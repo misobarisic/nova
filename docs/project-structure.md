@@ -242,7 +242,7 @@ nova/
 ├── build.rs                  # version identity, license catalog; native link directives
 ├── build-support/version.rs  # Git tag/commit resolution, shared with app unit tests
 ├── .cargo/config.toml        # local-kit build/run aliases; Android linker notes
-├── flake.nix                 # devShells: default, Android/Windows pinned native media
+├── flake.nix                 # devShells: default, Android/Windows pinned native media, lightweight Android packaging
 ├── nix/native-media/         # pinned nova-vendor release fetchers, hashes and native notices
 ├── Makefile                  # Linux and Android build/run targets (use active shell)
 ├── android/                  # Android source, signing key, and resources
@@ -1882,6 +1882,7 @@ unit/documentation coverage.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop video handoff blocked), `CacheSettings::uses_external_player` (effective platform policy); desktop Settings disables External while Android retains it |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/{tracking,tracking-panel}.slint` (account setup and title episode mapping review) |
+| Release packaging tool pins / assembly-only SDK | `docs/packaging.md`, `.github/scripts/{package-linux.sh,test_package_linux.py,check-android-packaging-tools.sh}`, `flake.nix::android-package`; dated, verified AppImage tools and SDK-35/JDK-only APK assembly without NDK/Rust/native-media dependencies. |
 | CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `nix/native-media/`, `.github/workflows/build-release.yml` (`android-build` three-ABI matrix → `android-package` merge/sign → release assets; `check-linux`, `check-windows`, ARM64 app checking plus `android/test_runtime_packaging.py` for repeated three-ABI APK staging on PRs/main source pushes; `android/cargo-apk2-readonly-libs.patch` fixes read-only dependency copies; `android/cargo-apk2-uncompressed-libs.patch` stores native libraries for direct loading), `.github/scripts/{package-android,test_package_android,test_package_windows}.py` (APK payload/ABI checks, compressed/extracted universal versus stored/16 KiB aligned per-ABI policies, binary manifest regressions, and repeatable Windows staging regression), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |
 
@@ -1921,3 +1922,10 @@ Watching/Completed/NewEpisodes; pins preserve playback history and progress.
 Active pins retain normal refresh/Continue Watching eligibility; status changes
 persist through the existing profile library/sync transaction. Reader copies the
 same component and enum pattern with chapter-specific labels and identities.
+
+
+Android release assembly uses the `android-package` shell instead of the
+compilation shell; it removes the runner's preinstalled SDK before Nix and keeps
+the three-ABI build/merge/sign graph and tag-only release policy unchanged.
+The Android PR/main check exercises actual align/sign/verify operations in this
+shell, while Python regressions exercise fail-closed Linux tool verification.

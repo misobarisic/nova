@@ -188,6 +188,22 @@
         };
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      # APK assembly uses the build tools only. Pulling the compilation shell
+      # here also installs NDKs, Rust targets, native media and an emulator.
+      android-package = let
+        androidsdk = (pkgsAndroid.androidenv.composeAndroidPackages {
+          platformVersions = [];
+          buildToolsVersions = [ "35.0.0" ];
+          includeNDK = false;
+          includeCmake = false;
+          includeEmulator = false;
+          includeSystemImages = false;
+        }).androidsdk;
+      in pkgsAndroid.mkShellNoCC {
+        packages = [ androidsdk pkgsAndroid.jdk17 pkgs.python3 ];
+        ANDROID_HOME = "${androidsdk}/libexec/android-sdk";
+        JAVA_HOME = "${pkgsAndroid.jdk17}";
+      };
       # Android build environment: nix-managed Rust (fenix, stable + the three
       # Android target stds) + SDK + NDK + JDK + cargo-apk. No
       # rustup, no manual `rustup target add` — entering the shell is enough.

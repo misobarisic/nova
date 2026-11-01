@@ -52,16 +52,16 @@ download_verified() {
   chmod 755 "$output"
 }
 
-# AppImage's continuous release assets are mutable, so pin their published
-# SHA-256 digests and fail closed if the upstream binaries change.
+# Dated releases isolate packaging from continuous updates; verified SHA-256
+# pins still fail closed if upstream replaces a dated asset. See docs/packaging.md.
 download_verified \
-  "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+  "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage" \
   "$tools_dir/linuxdeploy-x86_64.AppImage" \
-  "8aea8da0f7f7039d2a2cecb14657d752a222a5e1d3825caeef186c82f751cdd1"
+  "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
 download_verified \
-  "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage" \
+  "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage" \
   "$tools_dir/linuxdeploy-plugin-appimage-x86_64.AppImage" \
-  "49d6a17160675a6bd1781699aae6bdf7692d98552e02a3671d2183d10547842e"
+  "992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3"
 
 appimage="$dist/Nova-Linux-x86_64-${artifact_tag}.AppImage"
 deb_file="$dist/Nova-Linux-x86_64-${artifact_tag}.deb"
