@@ -35,12 +35,10 @@ members = [
     "crates/torrent",
     "crates/media",
     "crates/player",
-    "crates/playback-api",
     "crates/cast",
     "crates/cast-media",
     "crates/remux",
     "crates/party",
-    "crates/sync",
     "crates/tracking",
     "crates/stremio",
     "crates/list-services",
@@ -76,13 +74,15 @@ i-slint-compiler = { path = "vendor/i-slint-compiler" }
 librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e38562e7e373bc58bbbb20b68e58c71fef" }
 
 [workspace.dependencies]
+nova-sync = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
+nova-playback-api = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
 # Shared kit crates; local development aliases opt into the sibling checkout.
-nova-cache = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795" }
-nova-image = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795" }
-addons = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795", default-features = false }
-nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795" }
-nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795" }
-nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "689f86852aaaf5b13f1f51178672ac5de6745795" }
+nova-cache = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
+nova-image = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
+addons = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2", default-features = false }
+nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
+nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
+nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "01cd5ab098d836faf5138d91e538946439c656f2" }
 
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
@@ -96,7 +96,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.56"
+version = "0.0.57"
 edition = "2024"
 license.workspace = true
 
@@ -144,12 +144,12 @@ nova-config = { path = "crates/config" }
 nova-media = { path = "crates/media" }
 nova-download = { workspace = true }
 nova-player = { path = "crates/player" }
-nova-playback-api = { path = "crates/playback-api" }
+nova-playback-api = { workspace = true }
 nova-cast = { path = "crates/cast" }
 nova-cast-media = { path = "crates/cast-media" }
 nova-party = { path = "crates/party" }
 nova-torrent = { path = "crates/torrent" }
-nova-sync = { path = "crates/sync" }
+nova-sync = { workspace = true }
 nova-tracking = { path = "crates/tracking" }
 nova-stremio = { path = "crates/stremio" }
 nova-list-services = { path = "crates/list-services" }

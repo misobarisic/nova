@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-nova-playback-api = { path = "../playback-api" }
+nova-playback-api = { workspace = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }

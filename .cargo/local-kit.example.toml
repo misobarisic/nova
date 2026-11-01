@@ -14,3 +14,5 @@ nova-storage = { path = "../nova-kit/crates/storage" }
 addons = { path = "../nova-kit/crates/addons" }
 nova-download = { path = "../nova-kit/crates/download" }
 nova-ui-base = { path = "../nova-kit/crates/ui-base" }
+nova-sync = { path = "../nova-kit/crates/sync" }
+nova-playback-api = { path = "../nova-kit/crates/playback-api" }

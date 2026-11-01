@@ -87,7 +87,7 @@ cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regres
 - **`ApplyingGuard`** must wrap remote-apply paths so writes don't echo back into
   sync.
 - **postcard wire schemas are not self-describing:** changing/reordering fields
-  in `crates/sync` wire structs requires an ALPN version bump. Local storage
+  in Kit `crates/sync` wire structs requires an ALPN version bump. Local storage
   stays JSON.
 - **Peer membership:** only explicit pairing/manual add may re-add a removed
   peer; routine syncs must never resurrect a tombstoned peer.

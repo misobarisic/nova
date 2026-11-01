@@ -587,7 +587,7 @@ fn inspector_cards_keep_intrinsic_height_without_spreading_text() {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         app.set_settings_scroll_y(0.0);
         settle();
-        let intro = ElementHandle::find_by_element_id(&app, "SettingsSyncModule::inspector_intro")
+        let intro = ElementHandle::find_by_element_id(&app, "SyncSettingsPage::inspector_intro")
             .next()
             .expect("intro card");
         assert!(
