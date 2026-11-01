@@ -275,7 +275,7 @@ component DiscoverHeader {
 
             discover_hero := Rectangle {
                 x: 0px; y: 0px; width: 100%;
-                height: Math.max(44px, hero_title.preferred-height) + 8px + hero_description.preferred-height;
+                height: Math.max(44px, hero_title.preferred-height);
                 visible: !root.search_mode;
                 opacity: root.context_revealed ? 1.0 : 0.0;
                 animate opacity { duration: Anim.transition_fade; easing: ease-out; }
@@ -288,15 +288,6 @@ component DiscoverHeader {
                     font-weight: 700;
                     color: Theme.current.text_bright;
                     vertical-alignment: center;
-                    wrap: word-wrap;
-                }
-                hero_description := Text {
-                    y: hero_title.height + 8px;
-                    width: 100%;
-                    height: self.preferred-height;
-                    text: @tr("Find your next movie, show, or anime.");
-                    font-size: InterfaceStyle.tv ? 18px : 14px;
-                    color: Theme.current.text_secondary;
                     wrap: word-wrap;
                 }
             }
@@ -324,7 +315,7 @@ component DiscoverHeader {
                     root.search_focused = focused;
                     if (focused) { root.search_activated(); }
                 }
-                placeholder-text: root.searchable ? @tr("Search Nova…") : root.searchable_hint;
+                placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
                 accepted(t) => {
                     root.kb_edit = false;
                     root.search_done();

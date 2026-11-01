@@ -644,12 +644,8 @@ impl Bridge {
             self.refresh_library_progress_ui();
             return;
         }
-        let watch_status = match status {
-            1 => WatchStatus::OnHold,
-            2 => WatchStatus::Dropped,
-            5 => WatchStatus::PlanToWatch,
-            0 => WatchStatus::Auto,
-            _ => return,
+        let Some(watch_status) = WatchStatus::from_action(status) else {
+            return;
         };
         let Some(_reservation) = persistence::reserve(1) else {
             return;
@@ -681,7 +677,8 @@ impl Bridge {
     /// Detail actions resolve the saved identity directly: a library filter
     /// may hide this entry or change after its status is edited.
     /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove,
-    /// 5 await return, 6 resume viewing, 7 Plan to Watch.
+    /// 5 await return, 6 resume viewing, 7 Plan to Watch, 8 Watching,
+    /// 9 Completed, 10 New episodes.
     pub(super) fn detail_library_action(&self, action: i32) {
         let entry = {
             let state = self.shared.lock().unwrap();
@@ -713,6 +710,9 @@ impl Bridge {
             5 => self.library_entry_status_action(&entry.type_, &entry.id, 3),
             6 => self.library_entry_status_action(&entry.type_, &entry.id, 4),
             7 => self.library_entry_status_action(&entry.type_, &entry.id, 5),
+            8 => self.library_entry_status_action(&entry.type_, &entry.id, 6),
+            9 => self.library_entry_status_action(&entry.type_, &entry.id, 7),
+            10 => self.library_entry_status_action(&entry.type_, &entry.id, 8),
             _ => {}
         }
     }
@@ -2611,6 +2611,65 @@ mod tests {
             serde_json::to_value(&original_progress).unwrap(),
             "display grouping cannot create progress actions"
         );
+    }
+
+    #[test]
+    fn every_manual_status_pin_overrides_only_the_bucket_and_roundtrips() {
+        let mut entry: LibraryEntry = serde_json::from_value(
+            serde_json::json!({"id":"movie","type_":"movie","name":"Movie"}),
+        )
+        .unwrap();
+        let progress = HashMap::new();
+        let activity = HashMap::new();
+        for (code, label) in [
+            (6, "Watching"),
+            (5, "Plan to Watch"),
+            (7, "Completed"),
+            (8, "New episodes"),
+            (1, "On Hold"),
+            (2, "Dropped"),
+        ] {
+            entry.watch_status = WatchStatus::from_action(code).unwrap();
+            let candidate = LibraryCandidate::from_entry(&entry, 0);
+            assert_eq!(
+                project_library_card(&entry, &candidate, &[], &progress, &activity)
+                    .unwrap()
+                    .status,
+                label
+            );
+            for filter in BUILTIN_FILTERS {
+                assert_eq!(
+                    project_library_candidate(
+                        &entry,
+                        0,
+                        None,
+                        &progress,
+                        &activity,
+                        &LibraryViewOptions {
+                            filter,
+                            needle: String::new(),
+                            sort: 0
+                        }
+                    )
+                    .is_some(),
+                    builtin_filter_label(filter) == label
+                );
+            }
+            let restored: LibraryEntry =
+                serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+            assert_eq!(restored.watch_status, entry.watch_status);
+            assert!(progress.is_empty());
+        }
+        entry.watch_status = WatchStatus::from_action(0).unwrap();
+        let candidate = LibraryCandidate::from_entry(&entry, 0);
+        assert_eq!(
+            project_library_card(&entry, &candidate, &[], &progress, &activity)
+                .unwrap()
+                .status,
+            "Plan to Watch"
+        );
+        assert!(WatchStatus::Watching.allows_episode_refresh(false));
+        assert!(WatchStatus::NewEpisodes.allows_episode_refresh(false));
     }
 
     #[test]

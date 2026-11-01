@@ -2047,3 +2047,39 @@ msgstr "JPEG, WebP or AVIF for compressed artwork."
 
 msgid "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."
 msgstr "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."
+
+msgid "JPEG XL (lossless)"
+msgstr "JPEG XL (lossless)"
+
+msgid "JPEG XL (lossy)"
+msgstr "JPEG XL (lossy)"
+
+msgid "JPEG XL quality"
+msgstr "JPEG XL quality"
+
+msgid "JPEG, WebP, AVIF or JPEG XL for compressed artwork."
+msgstr "JPEG, WebP, AVIF or JPEG XL for compressed artwork."
+
+msgid "PNG, lossless WebP and lossless JPEG XL preserve every pixel. Lossy formats use the quality setting."
+msgstr "PNG, lossless WebP and lossless JPEG XL preserve every pixel. Lossy formats use the quality setting."
+
+msgid "Losslessly transcode JPEG"
+msgstr "Losslessly transcode JPEG"
+
+msgid "Preserve original JPEG data when no resize is needed. Other images and resized JPEGs use the selected quality."
+msgstr "Preserve original JPEG data when no resize is needed. Other images and resized JPEGs use the selected quality."
+
+msgid "Search movies, shows…"
+msgstr "Search movies, shows…"
+
+msgid "Change status"
+msgstr "Change status"
+
+msgid "Mark as watching"
+msgstr "Mark as watching"
+
+msgid "Mark as completed"
+msgstr "Mark as completed"
+
+msgid "Mark as new episodes"
+msgstr "Mark as new episodes"

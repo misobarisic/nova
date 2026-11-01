@@ -103,6 +103,8 @@ export component SettingsPage {
     in-out property <int> cache_format_index: 1;
     in-out property <float> cache_quality: 50.0;
     in-out property <float> cache_avif_quality: 85;
+    in-out property <float> cache_jxl_quality: 85;
+    in-out property <bool> cache_jxl_lossless_jpeg: false;
     in-out property <int> detail_poster_resolution_index: 3;
     in-out property <int> detail_backdrop_resolution_index: 5;
     in-out property <int> episode_thumbnail_resolution_index: 2;
@@ -130,7 +132,7 @@ export component SettingsPage {
     // list is the same in every language (the backend pushes it from
     // `nova_config::Language::ALL`; this default keeps the page previewable).
     in-out property <[string]> language_names: ["English", "Hrvatski"];
-    in-out property <[string]> cache_format_names: ["JPEG", "WebP", "AVIF"];
+    in-out property <[string]> cache_format_names: ["JPEG", "WebP", "AVIF", @tr("JPEG XL (lossless)"), @tr("JPEG XL (lossy)")];
     // Player section: player backend (0 = built-in mpv, 1 = external) on
     // every platform, plus the desktop external-app picker (0 = system
     // default, 1 = VLC, 2 = mpv) and the Android video decoder (0 = HW+,
@@ -177,6 +179,7 @@ export component SettingsPage {
     in-out property <float> screenshot_jpeg_quality: 85;
     in-out property <float> screenshot_webp_quality: 85;
     in-out property <float> screenshot_avif_quality: 85;
+    in-out property <float> screenshot_jxl_quality: 85;
     in-out property <bool> screenshot_show_folder: false;
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
@@ -862,9 +865,11 @@ export component SettingsPage {
     // 8 memory, 9 re-encode button, 10 clear. Sizes and memory remain available when disk
     // caching or re-encoding is off. Rows 9/10 activate on Enter
     // (Left/Right no-op). Row 11 is the disk limit, visually after row 0.
-    function kb_cache_n() -> int { return 12; }
+    function kb_cache_n() -> int { return 13; }
     function kb_cache_available(r: int) -> bool {
         if !SettingsContent.advanced_visible && r != 0 && r != 11 && r != 10 && !(r == 9 && root.cache_rewriting) { return false; }
+        if (r == 12 && root.cache_format_index != 3 && root.cache_format_index != 4) { return false; }
+        if (r == 3 && root.cache_format_index == 3) { return false; }
         if (r == 8) { return true; }
         if (r == 11) { return root.cache_images && !root.cache_busy; }
         if (r == 9 && root.cache_rewriting) { return true; }
@@ -886,12 +891,14 @@ export component SettingsPage {
             if (r == 9 || r == 10) { return 8; }
             return 0;
         }
+        if (r == 12) { return 2; }
+        if (r == 3 && root.cache_format_index == 4) { return 12; }
         if (r == 11) { return 0; }
         if (r == 1 && root.cache_images) { return 11; }
         if (r == 10) { return root.cache_images ? 9 : 8; }
         if (r == 9) { return 8; }
         if (r == 8) { return 7; }
-        if (r == 4) { return root.cache_images ? (root.cache_enabled ? 3 : 1) : 0; }
+        if (r == 4) { return root.cache_images ? (root.cache_enabled ? (root.cache_format_index == 3 ? 12 : 3) : 1) : 0; }
         if ((r == 2 || r == 3) && !root.cache_enabled) { return 1; }
         return Math.max(0, r - 1);
     }
@@ -912,6 +919,8 @@ export component SettingsPage {
         if (r == 1) { return root.cache_enabled ? 2 : 4; }
         if (r == 8) { return root.cache_images ? 9 : 10; }
         if (r == 9) { return 10; }
+        if (r == 12) { return root.cache_format_index == 3 ? 4 : 3; }
+        if (r == 2 && (root.cache_format_index == 3 || root.cache_format_index == 4)) { return 12; }
         return Math.min(root.kb_cache_n() - 1, r + 1);
     }
 
@@ -1390,6 +1399,9 @@ export component SettingsPage {
         if (r == 0) {
             root.cache_images = !root.cache_images;
             root.schedule_save();
+        } else if (r == 12) {
+            root.cache_jxl_lossless_jpeg = !root.cache_jxl_lossless_jpeg;
+            root.schedule_setting("jxl_lossless_jpeg");
         } else if (r == 1) {
             root.cache_enabled = !root.cache_enabled;
             root.schedule_save();
@@ -1398,7 +1410,7 @@ export component SettingsPage {
 
     function kb_cache_step(r: int, d: int) {
         if (!root.kb_cache_available(r)) { return; }
-        if (r == 0 || r == 1) {
+        if (r == 0 || r == 1 || r == 12) {
             root.kb_cache_flip(r);
         } else if (r == 2) {
             let n = root.cache_format_names.length;
@@ -1409,6 +1421,8 @@ export component SettingsPage {
         } else if (r == 3) {
             if root.cache_format_index == 2 {
                 root.cache_avif_quality = Math.clamp(root.cache_avif_quality + d, 1, 100);
+            } else if root.cache_format_index == 4 {
+                root.cache_jxl_quality = Math.clamp(root.cache_jxl_quality + d,1,100);
             } else {
                 root.cache_quality = Math.clamp(root.cache_quality + d, 1, 100);
             }
@@ -1485,7 +1499,7 @@ export component SettingsPage {
         if CastBridge.available && row == root.kb_player_existing_n() - 1 { return false; }
         if root.player_backend_index != 0 { return true; }
         if row == 2 && (root.is_android || root.desktop_decoder_available) { return false; }
-        if row >= root.kb_player_speed_row() + 1 && row < root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 ? 5 : 4) { return false; }
+        if row >= root.kb_player_speed_row() + 1 && row < root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4) { return false; }
         if row == SettingsContent.kb_player_paused_controls_row() - 4 || row == SettingsContent.kb_player_paused_controls_row() - 1 { return false; }
         return row != SettingsContent.kb_player_loading_text_row() && row != SettingsContent.kb_player_recovery_row();
     }
@@ -1669,13 +1683,13 @@ export component SettingsPage {
             root.playback_speed_stepped(d);
             root.schedule_save();
         } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 2 {
-            root.screenshot_format_index = Math.clamp(root.screenshot_format_index + d, 0, 4);
+            root.screenshot_format_index = Math.clamp(root.screenshot_format_index + d, 0, 6);
             root.schedule_setting("screenshot_format");
         } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 3 {
             root.screenshot_show_folder = d > 0;
             root.schedule_setting("screenshot_show_folder");
-        } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 ? 5 : 4) {
-            let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 ? 5 : 4);
+        } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4) {
+            let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4);
             SettingsBridge.subtitle_style_changed(index, SettingsBridge.subtitle_style[index] + d * SubtitleStyle.step(index));
             root.schedule_setting("subtitle_style");
         } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 4 {
@@ -1688,6 +1702,9 @@ export component SettingsPage {
             } else if root.screenshot_format_index == 4 {
                 root.screenshot_avif_quality = Math.clamp(root.screenshot_avif_quality + d, 1, 100);
                 root.schedule_setting("screenshot_avif_quality");
+            } else if root.screenshot_format_index == 6 {
+                root.screenshot_jxl_quality = Math.clamp(root.screenshot_jxl_quality + d,1,100);
+                root.schedule_setting("screenshot_jxl_quality");
             }
         } else if (root.desktop_decoder_available && root.player_backend_index == 0 && root.kb_pr == 2) {
             root.desktop_hwdec_index = Math.clamp(root.desktop_hwdec_index + d, root.hw_plus_available ? 0 : 1, 2);
@@ -2040,8 +2057,8 @@ export component SettingsPage {
             } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() - 3 {
                 root.auto_next_episode = !root.auto_next_episode;
                 root.schedule_setting("auto_next_episode");
-            } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 ? 5 : 4) {
-                let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 ? 5 : 4);
+            } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4) {
+                let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4);
                 if index == 5 { SettingsBridge.subtitle_style_changed(5, Math.mod(SettingsBridge.subtitle_style[5] + 1, 3)); }
                 else if index == 6 { SettingsBridge.subtitle_style_changed(6, SettingsBridge.subtitle_style[6] >= 0.5 ? 0 : 1); }
                 if index >= 5 { root.schedule_setting("subtitle_style"); }

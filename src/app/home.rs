@@ -199,7 +199,7 @@ fn prune_watched_new_episode_rows(state: &mut Shared) {
         entries.iter().any(|entry| {
             entry.id == row.series_id
                 && entry.type_ == row.type_
-                && entry.watch_status == WatchStatus::Auto
+                && entry.watch_status.allows_active_viewing()
         }) && !progress
             .get(&progress_map_key(&row.series_id, &row.episode_id))
             .is_some_and(|record| record.watched)
@@ -2027,7 +2027,7 @@ impl Bridge {
                         &profiles::ProfileStore::capture(),
                         &e.type_,
                         &e.id,
-                    ) && e.watch_status == WatchStatus::Auto
+                    ) && e.watch_status.allows_active_viewing()
                         && latest_refs.contains_key(e.id.as_str())
                         && groups.is_representative(&e.type_, &e.id)
                 })
@@ -2070,7 +2070,7 @@ impl Bridge {
             let Some(entry) = state.entries.get(identity.index).filter(|entry| {
                 entry.id == identity.id
                     && entry.type_ == identity.type_
-                    && entry.watch_status == WatchStatus::Auto
+                    && entry.watch_status.allows_active_viewing()
             }) else {
                 continue;
             };
@@ -2548,7 +2548,7 @@ impl Bridge {
                 .enumerate()
                 .filter(|(_, e)| {
                     e.type_ != "movie"
-                        && e.watch_status == WatchStatus::Auto
+                        && e.watch_status.allows_active_viewing()
                         && groups.is_representative(&e.type_, &e.id)
                 })
                 .map(|(index, e)| HomeLibraryIdentity {
@@ -2574,7 +2574,7 @@ impl Bridge {
             let Some(e) = state.entries.get(identity.index).filter(|entry| {
                 entry.id == identity.id
                     && entry.type_ == identity.type_
-                    && entry.watch_status == WatchStatus::Auto
+                    && entry.watch_status.allows_active_viewing()
                     && entry.type_ != "movie"
             }) else {
                 continue;
@@ -6282,7 +6282,7 @@ pub(super) fn prepare_progress_home(
     let mut aliases = HashMap::new();
     for e in state.entries.iter().filter(|e| {
         profile_policy::allows_title(&profiles::ProfileStore::capture(), &e.type_, &e.id)
-            && e.watch_status == WatchStatus::Auto
+            && e.watch_status.allows_active_viewing()
             && groups.is_representative(&e.type_, &e.id)
     }) {
         let cached = metadata.episode_data(&e.type_, &e.id);

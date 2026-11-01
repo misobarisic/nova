@@ -149,11 +149,17 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     for (label, action) in [
         ("Mark watched", 0),
         ("Mark as Plan to Watch", 7),
+        ("Mark as watching", 8),
+        ("Mark as completed", 9),
+        ("Mark as new episodes", 10),
         ("Mark on hold", 1),
         ("Mark dropped", 2),
         ("Back to automatic", 3),
     ] {
         click(&app, element(&app, "DetailPage::library_options_button"));
+        if label != "Mark watched" {
+            click_label(&app, "Change status");
+        }
         click_label(&app, label);
         assert_eq!(actions.borrow().last(), Some(&action));
     }
@@ -173,7 +179,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
             .next()
             .is_none()
     );
-    assert_eq!(actions.borrow().len(), 5);
+    assert_eq!(actions.borrow().as_slice(), &[0, 7, 8, 9, 10, 1, 2, 3]);
 
     click(&app, element(&app, "DetailPage::library_options_button"));
     click_label(&app, "Categories");

@@ -326,6 +326,9 @@ impl Player {
         let quality = match format {
             ScreenshotFormat::Jpeg => settings.screenshot_jpeg_quality,
             ScreenshotFormat::Avif => settings.screenshot_avif_quality,
+            ScreenshotFormat::JxlLossless | ScreenshotFormat::JxlLossy => {
+                settings.screenshot_jxl_quality
+            }
             _ => settings.screenshot_webp_quality,
         }
         .clamp(1, 100);
@@ -508,6 +511,18 @@ pub(super) fn write_image(
         ScreenshotFormat::WebpLossless | ScreenshotFormat::WebpLossy => {
             let encoded = webp::Encoder::from_rgba(pixels, width, height)
                 .encode_simple(format == ScreenshotFormat::WebpLossless, quality as f32)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::write_all(&mut output, &encoded)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::flush(&mut output).map_err(|_| ScreenshotError::SaveFailed)?;
+        }
+        ScreenshotFormat::JxlLossless | ScreenshotFormat::JxlLossy => {
+            let mode = if format == ScreenshotFormat::JxlLossless {
+                nova_image::JxlEncoding::Lossless
+            } else {
+                nova_image::JxlEncoding::Lossy { quality }
+            };
+            let encoded = nova_image::encode_jxl(width, height, pixels, mode, avif_limits())
                 .map_err(|_| ScreenshotError::SaveFailed)?;
             std::io::Write::write_all(&mut output, &encoded)
                 .map_err(|_| ScreenshotError::SaveFailed)?;
@@ -922,6 +937,8 @@ mod tests {
             ScreenshotFormat::WebpLossless,
             ScreenshotFormat::WebpLossy,
             ScreenshotFormat::Avif,
+            ScreenshotFormat::JxlLossless,
+            ScreenshotFormat::JxlLossy,
         ] {
             let source = temporary.0.join("stage.png");
             fs::write(&source, &png).unwrap();
@@ -963,7 +980,12 @@ mod tests {
         assert!(a.ends_with(".png"));
     }
     fn decode_output(path: &Path, format: ScreenshotFormat) -> image::RgbaImage {
-        if format == ScreenshotFormat::Avif {
+        if matches!(
+            format,
+            ScreenshotFormat::JxlLossless | ScreenshotFormat::JxlLossy
+        ) {
+            nova_image::decode_jxl(&fs::read(path).unwrap(), avif_limits()).unwrap()
+        } else if format == ScreenshotFormat::Avif {
             nova_image::decode_avif(&fs::read(path).unwrap(), avif_limits()).unwrap()
         } else {
             image::open(path).unwrap().into_rgba8()
@@ -991,10 +1013,14 @@ mod tests {
     fn encoders_preserve_dimensions_lossless_pixels_and_apply_lossy_quality() {
         let temp = Temporary::new(&std::env::temp_dir()).unwrap();
         let (width, height, pixels) = fixture_pixels();
-        for format in [ScreenshotFormat::Png, ScreenshotFormat::WebpLossless] {
+        for format in [
+            ScreenshotFormat::Png,
+            ScreenshotFormat::WebpLossless,
+            ScreenshotFormat::JxlLossless,
+        ] {
             let path = temp.0.join(filename(format));
             write_image(&path, width, height, &pixels, format, 85).unwrap();
-            let decoded = image::open(path).unwrap().into_rgba8();
+            let decoded = decode_output(&path, format);
             assert_eq!(decoded.dimensions(), (width, height));
             assert_eq!(decoded.as_raw(), &pixels);
         }
@@ -1002,6 +1028,7 @@ mod tests {
             ScreenshotFormat::Jpeg,
             ScreenshotFormat::WebpLossy,
             ScreenshotFormat::Avif,
+            ScreenshotFormat::JxlLossy,
         ] {
             let mut errors = Vec::new();
             let mut encoded = Vec::new();
@@ -1149,6 +1176,8 @@ mod tests {
             ScreenshotFormat::WebpLossless,
             ScreenshotFormat::WebpLossy,
             ScreenshotFormat::Avif,
+            ScreenshotFormat::JxlLossless,
+            ScreenshotFormat::JxlLossy,
         ] {
             let source = temp.0.join(filename(format));
             write_image(&source, width, height, &pixels, format, 85).unwrap();

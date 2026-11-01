@@ -1,3 +1,4 @@
+import { StatusMenu } from "status-menu.slint";
 import { SmartCollectionsBridge, InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
 import { LibraryScroll } from "library-scroll.slint";
 import { FeedbackProgress } from "feedback-motion.slint";
@@ -113,14 +114,17 @@ export component LibraryPage {
     // Library watched-state context menu: 1 mark series watched,
     // 2 mark series unwatched.
     callback library_watch_action(int, int);
-    // Library status: 0 automatic, 1 On Hold, 2 Dropped, 3/4 activity, 5 Plan to Watch.
+    // Library status: 0 automatic, 1 On Hold, 2 Dropped, 3/4 activity,
+    // 5 Plan to Watch, 6 Watching, 7 Completed, 8 New episodes.
     callback library_status_action(int, int);
     callback remove_library_item(int);
 
     // Card bottom-sheet menu state (single instance).
     // Pure UI state: actions reuse the callbacks above.
-    out property <bool> card_menu_open: root.menu_open;
+    out property <bool> card_menu_open: root.menu_open || root.status_menu_open;
     property <bool> menu_open: false;
+    property <bool> status_menu_open: false;
+    property <string> menu_type;
     property <int> menu_idx: 0;
     property <bool> menu_watched: false;
     property <int> menu_activity_action: root.menu_valid ? root.library[root.menu_idx].activity_action : 0;
@@ -128,25 +132,28 @@ export component LibraryPage {
     // A sync or watched-state refresh can remove/reorder a filtered row while
     // its sheet is open. Never let its old index act on the replacement show.
     property <bool> menu_valid: root.menu_idx >= 0 && root.menu_idx < root.library.length
-        && root.library[root.menu_idx].id == root.menu_id;
+        && root.library[root.menu_idx].id == root.menu_id && root.library[root.menu_idx].media_type == root.menu_type;
     changed menu_valid => {
-        if (root.menu_open && !root.menu_valid) { root.close_menu(); }
+        if ((root.menu_open || root.status_menu_open) && !root.menu_valid) { root.close_menu(); }
     }
 
     function open_lib_menu(idx: int, watched: bool) {
         if (root.view_loading || idx < 0 || idx >= root.library.length) { return; }
         root.menu_idx = idx;
         root.menu_id = root.library[idx].id;
+        root.menu_type = root.library[idx].media_type;
+        root.status_menu_open = false;
         root.menu_watched = watched;
         root.menu_open = true;
     }
 
     function close_menu() {
         root.menu_open = false;
+        root.status_menu_open = false;
         if (InterfaceStyle.tv) { nav_scope.focus(); }
     }
     function system_back() {
-        if (root.menu_open) {
+        if (root.menu_open || root.status_menu_open) {
             root.close_menu();
         } else if (root.search_open) {
             root.search_open = false;
@@ -491,7 +498,7 @@ export component LibraryPage {
                     root.kb_active = true;
                     if (!e.repeat) { root.tv_context(); }
                     accept
-                } else if (root.menu_open) {
+                } else if (root.menu_open || root.status_menu_open) {
                     // An open sheet eats Backspace (dismiss only).
                     root.close_menu();
                     accept
@@ -646,20 +653,8 @@ export component LibraryPage {
                                     }
                                     MenuSeparator {}
                                     MenuItem {
-                                        title: @tr("Mark as Plan to Watch");
-                                        activated => { root.library_status_action(i, 5); }
-                                    }
-                                    MenuItem {
-                                        title: @tr("Mark on hold");
-                                        activated => { root.library_status_action(i, 1); }
-                                    }
-                                    MenuItem {
-                                        title: @tr("Mark dropped");
-                                        activated => { root.library_status_action(i, 2); }
-                                    }
-                                    MenuItem {
-                                        title: @tr("Back to automatic");
-                                        activated => { root.library_status_action(i, 0); }
+                                        title: @tr("Change status");
+                                        activated => { root.open_lib_menu(i,card.watched); root.menu_open = false; root.status_menu_open = true; }
                                     }
                                     MenuItem {
                                         title: card.activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes");
@@ -929,14 +924,6 @@ export component LibraryPage {
                                 }
                                 Rectangle { horizontal-stretch: 1; min-width: 0px; }
 
-                            }
-                            Text {
-                                text: @tr("Your saved titles, continue watching, and downloads.");
-                                color: Theme.current.text_home_metadata;
-                                font-size: InterfaceStyle.tv ? 18px : 14px;
-                                wrap: word-wrap;
-                                min-width: 0px;
-                                height: self.preferred-height;
                             }
                         }
                         library_controls := Rectangle {
@@ -1230,10 +1217,7 @@ export component LibraryPage {
             items: [
                 { label: @tr("Open"), enabled: true },
                 { label: root.menu_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
-                { label: @tr("Mark as Plan to Watch"), enabled: true },
-                { label: @tr("Mark on hold"), enabled: true },
-                { label: @tr("Mark dropped"), enabled: true },
-                { label: @tr("Back to automatic"), enabled: true },
+                { label: @tr("Change status"), enabled: true },
                 { label: @tr("Remove from library"), enabled: true },
                 { label: root.menu_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.menu_activity_action > 0 },
             ];
@@ -1250,20 +1234,21 @@ export component LibraryPage {
                 } else if (a == 1) {
                     root.library_watch_action(root.menu_idx, root.menu_watched ? 2 : 1);
                 } else if (a == 2) {
-                    root.library_status_action(root.menu_idx, 5);
+                    root.menu_open = false; root.status_menu_open = true; return;
                 } else if (a == 3) {
-                    root.library_status_action(root.menu_idx, 1);
-                } else if (a == 4) {
-                    root.library_status_action(root.menu_idx, 2);
-                } else if (a == 5) {
-                    root.library_status_action(root.menu_idx, 0);
-                } else if (a == 6) {
                     root.remove_library_item(root.menu_idx);
-                } else if (a == 7) {
+                } else if (a == 4) {
                     root.library_status_action(root.menu_idx, root.menu_activity_action);
                 }
                 root.close_menu();
             }
+            closed => { root.close_menu(); }
+        }
+        StatusMenu {
+            open: root.status_menu_open; width: 100%; height: 100%;
+            safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            status-picked(code) => { if root.menu_valid { root.library_status_action(root.menu_idx,code); } root.close_menu(); }
             closed => { root.close_menu(); }
         }
 

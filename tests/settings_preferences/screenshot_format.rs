@@ -26,24 +26,20 @@ fn key(app: &nova::AppWindow, key: slint::platform::Key) {
         .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
     settle(app);
 }
-fn choose(app: &nova::AppWindow, label: &str) {
+fn choose_control(app: &nova::AppWindow, id: &str, label: &str) {
     // Compiled section delegates outside the viewport are instantiated lazily.
     for attempt in 0..40 {
-        if ElementHandle::find_by_element_id(app, "SettingsPlayerModule::screenshot_format")
-            .next()
-            .is_some()
-        {
+        if ElementHandle::find_by_element_id(app, id).next().is_some() {
             break;
         }
         app.set_settings_scroll_y(-50.0 * (attempt + 1) as f32);
         settle(app);
     }
-    let dropdown = item(app, "SettingsPlayerModule::screenshot_format");
+    let dropdown = item(app, id);
     let y = dropdown.absolute_position().y;
     app.set_settings_scroll_y((app.get_settings_scroll_y() - (y - 240.0)).min(0.0));
     settle(app);
-    item(app, "SettingsPlayerModule::screenshot_format")
-        .mock_single_click(slint::platform::PointerEventButton::Left);
+    item(app, id).mock_single_click(slint::platform::PointerEventButton::Left);
     settle(app);
     ElementHandle::find_by_accessible_label(app, label)
         // The closed dropdown also exposes its current label. With the popup
@@ -54,8 +50,12 @@ fn choose(app: &nova::AppWindow, label: &str) {
         })
         .last()
         .expect(label)
-        .mock_single_click(slint::platform::PointerEventButton::Left);
+        .invoke_accessible_default_action();
     settle(app);
+}
+
+fn choose(app: &nova::AppWindow, label: &str) {
+    choose_control(app, "SettingsPlayerModule::screenshot_format", label);
 }
 
 #[test]
@@ -94,12 +94,15 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
             app.set_screenshot_jpeg_quality(67.0);
             app.set_screenshot_webp_quality(92.0);
             app.set_screenshot_avif_quality(85.0);
+            app.set_screenshot_jxl_quality(85.0);
             for (index, label) in [
                 "PNG (lossless)",
                 "JPEG",
                 "WebP (lossless)",
                 "WebP (lossy)",
                 "AVIF",
+                "JPEG XL (lossless)",
+                "JPEG XL (lossy)",
             ]
             .into_iter()
             .enumerate()
@@ -110,7 +113,7 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
                 assert!(dropdown.absolute_position().x >= 0.0);
                 assert!(dropdown.absolute_position().x + dropdown.size().width <= width as f32);
                 assert!(dropdown.size().height >= 44.0);
-                if index == 1 || index == 3 || index == 4 {
+                if index == 1 || index == 3 || index == 4 || index == 6 {
                     key(&app, slint::platform::Key::DownArrow); // folder
                     key(&app, slint::platform::Key::RightArrow);
                     assert!(app.get_screenshot_show_folder());
@@ -123,7 +126,7 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
                         assert_eq!(app.get_screenshot_jpeg_quality(), 68.0);
                         assert_eq!(app.get_screenshot_webp_quality(), 93.0);
                         assert_eq!(app.get_screenshot_avif_quality(), 85.0);
-                    } else {
+                    } else if index == 4 {
                         let quality = item(&app, "SettingsPlayerModule::avif_quality");
                         assert!(quality.absolute_position().x >= 0.0);
                         assert!(
@@ -139,6 +142,14 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
                         app.set_screenshot_avif_quality(1.0);
                         key(&app, slint::platform::Key::LeftArrow);
                         assert_eq!(app.get_screenshot_avif_quality(), 1.0);
+                    } else {
+                        assert_eq!(app.get_screenshot_jxl_quality(), 86.0);
+                        assert_eq!(app.get_screenshot_avif_quality(), 1.0);
+                        let quality = item(&app, "SettingsPlayerModule::jxl_quality");
+                        assert!(quality.absolute_position().x >= 0.0);
+                        assert!(
+                            quality.absolute_position().x + quality.size().width <= width as f32
+                        );
                     }
                 }
                 assert_eq!(
@@ -157,21 +168,21 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
                     usize::from(index == 4)
                 );
             }
-            // AVIF is appended after every established persisted index.
-            choose(&app, "AVIF");
+            // New formats append to established persisted indices.
+            choose(&app, "JPEG XL (lossy)");
             assert_eq!(
                 app.get_screenshot_format_index(),
-                4,
-                "reselect AVIF: android={android}, width={width}"
+                6,
+                "reselect JPEG XL: android={android}, width={width}"
             );
             key(&app, slint::platform::Key::RightArrow);
             assert_eq!(
                 app.get_screenshot_format_index(),
-                4,
+                6,
                 "format maximum: android={android}, width={width}"
             );
             key(&app, slint::platform::Key::LeftArrow);
-            assert_eq!(app.get_screenshot_format_index(), 3);
+            assert_eq!(app.get_screenshot_format_index(), 5);
             choose(&app, "PNG (lossless)");
             key(&app, slint::platform::Key::RightArrow);
             assert_eq!(
@@ -197,6 +208,7 @@ fn formats_folders_and_quality_work_by_touch_and_keyboard() {
         "screenshot_jpeg_quality",
         "screenshot_webp_quality",
         "screenshot_avif_quality",
+        "screenshot_jxl_quality",
     ] {
         assert!(
             edits.borrow().iter().any(|seen| seen == field),
@@ -233,11 +245,7 @@ fn cache_avif_selection_preserves_other_quality_and_permanent_bridge() {
         app.set_cache_quality(63.0);
         app.set_cache_avif_quality(85.0);
         settle(&app);
-        let avif = ElementHandle::find_by_accessible_label(&app, "AVIF")
-            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
-            .expect("AVIF cache format");
-        avif.mock_single_click(slint::platform::PointerEventButton::Left);
-        settle(&app);
+        choose_control(&app, "SettingsImageCacheModule::cache_format", "AVIF");
         assert_eq!(app.get_cache_format_index(), 2);
         let quality = item(&app, "SettingsImageCacheModule::cache_avif_quality");
         assert!(quality.absolute_position().x >= 0.0);
@@ -275,6 +283,43 @@ fn cache_avif_selection_preserves_other_quality_and_permanent_bridge() {
         key(&app, slint::platform::Key::RightArrow);
         assert_eq!(app.get_cache_quality(), 64.0);
         assert_eq!(app.get_cache_avif_quality(), 1.0);
+        app.set_cache_jxl_quality(85.0);
+        app.set_cache_jxl_lossless_jpeg(false);
+        choose_control(
+            &app,
+            "SettingsImageCacheModule::cache_format",
+            "JPEG XL (lossless)",
+        );
+        assert_eq!(app.get_cache_format_index(), 3);
+        assert!(
+            ElementHandle::find_by_element_id(&app, "SettingsImageCacheModule::cache_jxl_quality")
+                .next()
+                .is_none()
+        );
+        bridge.set_kb_zone(5);
+        app.set_kb_active(true);
+        bridge.invoke_focus_shell();
+        content.set_kb_hr(2);
+        key(&app, slint::platform::Key::DownArrow);
+        assert_eq!(content.get_kb_hr(), 12, "JXL exposes the transcode toggle");
+        key(&app, slint::platform::Key::RightArrow);
+        assert!(app.get_cache_jxl_lossless_jpeg());
+        key(&app, slint::platform::Key::DownArrow);
+        assert_eq!(content.get_kb_hr(), 4, "lossless skips quality");
+        choose_control(
+            &app,
+            "SettingsImageCacheModule::cache_format",
+            "JPEG XL (lossy)",
+        );
+        assert_eq!(app.get_cache_format_index(), 4);
+        bridge.set_kb_zone(5);
+        app.set_kb_active(true);
+        bridge.invoke_focus_shell();
+        content.set_kb_hr(3);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_cache_jxl_quality(), 86.0);
+        assert_eq!(app.get_cache_avif_quality(), 1.0);
+        assert_eq!(app.get_cache_quality(), 64.0);
     }
 
     // Backends keep their property bindings when the Settings page is unmounted.
@@ -282,13 +327,21 @@ fn cache_avif_selection_preserves_other_quality_and_permanent_bridge() {
     settle(&app);
     app.set_cache_avif_quality(79.0);
     app.set_screenshot_avif_quality(81.0);
+    app.set_cache_jxl_quality(77.0);
+    app.set_screenshot_jxl_quality(83.0);
     let bridge = app.global::<nova_ui_shared::SettingsBridge>();
     assert_eq!(bridge.get_cache_avif_quality(), 79.0);
     assert_eq!(bridge.get_screenshot_avif_quality(), 81.0);
+    assert_eq!(bridge.get_cache_jxl_quality(), 77.0);
+    assert_eq!(bridge.get_screenshot_jxl_quality(), 83.0);
     bridge.set_cache_avif_quality(78.0);
     bridge.set_screenshot_avif_quality(82.0);
+    bridge.set_cache_jxl_quality(75.0);
+    bridge.set_screenshot_jxl_quality(84.0);
     assert_eq!(app.get_cache_avif_quality(), 78.0);
     assert_eq!(app.get_screenshot_avif_quality(), 82.0);
+    assert_eq!(app.get_cache_jxl_quality(), 75.0);
+    assert_eq!(app.get_screenshot_jxl_quality(), 84.0);
 }
 
 #[test]
@@ -323,7 +376,24 @@ fn codec_quality_search_reveals_correct_control_in_both_languages() {
         } else {
             "Kvaliteta"
         };
+        let jxl_query = if language == "en" {
+            "JPEG XL quality"
+        } else {
+            "Kvaliteta JPEG XL"
+        };
         for (section, destination, screenshot_format, cache_format, query, expected) in [
+            (5, "settings:player", 6, 0, "autoplay", "auto_next_episode"),
+            (5, "settings:player", 0, 0, jxl_query, "screenshot_format"),
+            (
+                5,
+                "settings:player",
+                6,
+                0,
+                jxl_query,
+                "screenshot_jxl_quality",
+            ),
+            (2, "settings:image-cache", 6, 3, jxl_query, "format"),
+            (2, "settings:image-cache", 6, 4, jxl_query, "jxl_quality"),
             (5, "settings:player", 0, 0, query, "screenshot_format"),
             (5, "settings:player", 4, 0, query, "screenshot_avif_quality"),
             (2, "settings:image-cache", 4, 0, query, "format"),
@@ -352,6 +422,12 @@ fn codec_quality_search_reveals_correct_control_in_both_languages() {
             assert_eq!(app.get_settings_selected_id(), section);
             let content = (*app).global::<nova_ui_shared::SettingsContent>();
             assert_eq!(content.get_search_target_key(), expected);
+            if expected == "auto_next_episode" {
+                assert_eq!(
+                    content.get_kb_pr(),
+                    content.invoke_kb_player_speed_row() + 14
+                );
+            }
             assert!(
                 crate::destinations::find(&app, &format!("setting:{expected}"))
                     .next()

@@ -781,6 +781,8 @@ const SETTINGS_GROUP_CACHE: &[&str] = &[
     "format",
     "quality",
     "avif_quality",
+    "jxl_quality",
+    "jxl_lossless_jpeg",
     "detail_poster_max_side",
     "detail_backdrop_max_side",
     "episode_thumbnail_max_side",
@@ -4911,6 +4913,8 @@ mod tests {
             format: CacheImageFormat::Avif,
             quality: 91,
             avif_quality: 78,
+            jxl_quality: 79,
+            jxl_lossless_jpeg: true,
             detail_poster_max_side: Some(720),
             detail_backdrop_max_side: None,
             episode_thumbnail_max_side: Some(360),
@@ -4943,6 +4947,8 @@ mod tests {
         assert_eq!(cache["format"], "avif");
         assert_eq!(cache["quality"], 91);
         assert_eq!(cache["avif_quality"], 78);
+        assert_eq!(cache["jxl_quality"], 79);
+        assert_eq!(cache["jxl_lossless_jpeg"], true);
         assert!(cache.get("image_disk_cache_limit_mb").is_none());
         let unlimited = merge_settings_fields(
             &settings,

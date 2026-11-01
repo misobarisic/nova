@@ -1534,7 +1534,13 @@ impl Bridge {
         let eligible = self.shared.lock().unwrap().entries.iter().any(|entry| {
             entry.id == job.id
                 && entry.type_ == job.type_
-                && entry.watch_status == WatchStatus::Auto
+                && entry
+                    .watch_status
+                    .allows_episode_refresh(release_reminders::subscribed(
+                        &profiles::ProfileStore::capture(),
+                        &entry.type_,
+                        &entry.id,
+                    ))
         });
         let Some(url) = job.sources.pop_front().filter(|_| eligible) else {
             self.finish_saved_episode_refresh(&job, false);
@@ -1562,7 +1568,13 @@ impl Bridge {
                         && state.entries.iter().any(|entry| {
                             entry.id == job.id
                                 && entry.type_ == job.type_
-                                && entry.watch_status == WatchStatus::Auto
+                                && entry.watch_status.allows_episode_refresh(
+                                    release_reminders::subscribed(
+                                        &profiles::ProfileStore::capture(),
+                                        &entry.type_,
+                                        &entry.id,
+                                    ),
+                                )
                         })
                 };
                 if !current {

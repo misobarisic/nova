@@ -154,8 +154,23 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     let record = statuses.clone();
     app.on_library_status_action(move |i, a| record.borrow_mut().push((i, a)));
     click(&app, elements(&app, "library_card_menu").remove(1));
+    click(&app, label(&app, "Change status"));
     click(&app, label(&app, "Mark as Plan to Watch"));
     assert_eq!(*statuses.borrow(), [(1, 5)]);
+    for (label_text, code) in [
+        ("Mark as watching", 6),
+        ("Mark as completed", 7),
+        ("Mark as new episodes", 8),
+        ("Mark on hold", 1),
+        ("Mark dropped", 2),
+        ("Back to automatic", 0),
+    ] {
+        click(&app, elements(&app, "library_card_menu").remove(1));
+        click(&app, label(&app, "Change status"));
+        click(&app, label(&app, label_text));
+        assert_eq!(statuses.borrow().last(), Some(&(1, code)));
+    }
+
     assert_eq!(*opened.borrow(), [1]);
     click(&app, label(&app, "Search library"));
     assert!(app.get_library_search_open());

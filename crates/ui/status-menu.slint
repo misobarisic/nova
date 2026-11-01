@@ -1,0 +1,17 @@
+import { MenuSheet } from "menusheet.slint";
+export component StatusMenu inherits MenuSheet {
+    keyboard_navigation: true;
+    sheet_title: @tr("Change status");
+    items: [
+        { label: @tr("Mark as watching"), enabled: true },
+        { label: @tr("Mark as Plan to Watch"), enabled: true },
+        { label: @tr("Mark as completed"), enabled: true },
+        { label: @tr("Mark as new episodes"), enabled: true },
+        { label: @tr("Mark on hold"), enabled: true },
+        { label: @tr("Mark dropped"), enabled: true },
+        { label: @tr("Back to automatic"), enabled: true },
+    ];
+    private property <[int]> codes: [6, 5, 7, 8, 1, 2, 0];
+    callback status-picked(int);
+    picked(index) => { root.status-picked(root.codes[index]); }
+}

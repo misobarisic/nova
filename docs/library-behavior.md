@@ -92,7 +92,11 @@ retain their English identifiers.
 | Watching | A started, incomplete viewing run, including its next unstarted episode. Legacy backlogs without a checkpoint conservatively stay here. |
 | New episodes | Previously completed (or explicitly awaiting return), with dated released episodes outstanding, without resumed meaningful playback. |
 | Completed | **All known dated, released episodes watched**, without unfinished meaningful playback in the known list. Future episodes and untouched dateless extras do not block it. A dateless-only list completes only when every known episode is watched. Establishing series completion needs a cached episode list; an existing checkpoint survives missing metadata. A movie completes from its own watched playback record, without episode metadata. The show need not have ended. |
-| On Hold / Dropped | Pinned manually per entry (card menu → status); overrides the derived bucket. Back-to-automatic clears any manual pin, including Plan to Watch. |
+| On Hold / Dropped | Pinned manually per entry (card menu → status); overrides the derived bucket. Back-to-automatic clears any manual pin. |
+
+Every built-in bucket may also be pinned explicitly through **Change status**.
+**Back to automatic** clears the pin and uses the rules above. A status pin never
+marks episodes watched or edits their saved positions/history.
 
 Pinned entries appear only under their chosen status filter. A pin replaces the
 card’s status pill, while resume text and the watched/total rail remain derived
@@ -100,8 +104,7 @@ from progress.
 
 Movies use their native `id\x01id` playback record for completion and the
 watched/unwatched action. A watched movie belongs to Completed and has no
-episode rail or redundant Seen badge. Manual Plan to Watch / On Hold / Dropped
-pins still apply.
+episode rail or redundant Seen badge. Manual status pins still apply.
 
 ## Returning shows and Home
 
@@ -120,11 +123,12 @@ section has its own See all grid, keyboard route and removal behavior. New
 episodes removal hides the current episode-ID batch until a different episode
 becomes available, independently of Continue Watching removal. On Hold and
 Dropped titles appear in neither viewing rail nor Upcoming. Manually pinned
-Plan to Watch titles also stay out of those Home rows. Their resume positions
+Plan to Watch and Completed titles also stay out of those Home rows. Watching
+and New episodes pins retain active-viewing eligibility. Their resume positions
 remain available in Detail; choose Back to automatic to restore progress-based
 placement. Manual pins persist and sync until explicitly changed.
 Explicit release-reminder subscriptions still refresh metadata for planned
-shows, including Android background delivery.
+or explicitly Completed shows, including Android background delivery.
 
 `viewing_activity:v1` and `new_episodes_hidden:v1` are JSON snapshots with
 per-title sync records in `viewing_activity` and `new_episodes_hidden`. Activity
@@ -174,7 +178,7 @@ Resume (latest-updated resumable position) beats that text count.
 | Movie in progress | `▶ Resume` | Watching |
 | Movie watched | (none — Completed status pill) | Completed |
 | Movie untouched | (none) | Plan to Watch |
-| Pinned Plan to Watch / On Hold / Dropped | playback text as derived | under the pin |
+| Any manual status pin | playback text as derived | under the pin |
 
 A single-episode toggle *can* mark an unaired episode watched; once every
 known episode is (however it got there), the series completes and the badge
@@ -187,10 +191,12 @@ The card’s overflow button opens a native popup on desktop and the page-level
 bottom sheet on touch. Desktop right-click also pops the menu at the cursor;
 touch hold or right-click opens the same bottom sheet, whose Cancel row closes it.
 Rows: **Open** (same as tapping the card), **Mark watched / Mark unwatched**
-(label flips with state), **Mark as Plan to Watch / Mark on hold / Mark dropped /
-Back to automatic**, **Wait for new episodes / Resume watching** (when
+(label flips with state), **Change status**, **Wait for new episodes / Resume watching** (when
 applicable), **Remove from library**. All indices resolve against the
-currently filtered/sorted view. A touch sheet closes if a background refresh
+currently filtered/sorted view. Change status opens a second menu with **Mark as
+watching / Mark as Plan to Watch / Mark as completed / Mark as new episodes /
+Mark on hold / Mark dropped / Back to automatic**. Detail uses the same picker.
+A touch sheet closes if a background refresh
 replaces its row, preventing its old index from acting on a different show.
 
 ## Marking rules

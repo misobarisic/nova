@@ -5782,3 +5782,39 @@ msgstr "JPEG, WebP ili AVIF za komprimirane slike."
 
 msgid "PNG and lossless WebP preserve every pixel. JPEG, lossy WebP and AVIF use the quality setting."
 msgstr "PNG i WebP bez gubitaka čuvaju svaki piksel. JPEG, WebP s gubicima i AVIF koriste postavku kvalitete."
+
+msgid "JPEG XL (lossless)"
+msgstr "JPEG XL (bez gubitaka)"
+
+msgid "JPEG XL (lossy)"
+msgstr "JPEG XL (s gubicima)"
+
+msgid "JPEG XL quality"
+msgstr "Kvaliteta JPEG XL"
+
+msgid "JPEG, WebP, AVIF or JPEG XL for compressed artwork."
+msgstr "JPEG, WebP, AVIF ili JPEG XL za komprimirane slike."
+
+msgid "PNG, lossless WebP and lossless JPEG XL preserve every pixel. Lossy formats use the quality setting."
+msgstr "PNG, WebP bez gubitaka i JPEG XL bez gubitaka čuvaju svaki piksel. Formati s gubicima koriste postavku kvalitete."
+
+msgid "Losslessly transcode JPEG"
+msgstr "Pretvori JPEG bez gubitaka"
+
+msgid "Preserve original JPEG data when no resize is needed. Other images and resized JPEGs use the selected quality."
+msgstr "Sačuvaj izvorne JPEG podatke kada promjena veličine nije potrebna. Ostale slike i JPEG slike promijenjene veličine koriste odabranu kvalitetu."
+
+msgid "Search movies, shows…"
+msgstr "Pretraži filmove, serije…"
+
+msgid "Change status"
+msgstr "Promijeni status"
+
+msgid "Mark as watching"
+msgstr "Označi kao gledanje"
+
+msgid "Mark as completed"
+msgstr "Označi kao dovršeno"
+
+msgid "Mark as new episodes"
+msgstr "Označi kao nove epizode"

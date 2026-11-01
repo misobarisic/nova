@@ -138,6 +138,8 @@ pub enum ScreenshotFormat {
     WebpLossless,
     WebpLossy,
     Avif,
+    JxlLossless,
+    JxlLossy,
 }
 
 impl ScreenshotFormat {
@@ -147,6 +149,8 @@ impl ScreenshotFormat {
             2 => Self::WebpLossless,
             3 => Self::WebpLossy,
             4 => Self::Avif,
+            5 => Self::JxlLossless,
+            6 => Self::JxlLossy,
             _ => Self::Png,
         }
     }
@@ -158,6 +162,8 @@ impl ScreenshotFormat {
             Self::WebpLossless => 2,
             Self::WebpLossy => 3,
             Self::Avif => 4,
+            Self::JxlLossless => 5,
+            Self::JxlLossy => 6,
         }
     }
 
@@ -167,6 +173,7 @@ impl ScreenshotFormat {
             Self::Jpeg => "jpg",
             Self::WebpLossless | Self::WebpLossy => "webp",
             Self::Avif => "avif",
+            Self::JxlLossless | Self::JxlLossy => "jxl",
         }
     }
 
@@ -176,6 +183,7 @@ impl ScreenshotFormat {
             Self::Jpeg => "image/jpeg",
             Self::WebpLossless | Self::WebpLossy => "image/webp",
             Self::Avif => "image/avif",
+            Self::JxlLossless | Self::JxlLossy => "image/jxl",
         }
     }
 }
@@ -852,6 +860,10 @@ cache_settings_type! {
     /// AVIF uses an independent quality so switching formats keeps both preferences.
     #[serde(default = "default_avif_quality", deserialize_with = "deserialize_image_quality")]
     pub avif_quality: u8,
+    #[serde(default = "default_screenshot_quality", deserialize_with = "deserialize_image_quality")]
+    pub jxl_quality: u8,
+    #[serde(default)]
+    pub jxl_lossless_jpeg: bool,
     /// Longest side of Detail posters; None preserves original dimensions.
     pub detail_poster_max_side: Option<u32>,
     /// Longest side of Detail banners; None preserves original dimensions.
@@ -989,6 +1001,8 @@ cache_settings_type! {
     pub screenshot_webp_quality: u8,
     #[serde(default = "default_screenshot_quality", deserialize_with = "deserialize_image_quality")]
     pub screenshot_avif_quality: u8,
+    #[serde(default = "default_screenshot_quality", deserialize_with = "deserialize_image_quality")]
+    pub screenshot_jxl_quality: u8,
     /// Save under Pictures/Nova/<show> instead of Pictures/Nova.
     #[serde(default)]
     pub screenshot_show_folder: bool,
@@ -1148,6 +1162,8 @@ impl Default for CacheSettings {
             format: images.format,
             quality: images.quality,
             avif_quality: images.avif_quality,
+            jxl_quality: images.jxl_quality,
+            jxl_lossless_jpeg: images.jxl_lossless_jpeg,
             detail_poster_max_side: images.detail_poster_max_side,
             detail_backdrop_max_side: images.detail_backdrop_max_side,
             episode_thumbnail_max_side: images.episode_thumbnail_max_side,
@@ -1190,6 +1206,7 @@ impl Default for CacheSettings {
             screenshot_jpeg_quality: default_screenshot_quality(),
             screenshot_webp_quality: default_screenshot_quality(),
             screenshot_avif_quality: default_screenshot_quality(),
+            screenshot_jxl_quality: default_screenshot_quality(),
             screenshot_show_folder: false,
             default_audio_language: String::new(),
             default_subtitle_language: String::new(),
@@ -1335,6 +1352,8 @@ impl From<&CacheSettings> for nova_cache::config::CacheSettings {
             format: settings.format,
             quality: settings.quality,
             avif_quality: settings.avif_quality,
+            jxl_quality: settings.jxl_quality,
+            jxl_lossless_jpeg: settings.jxl_lossless_jpeg,
             detail_poster_max_side: settings.detail_poster_max_side,
             detail_backdrop_max_side: settings.detail_backdrop_max_side,
             episode_thumbnail_max_side: settings.episode_thumbnail_max_side,
@@ -2246,6 +2265,55 @@ mod tests {
             let restored: CacheSettings =
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.home_episode_artwork, episode_artwork);
+        }
+    }
+
+    #[test]
+    fn jpeg_xl_formats_append_indices_and_keep_independent_quality() {
+        let formats = [
+            ScreenshotFormat::Png,
+            ScreenshotFormat::Jpeg,
+            ScreenshotFormat::WebpLossless,
+            ScreenshotFormat::WebpLossy,
+            ScreenshotFormat::Avif,
+            ScreenshotFormat::JxlLossless,
+            ScreenshotFormat::JxlLossy,
+        ];
+        for (index, format) in formats.into_iter().enumerate() {
+            assert_eq!(format.index(), index as i32);
+            assert_eq!(ScreenshotFormat::from_index(index as i32), format);
+        }
+        let old:CacheSettings = serde_json::from_str(r#"{"format":"webp","quality":42,"screenshot_format":"avif","screenshot_avif_quality":73}"#).unwrap();
+        assert_eq!(old.jxl_quality, 85);
+        assert_eq!(old.screenshot_jxl_quality, 85);
+        assert_eq!(old.avif_quality, 85);
+        assert_eq!(old.screenshot_avif_quality, 73);
+        let settings = CacheSettings {
+            format: CacheImageFormat::JxlLossy,
+            jxl_quality: 79,
+            screenshot_format: ScreenshotFormat::JxlLossy,
+            screenshot_jxl_quality: 62,
+            ..old
+        };
+        assert_eq!(settings.config_key(), "jxl_lossy:q79");
+        assert_eq!(ScreenshotFormat::JxlLossless.extension(), "jxl");
+        assert_eq!(ScreenshotFormat::JxlLossy.mime_type(), "image/jxl");
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CacheSettings>(&saved).unwrap(),
+            settings
+        );
+        for quality in [0, 101] {
+            assert!(
+                serde_json::from_value::<CacheSettings>(serde_json::json!({"jxl_quality":quality}))
+                    .is_err()
+            );
+            assert!(
+                serde_json::from_value::<CacheSettings>(
+                    serde_json::json!({"screenshot_jxl_quality":quality})
+                )
+                .is_err()
+            );
         }
     }
 

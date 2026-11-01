@@ -999,13 +999,32 @@ pub(crate) enum WatchStatus {
     OnHold,
     Dropped,
     PlanToWatch,
+    Watching,
+    Completed,
+    NewEpisodes,
 }
 
 impl WatchStatus {
+    fn from_action(status: i32) -> Option<Self> {
+        match status {
+            0 => Some(Self::Auto),
+            1 => Some(Self::OnHold),
+            2 => Some(Self::Dropped),
+            5 => Some(Self::PlanToWatch),
+            6 => Some(Self::Watching),
+            7 => Some(Self::Completed),
+            8 => Some(Self::NewEpisodes),
+            _ => None,
+        }
+    }
+    fn allows_active_viewing(self) -> bool {
+        matches!(self, Self::Auto | Self::Watching | Self::NewEpisodes)
+    }
     /// Planning suppresses active-viewing refreshes, but an explicit reminder
     /// still needs fresh release metadata on foreground and background paths.
     fn allows_episode_refresh(self, has_reminder: bool) -> bool {
-        self == Self::Auto || (self == Self::PlanToWatch && has_reminder)
+        matches!(self, Self::Auto | Self::Watching | Self::NewEpisodes)
+            || (matches!(self, Self::PlanToWatch | Self::Completed) && has_reminder)
     }
 
     /// Badge label shown on the card while pinned (`None` when automatic).
@@ -1015,6 +1034,9 @@ impl WatchStatus {
             WatchStatus::OnHold => Some("On Hold"),
             WatchStatus::Dropped => Some("Dropped"),
             WatchStatus::PlanToWatch => Some("Plan to Watch"),
+            WatchStatus::Watching => Some("Watching"),
+            WatchStatus::Completed => Some("Completed"),
+            WatchStatus::NewEpisodes => Some("New episodes"),
         }
     }
 }

@@ -293,7 +293,9 @@ fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.len() > LOGO_BYTES {
         return None;
     }
-    let image = if image::guess_format(bytes).ok() == Some(image::ImageFormat::Avif) {
+    let image = if nova_image::is_jpeg_xl(bytes)
+        || image::guess_format(bytes).ok() == Some(image::ImageFormat::Avif)
+    {
         // Keep directory logos under their own stricter caps before handing
         // their bounded PNG thumbnail to the normal artwork-cache pipeline.
         let limits = nova_image::DecodeLimits {
@@ -303,7 +305,11 @@ fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
             max_pixels: u64::from(LOGO_SOURCE_SIDE) * u64::from(LOGO_SOURCE_SIDE),
             max_decoded_bytes: 8 * 1024 * 1024,
         };
-        image::DynamicImage::ImageRgba8(nova_image::decode_avif(bytes, limits).ok()?)
+        image::DynamicImage::ImageRgba8(if nova_image::is_jpeg_xl(bytes) {
+            nova_image::decode_jxl(bytes, limits).ok()?
+        } else {
+            nova_image::decode_avif(bytes, limits).ok()?
+        })
     } else {
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(LOGO_SOURCE_SIDE);
@@ -548,5 +554,20 @@ mod tests {
         let pixels = image::load_from_memory(&encoded).unwrap().into_rgba8();
         assert_eq!(pixels.dimensions(), (64, 32));
         assert!(pixels.pixels().all(|pixel| pixel[3] == 127));
+    }
+    #[test]
+    fn jpeg_xl_logos_use_shared_decoder_and_preserve_alpha() {
+        let encoded = nova_image::encode_jxl(
+            128,
+            64,
+            &vec![127; 128 * 64 * 4],
+            nova_image::JxlEncoding::Lossless,
+            nova_image::DecodeLimits::default(),
+        )
+        .unwrap();
+        let png = thumbnail(&encoded).unwrap();
+        let decoded = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), (64, 32));
+        assert!(decoded.pixels().all(|p| p[3] == 127));
     }
 }

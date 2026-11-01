@@ -2699,9 +2699,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         | "player_episode_backdrop_max_side" => format!("{number} px"),
         "quality"
         | "avif_quality"
+        | "jxl_quality"
         | "screenshot_jpeg_quality"
         | "screenshot_webp_quality"
         | "screenshot_avif_quality"
+        | "screenshot_jxl_quality"
         | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" => match value.as_u64() {
             Some(0) => tr("Square").into(),
@@ -2733,6 +2735,8 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some("webp_lossless") => tr("WebP (lossless)").into(),
             Some("webp_lossy") => tr("WebP (lossy)").into(),
             Some("avif") => "AVIF".into(),
+            Some("jxl_lossless") => tr("JPEG XL (lossless)").into(),
+            Some("jxl_lossy") => tr("JPEG XL (lossy)").into(),
             _ => value.to_string(),
         },
         "subtitle_style" => {
@@ -2842,6 +2846,8 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
                     "jpeg" => "JPEG",
                     "webp" => "WebP",
                     "avif" => "AVIF",
+                    "jxl_lossless" => tr("JPEG XL (lossless)"),
+                    "jxl_lossy" => tr("JPEG XL (lossy)"),
                     "en" | "English" => "English",
                     "hr" | "Croatian" => "Hrvatski",
                     "Resume" | "resume" => tr("Resume"),
