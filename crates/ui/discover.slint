@@ -555,6 +555,10 @@ component DiscoverGrid {
     in property <int> cols: 1;
     in property <length> item-width;
     in property <length> item-gap;
+    in property <length> viewport_top;
+    in property <length> viewport_height;
+    in property <length> grid_top;
+    in property <length> row_stride;
     in-out property <bool> kb_active;
     in-out property <int> kb_zone;
     in-out property <int> kb_idx;
@@ -611,23 +615,29 @@ component DiscoverGrid {
                 // motion back on should animate later arrivals, not hide and
                 // replay a result that the user is already reading.
                 init => { if !root.stagger { self.item_revealed = true; } }
-                changed item_motion => { if !self.item_motion { item_reveal_t.stop(); self.item_revealed = true; } }
+                // The mounted timer's running binding stops it when this flag
+                // settles, including a motion switch during an entrance.
+                changed item_motion => { if !self.item_motion { self.item_revealed = true; } }
                 property <duration> item_reveal_delay: Math.min(i, 12) * 30ms;
-                item_reveal_t := Timer {
-                    interval: 40ms;
-                    running: root.stagger && !card_slot.item_revealed;
-                    triggered => {
-                        card_slot.item_revealed = true;
-                    }
-                }
-
-                reveal_layer := Rectangle {
+                // Retain every grid slot and its reveal state. Only controls
+                // near the measured viewport (plus two rows) own native trees;
+                // logical keyboard focus is included before focus delivery.
+                if (root.kb_zone == 3 && root.kb_idx == i)
+                    || (root.viewport_height > 0px
+                        && root.grid_top + Math.floor(i / root.cols) * root.row_stride + card_slot.height >= root.viewport_top - 2 * root.row_stride
+                        && root.grid_top + Math.floor(i / root.cols) * root.row_stride <= root.viewport_top + root.viewport_height + 2 * root.row_stride): reveal_layer := Rectangle {
                     width: 100%;
                     height: 100%;
-                    opacity: !root.stagger || parent.item_revealed ? 1.0 : 0.0;
-                    y: !root.stagger || parent.item_revealed ? 0px : 12px;
-                    animate opacity { duration: Anim.transition_fade; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
-                    animate y { duration: Anim.transition_slide; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
+                    opacity: !root.stagger || card_slot.item_revealed ? 1.0 : 0.0;
+                    y: !root.stagger || card_slot.item_revealed ? 0px : 12px;
+                    animate opacity { duration: Anim.transition_fade; delay: root.stagger ? card_slot.item_reveal_delay : 0ms; }
+                    animate y { duration: Anim.transition_slide; delay: root.stagger ? card_slot.item_reveal_delay : 0ms; }
+
+                    item_reveal_t := Timer {
+                        interval: 40ms;
+                        running: root.stagger && !card_slot.item_revealed;
+                        triggered => { card_slot.item_revealed = true; }
+                    }
 
                     lift := Rectangle {
                         width: 100%;
@@ -1491,6 +1501,10 @@ export component DiscoverPage {
 
                 fix_grid := DiscoverGrid {
                     width: 100%;
+                    viewport_top: -root.display_scroll_y;
+                    viewport_height: root.sv_vh;
+                    grid_top: root.sv_grid_top;
+                    row_stride: root.row_stride;
                     active: root.grid_active;
                     context_revealed: root.context_revealed;
                     catalog: root.display_catalog;
@@ -1735,6 +1749,10 @@ export component DiscoverPage {
 
             and_grid := DiscoverGrid {
                 width: 100%;
+                viewport_top: -root.display_scroll_y;
+                viewport_height: root.sv_vh;
+                grid_top: root.sv_grid_top;
+                row_stride: root.row_stride;
                 active: root.grid_active;
                 context_revealed: root.context_revealed;
                 catalog: root.display_catalog;

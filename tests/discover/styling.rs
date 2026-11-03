@@ -11,6 +11,19 @@ fn idle(ms: u64) {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(ms));
 }
 
+/// Evaluate deferred bindings/layout without allowing a reveal timer to fire.
+fn settle_without_time(app: &nova::AppWindow) {
+    for _ in 0..4 {
+        for element in ElementQuery::from_root(app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
+        idle(0);
+    }
+}
+
 fn settle(app: &nova::AppWindow) {
     for _ in 0..12 {
         // No renderer evaluates the restored page's layout in this backend.
@@ -174,4 +187,216 @@ fn discover_hero_collapses_while_search_and_filters_stay_pinned() {
             assert!((search.absolute_position().y - original_y).abs() < 0.5);
         }
     }
+}
+
+#[test]
+fn discover_viewport_retires_only_inner_controls_and_preserves_focus_and_slot_geometry() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "discover_viewport_retires_only_inner_controls_and_preserves_focus_and_slot_geometry"
+    )) {
+        return;
+    }
+    use slint::{
+        Model,
+        platform::{Key, WindowEvent},
+    };
+    use std::cell::RefCell;
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_catalog(Rc::new(VecModel::from((0..1000).map(card).collect::<Vec<_>>())).into());
+    let selected = Rc::new(RefCell::new(None));
+    let chosen = selected.clone();
+    app.on_item_selected(move |id, index| *chosen.borrow_mut() = Some((id.to_string(), index)));
+    app.show().unwrap();
+    for (width, height, tv) in [
+        (390, 844, false),
+        (844, 390, false),
+        (1280, 720, false),
+        (1920, 1080, true),
+    ] {
+        app.global::<nova::InterfaceStyle>().set_tv(tv);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        for scroll_page in [false, true] {
+            app.set_discover_scroll_page(scroll_page);
+            app.set_kb_active(false);
+            app.set_discover_kb_zone(0);
+            app.set_discover_scroll_y(0.0);
+            settle(&app);
+            let controls = ElementHandle::find_by_accessible_label(&app, "Title 0")
+                .next()
+                .expect("first visible card controls");
+            let slot = find(&app, "DiscoverGrid::card_slot");
+            let size = slot.size();
+            let position = slot.absolute_position();
+            app.set_discover_scroll_y(-1_000_000.0);
+            settle(&app);
+            // ElementQuery omits invisible rows, so counts cannot prove native
+            // retirement. A previously captured weak handle does: only the
+            // inner conditional tree dies; the outer slot must remain alive.
+            assert!(
+                !controls.is_valid(),
+                "offscreen controls retained at {width}px, page={scroll_page}"
+            );
+            assert!(
+                slot.is_valid(),
+                "outer geometry must survive unmounting controls"
+            );
+            assert_eq!(slot.size(), size);
+            let bottom = app.get_discover_scroll_y();
+            assert!(bottom < -1000.0);
+            app.set_discover_scroll_y(0.0);
+            settle(&app);
+            let returned = ElementHandle::find_by_accessible_label(&app, "Title 0")
+                .next()
+                .expect("scroll-back remount");
+            assert!(returned.computed_opacity() > 0.99);
+            assert_eq!(slot.size(), size);
+            assert!((slot.absolute_position().y - position.y).abs() < 0.5);
+            // The logical target is included before keyboard focus/Enter,
+            // even though it started far outside the viewport's keep window.
+            app.set_kb_active(true);
+            app.set_discover_kb_zone(3);
+            app.set_discover_kb_idx(999);
+            app.global::<nova::DiscoverBridge>().invoke_focus_shell();
+            for event in [
+                WindowEvent::KeyPressed {
+                    text: Key::Return.into(),
+                },
+                WindowEvent::KeyReleased {
+                    text: Key::Return.into(),
+                },
+            ] {
+                app.window().dispatch_event(event);
+            }
+            assert_eq!(*selected.borrow(), Some(("id999".into(), 999)));
+            settle(&app);
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "Title 999")
+                    .next()
+                    .is_some()
+            );
+            assert_eq!(app.get_catalog().row_count(), 1000);
+            assert!(
+                (app.get_discover_scroll_y() - bottom).abs() < 2.0,
+                "focus preserves full scroll extent"
+            );
+        }
+    }
+}
+
+#[test]
+fn discover_remount_preserves_one_shot_reveal_and_offscreen_motion_switch_state() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "discover_remount_preserves_one_shot_reveal_and_offscreen_motion_switch_state"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    app.set_show_home(false);
+    app.set_discover_scroll_page(true);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    app.set_search_results(Rc::new(VecModel::from((0..1000).map(card).collect::<Vec<_>>())).into());
+    app.set_discover_search_open(true);
+    app.show().unwrap();
+    for _ in 0..8 {
+        settle(&app);
+        if let Some(first) = ElementHandle::find_by_accessible_label(&app, "Title 0").next() {
+            let _ = first.computed_opacity();
+        }
+    }
+    let first = ElementHandle::find_by_accessible_label(&app, "Title 0")
+        .next()
+        .unwrap();
+    assert!(first.computed_opacity() > 0.99);
+    app.set_discover_search_scroll_y(-1_000_000.0);
+    settle(&app);
+    assert!(!first.is_valid());
+    app.set_discover_search_scroll_y(0.0);
+    // Flush the deferred native scroll/layout restoration without advancing
+    // the clock: a newly armed40ms reveal must still be unable to fire.
+    settle_without_time(&app);
+    let returned = ElementHandle::find_by_accessible_label(&app, "Title 0")
+        .next()
+        .unwrap();
+    assert!(returned.computed_opacity() > 0.99);
+    app.set_discover_search_scroll_y(-1_000_000.0);
+    settle(&app);
+    app.global::<nova::Anim>().set_enabled(false);
+    settle(&app);
+    app.global::<nova::Anim>().set_enabled(true);
+    app.set_kb_active(true);
+    app.set_discover_kb_zone(3);
+    app.set_discover_kb_idx(20);
+    app.global::<nova::DiscoverBridge>().invoke_focus_shell();
+    settle_without_time(&app);
+    let settled = ElementHandle::find_by_accessible_label(&app, "Title 20")
+        .next()
+        .expect("focused previously unmounted row");
+    assert!(
+        settled.computed_opacity() > 0.99,
+        "offscreen rows settled by disabling motion must not replay"
+    );
+}
+
+#[test]
+fn discover_pointer_modality_keeps_selected_inner_tree_while_retiring_unrelated_rows() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "discover_pointer_modality_keeps_selected_inner_tree_while_retiring_unrelated_rows"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_catalog(Rc::new(VecModel::from((0..1000).map(card).collect::<Vec<_>>())).into());
+    app.set_kb_active(true);
+    app.set_discover_kb_zone(3);
+    app.set_discover_kb_idx(0);
+    app.show().unwrap();
+    settle(&app);
+    let selected = ElementHandle::find_by_accessible_label(&app, "Title 0")
+        .next()
+        .unwrap();
+    let unrelated = ElementHandle::find_by_accessible_label(&app, "Title 1")
+        .next()
+        .unwrap();
+    // Pointer modality hides the ring; it does not discard the selected
+    // logical target that Detail/back or later keyboard focus can restore.
+    app.set_kb_active(false);
+    app.set_discover_scroll_y(-1_000_000.0);
+    settle(&app);
+    assert!(app.get_discover_scroll_y() < -1000.0);
+    assert!(
+        selected.is_valid(),
+        "selected controls must survive pointer modality outside the viewport"
+    );
+    assert!(
+        !unrelated.is_valid(),
+        "unrelated offscreen controls must still retire"
+    );
+    assert_eq!(app.get_discover_kb_zone(), 3);
+    assert_eq!(app.get_discover_kb_idx(), 0);
+    assert!(!app.get_kb_active());
+    app.set_discover_kb_zone(0);
+    settle(&app);
+    assert!(
+        !selected.is_valid(),
+        "clearing logical focus releases the extra retained tree"
+    );
 }

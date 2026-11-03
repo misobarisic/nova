@@ -1565,6 +1565,9 @@ pub fn tr(english: &str) -> &str {
         "This stream requires the in-app player, which is unavailable." => {
             "Za ovaj zapis potreban je ugrađeni reproduktor, koji nije dostupan."
         }
+        "This stream session ended. Select the stream again." => {
+            "Sesija ovog zapisa je završila. Ponovno odaberite zapis."
+        }
         "This download is not complete yet." => "Preuzimanje još nije dovršeno.",
         "Unavailable catalog" => "Nedostupan katalog",
         "Background opacity (%)" => "Neprozirnost pozadine (%)",
