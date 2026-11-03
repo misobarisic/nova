@@ -342,6 +342,7 @@ fn joining_and_ending_a_party_keep_back_routed() {
     // The asynchronous join result replaces the focused invite editor.
     app.set_party_active(true);
     app.set_party_is_host(true);
+    app.set_party_can_choose_media(true);
     app.recover_back_focus();
     back(&app);
     assert!(!app.get_party_page_open());

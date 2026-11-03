@@ -29,20 +29,6 @@ fn back(app: &nova::AppWindow) {
         });
 }
 
-fn row_for(app: &nova::AppWindow, target: Rect) -> Option<Rect> {
-    let (tx, ty, tw, th) = target;
-    let center = (tx + tw / 2.0, ty + th / 2.0);
-    ElementHandle::find_by_element_type_name(app, "SettingsRow")
-        .map(|row| rect(&row))
-        .filter(|(x, y, w, h)| {
-            center.0 >= *x - 0.5
-                && center.0 <= x + w + 0.5
-                && center.1 >= *y - 0.5
-                && center.1 <= y + h + 0.5
-        })
-        .min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap())
-}
-
 fn check_segmented_rows(
     app: &nova::AppWindow,
     label: &str,
@@ -50,9 +36,20 @@ fn check_segmented_rows(
     stacked: bool,
     failures: &Rc<RefCell<Vec<String>>>,
 ) {
-    let controls: Vec<_> = ElementHandle::find_by_element_type_name(app, "Segmented")
-        .filter(|e| {
-            let size = e.size();
+    // The landing hero also owns a Segmented Settings-view selector. Inspect
+    // actual row descendants so unrelated navigation controls cannot masquerade
+    // as row content, and escaping controls still fail their own row's bounds.
+    let controls: Vec<_> = ElementHandle::find_by_element_type_name(app, "SettingsRow")
+        .flat_map(|row| {
+            let bounds = rect(&row);
+            row.query_descendants()
+                .match_type_name("Segmented")
+                .find_all()
+                .into_iter()
+                .map(move |control| (bounds, control))
+        })
+        .filter(|(_, control)| {
+            let size = control.size();
             size.width > 0.0 && size.height > 0.0
         })
         .collect();
@@ -67,16 +64,10 @@ fn check_segmented_rows(
     }
 
     let viewport = app.window().size().width as f32;
-    for (index, control) in controls.iter().enumerate() {
+    for (index, (row, control)) in controls.iter().enumerate() {
         let control = rect(control);
-        let Some(row) = row_for(app, control) else {
-            failures.borrow_mut().push(format!(
-                "{label}: segmented control {index} has no SettingsRow"
-            ));
-            continue;
-        };
         let (x, y, width, height) = control;
-        let (row_x, row_y, row_width, row_height) = row;
+        let (row_x, row_y, row_width, row_height) = *row;
         if x < row_x + 14.0
             || y < row_y - 0.5
             || x + width > row_x + row_width - 14.0 + 0.5

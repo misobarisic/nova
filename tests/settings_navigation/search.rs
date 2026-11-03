@@ -27,10 +27,66 @@ fn key(app: &nova::AppWindow, key: slint::platform::Key) {
     settle(app);
 }
 
-fn result(app: &nova::AppWindow, id: &str) -> ElementHandle {
-    destinations::find(app, id).next().expect(id)
+// A landscape viewport can place matches below the overview hero. Scroll the
+// real landing viewport as a user would; exact-hit assertions below still bind
+// the same destination, breadcrumb, highlighted control and keyboard action.
+fn reveal_landing_result(app: &nova::AppWindow, id: &str) {
+    if !id.starts_with("settings:") {
+        return;
+    }
+    for _ in 0..24 {
+        if destinations::find(app, id).next().is_some() {
+            return;
+        }
+        let Some(view) = ElementHandle::find_by_element_id(app, "SettingsPage::land_scroll").next()
+        else {
+            return;
+        };
+        let position = view.absolute_position();
+        let size = view.size();
+        let before = app.get_settings_navigation_scroll();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    position.x + size.width / 2.0,
+                    position.y + size.height - 8.0,
+                ),
+                delta_x: 0.0,
+                delta_y: -64.0,
+            });
+        settle(app);
+        if (app.get_settings_navigation_scroll() - before).abs() < 0.5 {
+            return;
+        }
+    }
 }
 
+#[track_caller]
+fn result(app: &nova::AppWindow, id: &str) -> ElementHandle {
+    reveal_landing_result(app, id);
+    let Some(result) = destinations::find(app, id).next() else {
+        let links: Vec<_> = ElementHandle::find_by_element_type_name(app, "SettingsLink")
+            .filter_map(|link| link.accessible_id())
+            .collect();
+        panic!(
+            "missing {id}; query={:?}, size={:?}, android={}, tv={}, settings={}, home={}, detail={}, section={}, keyboard_zone={}, backend={}, navigation_scroll={}, links={links:?}",
+            app.get_settings_search_query(),
+            app.window().size(),
+            app.get_is_android(),
+            app.global::<nova::InterfaceStyle>().get_tv(),
+            app.get_show_settings(),
+            app.get_show_home(),
+            app.get_settings_detail_open(),
+            app.get_settings_selected_id(),
+            app.global::<nova_ui_shared::SettingsBridge>().get_kb_zone(),
+            app.get_player_backend_index(),
+            app.get_settings_navigation_scroll(),
+        );
+    };
+    result
+}
+
+#[track_caller]
 fn open(app: &nova::AppWindow, id: &str, section: i32, keyboard: bool) {
     if keyboard {
         let bridge = app.global::<nova_ui_shared::SettingsBridge>();

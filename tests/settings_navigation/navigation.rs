@@ -94,6 +94,8 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
     }
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
+    // Exercise preservation of an explicitly saved nondefault quality.
+    app.set_cache_quality(85.0);
     app.on_settings_search_matches(|query, haystack| {
         nova_ui::settings_search_matches(&query, &haystack)
     });

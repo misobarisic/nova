@@ -116,7 +116,7 @@ fn theme_search_toggle_resize_and_android_back() {
         .next()
         .unwrap();
     let initial_mask_y = mask.absolute_position().y;
-    app.set_settings_navigation_scroll(-108.0);
+    app.set_settings_navigation_scroll(-192.0);
     settle(&app);
     let compact = ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
         .next()

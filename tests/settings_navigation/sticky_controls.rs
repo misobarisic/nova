@@ -301,10 +301,13 @@ fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
                 .next()
                 .is_none()
         );
-        app.set_settings_navigation_scroll(-90.0);
+        // The 184px hero includes the Settings-view selector. Its compact
+        // title fades over the final 40px, while controls keep their own slots.
+        app.set_settings_navigation_scroll(-164.0);
         settle(&app);
         assert!(
-            app.get_settings_navigation_scroll() < -68.0,
+            app.get_settings_navigation_scroll() < -144.0
+                && app.get_settings_navigation_scroll() > -184.0,
             "{width}: overview scroll is {}",
             app.get_settings_navigation_scroll()
         );
@@ -323,7 +326,7 @@ fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
             opacity > 0.0 && opacity < 1.0,
             "overview title fades in during collapse"
         );
-        app.set_settings_navigation_scroll(-150.0);
+        app.set_settings_navigation_scroll(-204.0);
         settle(&app);
         let header = ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
             .next()
