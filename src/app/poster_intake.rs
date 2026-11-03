@@ -351,6 +351,8 @@ impl Bridge {
                 .is_some_and(|session| session.cancelled.load(Ordering::Acquire))
             && self.intake_key_matches(&request.key)
     }
+    // Desktop catalogs use the dedicated poster queue; Home batches admission.
+    #[cfg(not(feature = "desktop"))]
     pub(super) fn enqueue_poster_intake(
         &self,
         surface: Surface,
