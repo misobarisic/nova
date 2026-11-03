@@ -1591,6 +1591,40 @@ impl Bridge {
     pub(super) fn dispatch_continue_posters(&self) {
         self.dispatch_episode_home_posters(false);
         self.dispatch_episode_home_posters(true);
+        self.pump_poster_intake();
+    }
+
+    /// Row images retain their pixels independently of the decoded LRU. Only
+    /// an actual recipe change invalidates already painted Home artwork.
+    pub(super) fn invalidate_home_poster_recipes(&self) {
+        let Some(app) = self.app() else { return };
+        for model in [app.get_home_continue(), app.get_home_new_episodes()] {
+            for (index, mut row) in model.iter().enumerate() {
+                if row.is_loaded {
+                    row.is_loaded = false;
+                    model.set_row_data(index, row);
+                }
+            }
+        }
+        for model in [app.get_home_upcoming(), app.get_home_cal_day()] {
+            for (index, mut row) in model.iter().enumerate() {
+                if row.is_loaded {
+                    row.is_loaded = false;
+                    model.set_row_data(index, row);
+                }
+            }
+        }
+        for model in [
+            app.get_home_catalog_cards(),
+            app.get_home_history_archive_cards(),
+        ] {
+            for (index, mut row) in model.iter().enumerate() {
+                if row.is_loaded {
+                    row.is_loaded = false;
+                    model.set_row_data(index, row);
+                }
+            }
+        }
     }
 
     fn dispatch_episode_home_posters(&self, new: bool) {
@@ -1612,14 +1646,7 @@ impl Bridge {
             model
                 .iter()
                 .enumerate()
-                .filter(|(_, row)| {
-                    !row.is_loaded
-                        || decoded_cache_get(&sized_cache_key(
-                            &row.art_url,
-                            Some(DISPLAY_POSTER_SIDE),
-                        ))
-                        .is_none()
-                })
+                .filter(|(_, row)| !row.is_loaded)
                 .filter_map(|(index, row)| {
                     let source = sources.iter().find(|source| {
                         source.series_id == row.id.as_str()
@@ -1636,7 +1663,7 @@ impl Bridge {
                 .collect::<Vec<_>>()
         };
         for (index, fallback) in requests {
-            self.enqueue_poster_intake(
+            if self.queue_poster_intake(
                 if new {
                     poster_intake::Surface::New
                 } else {
@@ -1645,7 +1672,10 @@ impl Bridge {
                 index,
                 true,
                 fallback,
-            );
+            ) == poster_intake::Admission::DeferredCapacity
+            {
+                break;
+            }
         }
     }
 
@@ -1659,14 +1689,7 @@ impl Bridge {
             app.get_home_upcoming()
                 .iter()
                 .enumerate()
-                .filter(|(_, row)| {
-                    !row.is_loaded
-                        || decoded_cache_get(&sized_cache_key(
-                            &row.art_url,
-                            Some(DISPLAY_POSTER_SIDE),
-                        ))
-                        .is_none()
-                })
+                .filter(|(_, row)| !row.is_loaded)
                 .filter_map(|(index, row)| {
                     let source = state
                         .upcoming_list
@@ -1683,8 +1706,13 @@ impl Bridge {
                 .collect::<Vec<_>>()
         };
         for (index, fallback) in requests {
-            self.enqueue_poster_intake(poster_intake::Surface::Upcoming, index, true, fallback);
+            if self.queue_poster_intake(poster_intake::Surface::Upcoming, index, true, fallback)
+                == poster_intake::Admission::DeferredCapacity
+            {
+                break;
+            }
         }
+        self.pump_poster_intake();
     }
 
     /// Fetch and paint the currently selected Home catalog rows. Each
@@ -1694,7 +1722,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        for (surface, model) in [
+        'models: for (surface, model) in [
             (
                 poster_intake::Surface::HomeCatalog,
                 app.get_home_catalog_cards(),
@@ -1707,11 +1735,14 @@ impl Bridge {
             for (index, card) in model.iter().enumerate().filter(|(_, card)| !card.is_loaded) {
                 if card.poster_url.is_empty() {
                     self.recover_missing_artwork(&card.media_type, &card.id, "");
-                } else {
-                    self.enqueue_poster_intake(surface, index, true, String::new());
+                } else if self.queue_poster_intake(surface, index, true, String::new())
+                    == poster_intake::Admission::DeferredCapacity
+                {
+                    break 'models;
                 }
             }
         }
+        self.pump_poster_intake();
     }
 
     /// Record a backdrop URL on a saved library entry (no-op when unchanged

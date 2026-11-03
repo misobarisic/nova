@@ -58,6 +58,7 @@ struct State {
     refresh: bool,
     deferred: bool,
     busy_revision: Option<u64>,
+    recipe_revision: Option<u64>,
 }
 #[derive(Default)]
 pub(super) struct Intake(Mutex<State>);
@@ -120,16 +121,28 @@ impl Intake {
     fn needs_pump(&self, revision: impl FnOnce() -> u64) -> bool {
         let state = self.0.lock().unwrap();
         !state.closed
-            && state.active.len() < DELIVERIES
-            && (state.refresh || state.deferred || !state.high.is_empty() || !state.low.is_empty())
-            && state
-                .busy_revision
-                .is_none_or(|before| before != revision())
+            && (state
+                .recipe_revision
+                .is_some_and(|before| before != image_settings_revision())
+                || (state.active.len() < DELIVERIES
+                    && (state.refresh
+                        || state.deferred
+                        || !state.high.is_empty()
+                        || !state.low.is_empty())
+                    && state
+                        .busy_revision
+                        .is_none_or(|before| before != revision())))
     }
     fn begin_pump(&self, revision: impl FnOnce() -> u64) -> bool {
         let mut state = self.0.lock().unwrap();
         if state.closed || state.pumping {
             return false;
+        }
+        if state
+            .recipe_revision
+            .is_some_and(|before| before != image_settings_revision())
+        {
+            state.busy_revision = None;
         }
         if state
             .busy_revision
@@ -189,7 +202,9 @@ impl Drop for Delivery {
             .is_some_and(|active| active.ticket == self.ticket)
         {
             state.active.remove(&self.key);
-            state.refresh = true;
+            // The completion pumps already admitted work. Rediscover rows
+            // only after explicit invalidation or deferred-capacity pressure;
+            // a successful image must not restart every Home rail.
         }
     }
 }
@@ -343,6 +358,20 @@ impl Bridge {
         visible: bool,
         fallback: String,
     ) -> Admission {
+        let admission = self.queue_poster_intake(surface, index, visible, fallback);
+        self.pump_poster_intake();
+        admission
+    }
+
+    /// Home admits a bounded batch before pumping, rather than validating the
+    /// entire pending queue once for every row in its initial model.
+    pub(super) fn queue_poster_intake(
+        &self,
+        surface: Surface,
+        index: usize,
+        visible: bool,
+        fallback: String,
+    ) -> Admission {
         let context = profiles::capture();
         if !profiles::is_current(&context)
             || context
@@ -394,18 +423,17 @@ impl Bridge {
             fallback,
             authority: owner.generation(),
         };
-        let admission = self.poster_intake.submit(Request {
+        self.poster_intake.submit(Request {
             key,
             context,
             owner,
             visible,
             fallback_attempt: false,
-        });
-        self.pump_poster_intake();
-        admission
+        })
     }
-    /// Existing 250ms tick only reads the atomic leaf revision while there is
-    /// deferred/pending work. Empty settled intake performs no queue pump.
+    /// Idle ticks observe the image-settings revision; shared artwork
+    /// availability is read only while work is pending. Settled models are
+    /// scanned again only after an actual recipe change.
     pub(super) fn poster_intake_tick(&self) {
         if self
             .poster_intake
@@ -426,8 +454,13 @@ impl Bridge {
         {
             return;
         }
-        let refresh = {
+        let (refresh, recipe_changed) = {
             let mut state = self.poster_intake.0.lock().unwrap();
+            let revision = image_settings_revision();
+            let recipe_changed = state
+                .recipe_revision
+                .replace(revision)
+                .is_some_and(|previous| previous != revision);
             let removed = state.high.len() + state.low.len();
             state.high.retain(|request| self.intake_matches(request));
             state.low.retain(|request| self.intake_matches(request));
@@ -440,12 +473,17 @@ impl Bridge {
                 }
             }
 
-            let refresh =
-                state.refresh || state.deferred || removed != state.high.len() + state.low.len();
+            let refresh = state.refresh
+                || state.deferred
+                || recipe_changed
+                || removed != state.high.len() + state.low.len();
             state.refresh = false;
             state.deferred = false;
-            refresh
+            (refresh, recipe_changed)
         };
+        if recipe_changed {
+            self.invalidate_home_poster_recipes();
+        }
         if refresh && let Some(app) = self.app() {
             if app.get_show_home() && !app.get_profiles_require_selection() {
                 self.dispatch_continue_posters();
@@ -960,6 +998,281 @@ mod tests {
                 && state.high.is_empty()
                 && state.low.is_empty()
         );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn home_fallbacks_settle_without_lru_and_idle_recipe_change_refreshes_once() {
+        use std::io::{Read, Write};
+        const CHILD: &str = "NOVA_HOME_SETTLED_INTAKE_CHILD";
+        let Some(root) = std::env::var_os(CHILD) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-home-settled-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .args(["--exact", "app::poster_intake::tests::home_fallbacks_settle_without_lru_and_idle_recipe_change_refreshes_once", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        set_active_cache_settings(CacheSettings {
+            cache_images: false,
+            enabled: false,
+            lru_cache_mb: 0,
+            ..Default::default()
+        });
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(true);
+        app.set_profiles_require_selection(false);
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx::closed(),
+            Arc::new(AtomicU64::new(0)),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let _owner = RunOwner(bridge.poster_intake.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let counts = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let server_counts = counts.clone();
+        let server_stop = stopped.clone();
+        let server = std::thread::spawn(move || {
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgba8(2, 3)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let png = png.into_inner();
+            while !server_stop.load(Ordering::Acquire) {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("fixture accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                let length = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let path = request.split_whitespace().nth(1).unwrap().to_owned();
+                *server_counts
+                    .lock()
+                    .unwrap()
+                    .entry(path.clone())
+                    .or_default() += 1;
+                let (status, body) = if path.contains("bad") {
+                    ("404 Not Found", &[][..])
+                } else {
+                    ("200 OK", png.as_slice())
+                };
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = (0..3).map(|index| serde_json::from_value(serde_json::json!({
+                "id":format!("rail-{index}"), "type_":"series", "name":"Rail", "poster_url":format!("{base}/good-{index}.png")
+            })).unwrap()).collect();
+            let source = |index| ContinueEntry {
+                series_id: format!("rail-{index}"),
+                type_: "series".into(),
+                episode_id: format!("episode-{index}"),
+                ..Default::default()
+            };
+            state.continue_list = vec![source(0)];
+            state.new_episodes_list = vec![source(1)];
+            state.upcoming_list = vec![UpcomingEntry {
+                series_id: "rail-2".into(),
+                type_: "series".into(),
+                episode_id: "episode-2".into(),
+                ..Default::default()
+            }];
+            state.home_catalog_row_items = vec![MetaPreview {
+                id: "catalog".into(),
+                type_: "series".into(),
+                poster: Some(format!("{base}/catalog.png")),
+                ..Default::default()
+            }];
+        }
+        // Catalog publication merges its metadata header. Seed that exact
+        // existing snapshot before admitting rail work so this fixture tests
+        // successful delivery, rather than an unrelated progress invalidation.
+        write_meta_header_for(
+            "series",
+            "catalog",
+            &MetaHeader {
+                poster_url: format!("{base}/catalog.png"),
+                ..Default::default()
+            },
+        );
+        let projection_revision = progress_projection::revision();
+        let row = |index| ContinueRow {
+            id: format!("rail-{index}").into(),
+            media_type: "series".into(),
+            episode_id: format!("episode-{index}").into(),
+            art_url: format!("{base}/bad-{index}.png").into(),
+            ..Default::default()
+        };
+        app.set_home_continue(Rc::new(VecModel::from(vec![row(0)])).into());
+        app.set_home_new_episodes(Rc::new(VecModel::from(vec![row(1)])).into());
+        let upcoming = UpcomingRow {
+            id: "rail-2".into(),
+            art_url: format!("{base}/bad-2.png").into(),
+            index: 0,
+            ..Default::default()
+        };
+        app.set_home_upcoming(Rc::new(VecModel::from(vec![upcoming.clone()])).into());
+        app.set_home_cal_day(Rc::new(VecModel::from(vec![upcoming])).into());
+        app.set_home_catalog_cards(
+            Rc::new(VecModel::from(vec![HomeCatalogCard {
+                id: "catalog".into(),
+                media_type: "series".into(),
+                poster_url: format!("{base}/catalog.png").into(),
+                ..Default::default()
+            }]))
+            .into(),
+        );
+        bridge.dispatch_continue_posters();
+        bridge.dispatch_upcoming_posters();
+        bridge.dispatch_home_catalog_posters();
+
+        let passed = Rc::new(std::cell::Cell::new(false));
+        let passed_tick = passed.clone();
+        let tick_bridge = bridge.clone();
+        let weak = app.as_weak();
+        let started = Instant::now();
+        let tick_counts = counts.clone();
+        let recipe_url = format!("{base}/bad-0.png");
+        let initial_recipe =
+            image_cache_key(&recipe_url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)));
+        let initial_image_revision = image_settings_revision();
+        let mut quiet_ticks = 0;
+        let mut revised = false;
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(10),
+            move || {
+                let app = weak.upgrade().unwrap();
+                assert_eq!(
+                    progress_projection::revision(),
+                    projection_revision,
+                    "successful image publication must not edit the preseeded metadata snapshot"
+                );
+                tick_bridge.poster_intake_tick();
+                let loaded = app.get_home_continue().iter().all(|row| row.is_loaded)
+                    && app.get_home_new_episodes().iter().all(|row| row.is_loaded)
+                    && app.get_home_upcoming().iter().all(|row| row.is_loaded)
+                    && app.get_home_cal_day().iter().all(|row| row.is_loaded)
+                    && app.get_home_catalog_cards().iter().all(|row| row.is_loaded);
+                let settled = {
+                    let state = tick_bridge.poster_intake.0.lock().unwrap();
+                    assert!(state.active.len() <= DELIVERIES);
+                    state.active.is_empty()
+                        && state.high.is_empty()
+                        && state.low.is_empty()
+                        && !state.refresh
+                        && !state.deferred
+                        && state.busy_revision.is_none()
+                };
+                if loaded && settled {
+                    assert_eq!(
+                        decoded_cache_stats().0,
+                        0,
+                        "row images survive without LRU residency"
+                    );
+                    // Exercise explicit redispatch too: success/fallback must not
+                    // become pending just because its original URL is uncached.
+                    tick_bridge.dispatch_continue_posters();
+                    tick_bridge.dispatch_upcoming_posters();
+                    tick_bridge.dispatch_home_catalog_posters();
+                    let counts = tick_counts.lock().unwrap();
+                    assert_eq!(counts.len(), 7);
+                    assert!(
+                        counts
+                            .values()
+                            .all(|count| *count == if revised { 2 } else { 1 }),
+                        "unexpected repeated fetches (revised={revised}): {counts:?}"
+                    );
+                    drop(counts);
+                    quiet_ticks += 1;
+                    if quiet_ticks == 12 {
+                        if revised {
+                            passed_tick.set(true);
+                            slint::quit_event_loop().unwrap();
+                        } else {
+                            let mut settings = active_cache_settings();
+                            settings.enabled = true;
+                            set_active_cache_settings(settings);
+                            assert_ne!(image_settings_revision(), initial_image_revision);
+                            assert_ne!(
+                                image_cache_key(
+                                    &recipe_url,
+                                    ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))
+                                ),
+                                initial_recipe,
+                                "the second wave must use an actually different resolved recipe"
+                            );
+                            // No navigation/invalidation callback: the existing
+                            // idle tick must notice this actual recipe revision.
+                            assert!(
+                                tick_bridge
+                                    .poster_intake
+                                    .needs_pump(nova_media::net::artwork_availability_revision)
+                            );
+                            tick_bridge.poster_intake_tick();
+                            assert!(!app.get_home_continue().row_data(0).unwrap().is_loaded);
+                            assert!(!app.get_home_upcoming().row_data(0).unwrap().is_loaded);
+                            assert!(!app.get_home_catalog_cards().row_data(0).unwrap().is_loaded);
+                            revised = true;
+                            quiet_ticks = 0;
+                        }
+                    }
+                } else {
+                    quiet_ticks = 0;
+                }
+                if started.elapsed() > Duration::from_secs(8) {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        app.run().unwrap();
+        timer.stop();
+        stopped.store(true, Ordering::Release);
+        server.join().unwrap();
+        assert!(
+            passed.get(),
+            "Home must settle before and after one recipe refresh"
+        );
+        assert!(
+            bridge.poster_intake.0.lock().unwrap().failures.is_empty(),
+            "successful fallback never charges a terminal failure"
+        );
+        let size = app.get_home_continue().row_data(0).unwrap().poster.size();
+        assert_eq!((size.width, size.height), (2, 3));
     }
 
     fn request(index: usize, visible: bool) -> Request {
