@@ -121,6 +121,7 @@
             hostToolchain
             cargo-bloat
             cargo-about
+            python3
           ] ++ (lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             perf
             cargo-sweep
@@ -350,6 +351,7 @@
             toolchain
             pkgs.pkg-config
             pkgs.cargo-about
+            pkgs.python3
             crossGcc
           ];
           buildInputs = [

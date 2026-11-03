@@ -24,6 +24,10 @@ on:
       - "build-support/**"
       - "crates/**"
       - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "Makefile"
+      - ".github/scripts/**"
       - "android/**"
       - "vendor/**"
       - "assets/**"
@@ -55,6 +59,10 @@ on:
       - "build-support/**"
       - "crates/**"
       - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "Makefile"
+      - ".github/scripts/**"
       - "android/**"
       - "vendor/**"
       - "assets/**"
@@ -111,8 +119,9 @@ jobs:
 
       - name: Test release packaging
         run: |
-          python3 -B -m unittest discover -s .github/scripts -p 'test_package_*.py'
-          python3 -B android/test_tv_packaging.py
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --discover .github/scripts
+          python3 -B .github/scripts/run-ci-tests.py --discover android
+          python3 -B .github/scripts/run-ci-tests.py --discover scripts/tests
 
       - name: Run Clippy
         run: nix develop .#default --command cargo clippy --workspace --locked -- -D warnings
@@ -132,6 +141,95 @@ jobs:
             export __EGL_VENDOR_LIBRARY_FILENAMES="$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES"
             exec cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked
           SH
+
+  test-backend:
+    name: Backend and data integrity regressions
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: nova-ci-v1
+          key: nix-${{ hashFiles('flake.lock') }}
+          cmd-format: nix develop .#default --command {0}
+          cache-targets: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test backend leaf crates and bounded media transport
+        run: >-
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --
+          cargo test --locked --lib -p nova-config -p nova-providers -p nova-media
+          -p nova-tracking -p nova-stremio -p nova-list-services
+          -- --test-threads=1
+
+      # These modules own subprocess isolation for storage and Slint globals.
+      - name: Test profile deletion and ownership
+        run: >-
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --
+          cargo test --locked -p nova --lib app::profile_actions_tests:: -- --test-threads=1
+
+      - name: Test sync projection transactions
+        run: >-
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --
+          cargo test --locked -p nova --lib app::sync::tests:: -- --test-threads=1
+
+      - name: Test typed artwork publication and restart
+        run: >-
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --
+          cargo test --locked -p nova --lib app::artwork_tests:: -- --test-threads=1
+
+  test-ui:
+    name: Search, library, downloads and profile UI regressions
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: nova-ci-v1
+          key: nix-${{ hashFiles('flake.lock') }}
+          cmd-format: nix develop .#default --command {0}
+          cache-targets: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The existing suites give each case its own process and body receipt.
+      - name: Test existing isolated UI suites
+        run: >-
+          nix develop .#default --command python3 -B .github/scripts/run-ci-tests.py --
+          cargo test --locked -p nova --test ui_discover --test ui_library
+          --test ui_downloads --test ui_navigation --test ui_settings_sync
+          -- --test-threads=1
 
   check-windows:
     name: Windows GNU target check
@@ -346,7 +444,7 @@ jobs:
             libseat-dev libssl-dev libudev-dev libvulkan-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxrandr-dev \
-            patchelf pkg-config \
+            patchelf pkg-config python3 \
             squashfs-tools xinput
 
       - name: Install cargo-about

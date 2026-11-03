@@ -138,6 +138,7 @@ fn generate_license_catalog() {
         "Cargo.toml",
         "Cargo.lock",
         "about.toml",
+        "build-support/source_catalog.py",
         "assets/open_source_licenses.hbs",
         "assets/open_source_crate_sources.hbs",
         "assets/open_source_project_sources.tsv",
@@ -157,14 +158,15 @@ fn generate_license_catalog() {
         "crates/remux/Cargo.toml",
         "vendor/oxicast/Cargo.toml",
         "vendor/oxicast/NOVA_PATCH.md",
-        "crates/sync/Cargo.toml",
     ] {
         println!("cargo:rerun-if-changed={path}");
     }
     for name in [
         "TARGET",
         "CARGO_FEATURE_DESKTOP",
+        "CARGO_FEATURE_ANDROID",
         "CARGO_FEATURE_LIVE_PREVIEW",
+        "CARGO_FEATURE_UPDATE_CHECK",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -173,12 +175,12 @@ fn generate_license_catalog() {
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
     );
-    let mut sources = render_cargo_about(
+    let sources = render_cargo_about(
         &manifest_dir,
         "assets/open_source_crate_sources.hbs",
         &target,
     );
-    sources.push_str(include_str!("assets/open_source_project_sources.tsv"));
+    let sources = resolve_workspace_sources(&manifest_dir, &target, &sources);
 
     let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".into());
     let mut catalog =
@@ -284,16 +286,19 @@ fn render_cargo_about(manifest_dir: &PathBuf, template: &str, target: &str) -> S
         .arg("--target")
         .arg(target);
 
-    let mut features = Vec::new();
-    if env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
-        features.push("desktop");
-    }
-    if env::var_os("CARGO_FEATURE_LIVE_PREVIEW").is_some() {
-        features.push("live-preview");
-    }
-    if features.is_empty() {
-        command.arg("--no-default-features");
-    } else {
+    // Match the feature set being compiled, including distro and Android builds.
+    // Do not let cargo-about silently re-enable Cargo's default features.
+    let features: Vec<_> = [
+        ("CARGO_FEATURE_DESKTOP", "desktop"),
+        ("CARGO_FEATURE_ANDROID", "android"),
+        ("CARGO_FEATURE_LIVE_PREVIEW", "live-preview"),
+        ("CARGO_FEATURE_UPDATE_CHECK", "update-check"),
+    ]
+    .into_iter()
+    .filter_map(|(variable, feature)| env::var_os(variable).map(|_| feature))
+    .collect();
+    command.arg("--no-default-features");
+    if !features.is_empty() {
         command.arg("--features").arg(features.join(","));
     }
 
@@ -314,6 +319,37 @@ fn render_cargo_about(manifest_dir: &PathBuf, template: &str, target: &str) -> S
     String::from_utf8(output.stdout).unwrap_or_else(|error| {
         panic!("cargo-about returned non-UTF-8 output for {template}: {error}")
     })
+}
+
+/// Keep filesystem package identities out of the shipped source-link catalog.
+fn resolve_workspace_sources(manifest_dir: &PathBuf, target: &str, sources: &str) -> String {
+    let mut child = Command::new("python3")
+        .arg("-B")
+        .arg(manifest_dir.join("build-support/source_catalog.py"))
+        .arg("--manifest-dir")
+        .arg(manifest_dir)
+        .arg("--target")
+        .arg(target)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("source catalog generation requires Python 3; use the supported Nix shell");
+    let input_result = child
+        .stdin
+        .take()
+        .expect("source catalog input pipe")
+        .write_all(sources.as_bytes());
+    let output = child
+        .wait_with_output()
+        .expect("wait for source catalog generator");
+    assert!(
+        output.status.success(),
+        "workspace source catalog generation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    input_result.expect("send cargo-about source rows");
+    String::from_utf8(output.stdout).expect("source catalog generator returned non-UTF-8 output")
 }
 
 /// Map Rust triples to the ABI directory names cargo-apk2 packages.
