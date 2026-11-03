@@ -3971,6 +3971,9 @@ fn owned_value<T: serde::de::DeserializeOwned + Default>(
         .unwrap_or_default())
 }
 
+#[cfg(test)]
+static PROJECTION_STORE_CLONES: AtomicU64 = AtomicU64::new(0);
+
 impl ProjectionWork {
     fn prepare(&self) -> Result<Arc<PreparedProjectionBatch>, String> {
         if let Some(batch) = self.prepared.lock().unwrap().as_ref() {
@@ -4021,8 +4024,21 @@ impl ProjectionWork {
         } else {
             None
         };
-        let mut store = handle.lock().unwrap().clone();
-        let preparation_clock = store.clock();
+        let (preparation_clock, mut store) = {
+            let store = handle.lock().unwrap();
+            if store
+                .pending_domains()
+                .contains(&self.input.owner.domain(profile_policy::DOMAIN))
+            {
+                requested_domains.insert(self.input.owner.domain(profile_policy::DOMAIN));
+            }
+            let snapshot = (!requested_domains.is_empty()).then(|| {
+                #[cfg(test)]
+                PROJECTION_STORE_CLONES.fetch_add(1, Ordering::Relaxed);
+                store.clone()
+            });
+            (store.clock(), snapshot)
+        };
         let mut raw_owners = BTreeMap::from([(
             self.input.owner.id().to_owned(),
             (
@@ -4048,12 +4064,6 @@ impl ProjectionWork {
                 true
             }
         };
-        if store
-            .pending_domains()
-            .contains(&self.input.owner.domain(profile_policy::DOMAIN))
-        {
-            requested_domains.insert(self.input.owner.domain(profile_policy::DOMAIN));
-        }
         if requested_domains.iter().any(|domain| {
             domain == DOMAIN_LIBRARY || domain == &self.input.owner.domain(DOMAIN_LIBRARY)
         }) {
@@ -4061,6 +4071,9 @@ impl ProjectionWork {
         }
         let mut seen_domains = BTreeSet::new();
         for requested in &requested_domains {
+            let store = store
+                .as_mut()
+                .expect("requested projection captures its Store");
             let (owner, base) = match profiles::parse_domain(requested) {
                 Some((id, base)) => (profiles::ProfileStore::for_profile(id), base.to_owned()),
                 None if SCOPED_DOMAINS.contains(&requested.as_str()) => {
@@ -4087,14 +4100,14 @@ impl ProjectionWork {
                 .entry(owner.id().to_owned())
                 .or_insert_with(|| (owner.clone(), owner.revision_token().read()));
             if base == DOMAIN_LIBRARY {
-                migrate_library_keys(&mut store, &domain).map_err(|error| error.to_string())?;
+                migrate_library_keys(store, &domain).map_err(|error| error.to_string())?;
             }
             let mut domain_live = LiveProjectionData::default();
             let prepared = owner.run(|| -> nova_sync::Result<CapturedDomain> {
                 if owner.is_scoped() || SCOPED_DOMAINS.contains(&base.as_str()) {
                     persistence::register_collections();
                 }
-                let view = &store;
+                let view = &*store;
                 let records = view.records(&domain);
                 let activity_guard = io::projection_guard(VIEWING_ACTIVITY_KEY);
                 let snapshot: Option<(&str, String)> = if retired || projection_actor_domain(&base)
@@ -4475,6 +4488,13 @@ impl ProjectionWork {
         let mut written = BTreeSet::new();
         let mut written_rows = Vec::new();
         let attempt = (|| -> nova_sync::Result<()> {
+            // An idle replay still validates policy/owner receipts but has no
+            // transaction candidate. Avoid copying the entire history again.
+            if batch.domains.is_empty() {
+                return Ok(());
+            }
+            #[cfg(test)]
+            PROJECTION_STORE_CLONES.fetch_add(1, Ordering::Relaxed);
             let mut staged = live.clone();
             let mut changed = false;
             for row in &batch.domains {
@@ -5770,6 +5790,74 @@ mod tests {
                     .unwrap();
                 caller.join().unwrap();
                 persistence::flush().unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn empty_replay_keeps_receipts_without_cloning_the_store() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::empty_replay_keeps_receipts_without_cloning_the_store"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                persistence::flush().unwrap();
+                let handle = nova_sync::local_store().unwrap();
+                // Establish a fully materialized fixture without changing any
+                // raw snapshots. Actor-owned pending rows are fixture setup,
+                // and are not the subject of this empty-window regression.
+                {
+                    let mut store = handle.lock().unwrap();
+                    for domain in store.pending_domains() {
+                        let basis = store.domain_digest(&domain).unwrap();
+                        store.mark_projected(&domain, &basis).unwrap();
+                    }
+                }
+                let allocation = bridge.sessions.active();
+                let before_digest = handle.lock().unwrap().digest();
+                let before_clock = handle.lock().unwrap().clock();
+                let before_progress = bridge.shared.lock().unwrap().progress.clone();
+                let before_policy = profiles::ProfileStore::capture()
+                    .read(profile_policy::KEY)
+                    .unwrap();
+                assert!(handle.lock().unwrap().pending_domains().is_empty());
+                PROJECTION_STORE_CLONES.store(0, Ordering::Relaxed);
+                bridge.replay_sync_projection();
+                bridge.wait_sync_projection();
+                assert_eq!(
+                    PROJECTION_STORE_CLONES.load(Ordering::Relaxed),
+                    0,
+                    "empty valid replay must not clone any Store history"
+                );
+                assert!(Arc::ptr_eq(&allocation, &bridge.sessions.active()));
+                assert_eq!(handle.lock().unwrap().clock(), before_clock);
+                assert_eq!(handle.lock().unwrap().digest(), before_digest);
+                assert!(handle.lock().unwrap().pending_domains().is_empty());
+                assert_eq!(bridge.shared.lock().unwrap().progress, before_progress);
+                assert_eq!(
+                    profiles::ProfileStore::capture()
+                        .read(profile_policy::KEY)
+                        .unwrap(),
+                    before_policy
+                );
+                // Prove the counter observes the real preparation/transaction
+                // path, and an incoming record still publishes and ACKs.
+                let domain = profile_domain(DOMAIN_PROGRESS);
+                remote_row(
+                    &domain,
+                    "episode",
+                    Some(&serde_json::to_string(&old_progress()).unwrap()),
+                );
+                bridge.sync_apply_and_wait(vec![domain.clone()]);
+                assert!(PROJECTION_STORE_CLONES.load(Ordering::Relaxed) >= 2);
+                assert_eq!(
+                    bridge.shared.lock().unwrap().progress["episode"],
+                    old_progress()
+                );
+                assert!(!handle.lock().unwrap().pending_domains().contains(&domain));
             },
         );
     }
