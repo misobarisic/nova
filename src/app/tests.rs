@@ -804,14 +804,23 @@ mod persistence_tests {
 
         write_poster_bytes(&dir, a, &bytes_a);
         write_poster_bytes(&dir, b, &bytes_b);
-        assert_eq!(
-            read_poster_bytes(&dir, a).as_deref(),
-            Some(bytes_a.as_slice())
-        );
-        assert_eq!(
-            read_poster_bytes(&dir, b).as_deref(),
-            Some(bytes_b.as_slice())
-        );
+        // These compatibility helpers store processed variants. The current
+        // compression default preserves the image, rather than its PNG bytes.
+        let assert_color = |url: &str, expected: [u8; 4]| {
+            let cached = read_poster_bytes(&dir, url).expect("cached image bytes");
+            let decoded = image::load_from_memory(&cached).unwrap().to_rgba8();
+            assert_eq!(decoded.dimensions(), (2, 2));
+            for pixel in decoded.pixels() {
+                for (actual, expected) in pixel.0.iter().zip(expected) {
+                    assert!(
+                        actual.abs_diff(expected) <= 4,
+                        "lossy solid-color round trip: {pixel:?}, expected {expected}"
+                    );
+                }
+            }
+        };
+        assert_color(a, [255, 0, 0, 255]);
+        assert_color(b, [0, 0, 255, 255]);
         // Different URLs map to different cache files.
         assert_ne!(poster_cache_path_in(&dir, a), poster_cache_path_in(&dir, b));
         let _ = fs::remove_dir_all(&dir);
@@ -1247,7 +1256,7 @@ mod settings_tests {
     #[test]
     fn settings_json_round_trip_and_defaults() {
         let defaults = CacheSettings::default();
-        assert!(!defaults.enabled);
+        assert!(defaults.enabled);
         assert_eq!(defaults.format, CacheImageFormat::Webp);
 
         let custom = CacheSettings {

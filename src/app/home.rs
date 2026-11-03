@@ -645,6 +645,8 @@ impl Bridge {
         cache: &HomeShowcaseCache,
         sources: &[HomeCatalogSource],
     ) -> Vec<MetaPreview> {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         self.shared
             .lock()
             .unwrap()
@@ -665,7 +667,9 @@ impl Bridge {
             .previews(sources)
             .into_iter()
             .filter(|m| {
-                profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+                policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&m.type_, &m.id))
             })
             .collect()
     }
@@ -878,6 +882,7 @@ impl Bridge {
 
     pub(super) fn invalidate_home_catalog_rows(&self) {
         self.home_catalog_rows_gen.fetch_add(1, Ordering::Relaxed);
+        self.poster_intake.invalidate();
         let mut state = self.shared.lock().unwrap();
         state.home_catalog_rows_loaded = false;
     }
@@ -935,9 +940,13 @@ impl Bridge {
     /// Progress workers already joined history against metadata. Keep this
     /// publication path free of the cache reads in rebuild_watch_history_list.
     pub(super) fn install_prepared_home_catalog_rows(&self, mut groups: Vec<HomeCatalogGroup>) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         for group in &mut groups {
             group.previews.retain(|m| {
-                profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+                policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&m.type_, &m.id))
             });
         }
         let Some(app) = self.app() else { return };
@@ -1205,8 +1214,12 @@ impl Bridge {
     }
 
     fn install_home_showcase(&self, mut previews: Vec<MetaPreview>) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         previews.retain(|m| {
-            profile_policy::allows_title(&profiles::ProfileStore::capture(), &m.type_, &m.id)
+            policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&m.type_, &m.id))
         });
         let anchor = self.shared.lock().unwrap().home_showcase_displayed.clone();
         let index = anchor
@@ -1997,6 +2010,8 @@ impl Bridge {
     /// explicitly removed are skipped until a newer progress update (a resume)
     /// appears; see [`Shared::continue_hidden`].
     pub(super) fn rebuild_continue_list(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         // Home is a glanceable landing page, not a second library: keep
         // the grid bounded no matter how many series carry progress.
         const CONTINUE_MAX: usize = 20;
@@ -2023,11 +2038,10 @@ impl Bridge {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    profile_policy::allows_title(
-                        &profiles::ProfileStore::capture(),
-                        &e.type_,
-                        &e.id,
-                    ) && e.watch_status.allows_active_viewing()
+                    policy
+                        .as_ref()
+                        .is_ok_and(|policy| policy.allows(&e.type_, &e.id))
+                        && e.watch_status.allows_active_viewing()
                         && latest_refs.contains_key(e.id.as_str())
                         && groups.is_representative(&e.type_, &e.id)
                 })
@@ -2054,11 +2068,10 @@ impl Bridge {
         let mut list: Vec<ContinueEntry> = Vec::new();
         let mut episode_identities = HashMap::new();
         for identity in identities {
-            if !profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &identity.type_,
-                &identity.id,
-            ) {
+            if !policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&identity.type_, &identity.id))
+            {
                 continue;
             }
             // Process each cache independently so a large metadata response
@@ -2538,6 +2551,8 @@ impl Bridge {
     /// check (unknown schedule). Air-date ascending, capped so Home stays
     /// a quick glance.
     pub(super) fn rebuild_upcoming_list(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         let groups = self.library_display_groups();
         const UPCOMING_MAX: usize = 20;
         let identities: Vec<HomeLibraryIdentity> = {
@@ -2561,11 +2576,10 @@ impl Bridge {
         let today = today_days();
         let mut upcoming: Vec<UpcomingEntry> = Vec::new();
         for identity in identities {
-            if !profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &identity.type_,
-                &identity.id,
-            ) {
+            if !policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&identity.type_, &identity.id))
+            {
                 continue;
             }
             let episodes =
@@ -2997,6 +3011,9 @@ impl Bridge {
             app.set_show_library(false);
             app.set_show_settings(false);
         }
+        #[cfg(feature = "desktop")]
+        self.retry_visible_catalog_posters();
+        self.refresh_poster_intake();
     }
 
     /// Main thread: show the Home landing page (Continue Watching).
@@ -3015,6 +3032,7 @@ impl Bridge {
         self.request_progress_projection();
         self.ensure_home_showcase_loaded();
         self.ensure_home_catalog_rows_loaded();
+        self.refresh_poster_intake();
         self.refresh_saved_episode_metadata();
     }
 
@@ -3529,63 +3547,6 @@ fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
         );
     }
     String::new()
-}
-
-/// One Home → Upcoming display row: library + episode-cache joins for a
-/// single [`UpcomingEntry`]. `index` is the entry's position in the full
-/// Upcoming list, so picks from filtered views (the calendar's selected day)
-/// resolve through [`Bridge::upcoming_picked`].
-pub(super) fn upcoming_row(
-    entries: &[LibraryEntry],
-    u: &UpcomingEntry,
-    index: usize,
-    date_relative: bool,
-    episode_artwork: bool,
-) -> Option<UpcomingRow> {
-    let e = entries
-        .iter()
-        .find(|e| e.id == u.series_id && e.type_ == u.type_)?;
-    let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
-    let v = episodes.iter().find(|v| v.id == u.episode_id)?;
-    let settings = active_cache_settings();
-    let progress = read_progress_map();
-    let record = progress.get(&progress_map_key(&u.series_id, &u.episode_id));
-    let protected = settings.spoiler_protection
-        && !record.is_some_and(|p| p.watched)
-        && !spoiler::revealed(&u.type_, &u.series_id, &u.episode_id);
-    let episode_artwork = episode_artwork
-        && !protected
-        && (settings.show_unwatched_thumbs
-            || record.is_some_and(|p| p.watched || p.position_secs > 0.0));
-    let subtitle = if protected {
-        episode_se_label(v)
-    } else {
-        format!("{} · {}", episode_badge(v), episode_row_label(v))
-    };
-    let date = v
-        .released
-        .as_deref()
-        .and_then(|d| Bridge::format_human_date(d, date_relative))
-        .unwrap_or_default();
-    let art_url = home_card_art_url(&e.poster_url, Some(v), episode_artwork);
-    let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
-    Some(UpcomingRow {
-        id: SharedString::from(&u.series_id),
-        title: SharedString::from(&e.name),
-        subtitle: SharedString::from(&subtitle),
-        date: SharedString::from(&date),
-        episode_title: if protected {
-            String::new()
-        } else {
-            episode_row_label(v)
-        }
-        .into(),
-        ep_no: episode_badge(v).into(),
-        art_url: art_url.into(),
-        poster,
-        is_loaded,
-        index: index as i32,
-    })
 }
 
 fn upcoming_entry_matches_at(
@@ -4728,11 +4689,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -4893,11 +4852,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -5340,11 +5297,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -6258,12 +6213,25 @@ pub(super) struct PreparedProgressHome {
     featured: Option<((String, String), String)>,
 }
 
+#[cfg(test)]
 pub(super) fn prepare_progress_home(
     state: &mut Shared,
     metadata: &super::progress_projection::Metadata<'_>,
     activity: &HashMap<String, ViewingActivity>,
     new_hidden: &HashMap<String, Vec<String>>,
     groups: &super::library::LibraryDisplayGroups,
+) -> PreparedProgressHome {
+    let policy = profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
+    prepare_progress_home_with_policy(state, metadata, activity, new_hidden, groups, &policy)
+}
+
+pub(super) fn prepare_progress_home_with_policy(
+    state: &mut Shared,
+    metadata: &super::progress_projection::Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+    new_hidden: &HashMap<String, Vec<String>>,
+    groups: &super::library::LibraryDisplayGroups,
+    policy: &Result<profile_policy::TitlePolicySnapshot, String>,
 ) -> PreparedProgressHome {
     const MAX: usize = 20;
     let today = today_days();
@@ -6281,7 +6249,9 @@ pub(super) fn prepare_progress_home(
     let mut upcoming = Vec::new();
     let mut aliases = HashMap::new();
     for e in state.entries.iter().filter(|e| {
-        profile_policy::allows_title(&profiles::ProfileStore::capture(), &e.type_, &e.id)
+        policy
+            .as_ref()
+            .is_ok_and(|policy| policy.allows(&e.type_, &e.id))
             && e.watch_status.allows_active_viewing()
             && groups.is_representative(&e.type_, &e.id)
     }) {

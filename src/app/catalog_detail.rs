@@ -796,11 +796,9 @@ mod tests {
         let other = profiles::create("Other").unwrap();
         i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
@@ -1101,11 +1099,9 @@ mod tests {
         profiles::initialize().unwrap();
         i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),

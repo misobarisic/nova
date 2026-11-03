@@ -15,16 +15,18 @@ impl LibraryDisplayGroups {
     fn from_index(mut identities: Vec<(TitleKey, u64)>, index: &IdentityIndex) -> Self {
         identities.sort_by(|left, right| (left.1, &left.0).cmp(&(right.1, &right.0)));
         let mut result = Self::default();
-        let mut representatives = Vec::<TitleKey>::new();
+        // Borrow exact nonempty coverage sets from the index. The map compares
+        // set contents; no copied inventory or digest substitutes for proof.
+        let mut representatives =
+            std::collections::BTreeMap::<&std::collections::BTreeSet<usize>, TitleKey>::new();
         for (key, _) in identities {
-            let representative = representatives
-                .iter()
-                .find(|candidate| index.equivalent_titles(candidate, &key))
-                .cloned()
-                .unwrap_or_else(|| {
-                    representatives.push(key.clone());
-                    key.clone()
-                });
+            let representative = match index.complete_coverage(&key) {
+                Some(coverage) => representatives
+                    .entry(coverage)
+                    .or_insert_with(|| key.clone())
+                    .clone(),
+                None => key.clone(),
+            };
             result
                 .members
                 .entry(representative.clone())
@@ -322,6 +324,8 @@ impl Bridge {
     /// Keep only the fields needed to filter and order outside the shared
     /// state lock. Episode-cache and activity reads must not happen under it.
     fn current_library_candidates(&self) -> Vec<LibraryCandidate> {
+        let context = profiles::capture();
+        let version = progress_projection::revision();
         let (filter, query, sort) = self
             .app()
             .map(|a| {
@@ -369,13 +373,14 @@ impl Bridge {
             sort,
         };
         let query_matches = groups.matching_query(&all_candidates, &query.trim().to_lowercase());
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         let mut candidates = Vec::new();
         for identity in identities {
-            if !profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &identity.type_,
-                &identity.id,
-            ) {
+            if !policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&identity.type_, &identity.id))
+            {
                 continue;
             }
             let episodes = ((dynamic_filter && identity.watch_status == WatchStatus::Auto)
@@ -419,6 +424,9 @@ impl Bridge {
             ) {
                 candidates.push(candidate);
             }
+        }
+        if !profiles::is_current(&context) || progress_projection::revision() != version {
+            return Vec::new();
         }
         order_library_candidates(
             groups.project_candidates(candidates, &all_candidates),
@@ -1158,9 +1166,16 @@ impl Bridge {
         // Write back anything the header cache filled, so the next open
         // (and restart) reads it straight from the entry.
         if !paint_background.is_empty() && e.background_url.is_empty() {
-            self.persist_backdrop_for(&e.id, &paint_background);
+            self.persist_backdrop_for(&e.type_, &e.id, &paint_background);
         }
-        self.persist_header_for(&e.id, &paint_genres, &paint_description, &paint_year, false);
+        self.persist_header_for(
+            &e.type_,
+            &e.id,
+            &paint_genres,
+            &paint_description,
+            &paint_year,
+            false,
+        );
 
         app.set_selected_title(SharedString::from(&e.name));
         app.set_detail_is_movie(e.type_ == "movie");
@@ -1764,6 +1779,19 @@ pub(super) fn prepare_cached_view(
     groups: &LibraryDisplayGroups,
     modal: Option<TitleKey>,
 ) -> CachedView {
+    let policy = profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
+    prepare_cached_view_with_policy(state, view, metadata, activity, groups, modal, &policy)
+}
+
+pub(super) fn prepare_cached_view_with_policy(
+    state: &Shared,
+    view: &super::progress_projection::View,
+    metadata: &super::progress_projection::Metadata<'_>,
+    activity: &HashMap<String, ViewingActivity>,
+    groups: &LibraryDisplayGroups,
+    modal: Option<TitleKey>,
+    policy: &Result<profile_policy::TitlePolicySnapshot, String>,
+) -> CachedView {
     let stamp = ViewStamp::new(view, modal);
     let all = state
         .entries
@@ -1773,9 +1801,11 @@ pub(super) fn prepare_cached_view(
         .collect::<Vec<_>>();
     let mut cards = HashMap::new();
     let mut eligible = HashSet::new();
-    let owner = profiles::ProfileStore::capture();
     for candidate in &all {
-        if !profile_policy::allows_title(&owner, &candidate.type_, &candidate.id) {
+        if !policy
+            .as_ref()
+            .is_ok_and(|policy| policy.allows(&candidate.type_, &candidate.id))
+        {
             continue;
         }
         let entry = &state.entries[candidate.entry_index];
@@ -1977,16 +2007,16 @@ pub(super) fn prepare_progress_cards(
         .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
         .collect::<Vec<_>>();
     let query_matches = groups.matching_query(&all, &view.query.trim().to_lowercase());
+    let policy = profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
     let candidates = state
         .entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if !profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &entry.type_,
-                &entry.id,
-            ) {
+            if !policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&entry.type_, &entry.id))
+            {
                 return None;
             }
             if !query_matches.contains(&groups.representative(&entry.type_, &entry.id)) {
@@ -2308,6 +2338,172 @@ fn builtin_filter_label(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Independent oracle retained from the pre-UI-07 representative scan.
+    fn legacy_groups(
+        mut identities: Vec<(TitleKey, u64)>,
+        index: &IdentityIndex,
+    ) -> (LibraryDisplayGroups, usize) {
+        identities.sort_by(|left, right| (left.1, &left.0).cmp(&(right.1, &right.0)));
+        let mut result = LibraryDisplayGroups::default();
+        let mut representatives = Vec::<TitleKey>::new();
+        let mut comparisons = 0;
+        for (key, _) in identities {
+            let representative = representatives
+                .iter()
+                .find(|candidate| {
+                    comparisons += 1;
+                    index.equivalent_titles(candidate, &key)
+                })
+                .cloned()
+                .unwrap_or_else(|| {
+                    representatives.push(key.clone());
+                    key.clone()
+                });
+            result
+                .members
+                .entry(representative.clone())
+                .or_default()
+                .push(key.clone());
+            result.representatives.insert(key, representative);
+        }
+        (result, comparisons)
+    }
+
+    #[test]
+    fn coverage_key_groups_match_legacy_generated_inventory_oracle() {
+        for seed in 0..32 {
+            let mut identities = Vec::new();
+            let mut inventories = Vec::new();
+            let mut add = |kind: &str, id: String, added, episodes: Vec<(String, Vec<String>)>| {
+                identities.push(((kind.into(), id.clone()), added));
+                inventories.push(TitleInventory {
+                    media_type: kind.into(), series_id: id,
+                    videos: episodes.into_iter().map(|(id, aliases)| {
+                        serde_json::from_value(serde_json::json!({
+                            "id":id,"novaStreamIds":aliases,"novaMetadataRevision":nova_providers::metadata_revision()
+                        })).unwrap()
+                    }).collect(),
+                });
+            };
+            for logical in 0..8 {
+                let canonical = |episode| format!("tt{}:1:{episode}", 1000 + seed * 10 + logical);
+                let episodes = |alias| {
+                    (1..=4)
+                        .map(|episode| {
+                            (
+                                format!("source-{logical}-{alias}-{episode}"),
+                                vec![canonical(episode)],
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                for alias in 0..2 + (seed + logical) % 4 {
+                    add(
+                        if alias % 2 == 0 { "series" } else { "anime" },
+                        format!("logical-{logical}-source-{alias}"),
+                        (seed + logical + alias) % 4,
+                        episodes(alias),
+                    );
+                }
+                add(
+                    "series",
+                    format!("overlap-{logical}"),
+                    0,
+                    episodes(100).into_iter().take(2).collect(),
+                );
+                add(
+                    "series",
+                    format!("duplicate-{logical}"),
+                    0,
+                    vec![
+                        ("duplicate".into(), vec![canonical(1)]),
+                        ("duplicate".into(), vec![canonical(2)]),
+                    ],
+                );
+                add(
+                    "series",
+                    format!("contradictory-{logical}"),
+                    0,
+                    vec![(
+                        format!("conflict-{logical}"),
+                        vec![canonical(1), canonical(2)],
+                    )],
+                );
+                add(
+                    "series",
+                    format!("disjoint-{logical}"),
+                    0,
+                    vec![(format!("private-{logical}"), Vec::new())],
+                );
+                add("series", format!("missing-{logical}"), 0, Vec::new());
+                add("movie", format!("movie-{logical}"), 0, episodes(200));
+            }
+            let index = IdentityIndex::new(inventories);
+            // Arrival order must not decide either representative or member order.
+            identities.reverse();
+            let actual = LibraryDisplayGroups::from_index(identities.clone(), &index);
+            let (expected, _) = legacy_groups(identities.clone(), &index);
+            assert_eq!(
+                actual.representatives, expected.representatives,
+                "seed={seed}"
+            );
+            assert_eq!(actual.members, expected.members, "seed={seed}");
+            for (key, _) in &identities {
+                if key.1.starts_with("movie-")
+                    || key.1.starts_with("missing-")
+                    || key.1.starts_with("duplicate-")
+                {
+                    assert_eq!(
+                        actual.representatives.get(key),
+                        Some(key),
+                        "unproven {key:?}"
+                    );
+                }
+            }
+            for logical in 0..8 {
+                let prefix = format!("logical-{logical}-source-");
+                let mut aliases: Vec<_> = identities
+                    .iter()
+                    .filter(|(key, _)| key.1.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                aliases.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+                let representative = &aliases[0].0;
+                assert_eq!(
+                    actual.members.get(representative).unwrap(),
+                    &aliases
+                        .iter()
+                        .map(|(key, _)| key.clone())
+                        .collect::<Vec<_>>()
+                );
+                assert_ne!(
+                    actual.representative("series", &format!("overlap-{logical}")),
+                    *representative
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_key_movies_skip_all_pairwise_proof_comparisons() {
+        let count = 1000;
+        let identities: Vec<_> = (0..count)
+            .map(|id| (("movie".into(), format!("movie-{id}")), 0))
+            .collect();
+        let index = IdentityIndex::default();
+        let actual = LibraryDisplayGroups::from_index(identities.clone(), &index);
+        let (expected, comparisons) = legacy_groups(identities.clone(), &index);
+        assert_eq!(actual.representatives, expected.representatives);
+        assert_eq!(actual.members, expected.members);
+        assert_eq!(comparisons, count * (count - 1) / 2);
+        assert!(
+            identities
+                .iter()
+                .all(|(key, _)| index.complete_coverage(key).is_none()),
+            "movies do one coverage lookup and never enter the set-comparison map"
+        );
+    }
 
     #[test]
     fn warm_filter_index_reuses_metadata_and_matches_legacy_grouped_filters() {

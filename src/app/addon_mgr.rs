@@ -9,6 +9,267 @@ pub(super) fn revoke_provider_authority(url: &str) {
 }
 static ADDON_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+/// The desired inventory is prepared without touching UI, provider authority,
+/// package workers or storage. Only the owning sync transaction may publish it.
+pub(super) struct PreparedAddonInventory {
+    pub snapshot: Vec<AddonStore>,
+    installed: Vec<Installed>,
+    removed: Vec<String>,
+    disabled: Vec<String>,
+    chosen_url: Option<String>,
+    labels_changed: bool,
+}
+
+impl PreparedAddonInventory {
+    pub(super) fn publish_state(&mut self, state: &mut Shared) {
+        for entry in &mut self.installed {
+            if entry.generation == 0 {
+                entry.generation = ADDON_GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        state.installed = std::mem::take(&mut self.installed);
+        let members: HashSet<_> = state
+            .installed
+            .iter()
+            .map(|addon| addon.url.clone())
+            .collect();
+        state.refreshing.retain(|url| members.contains(url));
+        state.chosen_addon = self
+            .chosen_url
+            .as_ref()
+            .and_then(|url| {
+                state
+                    .installed
+                    .iter()
+                    .position(|addon| &addon.url == url && addon.enabled)
+            })
+            .unwrap_or(usize::MAX);
+    }
+    pub(super) fn removed_urls(&self) -> Vec<String> {
+        self.removed.clone()
+    }
+}
+
+pub(super) fn cleanup_synced_addons(urls: &[String]) {
+    for url in urls {
+        delete_cached_manifest_for(url);
+    }
+}
+
+/// UI-owned allocation data captured before handing preparation to the writer.
+#[derive(Clone)]
+pub(super) struct AddonProjectionInput {
+    previous: Vec<Installed>,
+    chosen_url: Option<String>,
+}
+impl AddonProjectionInput {
+    pub(super) fn capture(state: &Shared) -> Self {
+        Self {
+            previous: state.installed.clone(),
+            chosen_url: state
+                .installed
+                .get(state.chosen_addon)
+                .map(|addon| addon.url.clone()),
+        }
+    }
+    pub(super) fn matches(&self, state: &Shared) -> bool {
+        self.previous.len() == state.installed.len()
+            && self
+                .previous
+                .iter()
+                .zip(&state.installed)
+                .all(|(old, current)| {
+                    old.url == current.url
+                        && old.label == current.label
+                        && old.enabled == current.enabled
+                        && old.configure_ok == current.configure_ok
+                        && old.available == current.available
+                        && old.generation == current.generation
+                        && old.manifest.id == current.manifest.id
+                        && old.manifest.version == current.manifest.version
+                })
+    }
+    pub(super) fn prepare(
+        &self,
+        desired: Vec<AddonStore>,
+        order: Option<Vec<String>>,
+        persisted: Vec<AddonStore>,
+    ) -> nova_sync::Result<PreparedAddonInventory> {
+        let previous = &self.previous;
+        let chosen_url = self.chosen_url.clone();
+        let mut installed = Vec::with_capacity(desired.len());
+        let mut snapshot = Vec::with_capacity(desired.len());
+        for addon in desired {
+            // Do not include the URL in errors: configured URLs can carry
+            // credentials. Invalid identities remain in the record store.
+            sync::validate_synced_addon_url(&addon.url)?;
+            let existing = previous.iter().find(|entry| entry.url == addon.url);
+            let capabilities = addon
+                .capabilities
+                .or_else(|| nova_providers::provider_capabilities(&addon.url))
+                .or_else(|| {
+                    persisted
+                        .iter()
+                        .find(|old| old.url == addon.url)
+                        .and_then(|old| old.capabilities)
+                });
+            let mut entry = if let Some(existing) = existing {
+                existing.clone()
+            } else {
+                let manifest = nova_providers::configured_provider_manifest(&addon.url)
+                    .or_else(|| read_cached_manifest_for(&addon.url));
+                let available = manifest.is_some();
+                let manifest = manifest.unwrap_or_else(|| {
+                    serde_json::from_value(
+                        serde_json::json!({"id":"pending", "version":"0", "name":addon.url}),
+                    )
+                    .expect("placeholder manifest")
+                });
+                Installed {
+                    url: addon.url.clone(),
+                    label: addon.url.clone(),
+                    enabled: addon.enabled,
+                    configure_ok: addon.configure_ok,
+                    manifest,
+                    available,
+                    generation: 0,
+                }
+            };
+            entry.enabled = addon.enabled;
+            // Configure reachability is installation-local, not sync authority.
+            entry.configure_ok = existing.map_or(addon.configure_ok, |old| old.configure_ok);
+            if !addon.label.trim().is_empty() {
+                entry.label = addon.label;
+            } else if entry.available {
+                entry.label = entry.manifest.name.clone();
+            }
+            snapshot.push(AddonStore {
+                url: entry.url.clone(),
+                label: entry.label.clone(),
+                enabled: entry.enabled,
+                configure_ok: entry.configure_ok,
+                capabilities,
+            });
+            installed.push(entry);
+        }
+        let pairs: Vec<_> = installed
+            .iter()
+            .filter(|a| a.available)
+            .map(|a| (a.manifest.name.clone(), a.url.clone()))
+            .collect();
+        let mut labels_changed = false;
+        for (entry, label) in installed
+            .iter_mut()
+            .filter(|a| a.available)
+            .zip(unique_labels(&pairs))
+        {
+            labels_changed |= entry.label != label;
+            entry.label = label;
+        }
+        let local_order: Vec<_> = previous.iter().map(|a| a.url.clone()).collect();
+        let ordered = sync::sort_by_order(
+            installed.iter().map(|a| a.url.clone()).collect(),
+            order.as_deref().unwrap_or(&local_order),
+        );
+        installed.sort_by_key(|a| ordered.iter().position(|url| url == &a.url));
+        snapshot.sort_by_key(|a| ordered.iter().position(|url| url == &a.url));
+        for (row, entry) in snapshot.iter_mut().zip(&installed) {
+            row.label = entry.label.clone();
+        }
+        let removed = previous
+            .iter()
+            .filter(|old| !installed.iter().any(|a| a.url == old.url))
+            .map(|a| a.url.clone())
+            .collect();
+        let disabled = previous
+            .iter()
+            .filter(|old| old.enabled && installed.iter().any(|a| a.url == old.url && !a.enabled))
+            .map(|a| a.url.clone())
+            .collect();
+        Ok(PreparedAddonInventory {
+            snapshot,
+            installed,
+            removed,
+            disabled,
+            chosen_url,
+            labels_changed,
+        })
+    }
+}
+
+impl Bridge {
+    pub(super) fn prepare_synced_addons(
+        &self,
+        desired: Vec<AddonStore>,
+        order: Option<Vec<String>>,
+    ) -> nova_sync::Result<PreparedAddonInventory> {
+        let input = AddonProjectionInput::capture(&self.shared.lock().unwrap());
+        input.prepare(desired, order, read_persisted_addons())
+    }
+
+    /// Called after the desired snapshot commits. Side effects below either
+    /// cannot fail or report their own deferred diagnostics; they never turn a
+    /// committed inventory into a failed projection or restore an older view.
+    pub(super) fn publish_synced_addons(&self, mut prepared: PreparedAddonInventory) {
+        prepared.publish_state(&mut self.shared.lock().unwrap());
+        self.finish_synced_addons(prepared, true);
+    }
+
+    pub(super) fn finish_synced_addons(
+        &self,
+        prepared: PreparedAddonInventory,
+        synchronous_cleanup: bool,
+    ) {
+        for url in &prepared.removed {
+            revoke_provider_authority(url);
+            addon_packages::remove(self, url);
+            nova_providers::configure_provider_capabilities(url, Default::default());
+            if let Some(app) = self
+                .app()
+                .filter(|app| app.get_addon_config_url().as_str() == url)
+            {
+                app.set_addon_config_open(false);
+            }
+            if synchronous_cleanup {
+                delete_cached_manifest_for(url);
+            }
+        }
+        for url in &prepared.disabled {
+            revoke_provider_authority(url);
+        }
+        for addon in &prepared.snapshot {
+            self.apply_provider_capabilities(
+                &addon.url,
+                addon.capabilities.unwrap_or_default(),
+                false,
+            );
+        }
+        self.publish_metadata_addons();
+        self.refresh_all(true);
+        self.apply_addon_rows();
+        let pending: Vec<_> = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .filter(|a| !a.available)
+            .cloned()
+            .collect();
+        for addon in pending {
+            self.fetch_desired_addon(
+                addon.url,
+                addon.generation,
+                addon.enabled,
+                Some(addon.label),
+            );
+        }
+        if synchronous_cleanup && prepared.labels_changed {
+            sync::notify_addons(&prepared.snapshot);
+        }
+    }
+}
+
 impl Bridge {
     #[cfg(test)]
     pub(super) fn assert_desired_addon_regression(&self) {
@@ -127,6 +388,23 @@ impl Bridge {
         }
 
         let generation = self.ensure_desired_addon(&base, enabled, None, label.clone());
+        self.fetch_desired_addon(base, generation, enabled, label);
+    }
+
+    // The desired inventory already owns this identity and generation. Parse
+    // only to obtain the transport URL; never normalize or insert another row.
+    fn fetch_desired_addon(
+        &self,
+        base: String,
+        generation: u64,
+        enabled: bool,
+        label: Option<String>,
+    ) {
+        if !self.addon_generation_matches(&base, generation) {
+            return;
+        }
+        let Ok(addon) = Addon::new(&base) else { return };
+
         if base.starts_with("nova-provider://") {
             if let Some(manifest) = nova_providers::configured_provider_manifest(&base) {
                 self.install_ok(base, manifest, enabled, Some(false), label);
@@ -430,6 +708,9 @@ impl Bridge {
         // Reject in-flight results from the old inventory even when the new
         // configuration leaves no catalog to trigger another request.
         self.catalog_gen.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "desktop")]
+        self.poster_tx.generation_changed();
+        self.poster_intake.invalidate();
         if previous.streams != config.streams {
             self.clear_streams();
         }

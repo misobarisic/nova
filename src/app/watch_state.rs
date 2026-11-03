@@ -319,6 +319,57 @@ impl Bridge {
     }
 }
 
+/// Detached activation migration. Metadata and storage are read in the durable
+/// owner's context without acquiring a live session or accessing Slint.
+pub(super) fn prepare_activation_activity(
+    owner: &profiles::ProfileStore,
+    entries: &[LibraryEntry],
+    progress: &HashMap<String, EpisodeProgress>,
+) -> nova_sync::Result<()> {
+    owner.run(|| {
+        let mut activity = read_viewing_activity();
+        let before = activity.clone();
+        let known: HashSet<_> = nova_sync::local_store()?
+            .lock()
+            .unwrap()
+            .records(&owner.domain(DOMAIN_VIEWING_ACTIVITY))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        let today = today_days();
+        for entry in entries.iter().filter(|entry| entry.type_ != "movie") {
+            if activity
+                .get(&entry.id)
+                .is_some_and(|value| value.phase != ViewingPhase::Active)
+                || (!activity.contains_key(&entry.id) && known.contains(&entry.id))
+                || progress
+                    .values()
+                    .filter(|row| row.series_id == entry.id)
+                    .all(tracking::imported_watch)
+            {
+                continue;
+            }
+            let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
+            if available_completed(&entry.id, &episodes, progress, today) {
+                activity.insert(
+                    entry.id.clone(),
+                    ViewingActivity {
+                        phase: ViewingPhase::AwaitingReturn,
+                    },
+                );
+            }
+        }
+        if activity != before {
+            owner.persist_snapshot(
+                VIEWING_ACTIVITY_KEY,
+                &serde_json::to_string(&activity)?,
+                false,
+            )?;
+        }
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -435,7 +435,7 @@ fn import_commits_snapshots_baselines_fresh_records_receipt_and_safe_undo_togeth
         )]),
     )
     .unwrap();
-    let selective = archive::decode(&bytes).unwrap();
+    let selective = cleanup::share_for_test(archive::decode(&bytes).unwrap());
     for preset in [0, 1] {
         let mut choices = super::choices(&selective).unwrap();
         choices[0].components = ui::components_for_preset(preset, Some(&selective), "p1");
@@ -457,11 +457,15 @@ fn import_commits_snapshots_baselines_fresh_records_receipt_and_safe_undo_togeth
     owner
         .persist_snapshot("continue_hidden", r#"{"original":4,"added":5}"#, false)
         .unwrap();
-    let archive = archive::decode(&bytes).unwrap();
+    let archive = cleanup::share_for_test(archive::decode(&bytes).unwrap());
     let mut choices = super::choices(&archive).unwrap();
     choices[0].target = "default".into();
     choices[0].create = false;
     let merged = preview(archive.clone(), choices.clone()).unwrap();
+    assert!(
+        Shared::ptr_eq(&archive, &merged.archive),
+        "preview must retain the same immutable archive"
+    );
     assert_eq!(
         (
             merged.rows[0].counts.conflicts,
@@ -518,7 +522,7 @@ fn import_commits_snapshots_baselines_fresh_records_receipt_and_safe_undo_togeth
     owner
         .persist_snapshot("continue_hidden", r#"{"original":11,"later":9}"#, false)
         .unwrap();
-    let undo = undo_preview().unwrap();
+    let undo = undo_preview(cleanup::permit_for_test()).unwrap();
     assert!(undo.choices[0].use_backup.is_empty());
     apply(&undo).unwrap();
     let restored: serde_json::Value =
@@ -549,7 +553,7 @@ fn import_commits_snapshots_baselines_fresh_records_receipt_and_safe_undo_togeth
         ]),
     )
     .unwrap();
-    let archive = archive::decode(&bytes).unwrap();
+    let archive = cleanup::share_for_test(archive::decode(&bytes).unwrap());
     let choices = super::choices(&archive).unwrap();
     let new_id = choices[0].target.clone();
     assert!(choices[0].create && !choices[0].replace);
@@ -638,7 +642,7 @@ fn skipped_profiles_preserve_choices_and_never_create_or_mutate_targets() {
         ]),
     )
     .unwrap();
-    let archive = archive::decode(&bytes).unwrap();
+    let archive = cleanup::share_for_test(archive::decode(&bytes).unwrap());
     let owner = ProfileStore::for_profile("default");
     owner
         .persist_snapshot("continue_hidden", r#"{"shared":9,"local":7}"#, false)
@@ -651,6 +655,10 @@ fn skipped_profiles_preserve_choices_and_never_create_or_mutate_targets() {
     let saved = choices[1].clone();
     choices[1].included = false;
     let merged = preview(archive.clone(), choices.clone()).unwrap();
+    assert!(
+        Shared::ptr_eq(&archive, &merged.archive),
+        "preview must retain the same immutable archive"
+    );
     assert_eq!(merged.choices.len(), 1);
     assert_eq!(merged.rows.len(), 1);
     assert_eq!(merged.rows[0].counts.conflicts, 1);
@@ -686,7 +694,7 @@ fn skipped_profiles_preserve_choices_and_never_create_or_mutate_targets() {
     choices[0].use_backup.insert("continue_hidden".into());
     let replacement = preview(archive, choices).unwrap();
     assert_eq!(replacement.rows[0].counts.deleted, 1);
-    let mut stale = replacement.clone();
+    let mut stale = preview(replacement.archive.clone(), replacement.selection.clone()).unwrap();
     stale.selection[1].included = true;
     assert!(apply(&stale).unwrap_err().contains("Selection changed"));
     apply(&replacement).unwrap();

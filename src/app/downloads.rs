@@ -24,7 +24,7 @@ type ResolveDownload = dyn Fn(
         &str,
         Duration,
         ResolverCancellation,
-    ) -> Result<addons::Stream, nova_providers::ProviderResolveError>
+    ) -> Result<nova_providers::ResolvedProviderStream, nova_providers::ProviderResolveError>
     + Send
     + Sync;
 #[derive(Clone)]
@@ -43,8 +43,10 @@ impl ResolverDownload {
             &str,
             Duration,
             ResolverCancellation,
-        ) -> Result<addons::Stream, nova_providers::ProviderResolveError>
-        + Send
+        ) -> Result<
+            nova_providers::ResolvedProviderStream,
+            nova_providers::ProviderResolveError,
+        > + Send
         + Sync
         + 'static,
         is_current: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -109,11 +111,90 @@ struct PendingRemoval {
     transfer_engine: Option<(String, Arc<crate::torrent::TorrentEngine>)>,
 }
 
+struct ArtifactObservation {
+    kind: String,
+    title: String,
+    episode: String,
+    path: Option<PathBuf>,
+    usable: bool,
+}
+
+impl ArtifactObservation {
+    fn same_artifact(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.title == other.title
+            && self.episode == other.episode
+            && self.path == other.path
+    }
+}
+
+/// The existing semantic signal is also the page's structural authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DownloadRevisions {
+    pub structure: u64,
+    pub progress: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TransferUpdate {
+    pub id: String,
+    pub phase: DownloadPhase,
+    pub bytes_downloaded: u64,
+    pub total_bytes: Option<u64>,
+    pub bytes_per_second: u64,
+    pub resource_progress: Option<(u64, u64)>,
+}
+impl TransferUpdate {
+    fn capture(job: &DownloadJob) -> Self {
+        Self {
+            id: job.id.clone(),
+            phase: job.phase,
+            bytes_downloaded: job.bytes_downloaded,
+            total_bytes: job.total_bytes,
+            bytes_per_second: job.bytes_per_second,
+            resource_progress: job.resource_progress,
+        }
+    }
+    pub(super) fn apply(&self, job: &mut DownloadJob) {
+        job.bytes_downloaded = self.bytes_downloaded;
+        job.total_bytes = self.total_bytes;
+        job.bytes_per_second = self.bytes_per_second;
+        job.resource_progress = self.resource_progress;
+    }
+    pub(super) fn status_text(&self) -> String {
+        debug_assert_eq!(self.phase, DownloadPhase::Downloading);
+        DownloadCoordinator::status_text(&DownloadJob {
+            phase: self.phase,
+            bytes_downloaded: self.bytes_downloaded,
+            total_bytes: self.total_bytes,
+            bytes_per_second: self.bytes_per_second,
+            resource_progress: self.resource_progress,
+            ..Default::default()
+        })
+    }
+    pub(super) fn progress_fraction(&self) -> f32 {
+        DownloadCoordinator::progress_fraction(&DownloadJob {
+            bytes_downloaded: self.bytes_downloaded,
+            total_bytes: self.total_bytes,
+            resource_progress: self.resource_progress,
+            ..Default::default()
+        })
+    }
+}
+pub(super) struct DownloadProjectionSnapshot {
+    pub revisions: DownloadRevisions,
+    pub jobs: Option<Vec<DownloadJob>>,
+    pub transfers: Vec<TransferUpdate>,
+}
+
 struct DownloadInner {
     root: PathBuf,
     state: Mutex<DownloadState>,
     next_id: AtomicU64,
     revision: AtomicU64,
+    semantic_revision: AtomicU64,
+    observed_artifacts: Mutex<HashMap<String, ArtifactObservation>>,
+    #[cfg(test)]
+    planner_invalidations: AtomicU64,
     foreground: AtomicBool,
 }
 
@@ -132,6 +213,8 @@ struct DownloadState {
     active: Option<ActiveDownload>,
     last_persist: Instant,
     resolvers: HashMap<String, ResolverDownload>,
+    transfer_structure: u64,
+    transfer_updates: HashMap<String, (u64, TransferUpdate)>,
 }
 
 #[derive(Clone)]
@@ -198,20 +281,56 @@ fn detach_policy_jobs(
 
 /// Refresh actual physical bytes before admission/restart. Torrent bundles are
 /// charged by directory once, including boundary pieces and sibling files.
-fn refresh_physical_accounting(jobs: &mut [DownloadJob]) {
+#[derive(Default)]
+struct AccountingChanges {
+    numeric: bool,
+    completed: bool,
+    presentation: bool,
+    transfers: Vec<TransferUpdate>,
+}
+fn refresh_physical_accounting(jobs: &mut [DownloadJob]) -> AccountingChanges {
+    refresh_physical_accounting_with(jobs, crate::torrent::physical_bytes)
+}
+
+fn refresh_physical_accounting_with(
+    jobs: &mut [DownloadJob],
+    mut physical_bytes: impl FnMut(&Path) -> u64,
+) -> AccountingChanges {
+    // Paths already belong to the manifest. Share one observation per distinct
+    // path only within this pass; later admissions must observe the disk again.
+    // Do not canonicalize here or collapse aliases with different path identity.
+    let mut measured: HashMap<&Path, u64> = HashMap::new();
+    let mut changes = AccountingChanges::default();
     for job in jobs {
         if job.offline.manual_keep {
             continue;
         }
-        if let Some(directory) = &job.torrent_directory {
-            job.bytes_downloaded = crate::torrent::physical_bytes(directory);
-        } else if let Some(path) = &job.artifact_path {
-            job.bytes_downloaded = path
-                .parent()
-                .map(crate::torrent::physical_bytes)
-                .unwrap_or(0);
+        let previous = job.bytes_downloaded;
+        let directory = job
+            .torrent_directory
+            .as_deref()
+            .or_else(|| job.artifact_path.as_deref().and_then(Path::parent));
+        if let Some(directory) = directory {
+            job.bytes_downloaded = *measured
+                .entry(directory)
+                .or_insert_with(|| physical_bytes(directory));
+        } else if job.artifact_path.is_some() {
+            // A path without a parent previously reset the accounting to zero.
+            job.bytes_downloaded = 0;
+        }
+        if previous != job.bytes_downloaded {
+            changes.numeric = true;
+            if job.phase == DownloadPhase::Completed {
+                changes.completed = true;
+                // Known totals fix the completed row size. Bundle accounting
+                // growth then changes the safety ledger, not presentation.
+                changes.presentation |= job.total_bytes.is_none();
+            } else {
+                changes.transfers.push(TransferUpdate::capture(job));
+            }
         }
     }
+    changes
 }
 
 fn projected_write_bytes(physical: u64, logical_next: u64, incoming: u64) -> u64 {
@@ -278,9 +397,15 @@ impl DownloadCoordinator {
                     active: None,
                     last_persist: Instant::now(),
                     resolvers: HashMap::new(),
+                    transfer_structure: 0,
+                    transfer_updates: HashMap::new(),
                 }),
                 next_id: AtomicU64::new(next_id),
                 revision: AtomicU64::new(0),
+                semantic_revision: AtomicU64::new(0),
+                observed_artifacts: Mutex::new(HashMap::new()),
+                #[cfg(test)]
+                planner_invalidations: AtomicU64::new(0),
                 foreground: AtomicBool::new(foreground),
             }),
         };
@@ -343,7 +468,7 @@ impl DownloadCoordinator {
         job.intro_timings = Some(timings);
         job.updated_at = crate::download::unix_timestamp();
         persist_manifest(&state.manifest);
-        self.bump_revision();
+        self.bump_revision(&mut state);
         true
     }
 
@@ -393,13 +518,194 @@ impl DownloadCoordinator {
                 job.error = Some(RESOLVER_RESELECT.into());
                 job.bytes_per_second = 0;
                 persist_manifest(&state.manifest);
-                self.bump_revision();
+                self.bump_revision(&mut state);
             }
         }
     }
 
     pub(crate) fn revision(&self) -> u64 {
         self.inner.revision.load(Ordering::Acquire)
+    }
+
+    /// Planning and search inputs, excluding byte/rate-only progress. Every
+    /// structural, authority, ownership or phase mutation advances this signal.
+    pub(crate) fn semantic_revision(&self) -> u64 {
+        self.inner.semantic_revision.load(Ordering::Acquire)
+    }
+
+    /// Capture revisions and plain data under the same coordinator lock. Byte
+    /// ticks visit only changed numeric transfer records and never clone completed jobs.
+    pub(super) fn projection_snapshot(
+        &self,
+        structure: Option<u64>,
+        progress: u64,
+    ) -> DownloadProjectionSnapshot {
+        let state = self.inner.state();
+        let revisions = DownloadRevisions {
+            structure: self.semantic_revision(),
+            progress: self.revision(),
+        };
+        let full = structure != Some(revisions.structure);
+        let jobs = full.then(|| state.manifest.jobs.clone());
+        let transfers = if !full && state.transfer_structure == revisions.structure {
+            state
+                .transfer_updates
+                .values()
+                .filter(|(revision, _)| *revision > progress)
+                .map(|(_, update)| update.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        DownloadProjectionSnapshot {
+            revisions,
+            jobs,
+            transfers,
+        }
+    }
+
+    /// Stream rows only need numeric deltas; structural callers perform their
+    /// existing authority/eligibility rebuild instead of cloning unused jobs.
+    pub(super) fn transfer_snapshot(&self, progress: u64) -> DownloadProjectionSnapshot {
+        let state = self.inner.state();
+        let revisions = DownloadRevisions {
+            structure: self.semantic_revision(),
+            progress: self.revision(),
+        };
+        let transfers = if state.transfer_structure == revisions.structure {
+            state
+                .transfer_updates
+                .values()
+                .filter(|(revision, _)| *revision > progress)
+                .map(|(_, update)| update.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        DownloadProjectionSnapshot {
+            revisions,
+            jobs: None,
+            transfers,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn ui_progress_for_test(&self, id: &str, progress: DownloadProgress) {
+        {
+            let mut state = self.inner.state();
+            if state
+                .active
+                .as_ref()
+                .is_none_or(|active| active.id != id || active.cancel.is_cancelled())
+            {
+                state.active = Some(ActiveDownload {
+                    id: id.into(),
+                    torrent_engine: None,
+                    cancel: CancellationToken::new(),
+                    torrent_cancel: Arc::new(AtomicBool::new(false)),
+                    remove: Arc::new(AtomicBool::new(false)),
+                    finished: Arc::new(AtomicBool::new(false)),
+                });
+            }
+        }
+        self.update_progress(id, progress);
+    }
+
+    #[cfg(test)]
+    pub(super) fn ui_finish_for_test(&self, id: &str, path: PathBuf, bytes: u64) {
+        self.finish(
+            id.into(),
+            Ok(DownloadOutcome {
+                file_name: path.file_name().unwrap().to_string_lossy().into(),
+                path,
+                part_path: PathBuf::new(),
+                bytes_downloaded: bytes,
+                total_bytes: Some(bytes),
+                bytes_per_second: 0,
+                etag: None,
+                last_modified: None,
+            }),
+        );
+    }
+
+    /// Observe external artifact usability on the caller's existing worker.
+    /// File access is off-lock; authority/identity are rechecked before an
+    /// observation can advance the shared semantic revision. Manifest phases
+    /// and serialized jobs remain unchanged.
+    pub(crate) fn observe_completed_artifacts(
+        &self,
+        owner: &profiles::ProfileStore,
+        current: impl Fn() -> bool,
+    ) -> bool {
+        if !current() {
+            return false;
+        }
+        let jobs: Vec<_> = self
+            .jobs()
+            .into_iter()
+            .filter(|job| job.phase == DownloadPhase::Completed)
+            .collect();
+        let mut observations = Vec::new();
+        for job in jobs {
+            if !current() {
+                return false;
+            }
+            if !smart_offline::allows_download(owner, &job) {
+                continue;
+            }
+            let usable = job.artifact_path.as_ref().is_some_and(|path| {
+                path.metadata()
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+                    && std::fs::File::open(path).is_ok()
+            });
+            observations.push((job, usable));
+        }
+        if !current() {
+            return false;
+        }
+        {
+            let mut state = self.inner.state();
+            if !current() {
+                return false;
+            }
+            let mut observed = self.inner.observed_artifacts.lock().unwrap();
+            observed.retain(|id, _| {
+                state
+                    .manifest
+                    .jobs
+                    .iter()
+                    .any(|job| job.id == *id && job.phase == DownloadPhase::Completed)
+            });
+            let mut changed = false;
+            for (snapshot, usable) in observations {
+                let Some(job) = state.manifest.jobs.iter().find(|job| {
+                    job.id == snapshot.id
+                        && job.phase == DownloadPhase::Completed
+                        && same_download_identity(job, &snapshot)
+                        && job.offline == snapshot.offline
+                        && job.artifact_path == snapshot.artifact_path
+                }) else {
+                    continue;
+                };
+                let observation = ArtifactObservation {
+                    kind: job.media_type.clone(),
+                    title: job.media_id.clone(),
+                    episode: job.request_id.clone(),
+                    path: job.artifact_path.clone(),
+                    usable,
+                };
+                changed |= observed
+                    .get(&job.id)
+                    .is_some_and(|old| old.same_artifact(&observation) && old.usable != usable);
+                observed.insert(job.id.clone(), observation);
+            }
+            // Keep the existing paired revision publication inside the same
+            // authority lock used by coherent page/transfer snapshots.
+            if changed {
+                self.bump_revision(&mut state);
+            }
+            changed
+        }
     }
 
     pub(crate) fn jobs_for_request(&self, request_id: &str) -> Vec<DownloadJob> {
@@ -533,6 +839,8 @@ impl DownloadCoordinator {
                     && job.request_id == request_id
                     && job.source == source
             }) {
+                let previous_ownership = state.manifest.jobs[index].offline.clone();
+                let resolver_changed = resolver.is_some();
                 if let Some(resolver) = resolver {
                     let id = state.manifest.jobs[index].id.clone();
                     state.resolvers.insert(id, resolver);
@@ -564,7 +872,7 @@ impl DownloadCoordinator {
                     }
                     let id = job.id.clone();
                     persist_manifest(&state.manifest);
-                    self.bump_revision();
+                    self.bump_revision(&mut state);
                     drop(state);
                     self.schedule_next();
                     return id;
@@ -573,6 +881,9 @@ impl DownloadCoordinator {
                 // active worker (e.g. a dead worker was reaped). Kick the
                 // queue so re-tapping Download always means "start it".
                 let id = state.manifest.jobs[index].id.clone();
+                if resolver_changed || state.manifest.jobs[index].offline != previous_ownership {
+                    self.bump_revision(&mut state);
+                }
                 drop(state);
                 self.schedule_next();
                 return id;
@@ -612,7 +923,7 @@ impl DownloadCoordinator {
             }
             state.manifest.jobs.push(job);
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             id
         };
         self.schedule_next();
@@ -644,7 +955,7 @@ impl DownloadCoordinator {
             active.torrent_cancel.store(true, Ordering::Release);
         }
         persist_manifest(&state.manifest);
-        self.bump_revision();
+        self.bump_revision(&mut state);
     }
 
     pub(super) fn attach_smart_owner(&self, id: &str, owner: crate::download::offline::Owner) {
@@ -653,7 +964,7 @@ impl DownloadCoordinator {
             && job.offline.owners.insert(owner)
         {
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
         }
     }
     pub(super) fn keep_removed_policy(
@@ -666,7 +977,7 @@ impl DownloadCoordinator {
         let remove = detach_policy_jobs(&mut state, owner, keep, playing);
         let pending = self.claim_removals(&mut state, &remove);
         persist_manifest(&state.manifest);
-        self.bump_revision();
+        self.bump_revision(&mut state);
         drop(state);
         if let Some(pending) = pending {
             self.finish_removals(pending);
@@ -750,7 +1061,8 @@ impl DownloadCoordinator {
             }
             return Ok(id);
         }
-        refresh_physical_accounting(&mut state.manifest.jobs);
+        let changes = refresh_physical_accounting(&mut state.manifest.jobs);
+        self.publish_accounting(&mut state, changes);
         let ledger = Ledger::from_jobs(&state.manifest.jobs);
         let estimate_cap = estimate
             .and_then(|n| n.checked_add(n / 20))
@@ -794,7 +1106,7 @@ impl DownloadCoordinator {
                 job.offline.owners.insert(owner);
             }
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             drop(state);
             self.schedule_next();
             return Ok(id);
@@ -813,7 +1125,8 @@ impl DownloadCoordinator {
         }
         let (free, capacity) =
             crate::download::filesystem_capacity(&self.inner.root).ok_or(PauseReason::FreeSpace)?;
-        refresh_physical_accounting(&mut state.manifest.jobs);
+        let changes = refresh_physical_accounting(&mut state.manifest.jobs);
+        self.publish_accounting(&mut state, changes);
         let mut reserved = Ledger::from_jobs(&state.manifest.jobs).admit(
             estimate.map(|n| n.saturating_add(16 * 1024 * 1024)),
             &device,
@@ -881,7 +1194,7 @@ impl DownloadCoordinator {
         }
         state.manifest.jobs.push(job);
         persist_manifest(&state.manifest);
-        self.bump_revision();
+        self.bump_revision(&mut state);
         drop(state);
         self.schedule_next();
         Ok(id)
@@ -897,7 +1210,8 @@ impl DownloadCoordinator {
         let Some(index) = state.manifest.jobs.iter().position(|j| j.id == id) else {
             return false;
         };
-        refresh_physical_accounting(&mut state.manifest.jobs);
+        let changes = refresh_physical_accounting(&mut state.manifest.jobs);
+        self.publish_accounting(&mut state, changes);
         let job = &state.manifest.jobs[index];
         if job.offline.manual_keep {
             return true;
@@ -933,7 +1247,7 @@ impl DownloadCoordinator {
             job.phase = DownloadPhase::Paused;
             job.offline.pause_reason = Some(reason);
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             return false;
         }
         true
@@ -1019,7 +1333,7 @@ impl DownloadCoordinator {
         let pending = self.claim_removals(&mut state, &remove);
         if state.manifest != before {
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
         }
         drop(state);
         if let Some(pending) = pending {
@@ -1039,7 +1353,7 @@ impl DownloadCoordinator {
             job.offline.pinned = pinned;
             job.offline.manual_keep = job.offline.manual_origin || pinned;
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
         }
     }
 
@@ -1061,7 +1375,7 @@ impl DownloadCoordinator {
             active.torrent_cancel.store(true, Ordering::Release);
         }
         persist_manifest(&state.manifest);
-        self.bump_revision();
+        self.bump_revision(&mut state);
     }
 
     pub(crate) fn resume(&self, id: &str) {
@@ -1084,7 +1398,7 @@ impl DownloadCoordinator {
                 job.offline.pause_reason = None;
                 job.error = None;
                 persist_manifest(&state.manifest);
-                self.bump_revision();
+                self.bump_revision(&mut state);
                 return;
             }
             job.phase = DownloadPhase::Queued;
@@ -1099,7 +1413,7 @@ impl DownloadCoordinator {
                 job.bytes_per_second = 0;
             }
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
         }
         self.schedule_next();
     }
@@ -1175,7 +1489,7 @@ impl DownloadCoordinator {
                     .clone()
                     .map(|engine| (active.id.clone(), engine))
             });
-        self.bump_revision();
+        self.bump_revision(state);
         Some(PendingRemoval {
             jobs: removed,
             transfer_engine,
@@ -1227,7 +1541,7 @@ impl DownloadCoordinator {
                     }
                     state.manifest.jobs.push(restored);
                     persist_manifest(&state.manifest);
-                    self.bump_revision();
+                    self.bump_revision(&mut state);
                 }
             } else if !self
                 .inner
@@ -1354,7 +1668,7 @@ impl DownloadCoordinator {
             }
             state.active = Some(active.clone());
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             (job, active)
         };
 
@@ -1405,6 +1719,9 @@ impl DownloadCoordinator {
 
     fn run_http(&self, mut job: DownloadJob, active: ActiveDownload) {
         let private_source = is_resolver_download(&job);
+        // Keep the in-memory relay owner through the entire blocking transfer,
+        // including stalls; every success/error/cancellation path releases it.
+        let mut _relay_lease = None;
         let resolver = self.inner.state().resolvers.get(&job.id).cloned();
         if private_source {
             let resolver = resolver.clone();
@@ -1440,7 +1757,10 @@ impl DownloadCoordinator {
                 self.finish(job.id, Err(error));
                 return;
             }
-            match resolved.map(|stream| stream_source(&stream)) {
+            match resolved.map(|resolved| {
+                _relay_lease = resolved.relay;
+                stream_source(&resolved.stream)
+            }) {
                 Ok(StreamSource::Url(url)) => job.source = JobSource::http(url),
                 Ok(StreamSource::UrlWithOptions { url, headers, .. }) => {
                     job.source = JobSource::http_with_headers(url, headers);
@@ -1591,9 +1911,14 @@ impl DownloadCoordinator {
                 move |location| {
                     let mut state = coordinator.inner.state();
                     if let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) {
+                        let changed = job.torrent_directory.as_ref() != Some(&location.directory)
+                            || job.torrent_file_idx != Some(location.file_idx);
                         job.torrent_directory = Some(location.directory);
                         job.torrent_file_idx = Some(location.file_idx);
                         persist_manifest(&state.manifest);
+                        if changed {
+                            coordinator.bump_revision(&mut state);
+                        }
                     }
                 }
             },
@@ -1657,12 +1982,14 @@ impl DownloadCoordinator {
         let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) else {
             return;
         };
+        let phase_changed = job.phase != DownloadPhase::Downloading;
         job.apply_progress(&progress);
+        let update = TransferUpdate::capture(job);
         if state.last_persist.elapsed() >= Duration::from_secs(2) {
             persist_manifest(&state.manifest);
             state.last_persist = Instant::now();
         }
-        self.bump_revision();
+        self.publish_progress(&mut state, update, phase_changed);
     }
 
     fn update_torrent_progress(&self, id: &str, stats: TorrentStats) {
@@ -1677,16 +2004,18 @@ impl DownloadCoordinator {
         let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) else {
             return;
         };
+        let phase_changed = job.phase != DownloadPhase::Downloading;
         job.phase = DownloadPhase::Downloading;
         job.bytes_per_second = stats.down_bps;
         job.total_bytes = (stats.total_bytes > 0).then_some(stats.total_bytes);
         job.bytes_downloaded = stats.downloaded_bytes;
         job.updated_at = crate::download::unix_timestamp();
+        let update = TransferUpdate::capture(job);
         if state.last_persist.elapsed() >= Duration::from_secs(2) {
             persist_manifest(&state.manifest);
             state.last_persist = Instant::now();
         }
-        self.bump_revision();
+        self.publish_progress(&mut state, update, phase_changed);
     }
 
     fn finish(&self, id: String, result: Result<DownloadOutcome, String>) {
@@ -1787,7 +2116,7 @@ impl DownloadCoordinator {
                 }
             }
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             // A replacement may reuse the removed ID while this worker
             // finishes. Its files belong to the new row, not this cleanup.
             let remove = active.remove.load(Ordering::Acquire)
@@ -1827,7 +2156,7 @@ impl DownloadCoordinator {
                 job.updated_at = crate::download::unix_timestamp();
             }
             persist_manifest(&state.manifest);
-            self.bump_revision();
+            self.bump_revision(&mut state);
             !still_present
         };
         // A job removed while active had its artifact cleanup deferred to the
@@ -1920,9 +2249,60 @@ impl DownloadCoordinator {
         }
     }
 
-    fn bump_revision(&self) {
+    fn bump_revision(&self, state: &mut DownloadState) {
+        #[cfg(test)]
+        self.inner
+            .planner_invalidations
+            .fetch_add(1, Ordering::AcqRel);
         smart_offline::trigger();
+        self.publish_structure(state);
+    }
+
+    // Presentation facts can change without changing offline-planner inputs.
+    // Keep the same structural receipt, but do not schedule planner work.
+    fn publish_structure(&self, state: &mut DownloadState) {
+        let structure = self.inner.semantic_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        state.transfer_structure = structure;
+        state.transfer_updates.clear();
         self.inner.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn publish_transfer_updates(
+        &self,
+        state: &mut DownloadState,
+        updates: impl IntoIterator<Item = TransferUpdate>,
+    ) {
+        let revision = self.inner.revision.fetch_add(1, Ordering::AcqRel) + 1;
+        debug_assert_eq!(state.transfer_structure, self.semantic_revision());
+        for update in updates {
+            state
+                .transfer_updates
+                .insert(update.id.clone(), (revision, update));
+        }
+    }
+
+    fn publish_accounting(&self, state: &mut DownloadState, changes: AccountingChanges) {
+        if !changes.numeric {
+            return;
+        }
+        if changes.presentation {
+            self.publish_structure(state);
+        } else if !changes.transfers.is_empty() {
+            self.publish_transfer_updates(state, changes.transfers);
+        }
+    }
+
+    fn publish_progress(
+        &self,
+        state: &mut DownloadState,
+        update: TransferUpdate,
+        phase_changed: bool,
+    ) {
+        if phase_changed {
+            self.bump_revision(state);
+        } else {
+            self.publish_transfer_updates(state, std::iter::once(update));
+        }
     }
 
     fn persist(&self) {
@@ -2798,7 +3178,7 @@ impl Bridge {
                     token: token.clone(),
                     is_current: Arc::new(move || authority.is_current()),
                     resolve: Arc::new(move |token, timeout, cancelled| {
-                        capability.resolve(token, timeout, cancelled)
+                        capability.resolve_with_lease(token, timeout, cancelled)
                     }),
                 })
             }
@@ -3019,12 +3399,15 @@ impl Bridge {
         // even when a completion did not change the row set) and is throttled
         // internally to state changes + ~1 Hz.
         self.refresh_download_background_status();
-        let revision = self.downloads.revision();
-        if revision == self.downloads_seen.load(Ordering::Acquire) {
+        let previous = self.downloads_seen.load(Ordering::Acquire);
+        let snapshot = self.downloads.transfer_snapshot(previous);
+        let changed = previous != snapshot.revisions.progress;
+        self.downloads_seen
+            .store(snapshot.revisions.progress, Ordering::Release);
+        self.refresh_stream_transfer_progress(&snapshot, changed);
+        if !changed {
             return;
         }
-        self.downloads_seen.store(revision, Ordering::Release);
-        self.apply_stream_filter();
         // Only rebuild the settings list while it could be on screen; this
         // runs on the 250 ms tick and active-transfer progress bumps the
         // revision often.
@@ -3187,6 +3570,717 @@ fn fallback_episode_label(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_and_removed_download_refresh_retained_search_actions() {
+        super::super::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::completed_and_removed_download_refresh_retained_search_actions"
+            ),
+            |fixture| {
+                let bridge = &fixture.bridge;
+                let coordinator = &bridge.downloads;
+                let root = temp_root("search-download-actions");
+                fs::create_dir_all(&root).unwrap();
+                let path = root.join("complete.bin");
+                fs::write(&path, b"ready").unwrap();
+                install_active(coordinator, "search-job", DownloadPhase::Downloading, false);
+                {
+                    let mut state = coordinator.inner.state();
+                    let job = state
+                        .manifest
+                        .jobs
+                        .iter_mut()
+                        .find(|job| job.id == "search-job")
+                        .unwrap();
+                    job.media_type = "movie".into();
+                    job.media_id = "search-movie".into();
+                    job.title = "Needle download".into();
+                }
+                let app = bridge.app().unwrap();
+                app.set_search_text("Needle".into());
+                bridge.shared.lock().unwrap().search = "Needle".into();
+                app.set_discover_search_open(true);
+                bridge.pick_search_scope(0);
+                bridge.refresh_local_search("Needle");
+                coordinator.finish(
+                    "search-job".into(),
+                    Ok(DownloadOutcome {
+                        part_path: part_path(&path),
+                        path: path.clone(),
+                        file_name: "complete.bin".into(),
+                        bytes_downloaded: 5,
+                        total_bytes: Some(5),
+                        bytes_per_second: 0,
+                        etag: None,
+                        last_modified: None,
+                    }),
+                );
+                let has_offline = || {
+                    bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .search_previews
+                        .iter()
+                        .any(|meta| {
+                            meta.extra
+                                .get("novaLocalSearchAction")
+                                .and_then(|value| value.get("Download"))
+                                .is_some()
+                        })
+                };
+                let wait_for = |present| {
+                    let until = std::time::Instant::now() + Duration::from_secs(15);
+                    loop {
+                        bridge.refresh_unified_search_downloads();
+                        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
+                        profiles::invoke_account(|| slint::quit_event_loop().unwrap()).unwrap();
+                        slint::run_event_loop().unwrap();
+                        if has_offline() == present {
+                            break;
+                        }
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "offline action did not refresh"
+                        );
+                        std::thread::yield_now();
+                    }
+                };
+                wait_for(true);
+                coordinator.remove("search-job");
+                wait_for(false);
+                let _ = fs::remove_dir_all(root);
+            },
+        );
+    }
+
+    #[test]
+    fn completed_artifact_observation_tracks_usability_without_changing_manifest() {
+        super::super::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::completed_artifact_observation_tracks_usability_without_changing_manifest"
+            ),
+            |fixture| {
+                let coordinator = &fixture.bridge.downloads;
+                let root = temp_root("artifact-observation");
+                fs::create_dir_all(&root).unwrap();
+                let path = root.join("complete.bin");
+                fs::write(&path, b"ready").unwrap();
+                install_active(coordinator, "observed", DownloadPhase::Completed, true);
+                {
+                    let mut state = coordinator.inner.state();
+                    let job = state
+                        .manifest
+                        .jobs
+                        .iter_mut()
+                        .find(|job| job.id == "observed")
+                        .unwrap();
+                    job.media_type = "movie".into();
+                    job.media_id = "observed-title".into();
+                    job.artifact_path = Some(path.clone());
+                }
+                let owner = profiles::ProfileStore::capture();
+                let original = serde_json::to_value(coordinator.job("observed").unwrap()).unwrap();
+                let before = coordinator.semantic_revision();
+                assert!(!coordinator.observe_completed_artifacts(&owner, || true));
+                assert!(!coordinator.observe_completed_artifacts(&owner, || true));
+                assert_eq!(coordinator.semantic_revision(), before);
+                fs::write(&path, b"").unwrap();
+                assert!(!coordinator.observe_completed_artifacts(&owner, || false));
+                assert_eq!(coordinator.semantic_revision(), before);
+                assert!(coordinator.observe_completed_artifacts(&owner, || true));
+                assert_eq!(coordinator.semantic_revision(), before + 1);
+                assert!(!coordinator.observe_completed_artifacts(&owner, || true));
+                fs::write(&path, b"restored").unwrap();
+                assert!(coordinator.observe_completed_artifacts(&owner, || true));
+                assert_eq!(coordinator.semantic_revision(), before + 2);
+                assert_eq!(
+                    serde_json::to_value(coordinator.job("observed").unwrap()).unwrap(),
+                    original
+                );
+                fs::remove_file(&path).unwrap();
+                // Change job identity after the off-lock read, before admission.
+                let calls = AtomicUsize::new(0);
+                assert!(!coordinator.observe_completed_artifacts(&owner, || {
+                    if calls.fetch_add(1, Ordering::AcqRel) == 2 {
+                        coordinator
+                            .inner
+                            .state()
+                            .manifest
+                            .jobs
+                            .iter_mut()
+                            .find(|job| job.id == "observed")
+                            .unwrap()
+                            .artifact_path = Some(root.join("replacement"));
+                    }
+                    true
+                }));
+                assert_eq!(coordinator.semantic_revision(), before + 2);
+                let _ = fs::remove_dir_all(root);
+            },
+        );
+    }
+
+    fn revisions(coordinator: &DownloadCoordinator) -> (u64, u64, u64) {
+        (
+            coordinator.revision(),
+            coordinator.semantic_revision(),
+            coordinator
+                .inner
+                .planner_invalidations
+                .load(Ordering::Acquire),
+        )
+    }
+
+    #[test]
+    fn ui09_projection_snapshot_separates_coherent_bytes_resources_and_structure() {
+        let coordinator = DownloadCoordinator::new(temp_root("ui09-coherent-snapshot"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "active", DownloadPhase::Resolving, false);
+        coordinator.inner.state().manifest.jobs.push(DownloadJob {
+            id: "completed".into(),
+            phase: DownloadPhase::Completed,
+            ..Default::default()
+        });
+        let initial = coordinator.projection_snapshot(None, 0);
+        assert_eq!(initial.jobs.as_ref().unwrap().len(), 2);
+        coordinator.update_progress(
+            "active",
+            DownloadProgress::new(0, None, 100).with_resources(0, 2000),
+        );
+        let phase = coordinator.projection_snapshot(
+            Some(initial.revisions.structure),
+            initial.revisions.progress,
+        );
+        assert!(
+            phase.jobs.is_some(),
+            "phase transitions require a structural snapshot"
+        );
+        let base = phase.revisions;
+        let writer = coordinator.clone();
+        let thread = std::thread::spawn(move || {
+            for bytes in 1..=1000 {
+                writer.update_progress(
+                    "active",
+                    DownloadProgress::new(bytes, None, bytes + 100).with_resources(bytes, 2000),
+                );
+            }
+        });
+        for _ in 0..2000 {
+            let snapshot = coordinator.projection_snapshot(Some(base.structure), base.progress);
+            assert!(
+                snapshot.jobs.is_none(),
+                "byte-only snapshots must never clone completed jobs"
+            );
+            assert_eq!(snapshot.revisions.structure, base.structure);
+            if let Some(update) = snapshot.transfers.first() {
+                assert_eq!(update.id, "active");
+                assert_eq!(
+                    update.bytes_downloaded,
+                    snapshot.revisions.progress - base.progress
+                );
+                assert_eq!(update.bytes_per_second, update.bytes_downloaded + 100);
+                assert_eq!(
+                    update.resource_progress,
+                    Some((update.bytes_downloaded, 2000))
+                );
+                let job = DownloadJob {
+                    phase: DownloadPhase::Downloading,
+                    bytes_downloaded: update.bytes_downloaded,
+                    bytes_per_second: update.bytes_per_second,
+                    resource_progress: update.resource_progress,
+                    ..Default::default()
+                };
+                assert_eq!(update.status_text(), DownloadCoordinator::status_text(&job));
+                assert_eq!(
+                    update.progress_fraction(),
+                    DownloadCoordinator::progress_fraction(&job)
+                );
+            }
+        }
+        thread.join().unwrap();
+        let current = coordinator.projection_snapshot(Some(base.structure), base.progress);
+        assert_eq!(current.transfers[0].bytes_downloaded, 1000);
+        let idle = coordinator.projection_snapshot(
+            Some(current.revisions.structure),
+            current.revisions.progress,
+        );
+        assert!(idle.jobs.is_none() && idle.transfers.is_empty());
+        coordinator.pause("active");
+        let paused =
+            coordinator.projection_snapshot(Some(base.structure), current.revisions.progress);
+        assert!(paused.jobs.is_some());
+        assert!(paused.revisions.structure > base.structure);
+    }
+
+    #[test]
+    fn ui09_independent_cursors_accounting_and_readded_identity_do_not_share_stale_deltas() {
+        let coordinator = DownloadCoordinator::new(temp_root("ui09-independent-cursors"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "active", DownloadPhase::Downloading, false);
+        {
+            let mut state = coordinator.inner.state();
+            state.manifest.jobs.push(DownloadJob {
+                id: "paused".into(),
+                phase: DownloadPhase::Paused,
+                bytes_downloaded: 10,
+                total_bytes: Some(100),
+                artifact_path: Some("bundle/file".into()),
+                ..Default::default()
+            });
+            state.manifest.jobs.last_mut().unwrap().offline.manual_keep = false;
+        }
+        let base = coordinator.projection_snapshot(None, 0).revisions;
+        coordinator.update_progress(
+            "active",
+            DownloadProgress::new(20, None, 30).with_resources(2, 10),
+        );
+        let fast = coordinator.transfer_snapshot(base.progress);
+        assert_eq!(fast.transfers.len(), 1);
+        {
+            let mut state = coordinator.inner.state();
+            let changes = refresh_physical_accounting_with(&mut state.manifest.jobs, |_| 80);
+            assert!(changes.numeric && !changes.completed);
+            assert_eq!(changes.transfers.len(), 1);
+            assert_eq!(changes.transfers[0].phase, DownloadPhase::Paused);
+            coordinator.publish_accounting(&mut state, changes);
+        }
+        let fast_next =
+            coordinator.projection_snapshot(Some(base.structure), fast.revisions.progress);
+        assert!(fast_next.jobs.is_none());
+        assert_eq!(fast_next.transfers.len(), 1);
+        assert_eq!(fast_next.transfers[0].id, "paused");
+        assert_eq!(fast_next.transfers[0].bytes_downloaded, 80);
+        let slow = coordinator.transfer_snapshot(base.progress);
+        assert_eq!(
+            slow.transfers.len(),
+            2,
+            "one consumer cannot drain another consumer's deltas"
+        );
+        assert!(
+            coordinator
+                .transfer_snapshot(slow.revisions.progress)
+                .transfers
+                .is_empty()
+        );
+        {
+            let mut state = coordinator.inner.state();
+            state.manifest.jobs.push(DownloadJob {
+                id: "done".into(),
+                phase: DownloadPhase::Completed,
+                bytes_downloaded: 10,
+                artifact_path: Some("done/file".into()),
+                ..Default::default()
+            });
+            state.manifest.jobs.last_mut().unwrap().offline.manual_keep = false;
+            let changes = refresh_physical_accounting_with(&mut state.manifest.jobs, |_| 100);
+            assert!(changes.numeric && changes.completed);
+            coordinator.publish_accounting(&mut state, changes);
+            assert!(state.transfer_updates.is_empty());
+        }
+        let changed =
+            coordinator.projection_snapshot(Some(base.structure), slow.revisions.progress);
+        assert!(
+            changed.jobs.is_some(),
+            "completed-byte changes rebuild completed structure"
+        );
+        let stale = coordinator.transfer_snapshot(0);
+        {
+            let mut state = coordinator.inner.state();
+            state.manifest.jobs.retain(|job| job.id != "active");
+            state.active = None;
+            coordinator.bump_revision(&mut state);
+        }
+        install_active(&coordinator, "active", DownloadPhase::Downloading, false);
+        {
+            let mut state = coordinator.inner.state();
+            let job = state
+                .manifest
+                .jobs
+                .iter_mut()
+                .find(|job| job.id == "active")
+                .unwrap();
+            job.media_type = "anime".into();
+            job.media_id = "new-owner".into();
+            job.request_id = "new-native".into();
+            coordinator.bump_revision(&mut state);
+        }
+        assert_ne!(
+            stale.revisions.structure,
+            coordinator.semantic_revision(),
+            "publication must reject a capture from the old structure"
+        );
+        let replacement = coordinator
+            .projection_snapshot(Some(stale.revisions.structure), stale.revisions.progress);
+        assert!(
+            replacement
+                .jobs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|job| job.id == "active" && job.request_id == "new-native")
+        );
+        assert!(replacement.transfers.is_empty());
+        coordinator.update_progress(
+            "active",
+            DownloadProgress::new(1, None, 2).with_resources(1, 10),
+        );
+        let fresh = coordinator.projection_snapshot(
+            Some(replacement.revisions.structure),
+            replacement.revisions.progress,
+        );
+        assert!(fresh.jobs.is_none());
+        assert_eq!(fresh.transfers.len(), 1);
+        assert_eq!(fresh.transfers[0].bytes_downloaded, 1);
+    }
+
+    #[test]
+    fn progress_callbacks_advance_presentation_without_reinvalidating_planning() {
+        for torrent in [false, true] {
+            let root = temp_root(if torrent {
+                "semantic-torrent-progress"
+            } else {
+                "semantic-http-progress"
+            });
+            let coordinator = DownloadCoordinator::new(root.clone());
+            install_active(&coordinator, "transfer", DownloadPhase::Resolving, false);
+            let initial = revisions(&coordinator);
+            let update = |bytes| {
+                if torrent {
+                    coordinator.update_torrent_progress(
+                        "transfer",
+                        TorrentStats {
+                            downloaded_bytes: bytes,
+                            total_bytes: 20_000,
+                            down_bps: bytes + 1,
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    coordinator.update_progress(
+                        "transfer",
+                        DownloadProgress::new(bytes, Some(20_000), bytes + 1),
+                    );
+                }
+            };
+            update(0);
+            assert_eq!(
+                revisions(&coordinator),
+                (initial.0 + 1, initial.1 + 1, initial.2 + 1)
+            );
+            for bytes in 1..=10_000 {
+                update(bytes);
+            }
+            assert_eq!(
+                revisions(&coordinator),
+                (initial.0 + 10_001, initial.1 + 1, initial.2 + 1)
+            );
+            assert_eq!(
+                coordinator.job("transfer").unwrap().bytes_downloaded,
+                10_000
+            );
+            assert_eq!(
+                coordinator.job("transfer").unwrap().phase,
+                DownloadPhase::Downloading
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn rejected_late_progress_does_not_publish_either_revision() {
+        let root = temp_root("semantic-late-progress");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        install_active(&coordinator, "transfer", DownloadPhase::Downloading, false);
+        coordinator.pause("transfer");
+        let paused = revisions(&coordinator);
+        coordinator.update_progress("transfer", DownloadProgress::new(3, Some(10), 1));
+        coordinator.update_torrent_progress("transfer", TorrentStats::default());
+        coordinator.update_progress("unknown", DownloadProgress::new(3, Some(10), 1));
+        assert_eq!(revisions(&coordinator), paused);
+        assert_eq!(
+            coordinator.job("transfer").unwrap().phase,
+            DownloadPhase::Paused
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ownership_policy_source_pause_failure_and_removal_still_invalidate_planning() {
+        use crate::download::offline::Owner;
+        let root = temp_root("semantic-mutations");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        install_active(&coordinator, "transfer", DownloadPhase::Resolving, false);
+        let assert_semantic = |before: (u64, u64, u64)| {
+            let after = revisions(&coordinator);
+            assert!(after.0 > before.0);
+            assert_eq!(after.1 - before.1, after.0 - before.0);
+            assert_eq!(after.2 - before.2, after.1 - before.1);
+        };
+        let owner = Owner {
+            profile: "alice".into(),
+            policy: "series".into(),
+        };
+        let before = revisions(&coordinator);
+        coordinator.attach_smart_owner("transfer", owner.clone());
+        assert_semantic(before);
+        let before = revisions(&coordinator);
+        coordinator.attach_smart_owner("transfer", owner.clone());
+        assert_eq!(
+            revisions(&coordinator),
+            before,
+            "identical ownership is not a mutation"
+        );
+        coordinator.keep_removed_policy(&owner, true, Some("transfer"));
+        assert_semantic(before);
+        let before = revisions(&coordinator);
+        coordinator.pause("transfer");
+        assert_semantic(before);
+        let before = revisions(&coordinator);
+        coordinator.resume("transfer");
+        assert_semantic(before);
+        coordinator.inner.state().resolvers.insert(
+            "transfer".into(),
+            ResolverDownload::for_offline(
+                "authority".into(),
+                |_, _, _| panic!("fixture must never fetch"),
+                Arc::new(|| false),
+            ),
+        );
+        let before = revisions(&coordinator);
+        coordinator.cancel_stale_resolvers();
+        assert_semantic(before);
+        assert_eq!(
+            coordinator.job("transfer").unwrap().phase,
+            DownloadPhase::Failed
+        );
+        let before = revisions(&coordinator);
+        coordinator.remove("transfer");
+        assert_semantic(before);
+        assert!(coordinator.job("transfer").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transfer_completion_and_failure_keep_semantic_and_planner_revisions_in_step() {
+        for success in [false, true] {
+            let root = temp_root(if success {
+                "semantic-finish-completed"
+            } else {
+                "semantic-finish-failure"
+            });
+            let coordinator = DownloadCoordinator::new(root.clone());
+            install_active(&coordinator, "transfer", DownloadPhase::Downloading, false);
+            let before = revisions(&coordinator);
+            let outcome = if success {
+                fs::create_dir_all(&root).unwrap();
+                let path = root.join("complete.bin");
+                fs::write(&path, b"complete").unwrap();
+                Ok(DownloadOutcome {
+                    part_path: part_path(&path),
+                    path,
+                    file_name: "complete.bin".into(),
+                    bytes_downloaded: 8,
+                    total_bytes: Some(8),
+                    bytes_per_second: 0,
+                    etag: None,
+                    last_modified: None,
+                })
+            } else {
+                Err("injected transfer failure".into())
+            };
+            coordinator.finish("transfer".into(), outcome);
+            let after = revisions(&coordinator);
+            assert_eq!(after, (before.0 + 1, before.1 + 1, before.2 + 1));
+            assert_eq!(
+                coordinator.job("transfer").unwrap().phase,
+                if success {
+                    DownloadPhase::Completed
+                } else {
+                    DownloadPhase::Failed
+                }
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn ui09_shared_bundle_accounting_preserves_planner_and_admission() {
+        use crate::download::offline::{DevicePolicy, Environment, Ledger, Owner, PauseReason};
+        use std::collections::BTreeMap;
+        const ROOT: &str = "NOVA_UI09_SHARED_ACCOUNTING_ROOT";
+        let Some(data_root) = std::env::var_os(ROOT) else {
+            let root = temp_root("ui09-shared-accounting");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::downloads::tests::ui09_shared_bundle_accounting_preserves_planner_and_admission", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let data_root = PathBuf::from(data_root);
+        storage::init_at(&data_root.join("store"));
+        let store = profiles::ProfileStore::for_profile("alice");
+        let policy = smart_offline::Policy {
+            media_type: "series".into(),
+            title_id: "show".into(),
+            source_owner: "https://addon.test/manifest.json".into(),
+            ..Default::default()
+        };
+        let owner = Owner {
+            profile: store.id().into(),
+            policy: serde_json::to_string(&("series", "show")).unwrap(),
+        };
+        store
+            .write(
+                smart_offline::KEY,
+                &serde_json::to_string(&BTreeMap::from([(owner.policy.clone(), policy.clone())]))
+                    .unwrap(),
+            )
+            .unwrap();
+        store
+            .write(
+                &episodes_key("series", "show"),
+                &serde_json::to_string(&vec![Video {
+                    id: "episode".into(),
+                    season: Some(1),
+                    episode: Some(1),
+                    released: Some("2020-01-01T00:00:00Z".into()),
+                    ..Default::default()
+                }])
+                .unwrap(),
+            )
+            .unwrap();
+        let device = DevicePolicy {
+            enabled_profiles: std::collections::BTreeSet::from([store.id().into()]),
+            ..Default::default()
+        };
+        storage::try_set_str(
+            smart_offline::DEVICE_KEY,
+            &serde_json::to_string(&device).unwrap(),
+        )
+        .unwrap();
+        smart_offline::set_environment(Environment {
+            connected: true,
+            wifi_or_ethernet: true,
+            unmetered: true,
+            charging: true,
+        });
+        let coordinator = DownloadCoordinator::new(data_root.join("downloads"));
+        coordinator.inner.state().manifest.jobs.clear();
+        install_active(&coordinator, "active", DownloadPhase::Downloading, false);
+        let bundle = coordinator.inner.root.join("bundle");
+        fs::create_dir_all(&bundle).unwrap();
+        let path = bundle.join("growing.bin");
+        fs::write(&path, vec![1; 16384]).unwrap();
+        {
+            let mut state = coordinator.inner.state();
+            let job = &mut state.manifest.jobs[0];
+            job.media_type = policy.media_type.clone();
+            job.media_id = policy.title_id.clone();
+            job.request_id = "episode".into();
+            job.source = JobSource::torrent("1111111111111111111111111111111111111111", Some(0));
+            job.torrent_directory = Some(bundle.clone());
+            job.artifact_path = Some(path.clone());
+            job.offline.manual_keep = false;
+            job.offline.manual_origin = false;
+            job.offline.owners.insert(owner.clone());
+            job.offline.source_owner = policy.source_owner.clone();
+            job.offline.source_revision = smart_offline::source_revision(&policy, &store);
+            job.offline.reserved_bytes = 64 * 1024 * 1024;
+            let template = job.clone();
+            for id in ["done-a", "done-b"] {
+                let mut sibling = template.clone();
+                sibling.id = id.into();
+                sibling.phase = DownloadPhase::Completed;
+                sibling.total_bytes = Some(1024);
+                state.manifest.jobs.push(sibling);
+            }
+        }
+        assert_eq!(
+            smart_offline::job_pause(&coordinator.job("active").unwrap()),
+            None
+        );
+        let baseline = coordinator.projection_snapshot(None, 0).revisions;
+        let planner = coordinator
+            .inner
+            .planner_invalidations
+            .load(Ordering::Acquire);
+        let mut cursor = baseline.progress;
+        for blocks in 2..=9 {
+            fs::write(&path, vec![1; blocks * 16384]).unwrap();
+            assert!(coordinator.smart_write_admission("active", 0, 4096));
+            let snapshot = coordinator.projection_snapshot(Some(baseline.structure), cursor);
+            assert_eq!(snapshot.revisions.structure, baseline.structure);
+            assert!(snapshot.jobs.is_none());
+            assert_eq!(snapshot.transfers.len(), 1);
+            assert_eq!(snapshot.transfers[0].id, "active");
+            cursor = snapshot.revisions.progress;
+            let state = coordinator.inner.state();
+            let physical = crate::torrent::physical_bytes(&bundle);
+            assert!(
+                state
+                    .manifest
+                    .jobs
+                    .iter()
+                    .all(|job| job.bytes_downloaded == physical)
+            );
+            assert_eq!(
+                Ledger::from_jobs(&state.manifest.jobs).automatic_bytes,
+                physical
+            );
+            assert_eq!(
+                coordinator
+                    .inner
+                    .planner_invalidations
+                    .load(Ordering::Acquire),
+                planner
+            );
+        }
+        // Legacy unknown totals display their accounting fallback size: publish
+        // the changed presentation through the same structure receipt only.
+        coordinator.inner.state().manifest.jobs[1].total_bytes = None;
+        fs::write(&path, vec![1; 10 * 16384]).unwrap();
+        assert!(coordinator.smart_write_admission("active", 0, 4096));
+        let changed = coordinator.projection_snapshot(Some(baseline.structure), cursor);
+        assert!(changed.jobs.is_some());
+        assert_eq!(changed.revisions.structure, baseline.structure + 1);
+        assert_eq!(
+            coordinator
+                .inner
+                .planner_invalidations
+                .load(Ordering::Acquire),
+            planner
+        );
+        // Admission still uses conservative physical bytes and rejects a write
+        // beyond the reserved peak without modifying the existing bundle.
+        let physical = crate::torrent::physical_bytes(&bundle);
+        coordinator.inner.state().manifest.jobs[0]
+            .offline
+            .reserved_bytes = physical + 8192;
+        assert!(!coordinator.smart_write_admission("active", 0, 32768));
+        assert_eq!(
+            coordinator.job("active").unwrap().offline.pause_reason,
+            Some(PauseReason::Budget)
+        );
+        assert_eq!(crate::torrent::physical_bytes(&bundle), physical);
+        assert_eq!(
+            coordinator
+                .inner
+                .planner_invalidations
+                .load(Ordering::Acquire),
+            planner + 1
+        );
+    }
 
     #[test]
     fn smart_retry_refreshes_ordinary_sources_and_preserves_current_user_pause() {
@@ -3588,9 +4682,15 @@ mod tests {
                         active: None,
                         last_persist: Instant::now(),
                         resolvers: HashMap::new(),
+                        transfer_structure: 0,
+                        transfer_updates: HashMap::new(),
                     }),
                     next_id: AtomicU64::new(1),
                     revision: AtomicU64::new(0),
+                    semantic_revision: AtomicU64::new(0),
+                    observed_artifacts: Mutex::new(HashMap::new()),
+                    #[cfg(test)]
+                    planner_invalidations: AtomicU64::new(0),
                     foreground: AtomicBool::new(true),
                 }),
             };
@@ -5136,5 +6236,127 @@ mod tests {
 
         let root = coordinator.inner.root.clone();
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod physical_accounting_tests {
+    use super::*;
+
+    fn job(index: usize, shared: bool, http: bool) -> DownloadJob {
+        let directory = PathBuf::from(format!("bundle-{}", if shared { 0 } else { index }));
+        let mut job = DownloadJob::new(
+            format!("accounting-{index}"),
+            JobSource::http("https://fixture.invalid/video"),
+        );
+        job.offline.manual_keep = false;
+        job.bytes_downloaded = 17;
+        if http {
+            job.artifact_path = Some(directory.join(format!("file-{index}")));
+        } else {
+            job.torrent_directory = Some(directory);
+        }
+        job
+    }
+
+    #[test]
+    fn med03_accounting_scans_once_per_distinct_path_for_one_to_thousand_jobs() {
+        for count in [1, 10, 100, 1000] {
+            for shared in [false, true] {
+                for http in [false, true] {
+                    let mut jobs = (0..count)
+                        .map(|index| job(index, shared, http))
+                        .collect::<Vec<_>>();
+                    let before = jobs.clone();
+                    let mut visits = HashMap::<PathBuf, usize>::new();
+                    refresh_physical_accounting_with(&mut jobs, |path| {
+                        *visits.entry(path.to_owned()).or_default() += 1;
+                        8192
+                    });
+                    assert_eq!(visits.len(), if shared { 1 } else { count });
+                    assert!(visits.values().all(|count| *count == 1));
+                    for (mut old, current) in before.into_iter().zip(&jobs) {
+                        old.bytes_downloaded = 8192;
+                        assert_eq!(&old, current, "only physical byte accounting may change");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn med03_accounting_is_pass_local_and_preserves_manual_and_missing_path_rules() {
+        let mut jobs = vec![job(0, true, false), job(1, true, true)];
+        let mut manual = job(2, true, false);
+        manual.offline.manual_keep = true;
+        let mut absent = job(3, false, false);
+        absent.torrent_directory = None;
+        let mut no_parent = job(4, false, true);
+        no_parent.artifact_path = Some(PathBuf::new());
+        jobs.extend([manual.clone(), absent.clone(), no_parent]);
+        for physical in [4096, 12288, 0] {
+            let mut calls = 0;
+            refresh_physical_accounting_with(&mut jobs, |path| {
+                calls += 1;
+                assert_eq!(path, Path::new("bundle-0"));
+                physical
+            });
+            assert_eq!(calls, 1);
+            assert_eq!(jobs[0].bytes_downloaded, physical);
+            assert_eq!(jobs[1].bytes_downloaded, physical);
+            assert_eq!(jobs[2], manual);
+            assert_eq!(jobs[3], absent);
+            assert_eq!(jobs[4].bytes_downloaded, 0);
+        }
+    }
+
+    #[test]
+    fn med03_accounting_keeps_torrent_precedence_and_lexical_path_identity() {
+        let mut first = job(0, true, false);
+        first.artifact_path = Some(PathBuf::from("ignored-http/file"));
+        let mut alias = job(1, false, false);
+        alias.torrent_directory = Some(PathBuf::from("bundle-0/../bundle-0"));
+        let mut jobs = vec![first, alias];
+        let mut paths = Vec::new();
+        refresh_physical_accounting_with(&mut jobs, |path| {
+            paths.push(path.to_owned());
+            if path == Path::new("bundle-0") {
+                4096
+            } else {
+                8192
+            }
+        });
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("bundle-0"),
+                PathBuf::from("bundle-0/../bundle-0")
+            ]
+        );
+        assert_eq!(jobs[0].bytes_downloaded, 4096);
+        assert_eq!(jobs[1].bytes_downloaded, 8192);
+    }
+
+    #[test]
+    fn med03_accounting_real_bundle_changes_are_seen_on_the_next_pass() {
+        let root = std::env::temp_dir().join(format!("nova-accounting-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested/asset"), vec![7; 8192]).unwrap();
+        let mut jobs = vec![job(0, true, false), job(1, true, true)];
+        jobs[0].torrent_directory = Some(root.clone());
+        jobs[1].artifact_path = Some(root.join("manifest.m3u8"));
+        for change in [false, true] {
+            if change {
+                fs::write(root.join("replacement.part"), vec![8; 16384]).unwrap();
+            }
+            let expected = crate::torrent::physical_bytes(&root);
+            refresh_physical_accounting(&mut jobs);
+            assert!(expected >= 8192);
+            assert!(jobs.iter().all(|job| job.bytes_downloaded == expected));
+        }
+        fs::remove_dir_all(root).unwrap();
+        refresh_physical_accounting(&mut jobs);
+        assert!(jobs.iter().all(|job| job.bytes_downloaded == 0));
     }
 }

@@ -6,6 +6,9 @@ use std::sync::RwLock;
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct AccountRuntime {
+    pub profile_activation: Arc<Mutex<profile_actions::ActivationCoordinator>>,
+    pub sync_projection: Arc<Mutex<sync::ProjectionCoordinator>>,
+    pub torrent_edits: Mutex<Option<Arc<Mutex<settings::field_edits::SettingsEdits>>>>,
     /// Most recent sync notice, retained in semantic form so a language switch
     /// can rerender it instead of leaving the old translation on screen.
     pub sync_link_notice: Mutex<Option<SyncNotice>>,
@@ -34,6 +37,9 @@ static ANDROID_SYNC_REQUESTS: LazyLock<AndroidSyncRequests> =
 impl Default for AccountRuntime {
     fn default() -> Self {
         Self {
+            profile_activation: Arc::default(),
+            sync_projection: Arc::default(),
+            torrent_edits: Mutex::default(),
             sync_link_notice: Mutex::new(None),
             profile_recovery_pending: Arc::default(),
             #[cfg(feature = "desktop")]
@@ -71,6 +77,7 @@ pub(super) struct DeviceRuntime {
     pub sessions: Arc<SessionDirectory>,
     pub account: AccountRuntime,
     pub catalog_gen: Arc<AtomicU64>,
+    pub poster_intake: Arc<poster_intake::Intake>,
     pub home_showcase_gen: Arc<AtomicU64>,
     pub home_catalog_rows_gen: Arc<AtomicU64>,
     #[cfg(feature = "desktop")]
@@ -96,6 +103,8 @@ pub(super) struct ProfileSession {
     pub id: String,
     pub epoch: u64,
     pub store: profiles::ProfileStore,
+    pub settings_edits: Arc<Mutex<settings::field_edits::SettingsEdits>>,
+    pub applied_policy: Mutex<profile_policy::ProfilePolicy>,
     pub providers: std::sync::OnceLock<nova_providers::plugin_settings::SettingsCapability>,
     state: Arc<parking_lot::Mutex<Shared>>,
     pub tracking: tracking::StateHandle,
@@ -103,6 +112,9 @@ pub(super) struct ProfileSession {
     pub list_services: Arc<list_services::Handle>,
     pub cancelled: AtomicBool,
     pub services_requested: AtomicBool,
+    // Even is open; odd is closed. Each close advances the ticket so an older
+    // failed import cannot reopen a newer close or an already pending reload.
+    edit_admission: AtomicU64,
 }
 impl ProfileSession {
     fn new(runtime_id: u64, context: profiles::Context, state: Shared) -> Arc<Self> {
@@ -115,6 +127,10 @@ impl ProfileSession {
             },
             id: context.id,
             epoch: context.epoch,
+            applied_policy: Mutex::new(profile_policy::ProfilePolicy::default()),
+            settings_edits: Arc::new(Mutex::new(settings::field_edits::SettingsEdits::new(
+                serde_json::to_value(&state.cache_settings).unwrap(),
+            ))),
             state: Arc::new(parking_lot::Mutex::new(state)),
             providers: std::sync::OnceLock::new(),
             tracking: Arc::new(tracking::TrackingHandle::new()),
@@ -122,6 +138,7 @@ impl ProfileSession {
             list_services: Arc::new(list_services::Handle::new()),
             cancelled: AtomicBool::new(false),
             services_requested: AtomicBool::new(false),
+            edit_admission: AtomicU64::new(0),
         })
     }
     // Never store a Context in its session: Context owns the Arc that keeps
@@ -137,6 +154,44 @@ impl ProfileSession {
         self.tracking.is_finished()
             && self.stremio.is_finished()
             && self.list_services.is_finished()
+    }
+    pub(super) fn block_authoritative_edits(&self) {
+        self.close_edit_admission();
+    }
+    pub(super) fn authoritative_edits_allowed(&self) -> bool {
+        self.edit_admission
+            .load(Ordering::Acquire)
+            .is_multiple_of(2)
+    }
+    pub(super) fn close_edit_admission(&self) -> Option<u64> {
+        let mut previous = self.edit_admission.load(Ordering::Acquire);
+        loop {
+            let next = previous.wrapping_add(if previous.is_multiple_of(2) { 1 } else { 2 });
+            match self.edit_admission.compare_exchange_weak(
+                previous,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(previous) => return (previous % 2 == 0).then_some(next),
+                Err(current) => previous = current,
+            }
+        }
+    }
+    pub(super) fn reopen_edit_admission(&self, ticket: u64) -> bool {
+        self.edit_admission
+            .compare_exchange(
+                ticket,
+                ticket.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Coordinator backpressure only: do not read or copy live state here.
+    pub(super) fn wait_for_state_boundary(&self) {
+        drop(self.state.lock());
     }
     pub fn provider_inventory(&self) -> Result<nova_providers::OwnedProviderSnapshot, String> {
         let (packages, metadata) = {
@@ -206,7 +261,7 @@ impl SessionDirectory {
     }
     pub fn publish(&self, session: Arc<ProfileSession>) {
         let outgoing = std::mem::replace(&mut *self.active.write().unwrap(), session);
-        outgoing.cancelled.store(true, Ordering::Release);
+        spoiler::retire_context(&outgoing.id, outgoing.epoch, &outgoing.cancelled);
         self.draining.lock().unwrap().push(outgoing);
         self.reap();
     }

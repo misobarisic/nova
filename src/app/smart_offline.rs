@@ -655,7 +655,9 @@ fn lookup(
             });
             let resolver = downloads::ResolverDownload::for_offline(
                 token.clone(),
-                move |token, timeout, cancelled| authority.resolve(token, timeout, cancelled),
+                move |token, timeout, cancelled| {
+                    authority.resolve_with_lease(token, timeout, cancelled)
+                },
                 current,
             );
             (

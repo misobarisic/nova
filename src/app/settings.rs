@@ -2,6 +2,85 @@
 use super::*;
 use nova_config::DISK_CACHE_LIMITS;
 
+/// Immutable producer input plus its exact allocation's receipt destination.
+#[derive(Clone)]
+pub(super) struct CapturedSettings {
+    patch: field_edits::SettingsPatch,
+    tracker: Arc<Mutex<field_edits::SettingsEdits>>,
+}
+impl CapturedSettings {
+    fn capture(tracker: Arc<Mutex<field_edits::SettingsEdits>>, value: &impl Serialize) -> Self {
+        let patch = tracker
+            .lock()
+            .unwrap()
+            .capture(serde_json::to_value(value).unwrap());
+        Self { patch, tracker }
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.patch.is_empty()
+    }
+    pub(super) fn save<T: Serialize + serde::de::DeserializeOwned + Default>(
+        &self,
+        owner: &profiles::ProfileStore,
+        key: &str,
+    ) -> Result<(), String> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        self.save_inner::<T>(owner, key, false)
+    }
+    pub(super) fn save_admitted<T: Serialize + serde::de::DeserializeOwned + Default>(
+        &self,
+        owner: &profiles::ProfileStore,
+        key: &str,
+    ) -> Result<(), String> {
+        self.save_inner::<T>(owner, key, true)
+    }
+    fn save_inner<T: Serialize + serde::de::DeserializeOwned + Default>(
+        &self,
+        owner: &profiles::ProfileStore,
+        key: &str,
+        admitted: bool,
+    ) -> Result<(), String> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        sync::persist_settings_patch::<T>(owner, key, &self.patch, admitted)?;
+        self.tracker.lock().unwrap().acknowledge(&self.patch);
+        Ok(())
+    }
+}
+pub(super) fn capture_local_settings(value: &CacheSettings) -> Option<CapturedSettings> {
+    profiles::capture()
+        .session
+        .map(|session| CapturedSettings::capture(session.settings_edits.clone(), value))
+}
+impl Bridge {
+    pub(super) fn capture_torrent_edits(&self) -> CapturedSettings {
+        self.capture_torrent_value(&active_torrent_settings())
+    }
+    fn capture_torrent_value(&self, value: &TorrentSettings) -> CapturedSettings {
+        let tracker = {
+            let mut slot = self.torrent_edits.lock().unwrap();
+            slot.get_or_insert_with(|| {
+                Arc::new(Mutex::new(field_edits::SettingsEdits::new(
+                    serde_json::to_value(active_torrent_settings()).unwrap(),
+                )))
+            })
+            .clone()
+        };
+        CapturedSettings::capture(tracker, value)
+    }
+    fn persist_torrent_edits(&self, value: &TorrentSettings) {
+        let captured = self.capture_torrent_value(value);
+        if let Err(error) = captured
+            .save::<TorrentSettings>(&profiles::ProfileStore::capture(), TORRENT_SETTINGS_KEY)
+        {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+        }
+    }
+}
+
 /// Installation-local presentation only: never a CacheSettings/sync/profile field.
 pub(super) const SETTINGS_VIEW_KEY: &str = "ui:settings_view";
 static SETTINGS_ADVANCED: AtomicBool = AtomicBool::new(true);
@@ -212,6 +291,40 @@ pub(crate) fn preserve_unsupported_settings(_old: Option<&str>, new: &str) -> St
 }
 
 pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings> {
+    recover_settings_with_protection(value, |_| true)
+}
+/// Semantic notification preparation must not protect a value from a write
+/// attempt that may fail. Only durable recovery records protected raw intent.
+pub(super) fn effective_settings(value: serde_json::Value) -> Option<CacheSettings> {
+    recover_settings_with_protection(value, |_| false)
+}
+pub(super) fn recover_settings_for_patch(
+    value: serde_json::Value,
+    patch: &field_edits::SettingsPatch,
+) -> Option<(CacheSettings, Vec<String>)> {
+    let protected: HashSet<String> = UNSUPPORTED_SETTINGS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|owners| owners.get(&profiles::storage_key("settings")))
+        .map(|fields| fields.keys().cloned().collect())
+        .unwrap_or_default();
+    // An explicit allowed edit may replace its old future value. Unrelated
+    // edits discover/retain unsupported raw fields without adopting defaults.
+    let recovered = recover_settings_with_protection(value, |field| {
+        protected.contains(field) || !patch.touches(field)
+    })?;
+    let allowed = patch
+        .touched_fields()
+        .filter(|field| !protected.contains(*field))
+        .map(str::to_owned)
+        .collect();
+    Some((recovered, allowed))
+}
+fn recover_settings_with_protection(
+    value: serde_json::Value,
+    protect: impl Fn(&str) -> bool,
+) -> Option<CacheSettings> {
     let source = value.as_object()?;
     // Losing unreadable policy could publish device overrides as account values.
     if source.get("sync_overrides").is_some_and(|v| !v.is_object()) {
@@ -240,7 +353,9 @@ pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings
         if serde_json::from_value::<CacheSettings>(trial.clone()).is_ok() {
             current = trial;
         } else {
-            protect_setting_field(key, value.clone());
+            if protect(key) {
+                protect_setting_field(key, value.clone());
+            }
             storage::report(storage::Error::new(
                 storage::ErrorKind::Schema,
                 format!("unsupported settings field {key}; raw value retained"),
@@ -317,6 +432,11 @@ impl Bridge {
                     return;
                 }
                 allow_setting_field(&field);
+                if let Some(session) = profiles::capture().session {
+                    // Choosing the effective fallback still replaces an
+                    // explicitly allowed unsupported raw choice.
+                    session.settings_edits.lock().unwrap().choose(&field);
+                }
                 b.capture_settings();
                 let settings = b.shared.lock().unwrap().cache_settings.clone();
                 notify_setting_choice(&field, &settings);
@@ -325,6 +445,18 @@ impl Bridge {
         }
         self.bind_setting_sync();
         schedule
+    }
+
+    /// Only explicit durable/bootstrap publication establishes an applied
+    /// baseline. Rendering controls must never consume an unpersisted edit.
+    pub(super) fn install_applied_settings(&self, settings: &CacheSettings) {
+        if let Some(session) = profiles::capture().session {
+            session
+                .settings_edits
+                .lock()
+                .unwrap()
+                .install_applied(serde_json::to_value(settings).unwrap());
+        }
     }
 
     /// Mirror the stored cache settings onto the Settings page controls.
@@ -524,6 +656,13 @@ impl Bridge {
     /// Mirror the torrent settings (Settings → Torrents) into the UI.
     pub(super) fn torrent_settings_to_ui(&self) {
         let settings = active_torrent_settings();
+        let mut slot = self.torrent_edits.lock().unwrap();
+        slot.get_or_insert_with(|| {
+            Arc::new(Mutex::new(field_edits::SettingsEdits::new(
+                serde_json::to_value(&settings).unwrap(),
+            )))
+        });
+        drop(slot);
         if let Some(app) = self.app() {
             app.set_torrent_enabled(settings.enabled);
             app.set_torrent_dir(SharedString::from(&settings.dir));
@@ -550,7 +689,8 @@ impl Bridge {
         let mut settings = active_torrent_settings();
         f(&mut settings);
         settings.ram_buffer_mb = settings.ram_buffer_bytes() / (1024 * 1024);
-        write_torrent_settings(&settings);
+        self.persist_torrent_edits(&settings);
+        *CURRENT_TORRENT_SETTINGS.lock().unwrap() = settings.clone();
         sync_torrent_engine(&settings);
         self.torrent_settings_to_ui();
     }
@@ -852,6 +992,21 @@ impl Bridge {
                 nova_config::TORRENT_RAM_MAX_MB,
             ),
         };
+        // Observe actual controls before replacing CURRENT; the baseline belongs
+        // to this device, independent of profile allocation changes.
+        let tracker = {
+            let mut slot = self.torrent_edits.lock().unwrap();
+            slot.get_or_insert_with(|| {
+                Arc::new(Mutex::new(field_edits::SettingsEdits::new(
+                    serde_json::to_value(active_torrent_settings()).unwrap(),
+                )))
+            })
+            .clone()
+        };
+        tracker
+            .lock()
+            .unwrap()
+            .capture(serde_json::to_value(&torrent).unwrap());
         *CURRENT_TORRENT_SETTINGS.lock().unwrap() = torrent.clone();
         sync_torrent_engine(&torrent);
     }
@@ -1261,7 +1416,7 @@ impl Bridge {
     pub(super) fn persist_settings(&self) {
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         write_settings(&settings);
-        write_torrent_settings(&active_torrent_settings());
+        self.persist_torrent_edits(&active_torrent_settings());
     }
 
     pub(super) fn save_settings(&self) {
@@ -1492,6 +1647,16 @@ pub(crate) fn read_settings() -> CacheSettings {
     }
 }
 pub(crate) fn write_settings(settings: &CacheSettings) {
+    if !applying()
+        && let Some(captured) = capture_local_settings(settings)
+    {
+        if let Err(error) =
+            captured.save::<CacheSettings>(&profiles::ProfileStore::capture(), "settings")
+        {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+        }
+        return;
+    }
     write_json("settings", settings);
     if !applying() {
         notify_settings(settings);
@@ -1500,6 +1665,110 @@ pub(crate) fn write_settings(settings: &CacheSettings) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_effective_language_choice_replaces_future_record_and_retains_other_future_fields() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::explicit_effective_language_choice_replaces_future_record_and_retains_other_future_fields"
+            ),
+            |fixture| {
+                use super::*;
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let id = profiles::create("Future settings").unwrap();
+                let owner = profiles::ProfileStore::for_profile(&id);
+                let mut raw = serde_json::to_value(CacheSettings::default()).unwrap();
+                raw["language"] = "future-language".into();
+                raw["background_style"] = "future-style".into();
+                raw["future_schema"] = serde_json::json!({"version":7});
+                owner.write("settings", &raw.to_string()).unwrap();
+                bridge.switch_profile(&id);
+                bridge.wait_profile_activation();
+                assert_eq!(profiles::active_context().id, id);
+                let app = bridge.app().unwrap();
+                let _schedule = bridge.wire_settings_autosave();
+                assert_eq!(
+                    app.get_language_index(),
+                    nova_config::Language::English.index()
+                );
+                let handle = nova_sync::local_store().unwrap();
+                assert_eq!(
+                    handle
+                        .lock()
+                        .unwrap()
+                        .record(&owner.domain(DOMAIN_SETTINGS), "language")
+                        .unwrap()
+                        .value
+                        .as_deref(),
+                    Some("\"future-language\"")
+                );
+                // Choosing the already displayed fallback is an explicit edit.
+                app.invoke_settings_edited("language".into());
+                bridge.persist_settings();
+                let saved: serde_json::Value =
+                    serde_json::from_str(&owner.read("settings").unwrap().unwrap()).unwrap();
+                assert_eq!(
+                    saved["language"],
+                    serde_json::to_value(nova_config::Language::English).unwrap()
+                );
+                assert_eq!(saved["background_style"], "future-style");
+                assert_eq!(saved["future_schema"], raw["future_schema"]);
+                assert_eq!(
+                    handle
+                        .lock()
+                        .unwrap()
+                        .record(&owner.domain(DOMAIN_SETTINGS), "language")
+                        .unwrap()
+                        .value
+                        .as_ref()
+                        .unwrap(),
+                    &serde_json::to_string(&nova_config::Language::English).unwrap()
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn ui_remirror_keeps_local_edits_and_unedited_committed_category_order() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::ui_remirror_keeps_local_edits_and_unedited_committed_category_order"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let owner = super::profiles::ProfileStore::capture();
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.cache_settings.playback_speed = 1.25;
+                    state.cache_settings.categories = vec!["zeta".into(), "alpha".into()];
+                }
+                bridge.settings_to_ui();
+                bridge.persist_settings();
+                let saved: super::CacheSettings =
+                    serde_json::from_str(&owner.read("settings").unwrap().unwrap()).unwrap();
+                assert_eq!(saved.playback_speed, 1.25);
+                assert_eq!(saved.categories, vec!["zeta", "alpha"]);
+                // A remote commit is ahead of its UI receipt. An unrelated
+                // local edit must keep that raw membership and order exactly.
+                let mut remote = saved;
+                remote.categories = vec!["zeta".into(), "remote".into(), "alpha".into()];
+                owner
+                    .persist_snapshot("settings", &serde_json::to_string(&remote).unwrap(), false)
+                    .unwrap();
+                bridge.shared.lock().unwrap().cache_settings.playback_speed = 1.5;
+                bridge.settings_to_ui();
+                bridge.persist_settings();
+                let saved: super::CacheSettings =
+                    serde_json::from_str(&owner.read("settings").unwrap().unwrap()).unwrap();
+                assert_eq!(saved.playback_speed, 1.5);
+                assert_eq!(saved.categories, remote.categories);
+            },
+        );
+    }
+
     #[test]
     fn addon_switch_animates_across_row_publications() {
         use i_slint_backend_testing::ElementHandle;
@@ -1676,11 +1945,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -1750,6 +2017,7 @@ mod tests {
         assert!(owner.lock().unwrap().pending_domains().is_empty());
         // A subsequent no-op replay must keep the already published models.
         bridge.replay_sync_projection();
+        bridge.wait_sync_projection();
         assert_eq!(
             bridge
                 .shared
@@ -2029,7 +2297,7 @@ mod tests {
             );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_SETTINGS.into()]);
         assert_eq!(app.get_cache_quality(), 95.0);
         assert_eq!(read_settings().sync_overrides["quality"], 60);
         app.set_detail_poster_resolution_index(0);
@@ -2064,7 +2332,7 @@ mod tests {
             );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_SETTINGS.into()]);
         assert!(read_settings().home_row_enabled(&HomeRowSource::BecauseYouWatched));
         bridge.set_setting_override("home_rows", false);
         assert!(read_settings().home_recommendations_migrated);
@@ -2223,7 +2491,7 @@ mod tests {
                 },
             );
         }
-        bridge.sync_apply(vec![DOMAIN_CONTINUE_HIDDEN.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_CONTINUE_HIDDEN.into()]);
         let hidden = read_continue_hidden();
         assert!(!hidden.contains_key("old"));
         assert_eq!(hidden.get("remote"), Some(&3));
@@ -2313,7 +2581,7 @@ mod tests {
             );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_SETTINGS.into()]);
         app.set_cache_quality(88.0);
         app.invoke_settings_edited("quality".into());
         bridge.persist_settings();
@@ -2497,11 +2765,9 @@ mod view_tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -2566,5 +2832,337 @@ mod view_tests {
             storage::try_get_str(SETTINGS_VIEW_KEY).unwrap().as_deref(),
             Some("future-mode")
         );
+    }
+}
+
+/// Sequenced actual UI edits; a durable receipt cannot clear newer or other-allocation edits.
+pub(super) mod field_edits {
+    use serde_json::{Map, Value};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SETTINGS_TRACKER: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Clone)]
+    enum SettingOperation {
+        Set(Option<Value>),
+        Category { name: String, present: bool },
+        CategoryOrder(Vec<String>),
+    }
+    #[derive(Clone)]
+    struct SettingChange {
+        sequence: u64,
+        operation: SettingOperation,
+    }
+    #[derive(Clone)]
+    pub struct SettingsPatch {
+        allocation: u64,
+        changes: BTreeMap<Vec<String>, SettingChange>,
+    }
+    pub struct SettingsEdits {
+        allocation: u64,
+        next: u64,
+        seen: Value,
+        pending: BTreeMap<Vec<String>, SettingChange>,
+    }
+    impl SettingsEdits {
+        pub fn new(applied: Value) -> Self {
+            Self {
+                allocation: NEXT_SETTINGS_TRACKER.fetch_add(1, Ordering::Relaxed),
+                next: 0,
+                seen: applied,
+                pending: BTreeMap::new(),
+            }
+        }
+        pub fn choose(&mut self, field: &str) {
+            let Some(value) = self.seen.get(field).cloned() else {
+                return;
+            };
+            self.next += 1;
+            let path = vec![field.to_owned()];
+            self.pending
+                .retain(|key, _| key.len() <= 1 || !key.starts_with(&path));
+            self.pending.insert(
+                path,
+                SettingChange {
+                    sequence: self.next,
+                    operation: SettingOperation::Set(Some(value)),
+                },
+            );
+        }
+        pub fn capture(&mut self, current: Value) -> SettingsPatch {
+            let mut changes = Vec::new();
+            setting_changes(&[], Some(&self.seen), Some(&current), &mut changes);
+            for (path, operation) in changes {
+                self.next += 1;
+                if matches!(operation, SettingOperation::Set(_)) {
+                    self.pending
+                        .retain(|key, _| key.len() <= path.len() || !key.starts_with(&path));
+                }
+                self.pending.insert(
+                    path,
+                    SettingChange {
+                        sequence: self.next,
+                        operation,
+                    },
+                );
+            }
+            self.seen = current;
+            self.pending()
+        }
+        pub fn pending(&self) -> SettingsPatch {
+            SettingsPatch {
+                allocation: self.allocation,
+                changes: self.pending.clone(),
+            }
+        }
+        pub fn install_applied(&mut self, applied: Value) {
+            self.seen = applied;
+        }
+        pub fn acknowledge(&mut self, receipt: &SettingsPatch) -> bool {
+            if receipt.allocation != self.allocation {
+                return false;
+            }
+            for (path, saved) in &receipt.changes {
+                if self
+                    .pending
+                    .get(path)
+                    .is_some_and(|current| current.sequence == saved.sequence)
+                {
+                    self.pending.remove(path);
+                }
+            }
+            true
+        }
+        pub fn revision(&self) -> u64 {
+            self.next
+        }
+    }
+    impl SettingsPatch {
+        pub fn touched_fields(&self) -> impl Iterator<Item = &str> {
+            self.changes
+                .keys()
+                .filter_map(|path| path.first().map(String::as_str))
+        }
+        pub fn touches(&self, field: &str) -> bool {
+            self.changes
+                .keys()
+                .any(|path| path.first().is_some_and(|key| key == field))
+        }
+        pub fn is_empty(&self) -> bool {
+            self.changes.is_empty()
+        }
+        pub fn apply(&self, committed: &mut Value) {
+            let mut changes: Vec<_> = self.changes.iter().collect();
+            changes.sort_by_key(|(_, change)| change.sequence);
+            for (path, change) in changes {
+                match &change.operation {
+                    SettingOperation::Set(value) => set_setting(committed, path, value.as_ref()),
+                    SettingOperation::Category { name, present } => {
+                        let categories = categories_mut(committed);
+                        categories.retain(|value| value.as_str() != Some(name));
+                        if *present {
+                            categories.push(Value::String(name.clone()));
+                        }
+                    }
+                    SettingOperation::CategoryOrder(order) => {
+                        let categories = categories_mut(committed);
+                        categories.sort_by_key(|value| {
+                            value
+                                .as_str()
+                                .and_then(|name| order.iter().position(|key| key == name))
+                                .unwrap_or(usize::MAX)
+                        });
+                    }
+                }
+            }
+        }
+    }
+    fn setting_changes(
+        path: &[String],
+        before: Option<&Value>,
+        after: Option<&Value>,
+        changes: &mut Vec<(Vec<String>, SettingOperation)>,
+    ) {
+        if before == after {
+            return;
+        }
+        if path == ["categories"]
+            && let (Some(Value::Array(before)), Some(Value::Array(after))) = (before, after)
+        {
+            let before_set: BTreeSet<_> = before.iter().filter_map(Value::as_str).collect();
+            let after_set: BTreeSet<_> = after.iter().filter_map(Value::as_str).collect();
+            for name in before_set.difference(&after_set) {
+                changes.push((
+                    vec!["categories".into(), (*name).into()],
+                    SettingOperation::Category {
+                        name: (*name).into(),
+                        present: false,
+                    },
+                ));
+            }
+            for name in after_set.difference(&before_set) {
+                changes.push((
+                    vec!["categories".into(), (*name).into()],
+                    SettingOperation::Category {
+                        name: (*name).into(),
+                        present: true,
+                    },
+                ));
+            }
+            changes.push((
+                path.to_vec(),
+                SettingOperation::CategoryOrder(
+                    after
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+            ));
+            return;
+        }
+        if let (Some(Value::Object(before)), Some(Value::Object(after))) = (before, after) {
+            let keys: BTreeSet<_> = before.keys().chain(after.keys()).collect();
+            for key in keys {
+                let mut next = path.to_vec();
+                next.push(key.clone());
+                setting_changes(&next, before.get(key), after.get(key), changes);
+            }
+        } else {
+            changes.push((path.to_vec(), SettingOperation::Set(after.cloned())));
+        }
+    }
+    fn set_setting(root: &mut Value, path: &[String], value: Option<&Value>) {
+        let Some((key, rest)) = path.split_first() else {
+            if let Some(value) = value {
+                *root = value.clone();
+            }
+            return;
+        };
+        if !root.is_object() {
+            *root = Value::Object(Map::new());
+        }
+        let object = root.as_object_mut().unwrap();
+        if rest.is_empty() {
+            if let Some(value) = value {
+                object.insert(key.clone(), value.clone());
+            } else {
+                object.remove(key);
+            }
+        } else if value.is_some() || object.contains_key(key) {
+            set_setting(
+                object
+                    .entry(key.clone())
+                    .or_insert_with(|| Value::Object(Map::new())),
+                rest,
+                value,
+            );
+        }
+    }
+    fn categories_mut(root: &mut Value) -> &mut Vec<Value> {
+        if !root.is_object() {
+            *root = Value::Object(Map::new());
+        }
+        let categories = root
+            .as_object_mut()
+            .unwrap()
+            .entry("categories")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !categories.is_array() {
+            *categories = Value::Array(Vec::new());
+        }
+        categories.as_array_mut().unwrap()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use serde_json::json;
+        #[test]
+        fn explicit_choice_of_effective_default_is_a_sequenced_edit() {
+            let mut tracker = SettingsEdits::new(json!({"language":"en"}));
+            tracker.choose("language");
+            let receipt = tracker.pending();
+            assert!(!receipt.is_empty());
+            assert!(receipt.touches("language"));
+            let mut raw = json!({"language":"future-language", "unseen":true});
+            receipt.apply(&mut raw);
+            assert_eq!(raw, json!({"language":"en", "unseen":true}));
+            tracker.choose("language");
+            tracker.acknowledge(&receipt);
+            assert!(!tracker.pending().is_empty());
+        }
+        #[test]
+        fn unchanged_stale_ui_has_no_write_after_remote_commit() {
+            let old = json!({"language":"English","date_relative":true});
+            let mut tracker = SettingsEdits::new(old.clone());
+            let patch = tracker.capture(old);
+            assert!(patch.is_empty());
+            let remote = json!({"language":"Croatian","date_relative":false,"future":13});
+            let mut committed = remote.clone();
+            patch.apply(&mut committed);
+            assert_eq!(committed, remote);
+        }
+        #[test]
+        fn actual_field_edits_rebase_without_reverting_unseen_remote_fields() {
+            let mut tracker = SettingsEdits::new(
+                json!({"language":"English","date_relative":true,"sync_overrides":{"old":true}}),
+            );
+            let patch = tracker.capture(json!({"language":"English","date_relative":false,"sync_overrides":{"old":true,"local":true}}));
+            let mut committed = json!({"language":"Croatian","date_relative":true,"sync_overrides":{"old":true,"remote":true},"future":13});
+            patch.apply(&mut committed);
+            assert_eq!(
+                committed,
+                json!({"language":"Croatian","date_relative":false,"sync_overrides":{"old":true,"remote":true,"local":true},"future":13})
+            );
+        }
+        #[test]
+        fn old_receipt_cannot_clear_newer_or_aba_edits() {
+            let mut tracker = SettingsEdits::new(json!({"enabled":false}));
+            let first = tracker.capture(json!({"enabled":true}));
+            tracker.capture(json!({"enabled":false}));
+            tracker.capture(json!({"enabled":true}));
+            assert!(tracker.acknowledge(&first));
+            assert!(!tracker.pending().is_empty());
+            let final_receipt = tracker.pending();
+            tracker.acknowledge(&final_receipt);
+            assert!(tracker.pending().is_empty());
+        }
+        #[test]
+        fn receipt_from_an_old_same_id_allocation_is_rejected() {
+            let mut old = SettingsEdits::new(json!({"enabled":false}));
+            let receipt = old.capture(json!({"enabled":true}));
+            let mut new = SettingsEdits::new(json!({"enabled":false}));
+            new.capture(json!({"enabled":true}));
+            assert!(!new.acknowledge(&receipt));
+            assert!(!new.pending().is_empty());
+        }
+        #[test]
+        fn category_edits_keep_remote_members_and_rebase_local_order() {
+            let mut tracker = SettingsEdits::new(json!({"categories":["old","remove"]}));
+            let patch = tracker.capture(json!({"categories":["new","old"]}));
+            let mut committed = json!({"categories":["remote","old","remove"]});
+            patch.apply(&mut committed);
+            assert_eq!(committed, json!({"categories":["new","old","remote"]}));
+            tracker.capture(json!({"categories":["old"]}));
+            let aba = tracker.capture(json!({"categories":["new","old"]}));
+            let mut committed = json!({"categories":["remote","old"]});
+            aba.apply(&mut committed);
+            assert_eq!(committed, json!({"categories":["new","old","remote"]}));
+        }
+        #[test]
+        fn remote_ui_install_does_not_erase_unacknowledged_local_sequences() {
+            let mut tracker = SettingsEdits::new(json!({"local":false,"remote":false}));
+            let local = tracker.capture(json!({"local":true,"remote":false}));
+            tracker.install_applied(json!({"local":true,"remote":true}));
+            assert!(!tracker.pending().is_empty());
+            tracker.acknowledge(&local);
+            assert!(
+                tracker
+                    .capture(json!({"local":true,"remote":true}))
+                    .is_empty()
+            );
+        }
     }
 }

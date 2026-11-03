@@ -947,9 +947,19 @@ impl Bridge {
         }
         if !requested {
             *PENDING_TAP.lock().unwrap() = Some((profile.clone(), key.clone(), true));
-            if profiles::current_id() != profile {
-                self.switch_profile(&profile);
-            }
+            let target = profile.clone();
+            self.switch_profile_after(&profile, move |bridge, context| {
+                let matches = PENDING_TAP.lock().unwrap().as_ref().is_some_and(
+                    |(pending_profile, pending_key, _)| {
+                        pending_profile == &target && pending_key == &key
+                    },
+                );
+                if matches && context.id == target && profiles::active_context() == context {
+                    bridge.open_release_notification(&context, &key);
+                    cancel_pending_notification_tap();
+                }
+            });
+            return;
         }
         let Some(app) = self.app() else {
             return;
@@ -959,7 +969,27 @@ impl Bridge {
             return;
         }
         if profiles::current_id() != profile {
+            if self.profile_continuation_pending(&profile) {
+                return;
+            }
             cancel_pending_notification_tap();
+            return;
+        }
+        // A request-bound continuation owns asynchronous navigation. The
+        // periodic poll must not open a title for an unrelated later session.
+        if self.profile_continuation_pending(&profile) {
+            return;
+        }
+        cancel_pending_notification_tap();
+    }
+
+    #[cfg(target_os = "android")]
+    fn open_release_notification(&self, context: &profiles::Context, key: &str) {
+        let owner = profiles::ProfileStore::for_profile(&context.id);
+        if profiles::active_context() != *context
+            || owner.retired().unwrap_or(true)
+            || profile_policy::entry_blocked()
+        {
             return;
         }
         if let Ok(all) = delivery_events(&owner, Utc::now().timestamp())
@@ -967,7 +997,6 @@ impl Bridge {
         {
             self.calendar_release_picked(key.into());
         }
-        cancel_pending_notification_tap();
     }
     pub(super) fn setup_release_reminders(&self) {
         let Some(app) = self.app() else {
@@ -1037,6 +1066,8 @@ impl Bridge {
     }
 
     pub(super) fn refresh_release_reminders(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         if profile_policy::entry_blocked() {
             return;
         }
@@ -1089,7 +1120,10 @@ impl Bridge {
         };
         let mut titles: Vec<LibraryEntry> = load(&owner, "library").unwrap_or_default();
         titles.retain(|e| {
-            e.type_ != "movie" && profile_policy::allows_title(&owner, &e.type_, &e.id)
+            e.type_ != "movie"
+                && policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&e.type_, &e.id))
         });
         titles.sort_by(|a, b| a.name.cmp(&b.name));
         let mut keys = Vec::<SharedString>::new();
@@ -1125,7 +1159,9 @@ impl Bridge {
             if !keys
                 .iter()
                 .any(|existing: &SharedString| existing.as_str() == key)
-                && profile_policy::allows_title(&owner, &sub.type_, &sub.title_id)
+                && policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&sub.type_, &sub.title_id))
             {
                 keys.push(key.clone().into());
                 labels.push(
@@ -1910,14 +1946,10 @@ mod tests {
         profiles::initialize().unwrap();
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
-        #[cfg(feature = "desktop")]
-        let (hi, _) = std::sync::mpsc::channel();
-        #[cfg(feature = "desktop")]
-        let (lo, _) = std::sync::mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
             #[cfg(feature = "desktop")]
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
@@ -2616,11 +2648,9 @@ mod tests {
             i_slint_backend_testing::init_integration_test_with_system_time();
             let app = AppWindow::new().unwrap();
             let player = crate::player::Player::setup(&app);
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             let bridge = Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 DownloadCoordinator::new(

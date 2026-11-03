@@ -308,6 +308,7 @@ pub(super) struct Handle {
     review_generation: AtomicU64,
     urgent: Mutex<Option<Command>>,
     mode_change: Mutex<Option<Command>>,
+    automatic_change: Mutex<Option<Command>>,
     selection_change: Mutex<Option<Command>>,
     wake: AtomicBool,
     checkpoint: AtomicBool,
@@ -324,6 +325,7 @@ impl Handle {
             review_generation: AtomicU64::new(0),
             urgent: Mutex::new(None),
             mode_change: Mutex::new(None),
+            automatic_change: Mutex::new(None),
             selection_change: Mutex::new(None),
             wake: AtomicBool::new(false),
             checkpoint: AtomicBool::new(false),
@@ -331,6 +333,12 @@ impl Handle {
         }
     }
     fn send(&self, command: Command) {
+        // The latest setting must survive a full ordinary queue without
+        // replacing an independent mode, selection or account control.
+        if matches!(&command, Command::Automatic(_, _)) {
+            *self.automatic_change.lock().unwrap() = Some(command);
+            return;
+        }
         // Consent changes must remain deliverable while HTTP blocks the actor.
         // Only the latest choice for this single open review can be current.
         if matches!(&command, Command::Mode(_, _)) {
@@ -381,7 +389,11 @@ impl Bridge {
         let bridge = self.clone();
         thread::spawn(move || {
             let _done = done;
-            match HttpsTransport::new() {
+            match HttpsTransport::with_user_agent(concat!(
+                "Nova/",
+                env!("CARGO_PKG_VERSION"),
+                " Stremio sync"
+            )) {
                 Ok(transport) => Worker::new(bridge, Client::new(transport)).run(rx),
                 Err(error) => publish_error(&bridge, error, "Connecting to Stremio…"),
             }
@@ -519,26 +531,8 @@ impl<T: nova_stremio::Transport> Worker<T> {
             if !profiles::is_current(&profiles::capture()) {
                 return;
             }
-            let urgent = self.bridge.stremio().urgent.lock().unwrap().take();
-            if let Some(command) = urgent {
-                if matches!(command, Command::Shutdown) {
-                    return;
-                }
-                self.command(command);
-            }
-            let mode = self.bridge.stremio().mode_change.lock().unwrap().take();
-            if let Some(command) = mode {
-                self.command(command);
-            }
-            let selection = self
-                .bridge
-                .stremio()
-                .selection_change
-                .lock()
-                .unwrap()
-                .take();
-            if let Some(command) = selection {
-                self.command(command);
+            if !self.dispatch_controls() {
+                return;
             }
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -549,6 +543,40 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 self.failed(error);
             }
         }
+    }
+    fn dispatch_controls(&mut self) -> bool {
+        let urgent = self.bridge.stremio().urgent.lock().unwrap().take();
+        if let Some(command) = urgent {
+            if matches!(command, Command::Shutdown) {
+                return false;
+            }
+            self.command(command);
+        }
+        let automatic = self
+            .bridge
+            .stremio()
+            .automatic_change
+            .lock()
+            .unwrap()
+            .take();
+        if let Some(command) = automatic {
+            self.command(command);
+        }
+        let mode = self.bridge.stremio().mode_change.lock().unwrap().take();
+        if let Some(command) = mode {
+            self.command(command);
+        }
+        let selection = self
+            .bridge
+            .stremio()
+            .selection_change
+            .lock()
+            .unwrap()
+            .take();
+        if let Some(command) = selection {
+            self.command(command);
+        }
+        true
     }
     fn command(&mut self, command: Command) {
         if !profiles::is_current(&profiles::capture()) {

@@ -1245,11 +1245,9 @@ mod tests {
         app.window().show().unwrap();
         let player = crate::player::Player::setup(&app);
         let downloads = DownloadCoordinator::new(root.join("downloads"));
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(7)),
             player,
             downloads,

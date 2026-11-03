@@ -3,21 +3,45 @@ use super::*;
 
 const ARTWORK_RECOVERY_COOLDOWN: Duration = Duration::from_secs(60);
 
-/// Future episode thumbnails can be declared before their image exists.
-/// Keep the library poster as a fallback instead of a permanent placeholder.
-fn fetch_home_card_art(
-    url: String,
-    fallback: String,
-    then: impl FnOnce(Option<SharedPixelBuffer<Rgba8Pixel>>) + Send + 'static,
-) {
-    let has_fallback = !fallback.is_empty() && fallback != url;
-    net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-        if pixels.is_some() || !has_fallback {
-            then(pixels);
-        } else {
-            net::fetch_image(fallback, Some(DISPLAY_POSTER_SIDE), then);
-        }
+#[cfg(test)]
+thread_local! {
+    static SEARCH_RECOVERY_COUNTS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+}
+#[cfg(test)]
+pub(super) fn search_recovery_counts() -> [u64; 3] {
+    SEARCH_RECOVERY_COUNTS.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+fn search_recovery_count(index: usize) {
+    SEARCH_RECOVERY_COUNTS.with(|counts| {
+        let mut value = counts.get();
+        value[index] += 1;
+        counts.set(value);
     });
+}
+
+fn search_poster_slot_current(
+    state: &Shared,
+    generation: u64,
+    index: usize,
+    key: &(String, String, String),
+    source: &str,
+) -> bool {
+    #[cfg(test)]
+    search_recovery_count(0);
+    !key.0.is_empty()
+        && !key.1.is_empty()
+        && state.search_generation == generation
+        && state.search_previews.get(index).is_some_and(|meta| {
+            meta.type_ == key.0
+                && meta.id == key.1
+                && meta
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    == source
+        })
 }
 
 // Resolve by current metadata identity, never by a row index captured before
@@ -43,6 +67,8 @@ pub(super) struct CatalogPosterRepair {
     original_url: String,
 }
 
+type SearchPosterSlotReceipt = (u64, usize, (String, String, String), String);
+
 // Keep the ordinary Detail namespace rules: exact global IDs are portable
 // across accepting metadata providers, while opaque IDs require their owner.
 fn global_artwork_identity(id: &str) -> bool {
@@ -62,6 +88,8 @@ fn artwork_metadata_sources(
     id: &str,
     receipts: &[CatalogPosterRepair],
 ) -> VecDeque<(String, String)> {
+    #[cfg(test)]
+    search_recovery_count(2);
     let owner_bound = !receipts.is_empty() && !global_artwork_identity(id);
     installed
         .iter()
@@ -201,6 +229,8 @@ fn requested_poster_indices(model: &slint::ModelRc<MediaCard>, id: &str, url: &s
 }
 
 fn artwork_request_current(state: &Shared, type_: &str, id: &str, failed_url: &str) -> bool {
+    #[cfg(test)]
+    search_recovery_count(1);
     let current = state
         .entries
         .iter()
@@ -238,6 +268,7 @@ fn grid_artwork_recovery_target(
     grid_artwork_recovery_target_for_owner(state, type_, id, failed_url, "")
 }
 
+#[cfg(test)]
 fn grid_artwork_recovery_target_for_owner(
     state: &mut Shared,
     type_: &str,
@@ -248,6 +279,18 @@ fn grid_artwork_recovery_target_for_owner(
     if !artwork_request_current(state, type_, id, failed_url) {
         return None;
     }
+    validated_artwork_recovery_target(state, type_, id, failed_url, owner)
+}
+
+// The caller holds the same Shared guard used to validate the current row.
+// Rechecking every other surface here made a batch of n search rows quadratic.
+fn validated_artwork_recovery_target(
+    state: &mut Shared,
+    type_: &str,
+    id: &str,
+    failed_url: &str,
+    owner: &str,
+) -> Option<(String, String)> {
     let target = (type_.to_owned(), id.to_owned());
     let key = (
         target.0.clone(),
@@ -326,6 +369,35 @@ fn mapped_poster_endpoints(
 }
 
 impl Bridge {
+    pub(super) fn fetch_prepared_search_poster(
+        &self,
+        generation: u64,
+        index: usize,
+        key: (String, String, String),
+        source: String,
+        url: String,
+    ) {
+        let current = {
+            let state = self.shared.lock().unwrap();
+            search_poster_slot_current(&state, generation, index, &key, &source)
+        };
+        if !current {
+            return;
+        }
+        if url.is_empty() {
+            if !key.1.starts_with("local:") {
+                self.recover_missing_artwork_at_search_slot(
+                    &key.0,
+                    &key.1,
+                    &url,
+                    vec![],
+                    Some((generation, index, key.clone(), source)),
+                );
+            }
+        } else {
+            self.fetch_search_card_poster(key.0, key.1, url, generation);
+        }
+    }
     /// Prefetch can discover an image missing/broken in the catalog preview.
     /// Decode only for currently visible models needing art, independent of
     /// their row order; full metadata prefetch remains controlled by settings.
@@ -455,11 +527,9 @@ impl Bridge {
                 .entries
                 .iter()
                 .any(|entry| entry.id == id && entry.type_ == type_ && entry.poster_url != url);
-            self.persist_poster_for(id, url);
+            self.persist_poster_for(type_, id, url);
             let model = app.get_library();
-            let indices = (0..model.row_count())
-                .filter(|&i| model.row_data(i).is_some_and(|row| row.id.as_str() == id))
-                .collect::<Vec<_>>();
+            let indices = self.library_poster_indices(type_, id);
             paint_poster_rows(&model, &indices, id, url, &image);
             if changed {
                 self.apply_home_to_ui();
@@ -579,6 +649,98 @@ impl Bridge {
         });
     }
 
+    #[cfg(feature = "desktop")]
+    pub(super) fn queue_catalog_poster(
+        &self,
+        generation: u64,
+        index: usize,
+        url: String,
+        priority: poster_queue::Priority,
+    ) -> poster_queue::Admission {
+        use poster_queue::Admission;
+        if self.poster_tx.queue.is_closed() {
+            return Admission::Closed;
+        }
+        let context = profiles::capture();
+        if !profiles::is_current(&context)
+            || context
+                .session
+                .as_ref()
+                .is_some_and(|session| session.cancelled.load(Ordering::Acquire))
+        {
+            return Admission::Obsolete;
+        }
+        let settings = if profiles::enabled() {
+            let Some(owner) = context
+                .session
+                .as_ref()
+                .and_then(|session| session.providers.get())
+            else {
+                return Admission::Obsolete;
+            };
+            owner.with(nova_providers::plugin_settings::capture_settings_capability)
+        } else {
+            nova_providers::plugin_settings::capture_settings_capability()
+        };
+        let inventory = if profiles::enabled() {
+            let Some(session) = context.session.as_ref() else {
+                return Admission::Obsolete;
+            };
+            let Ok(inventory) = session.provider_inventory() else {
+                return Admission::Obsolete;
+            };
+            inventory
+        } else {
+            nova_providers::OwnedProviderSnapshot::capture()
+        };
+        let revision = image_settings_revision();
+        let (projection, media_type, id, source) = {
+            let state = self.shared.lock().unwrap();
+            let Some(preview) = state
+                .previews
+                .get(index)
+                .filter(|preview| preview.poster.as_deref() == Some(url.as_str()))
+            else {
+                return Admission::Obsolete;
+            };
+            (
+                catalog_grouping::display_key(preview),
+                preview.type_.clone(),
+                preview.id.clone(),
+                preview
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        };
+        let authority =
+            nova_media::net::ImageFetchOwner::new(settings.clone(), inventory.clone()).generation();
+        let key = poster_queue::Key {
+            owner: context.id.clone(),
+            epoch: context.epoch,
+            generation,
+            revision,
+            authority,
+            grid: "catalog",
+            media_type,
+            id,
+            source,
+            projection,
+            index,
+            recipe: image_cache_key(&url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
+            url,
+        };
+        let job = PosterJob {
+            key: key.clone(),
+            context,
+            settings,
+            inventory,
+        };
+        self.poster_tx.queue.submit(key, job, priority)
+    }
+
     /// (Re)fetch the poster for one card (scroll-back after unloading, or a
     /// not-yet-loaded row inside the ±2-row preload window). Near-viewport
     /// work goes on the high-priority channel so it jumps ahead of the
@@ -588,90 +750,29 @@ impl Bridge {
             self.dispatch_library_posters();
             return;
         }
-        let display_key = (!library)
-            .then(|| {
-                self.shared
-                    .lock()
-                    .unwrap()
-                    .previews
-                    .get(index)
-                    .map(catalog_grouping::display_key)
-            })
-            .flatten();
         #[cfg(feature = "desktop")]
         {
             let generation = self.catalog_gen.load(Ordering::Relaxed);
-            self.poster_tx.send_hi(PosterJob {
-                display_key,
-                generation,
-                index,
-                url,
-                library,
-            });
+            let _ =
+                self.queue_catalog_poster(generation, index, url, poster_queue::Priority::Visible);
         }
         #[cfg(not(feature = "desktop"))]
         {
-            let Some(app) = self.app() else {
-                return;
-            };
-            let app_weak = app.as_weak();
-            let gen_counter = self.catalog_gen.clone();
-            let generation = gen_counter.load(Ordering::Relaxed);
-            let bridge = self.clone();
-            let requested_url = url.clone();
-            let image_revision = image_settings_revision();
-            net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                    if display_key.as_ref().is_some_and(|key| {
-                        !bridge.catalog_poster_slot_matches(generation, index, key, &requested_url)
-                    }) {
-                        return;
-                    }
-                    if image_settings_revision() != image_revision {
-                        if let Some(app) = app_weak.upgrade() {
-                            let model = if library {
-                                app.get_library()
-                            } else {
-                                app.get_catalog()
-                            };
-                            if model.row_data(index).is_some_and(|row| {
-                                row.poster_path.as_str() == requested_url && !row.is_loaded
-                            }) {
-                                bridge.fetch_card_poster(library, index, requested_url);
-                            }
-                        }
-                        return;
-                    }
-                    let Some(pixels) = pixels else {
-                        if !library {
-                            bridge.recover_catalog_artwork(generation, index, &requested_url);
-                        }
-                        return;
-                    };
-                    if generation != gen_counter.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    if let Some(app) = app_weak.upgrade() {
-                        let model = if library {
-                            app.get_library()
-                        } else {
-                            app.get_catalog()
-                        };
-                        if model
-                            .row_data(index)
-                            .is_none_or(|row| row.poster_path.as_str() != requested_url)
-                        {
-                            return;
-                        }
-                        let img = Image::from_rgba8(pixels);
-                        if library {
-                            app.invoke_set_library_poster(index as i32, img.clone());
-                        } else {
-                            app.invoke_set_card_poster(index as i32, img.clone());
-                        }
-                    }
-                });
-            });
+            let current_url = self
+                .shared
+                .lock()
+                .unwrap()
+                .previews
+                .get(index)
+                .is_some_and(|preview| preview.poster.as_deref() == Some(url.as_str()));
+            if current_url {
+                self.enqueue_poster_intake(
+                    poster_intake::Surface::Catalog,
+                    index,
+                    true,
+                    String::new(),
+                );
+            }
         }
     }
 
@@ -791,77 +892,80 @@ impl Bridge {
     /// Reserve a slot atomically: completions on separate transport threads
     /// may pump simultaneously, but episode and season work together stays <=4.
     pub(super) fn pump_episode_thumbs(bridge: Bridge) {
-        loop {
-            if EPISODE_ACTIVE
-                .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
-                    (active < 4).then_some(active + 1)
-                })
-                .is_err()
-            {
-                break;
-            }
-            let Some(job) = EPISODE_QUEUE.lock().unwrap().pop_front() else {
-                EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                break;
-            };
-            let current_opening = bridge
-                .shared
-                .lock()
-                .unwrap()
-                .modal_item
-                .as_ref()
-                .is_some_and(|item| {
-                    Arc::ptr_eq(&item.open_token, &job.open_token)
-                        && item.id == job.item_id
-                        && item.type_ == job.media_type
-                });
-            if !profiles::is_current(&job.context)
-                || !current_opening
-                || image_settings_revision() != job.settings_revision
-            {
-                Self::release_episode_thumb_job(&job);
-                EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                continue;
-            }
-            let worker = bridge.clone();
-            let url = job.url.clone();
-            let verify = job.verify;
-            let finish = move |pixels: Option<SharedPixelBuffer<Rgba8Pixel>>| {
-                // Hold the slot until publication, bounding transient completion
-                // buffers even if the UI thread is busy rebuilding metadata.
-                let fallback_job = (job.request_key.clone(), job.job_id);
-                let fallback_worker = worker.clone();
-                if profiles::invoke_account(move || {
-                    if profiles::is_current(&job.context)
-                        && let Some(pixels) = pixels
-                    {
-                        worker.publish_detail_thumbnail(&job, pixels);
-                    }
+        thread_local! { static PUMPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+        super::page_artwork::with_pump_guard(&PUMPING, || {
+            loop {
+                if EPISODE_ACTIVE
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                        (active < 4).then_some(active + 1)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                let Some(job) = EPISODE_QUEUE.lock().unwrap().pop_front() else {
+                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                    break;
+                };
+                let current_opening = bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .is_some_and(|item| {
+                        Arc::ptr_eq(&item.open_token, &job.open_token)
+                            && item.id == job.item_id
+                            && item.type_ == job.media_type
+                    });
+                if !profiles::is_current(&job.context)
+                    || !current_opening
+                    || image_settings_revision() != job.settings_revision
+                {
                     Self::release_episode_thumb_job(&job);
                     EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                    Self::pump_episode_thumbs(worker);
-                })
-                .is_err()
-                {
-                    let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
-                    if inflight.get(&fallback_job.0) == Some(&fallback_job.1) {
-                        inflight.remove(&fallback_job.0);
-                    }
-                    drop(inflight);
-                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                    Self::pump_episode_thumbs(fallback_worker);
+                    continue;
                 }
-            };
-            // Copy these before moving the job into the completion callback.
-            // The selected recipe is identical for the episode and season uses.
-            if verify {
-                refresh_image_if_changed(url, ImageUse::EpisodeThumbnail, finish);
-            } else {
-                // Cleanup owns a global slot and must run even if its profile
-                // changed. Publication above still checks the captured owner.
-                nova_media::net::fetch_image(url, ImageUse::EpisodeThumbnail, finish);
+                let worker = bridge.clone();
+                let url = job.url.clone();
+                let verify = job.verify;
+                let finish = move |pixels: Option<SharedPixelBuffer<Rgba8Pixel>>| {
+                    // Hold the slot until publication, bounding transient completion
+                    // buffers even if the UI thread is busy rebuilding metadata.
+                    let fallback_job = (job.request_key.clone(), job.job_id);
+                    let fallback_worker = worker.clone();
+                    if profiles::invoke_account(move || {
+                        if profiles::is_current(&job.context)
+                            && let Some(pixels) = pixels
+                        {
+                            worker.publish_detail_thumbnail(&job, pixels);
+                        }
+                        Self::release_episode_thumb_job(&job);
+                        EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                        Self::pump_episode_thumbs(worker);
+                    })
+                    .is_err()
+                    {
+                        let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
+                        if inflight.get(&fallback_job.0) == Some(&fallback_job.1) {
+                            inflight.remove(&fallback_job.0);
+                        }
+                        drop(inflight);
+                        EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                        Self::pump_episode_thumbs(fallback_worker);
+                    }
+                };
+                // Copy these before moving the job into the completion callback.
+                // The selected recipe is identical for the episode and season uses.
+                if verify {
+                    refresh_image_if_changed(url, ImageUse::EpisodeThumbnail, finish);
+                } else {
+                    // Cleanup owns a global slot and must run even if its profile
+                    // changed. Publication above still checks the captured owner.
+                    nova_media::net::fetch_image(url, ImageUse::EpisodeThumbnail, finish);
+                }
             }
-        }
+        });
     }
 
     pub(super) fn publish_detail_thumbnail(
@@ -1011,9 +1115,14 @@ impl Bridge {
                     && let Some(app) = bridge.app()
                 {
                     let model = app.get_library();
+                    let typed_indices = bridge.library_poster_indices(&entry.type_, &entry.id);
                     let indices = requested_poster_indices(&model, &entry.id, &entry.poster_url)
                         .into_iter()
-                        .filter(|index| *index >= window.0 && *index <= window.1)
+                        .filter(|index| {
+                            typed_indices.contains(index)
+                                && *index >= window.0
+                                && *index <= window.1
+                        })
                         .collect::<Vec<_>>();
                     paint_poster_rows(
                         &model,
@@ -1076,7 +1185,7 @@ impl Bridge {
                 continue;
             }
             if entry.poster_url.is_empty() {
-                self.recover_library_artwork(&entry.id, "");
+                self.recover_library_artwork(&entry.type_, &entry.id, "");
                 continue;
             }
             if self.try_library_poster_cache(&entry) {
@@ -1127,9 +1236,14 @@ impl Bridge {
                         let model = app.get_library();
                         // Resolve current identity after filter changes, and
                         // never reattach textures to rows scrolled out of view.
+                        let typed_indices = bridge.library_poster_indices(&key.0, &id);
                         let indices = requested_poster_indices(&model, &id, &url)
                             .into_iter()
-                            .filter(|index| *index >= window.0 && *index <= window.1)
+                            .filter(|index| {
+                                typed_indices.contains(index)
+                                    && *index >= window.0
+                                    && *index <= window.1
+                            })
                             .collect::<Vec<_>>();
                         if let Some(pixels) = pixels {
                             paint_poster_rows(
@@ -1140,7 +1254,7 @@ impl Bridge {
                                 &Image::from_rgba8(pixels),
                             );
                         } else {
-                            bridge.recover_library_artwork(&id, &url);
+                            bridge.recover_library_artwork(&key.0, &id, &url);
                         }
                     }
                     bridge.dispatch_library_posters();
@@ -1178,20 +1292,36 @@ impl Bridge {
         self.dispatch_library_posters();
     }
 
+    #[cfg(test)]
+    pub(super) fn recover_library_artwork_for_test(&self, type_: &str, id: &str, failed_url: &str) {
+        self.recover_library_artwork(type_, id, failed_url);
+    }
+
     /// Old saved URLs can expire even when episodes/header text are cached.
     /// Keep native IDs; ask the same metadata pipeline used by Detail for art.
-    fn recover_library_artwork(&self, id: &str, failed_url: &str) {
-        let type_ = self
-            .shared
+    fn recover_library_artwork(&self, type_: &str, id: &str, failed_url: &str) {
+        let current =
+            self.shared.lock().unwrap().entries.iter().any(|entry| {
+                entry.type_ == type_ && entry.id == id && entry.poster_url == failed_url
+            });
+        if current {
+            self.recover_missing_artwork(type_, id, failed_url);
+        }
+    }
+
+    // Library cards carry translated type labels. The retained projection is
+    // the authoritative typed identity, including after filtering/reordering.
+    fn library_poster_indices(&self, type_: &str, id: &str) -> Vec<usize> {
+        self.shared
             .lock()
             .unwrap()
-            .entries
+            .library_displayed
             .iter()
-            .find(|entry| entry.id == id && entry.poster_url == failed_url)
-            .map(|entry| entry.type_.clone());
-        if let Some(type_) = type_ {
-            self.recover_missing_artwork(&type_, id, failed_url);
-        }
+            .enumerate()
+            .filter_map(|(index, (row_type, row_id))| {
+                (row_type == type_ && row_id == id).then_some(index)
+            })
+            .collect()
     }
 
     pub(super) fn recover_missing_artwork(&self, type_: &str, id: &str, failed_url: &str) {
@@ -1205,9 +1335,35 @@ impl Bridge {
         failed_url: &str,
         receipts: Vec<CatalogPosterRepair>,
     ) {
+        self.recover_missing_artwork_at_search_slot(type_, id, failed_url, receipts, None);
+    }
+
+    fn recover_missing_artwork_at_search_slot(
+        &self,
+        type_: &str,
+        id: &str,
+        failed_url: &str,
+        receipts: Vec<CatalogPosterRepair>,
+        search_slot: Option<SearchPosterSlotReceipt>,
+    ) {
         let target = {
             let mut state = self.shared.lock().unwrap();
-            if !artwork_request_current(&state, type_, id, failed_url) {
+            let slot_current = search_slot
+                .as_ref()
+                .map(|(generation, index, key, source)| {
+                    search_poster_slot_current(&state, *generation, *index, key, source)
+                });
+            if slot_current == Some(false) {
+                return;
+            }
+            let fast_current = search_slot.as_ref().is_some_and(|(_, index, _, _)| {
+                state.search_previews[*index]
+                    .poster
+                    .as_deref()
+                    .unwrap_or_default()
+                    == failed_url
+            });
+            if !fast_current && !artwork_request_current(&state, type_, id, failed_url) {
                 return;
             }
             let owner = receipts
@@ -1252,10 +1408,15 @@ impl Bridge {
                 failed_url.into(),
                 owner.into(),
             ));
-            grid_artwork_recovery_target_for_owner(&mut state, type_, id, failed_url, owner)
+            validated_artwork_recovery_target(&mut state, type_, id, failed_url, owner)
         };
         if let Some(target) = target {
-            self.recover_artwork_target(target, failed_url, receipts);
+            self.recover_artwork_target_with_header_receipt(
+                target,
+                failed_url,
+                receipts,
+                search_slot.is_some(),
+            );
         }
     }
 
@@ -1316,11 +1477,12 @@ impl Bridge {
         self.publish_discover_poster_with_receipts(type_, id, url, pixels, receipts);
     }
 
-    fn recover_artwork_target(
+    fn recover_artwork_target_with_header_receipt(
         &self,
         (type_, id): (String, String),
         failed_url: &str,
         receipts: Vec<CatalogPosterRepair>,
+        header_checked: bool,
     ) {
         let urls = artwork_metadata_sources(
             &self.shared.lock().unwrap().installed,
@@ -1396,7 +1558,10 @@ impl Bridge {
         // Legacy headers are keyed by native ID, without catalog ownership.
         // An owned opaque catalog request requires its owner or a validated
         // broker connection, rather than another addon's coincidentally equal ID.
-        let cached = (receipts.is_empty() || global_artwork_identity(&id))
+        // Prepared search rows already hydrated this URL at the guarded
+        // metadata revision. An empty prepared URL proves there is no cached
+        // alternative, so publication must not read the same header on the UI.
+        let cached = (!header_checked && (receipts.is_empty() || global_artwork_identity(&id)))
             .then(|| read_meta_header_for(&type_, &id))
             .flatten()
             .map(|header| header.poster_url)
@@ -1421,37 +1586,6 @@ impl Bridge {
         }
     }
 
-    // Keep request completion policy shared while each rail retains its own
-    // row identity/index rules and, for Upcoming, calendar-day publication.
-    fn fetch_episode_home_poster(
-        &self,
-        id: SharedString,
-        url: SharedString,
-        type_: String,
-        fallback: String,
-        retry: impl FnOnce(&Self) + Send + 'static,
-        publish: impl FnOnce(&AppWindow, SharedPixelBuffer<Rgba8Pixel>) + Send + 'static,
-    ) {
-        let bridge = self.clone();
-        let failed_poster = fallback.clone();
-        let image_revision = image_settings_revision();
-        fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-            let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                if image_settings_revision() != image_revision {
-                    retry(&bridge);
-                    return;
-                }
-                let Some(pixels) = pixels else {
-                    bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
-                    return;
-                };
-                if let Some(app) = bridge.app() {
-                    publish(&app, pixels);
-                }
-            });
-        });
-    }
-
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
     /// Guard both series and URL: the next episode can occupy the same slot.
     pub(super) fn dispatch_continue_posters(&self) {
@@ -1460,177 +1594,96 @@ impl Bridge {
     }
 
     fn dispatch_episode_home_posters(&self, new: bool) {
-        let Some(app) = self.app() else { return };
-        let (fallbacks, row_sources) = {
-            let state = self.shared.lock().unwrap();
-            let sources = if new {
-                &state.new_episodes_list
-            } else {
-                &state.continue_list
-            };
-            let fallbacks = state
-                .entries
-                .iter()
-                .map(|entry| {
-                    (
-                        (entry.type_.clone(), entry.id.clone()),
-                        entry.poster_url.clone(),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-            let row_sources = sources
-                .iter()
-                // These are the same rows retained by current_episode_home_rows:
-                // the source entry must have a typed library join.
-                .filter(|source| {
-                    state
-                        .entries
-                        .iter()
-                        .any(|entry| entry.id == source.series_id && entry.type_ == source.type_)
-                })
-                .map(|source| (source.series_id.clone(), source.type_.clone()))
-                .collect::<Vec<_>>();
-            (fallbacks, row_sources)
+        let Some(app) = self.app() else {
+            return;
         };
         let model = if new {
             app.get_home_new_episodes()
         } else {
             app.get_home_continue()
         };
-        let items: Vec<_> = model
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| {
-                // Shared pixels may arrive after this blank model was built.
-                // Cache residency alone does not publish them into the row.
-                !row.is_loaded
-                    || decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+        let requests = {
+            let state = self.shared.lock().unwrap();
+            let sources = if new {
+                &state.new_episodes_list
+            } else {
+                &state.continue_list
+            };
+            model
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    !row.is_loaded
+                        || decoded_cache_get(&sized_cache_key(
+                            &row.art_url,
+                            Some(DISPLAY_POSTER_SIDE),
+                        ))
                         .is_none()
-            })
-            .map(|(index, row)| {
-                let type_ = row_sources
-                    .get(index)
-                    .filter(|(source_id, _)| source_id.as_str() == row.id.as_str())
-                    .map(|(_, type_)| type_.clone())
-                    .unwrap_or_default();
-                let fallback = fallbacks
-                    .get(&(type_.clone(), row.id.to_string()))
-                    .cloned()
-                    .unwrap_or_default();
-                (index, row.id, row.art_url, type_, fallback)
-            })
-            .collect();
-        for (_index, id, url, type_, fallback) in items {
-            self.fetch_episode_home_poster(
-                id.clone(),
-                url.clone(),
-                type_,
-                fallback,
-                move |bridge| bridge.dispatch_episode_home_posters(new),
-                move |app, pixels| {
-                    let model = if new {
-                        app.get_home_new_episodes()
-                    } else {
-                        app.get_home_continue()
-                    };
-                    if let Some((index, mut row)) = model
-                        .iter()
-                        .enumerate()
-                        .find(|(_, row)| row.id == id && row.art_url == url)
-                    {
-                        row.poster = Image::from_rgba8(
-                            decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
-                                .unwrap_or(pixels),
-                        );
-                        row.is_loaded = true;
-                        model.set_row_data(index, row);
-                    }
+                })
+                .filter_map(|(index, row)| {
+                    let source = sources.iter().find(|source| {
+                        source.series_id == row.id.as_str()
+                            && (row.media_type.is_empty()
+                                || source.type_ == row.media_type.as_str())
+                            && (row.episode_id.is_empty()
+                                || source.episode_id == row.episode_id.as_str())
+                    })?;
+                    let entry = state.entries.iter().find(|entry| {
+                        entry.type_ == source.type_ && entry.id == source.series_id
+                    })?;
+                    Some((index, entry.poster_url.clone()))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (index, fallback) in requests {
+            self.enqueue_poster_intake(
+                if new {
+                    poster_intake::Surface::New
+                } else {
+                    poster_intake::Surface::Continue
                 },
+                index,
+                true,
+                fallback,
             );
         }
     }
 
     /// Upcoming and its selected calendar day share the same guarded image.
     pub(super) fn dispatch_upcoming_posters(&self) {
-        let Some(app) = self.app() else { return };
-        let (fallbacks, row_sources) = {
-            let state = self.shared.lock().unwrap();
-            let fallbacks = state
-                .entries
-                .iter()
-                .map(|entry| {
-                    (
-                        (entry.type_.clone(), entry.id.clone()),
-                        entry.poster_url.clone(),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-            let row_sources = state
-                .upcoming_list
-                .iter()
-                .map(|source| (source.series_id.clone(), source.type_.clone()))
-                .collect::<Vec<_>>();
-            (fallbacks, row_sources)
+        let Some(app) = self.app() else {
+            return;
         };
-        let items: Vec<_> = app
-            .get_home_upcoming()
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| {
-                !row.is_loaded
-                    || decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+        let requests = {
+            let state = self.shared.lock().unwrap();
+            app.get_home_upcoming()
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    !row.is_loaded
+                        || decoded_cache_get(&sized_cache_key(
+                            &row.art_url,
+                            Some(DISPLAY_POSTER_SIDE),
+                        ))
                         .is_none()
-            })
-            .map(|(index, row)| {
-                let type_ = row_sources
-                    .get(row.index as usize)
-                    .filter(|(source_id, _)| source_id.as_str() == row.id.as_str())
-                    .map(|(_, type_)| type_.clone())
-                    .unwrap_or_default();
-                let fallback = fallbacks
-                    .get(&(type_.clone(), row.id.to_string()))
-                    .cloned()
-                    .unwrap_or_default();
-                (index, row.id, row.art_url, type_, fallback)
-            })
-            .collect();
-        for (_index, id, url, type_, fallback) in items {
-            self.fetch_episode_home_poster(
-                id.clone(),
-                url.clone(),
-                type_,
-                fallback,
-                Self::dispatch_upcoming_posters,
-                move |app, pixels| {
-                    let model = app.get_home_upcoming();
-                    if let Some((index, mut row)) = model
+                })
+                .filter_map(|(index, row)| {
+                    let source = state
+                        .upcoming_list
+                        .get(row.index as usize)
+                        .filter(|source| source.series_id == row.id.as_str())?;
+                    let fallback = state
+                        .entries
                         .iter()
-                        .enumerate()
-                        .find(|(_, row)| row.id == id && row.art_url == url)
-                    {
-                        let image = Image::from_rgba8(
-                            decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
-                                .unwrap_or(pixels),
-                        );
-                        row.poster = image.clone();
-                        row.is_loaded = true;
-                        model.set_row_data(index, row);
-                        // A day can contain several episodes of the same series;
-                        // match its selected artwork rather than series alone.
-                        let day_model = app.get_home_cal_day();
-                        let matches: Vec<_> = day_model
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, row)| row.id == id && row.art_url == url)
-                            .collect();
-                        for (day_index, mut row) in matches {
-                            row.poster = image.clone();
-                            row.is_loaded = true;
-                            day_model.set_row_data(day_index, row);
-                        }
-                    }
-                },
-            );
+                        .find(|entry| entry.type_ == source.type_ && entry.id == source.series_id)
+                        .map(|entry| entry.poster_url.clone())
+                        .unwrap_or_default();
+                    Some((index, fallback))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (index, fallback) in requests {
+            self.enqueue_poster_intake(poster_intake::Surface::Upcoming, index, true, fallback);
         }
     }
 
@@ -1638,64 +1691,26 @@ impl Bridge {
     /// completion checks its current flattened index, identity and URL so a
     /// settings change or a newer catalog response cannot paint stale art.
     pub(super) fn dispatch_home_catalog_posters(&self) {
-        let Some(app) = self.app() else { return };
-        let requests = [
-            app.get_home_catalog_cards(),
-            app.get_home_history_archive_cards(),
-        ]
-        .into_iter()
-        .enumerate()
-        .flat_map(|(archive, model)| {
-            model
-                .iter()
-                .enumerate()
-                .filter(|(_, card)| !card.is_loaded)
-                .map(move |(index, card)| {
-                    (
-                        archive != 0,
-                        index,
-                        card.media_type.to_string(),
-                        card.id.to_string(),
-                        card.poster_url.to_string(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-        for (archive, index, type_, id, url) in requests {
-            if url.is_empty() {
-                self.recover_missing_artwork(&type_, &id, "");
-                continue;
+        let Some(app) = self.app() else {
+            return;
+        };
+        for (surface, model) in [
+            (
+                poster_intake::Surface::HomeCatalog,
+                app.get_home_catalog_cards(),
+            ),
+            (
+                poster_intake::Surface::History,
+                app.get_home_history_archive_cards(),
+            ),
+        ] {
+            for (index, card) in model.iter().enumerate().filter(|(_, card)| !card.is_loaded) {
+                if card.poster_url.is_empty() {
+                    self.recover_missing_artwork(&card.media_type, &card.id, "");
+                } else {
+                    self.enqueue_poster_intake(surface, index, true, String::new());
+                }
             }
-            let bridge = self.clone();
-            let requested_url = url.clone();
-            let image_revision = image_settings_revision();
-            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                    let Some(app) = bridge.app() else { return };
-                    let model = if archive {
-                        app.get_home_history_archive_cards()
-                    } else {
-                        app.get_home_catalog_cards()
-                    };
-                    let current = model.row_data(index).is_some_and(|card| {
-                        card.id == id
-                            && card.media_type == type_
-                            && card.poster_url == requested_url
-                    });
-                    if current && image_settings_revision() != image_revision {
-                        bridge.dispatch_home_catalog_posters();
-                        return;
-                    }
-                    if let Some(pixels) = pixels {
-                        if current {
-                            bridge.publish_discover_poster(&type_, &id, &requested_url, &pixels);
-                        }
-                    } else if current {
-                        bridge.recover_missing_artwork(&type_, &id, &requested_url);
-                    }
-                });
-            });
         }
     }
 
@@ -1703,7 +1718,7 @@ impl Bridge {
     /// or not in library). Backfills entries saved before the backdrop URL
     /// was persisted, so later reopens can start the image load without
     /// waiting for a meta fetch.
-    pub(super) fn persist_backdrop_for(&self, id: &str, url: &str) {
+    pub(super) fn persist_backdrop_for(&self, type_: &str, id: &str, url: &str) {
         if url.is_empty() {
             return;
         }
@@ -1712,7 +1727,11 @@ impl Bridge {
         };
         let changed = {
             let mut state = self.shared.lock().unwrap();
-            match state.entries.iter_mut().find(|e| e.id == id) {
+            match state
+                .entries
+                .iter_mut()
+                .find(|e| e.type_ == type_ && e.id == id)
+            {
                 Some(e) if e.background_url != url => {
                     e.background_url = url.to_string();
                     true
@@ -1730,7 +1749,7 @@ impl Bridge {
     /// a changed poster URL means changed art, so updated data is saved and
     /// later reopens (and restarts) paint the grid + detail header from the
     /// entry without waiting for a meta fetch.
-    pub(super) fn persist_poster_for(&self, id: &str, url: &str) {
+    pub(super) fn persist_poster_for(&self, type_: &str, id: &str, url: &str) {
         if url.is_empty() {
             return;
         }
@@ -1739,7 +1758,11 @@ impl Bridge {
         };
         let changed = {
             let mut state = self.shared.lock().unwrap();
-            match state.entries.iter_mut().find(|e| e.id == id) {
+            match state
+                .entries
+                .iter_mut()
+                .find(|e| e.type_ == type_ && e.id == id)
+            {
                 Some(e) if e.poster_url != url => {
                     e.poster_url = url.to_string();
                     true
@@ -1748,6 +1771,8 @@ impl Bridge {
             }
         };
         if changed {
+            // The successful library commit notifies retained local search;
+            // queue admission alone must not publish a corpus refresh.
             self.persist_library();
         }
     }
@@ -1761,6 +1786,7 @@ impl Bridge {
     /// is saved.
     pub(super) fn persist_header_for(
         &self,
+        type_: &str,
         id: &str,
         genres: &[String],
         description: &str,
@@ -1772,12 +1798,18 @@ impl Bridge {
         };
         let changed = {
             let mut state = self.shared.lock().unwrap();
-            match state.entries.iter_mut().find(|e| e.id == id) {
+            match state
+                .entries
+                .iter_mut()
+                .find(|e| e.type_ == type_ && e.id == id)
+            {
                 Some(e) => merge_library_header_text(e, genres, description, year, overwrite),
                 None => false,
             }
         };
         if changed {
+            // The committed snapshot compares searchable fields, so a genre
+            // or description-only header write does not restart local search.
             self.persist_library();
         }
     }
@@ -2090,6 +2122,103 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
 #[cfg(test)]
 mod discover_artwork_tests {
     use super::*;
+    #[test]
+    fn prepared_search_slot_batch_keeps_recovery_guards_without_corpus_scans() {
+        let addon = |enabled: bool, available: bool| Installed {
+            url: "https://metadata.example".into(),
+            label: "Fixture".into(),
+            enabled,
+            available,
+            configure_ok: None,
+            generation: 0,
+            manifest: serde_json::from_value(serde_json::json!({
+                "id":"fixture", "name":"Fixture", "version":"1", "types":["series"],
+                "resources":["meta"], "catalogs":[]
+            }))
+            .unwrap(),
+        };
+        for enabled in [false, true] {
+            let mut state = Shared {
+                search_generation: 9,
+                installed: vec![addon(enabled, true)],
+                ..Default::default()
+            };
+            state.search_previews = (0..100)
+                .map(|at| {
+                    let mut meta = MetaPreview {
+                        id: format!("native:{at}"),
+                        type_: "series".into(),
+                        ..Default::default()
+                    };
+                    meta.extra
+                        .insert("novaSourceUrl".into(), "https://owner.example".into());
+                    meta
+                })
+                .collect();
+            let before = search_recovery_counts();
+            let mut eligible = 0;
+            for at in 0..100 {
+                let key = (
+                    "series".into(),
+                    format!("native:{at}"),
+                    "https://owner.example".into(),
+                );
+                assert!(search_poster_slot_current(
+                    &state,
+                    9,
+                    at,
+                    &key,
+                    "https://owner.example"
+                ));
+                assert!(!search_poster_slot_current(
+                    &state,
+                    8,
+                    at,
+                    &key,
+                    "https://owner.example"
+                ));
+                assert!(!search_poster_slot_current(
+                    &state,
+                    9,
+                    at,
+                    &key,
+                    "https://other.example"
+                ));
+                let sources = artwork_metadata_sources(&state.installed, &key.0, &key.1, &[]);
+                if !sources.is_empty() {
+                    eligible += 1;
+                    assert!(
+                        validated_artwork_recovery_target(&mut state, &key.0, &key.1, "", "")
+                            .is_some()
+                    );
+                    assert!(
+                        validated_artwork_recovery_target(&mut state, &key.0, &key.1, "", "")
+                            .is_none()
+                    );
+                    // A different failed URL remains independently retryable.
+                    assert!(
+                        validated_artwork_recovery_target(&mut state, &key.0, &key.1, "failed", "")
+                            .is_some()
+                    );
+                }
+            }
+            let after = search_recovery_counts();
+            assert_eq!(eligible, if enabled { 100 } else { 0 });
+            assert_eq!(after[0] - before[0], 300);
+            assert_eq!(after[1] - before[1], 0);
+            assert_eq!(after[2] - before[2], 100);
+            // Pending manifests must leave the native identity eligible later;
+            // source discovery itself never consumes a request cooldown.
+            let pending = vec![addon(true, false)];
+            assert!(artwork_metadata_sources(&pending, "series", "new", &[]).is_empty());
+            assert!(!state.artwork_recovery.keys().any(|key| key.1 == "new"));
+            assert_eq!(
+                artwork_metadata_sources(&[addon(true, true)], "series", "new", &[]).len(),
+                1
+            );
+        }
+    }
+
     #[cfg(feature = "desktop")]
     #[test]
     fn home_paints_posters_cached_after_blank_rows_are_created_without_scrolling() {
@@ -2127,11 +2256,9 @@ mod discover_artwork_tests {
         i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -2143,11 +2270,46 @@ mod discover_artwork_tests {
                 ..Default::default()
             })
             .collect::<Vec<_>>();
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = rows.iter().map(|row| serde_json::from_value::<LibraryEntry>(serde_json::json!({
+                "id": row.id.to_string(), "type_": "series", "name": row.id.to_string(), "poster_url": row.art_url.to_string()
+            })).unwrap()).collect();
+            state.continue_list = rows[..2]
+                .iter()
+                .map(|row| ContinueEntry {
+                    series_id: row.id.to_string(),
+                    type_: "series".into(),
+                    episode_id: row.id.to_string(),
+                    ..Default::default()
+                })
+                .collect();
+            state.new_episodes_list = rows[2..4]
+                .iter()
+                .map(|row| ContinueEntry {
+                    series_id: row.id.to_string(),
+                    type_: "series".into(),
+                    episode_id: row.id.to_string(),
+                    ..Default::default()
+                })
+                .collect();
+            state.upcoming_list = rows[4..]
+                .iter()
+                .map(|row| UpcomingEntry {
+                    series_id: row.id.to_string(),
+                    type_: "series".into(),
+                    episode_id: row.id.to_string(),
+                    ..Default::default()
+                })
+                .collect();
+        }
         app.set_home_continue(Rc::new(VecModel::from(rows[..2].to_vec())).into());
         app.set_home_new_episodes(Rc::new(VecModel::from(rows[2..4].to_vec())).into());
         let upcoming = rows[4..]
             .iter()
-            .map(|row| UpcomingRow {
+            .enumerate()
+            .map(|(index, row)| UpcomingRow {
+                index: index as i32,
                 id: row.id.clone(),
                 art_url: row.art_url.clone(),
                 ..Default::default()
@@ -2236,11 +2398,9 @@ mod discover_artwork_tests {
         i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -2523,11 +2683,9 @@ mod discover_artwork_tests {
         });
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

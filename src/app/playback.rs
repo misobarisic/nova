@@ -73,6 +73,8 @@ pub(super) struct PlaybackIntent {
     // Credential-bearing resolver links stay inside the in-app player, including
     // a delayed resume prompt. Never pass them through OS process arguments.
     private_playback: bool,
+    // Runtime ownership survives pause/resume but never enters saved stream data.
+    provider_relay: Option<nova_providers::PlaybackRelayLease>,
     party_guard: Option<party::PlaybackGuard>,
     pub(super) context: PlaybackContext,
     detached: bool,
@@ -295,6 +297,134 @@ pub(crate) fn note_android_pause_checkpoint() {
         bridge.persist_playback_checkpoint(false);
     }
     persistence::flush_report();
+}
+
+pub(super) struct PolicyStopCapture {
+    pub transition: profile_actions::OutgoingTransition,
+    session: Option<u64>,
+    request: Option<crate::torrent::PlaybackRequest>,
+}
+impl Bridge {
+    /// Personal progress remains untouched until its ordered receipt. The
+    /// captured observation is a one-entry patch, never a full stale map.
+    pub(super) fn preview_policy_progress(&self) -> Option<HashMap<String, EpisodeProgress>> {
+        let state = self.shared.lock().unwrap();
+        let target = state.playback.as_ref()?;
+        if target.last_pos <= 0.0 && target.last_dur <= 0.0 {
+            return None;
+        }
+        let key = progress_map_key(&target.series_id, &target.episode_id);
+        let mut entry = state
+            .progress
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| EpisodeProgress {
+                series_id: target.series_id.clone(),
+                episode_id: target.episode_id.clone(),
+                ..Default::default()
+            });
+        entry.position_secs = target.last_pos;
+        entry.duration_secs = target.last_dur;
+        entry.updated_at_secs = now_secs();
+        stamp_playback_history(&mut entry, &target.history);
+        if target.last_pos > 0.0 {
+            entry.unwatched_at_secs = 0;
+        }
+        if is_watched_position(target.last_pos, target.last_dur) {
+            entry.watched = true;
+        }
+        Some(HashMap::from([(key, entry)]))
+    }
+    pub(super) fn policy_stop_is_gated(&self) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .is_some_and(|intent| !intent.pending && !intent.token.is_current())
+            && self.player.playback_failed()
+    }
+    pub(super) fn playback_policy_checkpoint_required(&self) -> bool {
+        let owner = profiles::ProfileStore::capture();
+        let state = self.shared.lock().unwrap();
+        let forbidden = state.playback.as_ref().is_some_and(|target| {
+            let kind = target
+                .history
+                .as_ref()
+                .map(|history| history.type_.as_str())
+                .unwrap_or("");
+            !profile_policy::allows_title(&owner, kind, &target.series_id)
+        });
+        forbidden
+            || state.playback_intent.as_ref().is_some_and(|intent| {
+                !profile_policy::allows_title(
+                    &owner,
+                    &intent.context.media_type,
+                    &intent.context.media_id,
+                )
+            })
+            || (!state.casting.loading
+                && state
+                    .playback_intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.pending))
+    }
+    pub(super) fn capture_and_gate_policy_stop(&self) -> PolicyStopCapture {
+        let transition = profile_actions::OutgoingTransition::for_policy_stop(self);
+        let (session, request, visible) = {
+            let mut state = self.shared.lock().unwrap();
+            let session = state.playback.as_ref().map(|target| target.session);
+            let request = state.playback_intent.as_mut().map(|intent| {
+                intent.pending = false;
+                intent.token.cancel();
+                intent.token.clone()
+            });
+            let visible = state
+                .playback_intent
+                .as_ref()
+                .is_some_and(|intent| intent.in_app);
+            (session, request, visible)
+        };
+        // Native stop plus the existing opaque source-wait surface masks the
+        // old frame immediately. Runtime target/journal survive only to finish
+        // the captured receipt; cancellation cannot restart the forbidden URL.
+        if let Some(target) = self.shared.lock().unwrap().playback.clone() {
+            self.list_services_playback(&target, target.last_pos, target.last_dur, false, true);
+        }
+        self.stremio_checkpoint();
+        self.player.set_paused(true);
+        if visible {
+            let message = text::tr("Title is unavailable");
+            self.player.wait_for_source(message);
+            self.player.source_failed(message);
+        } else {
+            self.player.close();
+        }
+        PolicyStopCapture {
+            transition,
+            session,
+            request,
+        }
+    }
+    pub(super) fn complete_policy_stop(&self, capture: &PolicyStopCapture) {
+        let matching = {
+            let state = self.shared.lock().unwrap();
+            state.playback.as_ref().map(|target| target.session) == capture.session
+                && match (&capture.request, state.playback_intent.as_ref()) {
+                    (Some(expected), Some(current)) => current.token.same_request(expected),
+                    (None, None) => true,
+                    _ => false,
+                }
+        };
+        if !matching {
+            return;
+        }
+        capture.transition.accept_policy_journal(self);
+        self.shared.lock().unwrap().playback = None;
+        self.cancel_sleep_timer();
+        self.player.close();
+        self.finish_playback_request();
+    }
 }
 
 impl Bridge {
@@ -586,6 +716,7 @@ impl Bridge {
             pending: true,
             in_app: false,
             private_playback: false,
+            provider_relay: None,
             party_guard,
             detached: remote_context.is_some(),
             context: remote_context
@@ -1439,7 +1570,7 @@ impl Bridge {
             self.open_provider_loading(&request);
         }
         crate::app::profiles::thread::spawn(move || {
-            let result = nova_providers::resolve_provider_stream(
+            let result = nova_providers::resolve_provider_stream_with_lease(
                 &provider_url,
                 &token,
                 Duration::from_secs(30),
@@ -1455,7 +1586,10 @@ impl Bridge {
         &self,
         request: crate::torrent::PlaybackRequest,
         selection_is_stale: bool,
-        result: Result<addons::Stream, nova_providers::ProviderResolveError>,
+        result: Result<
+            nova_providers::ResolvedProviderStream,
+            nova_providers::ProviderResolveError,
+        >,
     ) {
         if !self.playback_request_is_current(&request) {
             return;
@@ -1468,6 +1602,14 @@ impl Bridge {
             );
             return;
         }
+        // The queued UI callback carries ownership through resolver handoff.
+        // Stale/failing results drop it; only this live intent keeps the relay.
+        let result = result.map(|resolved| {
+            if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+                intent.provider_relay = resolved.relay;
+            }
+            resolved.stream
+        });
         if result.is_ok()
             && let Some(app) = self.app()
             && app.get_player_open()
@@ -1540,6 +1682,64 @@ impl Bridge {
                 self.provider_resolution_failed(&request, "Could not resolve this stream. Try another result or check the addon configuration.".into());
             }
         }
+    }
+
+    /// Inspect terminal state on the existing UI tick, including while paused.
+    /// The relay thread never mutates UI or reaches into player ownership.
+    pub(super) fn poll_provider_relay(&self) {
+        let failed = self.player.playback_failed();
+        let request = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_mut()
+            .and_then(|intent| {
+                if failed {
+                    intent.provider_relay = None;
+                    return None;
+                }
+                intent
+                    .provider_relay
+                    .as_ref()
+                    .filter(|relay| relay.has_ended())
+                    .map(|_| intent.token.clone())
+            });
+        if let Some(request) = request {
+            self.provider_relay_ended(&request);
+        }
+    }
+
+    fn provider_relay_ended(&self, request: &crate::torrent::PlaybackRequest) {
+        if !self.playback_request_is_current(request) {
+            return;
+        }
+        // Preserve the already accepted in-memory observation. This UI-tick
+        // path must not flush storage or wait for an ordered persistence fence.
+        let preferences = self.prepare_playback_preferences();
+        {
+            let mut state = self.shared.lock().unwrap();
+            let position = state
+                .playback
+                .as_ref()
+                .map(|target| target.last_pos)
+                .filter(|position| *position > 0.0);
+            if let Some(intent) = state.playback_intent.as_mut() {
+                intent.provider_relay = None;
+                if position.is_some() {
+                    intent.context.history_resume = position;
+                }
+                if intent.context.retry_preferences.is_none() {
+                    intent.context.retry_preferences = Some(preferences);
+                }
+            }
+        }
+        let message = "This stream session ended. Select the stream again.";
+        // source_failed only paints a waiting source. An expired relay can have
+        // already started playing, so stop it and enter that existing overlay
+        // after capturing its position/preferences, before publishing failure.
+        self.player.wait_for_source(message);
+        self.provider_resolution_failed(request, text::tr(message).into());
     }
 
     pub(super) fn open_player_with_options(
@@ -1791,47 +1991,66 @@ impl Bridge {
             self.list_services_playback(&target, target.last_pos, target.last_dur, false, true);
         }
         let _reservation = persistence::reserve(1);
-        let map = if _reservation.is_some() {
-            let mut state = self.shared.lock().unwrap();
-            let Some(target) = state.playback.clone() else {
-                return;
-            };
-            if target.last_pos <= 0.0 && target.last_dur <= 0.0 {
-                return;
-            }
-            let key = progress_map_key(&target.series_id, &target.episode_id);
-            let entry = state
-                .progress
-                .entry(key)
-                .or_insert_with(|| EpisodeProgress {
-                    series_id: target.series_id.clone(),
-                    episode_id: target.episode_id.clone(),
-                    ..Default::default()
-                });
-            if entry.position_secs != target.last_pos || entry.duration_secs != target.last_dur {
-                entry.position_secs = target.last_pos;
-                entry.duration_secs = target.last_dur;
-                entry.updated_at_secs = now_secs();
-                stamp_playback_history(entry, &target.history);
-                if target.last_pos > 0.0 {
-                    entry.unwatched_at_secs = 0;
-                }
-                if is_watched_position(target.last_pos, target.last_dur) {
-                    entry.watched = true;
-                }
-                Some(state.progress.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let map = _reservation
+            .as_ref()
+            .and_then(|_| self.capture_profile_progress());
         if let Some(map) = map {
             write_progress_map(&map);
             self.request_progress_projection();
         }
         nova_sync::flush_local_sync();
         self.stremio_checkpoint();
+    }
+
+    /// Capture only after the caller reserves ordered capacity. The snapshot
+    /// owns its input before any worker starts; it never rereads mutable Shared.
+    pub(super) fn capture_profile_progress(&self) -> Option<HashMap<String, EpisodeProgress>> {
+        self.capture_profile_progress_mode(false)
+    }
+
+    pub(super) fn capture_profile_progress_patch(
+        &self,
+    ) -> Option<HashMap<String, EpisodeProgress>> {
+        self.capture_profile_progress_mode(true)
+    }
+
+    fn capture_profile_progress_mode(
+        &self,
+        patch: bool,
+    ) -> Option<HashMap<String, EpisodeProgress>> {
+        let mut state = self.shared.lock().unwrap();
+        let target = state.playback.clone()?;
+        if target.last_pos <= 0.0 && target.last_dur <= 0.0 {
+            return None;
+        }
+        let key = progress_map_key(&target.series_id, &target.episode_id);
+        let entry = state
+            .progress
+            .entry(key.clone())
+            .or_insert_with(|| EpisodeProgress {
+                series_id: target.series_id.clone(),
+                episode_id: target.episode_id.clone(),
+                ..Default::default()
+            });
+        if entry.position_secs != target.last_pos || entry.duration_secs != target.last_dur {
+            entry.position_secs = target.last_pos;
+            entry.duration_secs = target.last_dur;
+            entry.updated_at_secs = now_secs();
+            stamp_playback_history(entry, &target.history);
+            if target.last_pos > 0.0 {
+                entry.unwatched_at_secs = 0;
+            }
+            if is_watched_position(target.last_pos, target.last_dur) {
+                entry.watched = true;
+            }
+            Some(if patch {
+                HashMap::from([(key, entry.clone())])
+            } else {
+                state.progress.clone()
+            })
+        } else {
+            None
+        }
     }
 
     pub(super) fn publish_player_context(&self, context: &PlaybackContext) {
@@ -2957,10 +3176,6 @@ pub(crate) fn write_progress_map(map: &HashMap<String, EpisodeProgress>) {
 pub(crate) fn read_torrent_settings() -> TorrentSettings {
     read_json::<TorrentSettings>(TORRENT_SETTINGS_KEY).unwrap_or_default()
 }
-pub(crate) fn write_torrent_settings(settings: &TorrentSettings) {
-    write_json(TORRENT_SETTINGS_KEY, settings);
-    *CURRENT_TORRENT_SETTINGS.lock().unwrap() = settings.clone();
-}
 pub(crate) fn active_torrent_settings() -> TorrentSettings {
     CURRENT_TORRENT_SETTINGS.lock().unwrap().clone()
 }
@@ -3097,11 +3312,9 @@ mod home_return_tests {
         let app = AppWindow::new().unwrap();
         app.set_show_home(true);
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -3141,7 +3354,7 @@ mod home_return_tests {
             url: Some("https://example.invalid/stale".into()),
             ..Default::default()
         };
-        bridge.complete_provider_resolution(resolving.clone(), false, Ok(stale_url));
+        bridge.complete_provider_resolution(resolving.clone(), false, Ok(stale_url.into()));
         bridge.complete_provider_resolution(
             resolving,
             false,
@@ -3162,6 +3375,33 @@ mod home_return_tests {
         assert_eq!(app.get_player_status(), "Could not resolve this stream.");
         bridge.player.tick();
         assert_eq!(app.get_player_status(), "Could not resolve this stream.");
+        bridge.player.close();
+
+        let relay_request = bridge.begin_playback_request();
+        bridge.open_provider_loading(&relay_request);
+        bridge.provider_relay_ended(&replacement);
+        assert!(
+            relay_request.is_current(),
+            "old relay status cannot fail its replacement"
+        );
+        assert_eq!(app.get_player_status(), "Resolving stream…");
+        // Expiry after playback began must also enter the readable error
+        // overlay; source_failed alone only handles a source still resolving.
+        bridge.player.close();
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        bridge.provider_relay_ended(&relay_request);
+        assert!(!relay_request.is_current());
+        assert!(app.get_player_status_is_error());
+        assert_eq!(
+            app.get_player_status(),
+            "This stream session ended. Select the stream again."
+        );
+        bridge.player.tick();
+        assert_eq!(
+            app.get_player_status(),
+            "This stream session ended. Select the stream again."
+        );
         bridge.player.close();
 
         let ask = bridge.begin_playback_request();
@@ -3195,7 +3435,7 @@ mod home_return_tests {
             "subtitles":[{"id":"fixture-en", "url":"https://example.invalid/subtitle.srt", "lang":"en"}]
         }))
         .unwrap();
-        bridge.complete_provider_resolution(ask.clone(), false, Ok(resolved));
+        bridge.complete_provider_resolution(ask.clone(), false, Ok(resolved.into()));
         assert!(app.get_player_open());
         assert!(
             app.get_resume_prompt_visible(),
@@ -3426,7 +3666,7 @@ mod home_return_tests {
             .digest()
             .get(DOMAIN_VIEWING_ACTIVITY)
             .cloned();
-        bridge.sync_apply(vec![DOMAIN_PROGRESS.into(), DOMAIN_VIEWING_ACTIVITY.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_PROGRESS.into(), DOMAIN_VIEWING_ACTIVITY.into()]);
         assert_eq!(
             owner
                 .lock()
@@ -3554,7 +3794,7 @@ mod home_return_tests {
             );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_VIEWING_ACTIVITY.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_VIEWING_ACTIVITY.into()]);
         assert_eq!(
             storage::get_str(VIEWING_ACTIVITY_KEY).unwrap(),
             snapshot,
@@ -3596,11 +3836,9 @@ mod preference_tests {
         storage::init_at(&root);
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -3617,6 +3855,7 @@ mod preference_tests {
                 pending: false,
                 in_app: true,
                 private_playback: false,
+                provider_relay: None,
                 party_guard: None,
                 detached: false,
                 context: PlaybackContext {
@@ -3733,7 +3972,7 @@ mod preference_tests {
             );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_PLAYBACK_PREFERENCES.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_PLAYBACK_PREFERENCES.into()]);
         assert_eq!(
             app.get_effective_playback_speed(),
             1.4,
@@ -3942,11 +4181,9 @@ mod history_tests {
         let app = AppWindow::new().unwrap();
         app.set_show_home(true);
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4113,7 +4350,7 @@ mod history_tests {
             owner.lock().unwrap().records(DOMAIN_HISTORY_HIDDEN).len(),
             1
         );
-        bridge.sync_apply(vec![DOMAIN_HISTORY_HIDDEN.into()]);
+        bridge.sync_apply_and_wait(vec![DOMAIN_HISTORY_HIDDEN.into()]);
         assert_eq!(
             read_json::<HashMap<String, u64>>(watch_history::HIDDEN_KEY).unwrap(),
             hidden
@@ -4352,11 +4589,9 @@ mod retry_regressions {
         storage::init_at(&root);
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

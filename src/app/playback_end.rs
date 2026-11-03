@@ -978,11 +978,9 @@ mod tests {
         let app = AppWindow::new().unwrap();
         app.set_onboarding_visible(false);
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

@@ -76,6 +76,7 @@ fn mirror_families(
     let device = nova_sync::local_device().map_err(|e| e.to_string())?;
     let mut live = handle.lock().unwrap();
     let _serial = super::profiles::WRITE_SERIAL.lock().unwrap();
+    let revision = owner.writing();
     if owner.retired().map_err(|e| e.to_string())? {
         return Ok(false);
     }
@@ -103,6 +104,7 @@ fn mirror_families(
     staged.save().map_err(|e| e.to_string())?;
     *live = staged;
     *expected = Some(raw.into());
+    drop(revision);
     drop(_serial);
     drop(live);
     if changed {
@@ -675,27 +677,33 @@ fn seed_legacy_choice(
     ))
 }
 
+/// Called in the incoming durable owner's context. Cache routes each operation
+/// to that owner; preparing it cannot mutate another profile's stream choice.
+pub(super) fn prepare_activation(cache: &Cache) -> nova_sync::Result<()> {
+    let owner = nova_sync::local_store()?;
+    let dev = nova_sync::local_device()?;
+    let mut store = owner.lock().unwrap();
+    if seed_legacy_choice(&mut store, dev, snapshot(&cache.current().record))? {
+        store.save()?;
+    }
+    drop(store);
+    let _guard = super::sync::ApplyingGuard::new();
+    let raw = owner
+        .lock()
+        .unwrap()
+        .record(&domain(), SELECTION)
+        .and_then(|record| record.value.clone());
+    cache
+        .project(raw.as_deref(), nova_config::now_secs())
+        .map_err(|error| nova_storage::Error::new(nova_storage::ErrorKind::Schema, error))?;
+    Ok(())
+}
+
 impl super::Bridge {
     /// Seed the legacy cache with its original selection clock, then restore
     /// the record owner on every startup (including domains older apps ignored).
     pub(super) fn restore_last_stream_choice(&self) {
-        let result = (|| -> nova_sync::Result<()> {
-            let owner = nova_sync::local_store()?;
-            let dev = nova_sync::local_device()?;
-            let mut store = owner.lock().unwrap();
-            if seed_legacy_choice(
-                &mut store,
-                dev,
-                snapshot(&self.last_stream.current().record),
-            )? {
-                store.save()?;
-            }
-            drop(store);
-            self.project_last_stream_choice().map_err(|error| {
-                nova_storage::Error::new(nova_storage::ErrorKind::Schema, error)
-            })?;
-            Ok(())
-        })();
+        let result = prepare_activation(&self.last_stream);
         if let Err(error) = result {
             super::io::record_write_failure(nova_storage::Error::new(
                 nova_storage::ErrorKind::Transaction,

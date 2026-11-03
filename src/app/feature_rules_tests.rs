@@ -140,11 +140,9 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
     let downloads = DownloadCoordinator::new(root.join("downloads"));
     #[cfg(feature = "desktop")]
     let bridge = {
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             downloads,
@@ -251,7 +249,7 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
     };
     apply_remote(&alice_domain, &shared, 60_000);
     let received_records = records(&alice_domain);
-    bridge.sync_apply(vec![alice_domain.clone()]);
+    bridge.sync_apply_and_wait(vec![alice_domain.clone()]);
     assert_rules(&bridge.shared.lock().unwrap().cache_settings, &local);
     let effective = read_owned(&alice_owner);
     assert_rules(&effective, &local);
@@ -300,7 +298,7 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
     let bob_received = records(&bob_domain);
     let owner = nova_sync::local_store().unwrap();
     let digest = owner.lock().unwrap().digest();
-    bridge.sync_apply(vec![bob_domain.clone()]);
+    bridge.sync_apply_and_wait(vec![bob_domain.clone()]);
     assert_rules(&read_owned(&bob_owner), &bob_remote);
     assert_rules(&read_owned(&alice_owner), &shared);
     assert_rules(&bridge.shared.lock().unwrap().cache_settings, &shared);

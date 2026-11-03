@@ -83,7 +83,6 @@ fn unique_records<'de, D: serde::Deserializer<'de>>(
     }
     deserializer.deserialize_map(Unique)
 }
-#[derive(Clone)]
 pub(super) struct Archive {
     pub manifest: Manifest,
     pub payloads: BTreeMap<(String, String), Payload>,

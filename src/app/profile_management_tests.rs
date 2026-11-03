@@ -30,11 +30,9 @@ fn restricted_device_actions_require_pin_and_forget_the_management_grant() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
-    let (hi, _) = mpsc::channel();
-    let (lo, _) = mpsc::channel();
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx { hi, lo },
+        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),

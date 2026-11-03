@@ -3,11 +3,19 @@ use std::cell::RefCell;
 
 use nova_storage::{CollectionKind, Error, ErrorKind};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProfileStore {
     id: String,
     scoped: bool,
+    revision: super::OwnerRevision,
 }
+
+impl PartialEq for ProfileStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.scoped == other.scoped
+    }
+}
+impl Eq for ProfileStore {}
 
 thread_local! {
     // Only the existing snapshot decomposition adapter needs ambient ownership.
@@ -25,10 +33,20 @@ impl ProfileStore {
                     .as_ref()
                     .map(|session| session.store.clone())
                     .unwrap_or_else(|| Self {
+                        revision: super::OwnerRevision::for_id(&context.id),
                         id: context.id,
                         scoped: super::is_initialized(),
                     })
             })
+    }
+
+    /// Account-wide work must survive retirement of its originating UI owner.
+    pub(crate) fn account() -> Self {
+        Self {
+            id: String::new(),
+            scoped: false,
+            revision: super::OwnerRevision::for_id(""),
+        }
     }
 
     pub(crate) fn for_profile(id: &str) -> Self {
@@ -36,11 +54,21 @@ impl ProfileStore {
         Self {
             id: id.into(),
             scoped: true,
+            revision: super::OwnerRevision::for_id(id),
         }
     }
 
     pub(crate) fn is_scoped(&self) -> bool {
         self.scoped
+    }
+
+    pub(crate) fn revision_token(&self) -> super::OwnerRevision {
+        self.revision.clone()
+    }
+    /// Must be created after acquiring WRITE_SERIAL. Failed writes also
+    /// invalidate preparation; odd values denote an in-progress attempt.
+    pub(crate) fn writing(&self) -> super::OwnerWrite {
+        self.revision.writing()
     }
 
     pub(crate) fn id(&self) -> &str {
@@ -72,11 +100,15 @@ impl ProfileStore {
     }
 
     pub(crate) fn write_batch(&self, entries: &[(String, Option<String>)]) -> Result<(), Error> {
+        for (key, _) in entries {
+            check_reload(&self.key(key))?;
+        }
         let entries: Vec<_> = entries
             .iter()
             .map(|(key, value)| (self.key(key), value.clone()))
             .collect();
         let _serial = super::WRITE_SERIAL.lock().unwrap();
+        let _revision = self.writing();
         for (key, _) in &entries {
             check_key(key)?;
         }
@@ -85,7 +117,9 @@ impl ProfileStore {
 
     pub(crate) fn write_cached(&self, logical: &str, raw: &str) -> Result<(), Error> {
         let key = self.key(logical);
+        check_reload(&key)?;
         let _serial = super::WRITE_SERIAL.lock().unwrap();
+        let _revision = self.writing();
         check_key(&key)?;
         nova_storage::try_set_cached_str(&key, raw)
     }
@@ -145,12 +179,25 @@ impl ProfileStore {
 }
 
 fn check_key(key: &str) -> Result<(), Error> {
+    check_reload(key)?;
     if let Some((id, _)) = super::parse_domain(key)
         && retired_id(id)?
     {
         return Err(Error::new(
             ErrorKind::Transaction,
             "profile was deleted; late write discarded",
+        ));
+    }
+    Ok(())
+}
+
+fn check_reload(key: &str) -> Result<(), Error> {
+    if let Some((id, _)) = super::parse_domain(key)
+        && !super::authoritative_write_allowed(id)
+    {
+        return Err(Error::new(
+            ErrorKind::Transaction,
+            "Profile reload in progress; edit not accepted",
         ));
     }
     Ok(())

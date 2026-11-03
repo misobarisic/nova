@@ -780,11 +780,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -1076,11 +1074,9 @@ mod tests {
         let failed = downloads.job("old").unwrap();
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

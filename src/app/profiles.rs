@@ -83,6 +83,44 @@ static RUNTIME: LazyLock<RwLock<Runtime>> = LazyLock::new(|| {
 // Deletion and scoped writes share this lock: an already running writer either
 // finishes before cleanup, or observes retirement and cannot recreate data.
 pub(super) static WRITE_SERIAL: Mutex<()> = Mutex::new(());
+
+/// Weak registry entries cannot keep an owner alive or confer write authority.
+/// Live ProfileStore/session/request handles retain the revision token itself.
+static OWNER_REVISIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, std::sync::Weak<std::sync::atomic::AtomicU64>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone, Debug)]
+pub(crate) struct OwnerRevision(std::sync::Arc<std::sync::atomic::AtomicU64>);
+impl OwnerRevision {
+    fn for_id(id: &str) -> Self {
+        let mut owners = OWNER_REVISIONS.lock().unwrap();
+        owners.retain(|_, owner| owner.strong_count() > 0);
+        let revision = owners
+            .get(id)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_else(|| {
+                let revision = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                owners.insert(id.into(), std::sync::Arc::downgrade(&revision));
+                revision
+            });
+        Self(revision)
+    }
+    pub(crate) fn read(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn writing(&self) -> OwnerWrite {
+        let before = self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert_eq!(before % 2, 0, "owner writes require WRITE_SERIAL");
+        OwnerWrite(self.clone())
+    }
+}
+pub(crate) struct OwnerWrite(OwnerRevision);
+impl Drop for OwnerWrite {
+    fn drop(&mut self) {
+        self.0.0.fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+}
 thread_local! { static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) }; }
 pub(super) fn capture() -> Context {
     CONTEXT
@@ -93,6 +131,22 @@ pub(super) fn capture() -> Context {
 /// context. Activation uses this to enter the replacement profile explicitly.
 pub(super) fn active_context() -> Context {
     RUNTIME.read().unwrap().context.clone()
+}
+
+/// A forced/import reload closes only its stale UI allocation. Detached
+/// durable owners have no session and remain usable by preparation workers.
+pub(super) fn authoritative_edits_allowed() -> bool {
+    capture()
+        .session
+        .is_none_or(|session| session.authoritative_edits_allowed())
+}
+
+pub(super) fn authoritative_write_allowed(id: &str) -> bool {
+    let context = capture();
+    context.id != id
+        || context
+            .session
+            .is_none_or(|session| session.authoritative_edits_allowed())
 }
 static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
 pub(super) fn activation_context(id: &str) -> Context {
@@ -266,6 +320,8 @@ fn cleanup_deleted_data(ids: HashSet<String>) -> Result<(), String> {
         // Tracking recovery may write durable storage while holding this
         // owner. Keep the same lock order for deletion and cleanup.
         let _serial = WRITE_SERIAL.lock().unwrap();
+        let revision_owner = ProfileStore::for_profile(&id);
+        let _revision = revision_owner.writing();
         let prefix = format!("profile:{id}:");
         let mut changed = false;
         for domain in store.domains() {
@@ -412,14 +468,130 @@ pub(super) fn device_preferences() -> DevicePreferences {
 }
 pub(super) struct PreparedActivation {
     device: DevicePreferences,
+    pub validation: Option<ActivationValidation>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ActivationValidation {
+    pub source: u64,
+    pub target: u64,
+    pub clock: nova_sync::Hlc,
+}
+
+pub(super) struct ActivationBasis {
+    pub snapshots: Vec<(String, String)>,
+    pub revision: u64,
+    pub clock: nova_sync::Hlc,
+    pub source_revision: u64,
+}
+
+pub(super) fn activation_basis(id: &str) -> Result<Vec<(String, String)>, String> {
+    nova_storage::try_scan_prefix(&format!("profile:{id}:")).map_err(|error| error.to_string())
+}
+
+/// Only a sealed UI request reaches this worker-side write. Keep validation
+/// and selected-profile persistence in the existing Store -> serializer order.
+pub(super) fn prepare_activation_checked(
+    id: &str,
+    source: &Context,
+    basis: &ActivationBasis,
+    source_policy: &str,
+    target_policy: &str,
+) -> Result<PreparedActivation, String> {
+    let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
+    let store = owner.lock().unwrap();
+    let _serial = WRITE_SERIAL.lock().unwrap();
+    let validation =
+        validate_activation_locked(&store, id, source, basis, source_policy, target_policy)?;
+    let mut receipt = write_selection(id)?;
+    receipt.validation = Some(validation);
+    Ok(receipt)
+}
+
+pub(super) fn revalidate_activation(
+    id: &str,
+    source: &Context,
+    basis: &ActivationBasis,
+    source_policy: &str,
+    target_policy: &str,
+) -> Result<ActivationValidation, String> {
+    let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
+    let store = owner.lock().unwrap();
+    let _serial = WRITE_SERIAL.lock().unwrap();
+    validate_activation_locked(&store, id, source, basis, source_policy, target_policy)
+}
+
+fn validate_activation_locked(
+    store: &nova_sync::Store,
+    id: &str,
+    source: &Context,
+    basis: &ActivationBasis,
+    source_policy: &str,
+    target_policy: &str,
+) -> Result<ActivationValidation, String> {
+    if store.clock() != basis.clock
+        || active_context() != *source
+        || !store
+            .record(DOMAIN, id)
+            .is_some_and(|record| !record.is_deleted())
+        || store
+            .record(DELETIONS_DOMAIN, id)
+            .is_some_and(|record| !record.is_deleted())
+    {
+        return Err("This profile is unavailable.".into());
+    }
+    if writable(&source.id)
+        && store
+            .pending_domains()
+            .contains(&domain_for(&source.id, super::profile_policy::DOMAIN))
+    {
+        return Err("Profile authorization changed".into());
+    }
+    let target = ProfileStore::for_profile(id).revision_token().read();
+    if !target.is_multiple_of(2)
+        || target != basis.revision
+        || activation_basis(id)? != basis.snapshots
+        || super::profile_policy::revision(&ProfileStore::for_profile(&source.id)) != source_policy
+        || super::profile_policy::revision(&ProfileStore::for_profile(id)) != target_policy
+    {
+        return Err("Profile data or authorization changed".into());
+    }
+    Ok(ActivationValidation {
+        source: ProfileStore::for_profile(&source.id)
+            .revision_token()
+            .read(),
+        target,
+        clock: basis.clock,
+    })
+}
+
+pub(super) fn restore_activation_selection(selected: &str, source: &Context) -> Result<(), String> {
+    let _serial = WRITE_SERIAL.lock().unwrap();
+    if active_context() != *source {
+        return Ok(());
+    }
+    let durable: DevicePreferences = nova_storage::try_get_str(DEVICE_KEY)
+        .map_err(|error| error.to_string())?
+        .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+        .transpose()?
+        .unwrap_or_default();
+    if durable.active_profile == selected {
+        write_selection(&source.id)?;
+    }
+    Ok(())
 }
 
 /// Finish the fallible selection write while the outgoing services still run.
 /// Publication happens later on the UI thread, after their shutdown is queued.
+#[cfg(test)]
 pub(super) fn prepare_activation(id: &str) -> Result<PreparedActivation, String> {
     if !list()?.iter().any(|p| p.id == id) {
         return Err("This profile is unavailable.".into());
     }
+    write_selection(id)
+}
+
+fn write_selection(id: &str) -> Result<PreparedActivation, String> {
     let mut device = RUNTIME.read().unwrap().device.clone();
     device.active_profile = id.into();
     nova_storage::try_set_str(
@@ -427,7 +599,10 @@ pub(super) fn prepare_activation(id: &str) -> Result<PreparedActivation, String>
         &serde_json::to_string(&device).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    Ok(PreparedActivation { device })
+    Ok(PreparedActivation {
+        device,
+        validation: None,
+    })
 }
 
 pub(super) fn set_open_last_profile_on_startup(enabled: bool) -> Result<(), String> {
@@ -457,6 +632,36 @@ pub(super) fn rename(id: &str, name: &str) -> Result<(), String> {
     }
     write_profile(id, &validated_name(name)?)
 }
+// Failure injection stays local to the isolated test's calling thread.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DeleteFailure {
+    AfterTombstone,
+    BeforeScan,
+}
+#[cfg(test)]
+thread_local! {
+    static DELETE_FAILURE: std::cell::Cell<Option<DeleteFailure>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn with_delete_failure<R>(failure: DeleteFailure, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<DeleteFailure>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DELETE_FAILURE.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(DELETE_FAILURE.with(|slot| slot.replace(Some(failure))));
+    f()
+}
+#[cfg(test)]
+fn deletion_checkpoint(point: DeleteFailure) -> Result<(), String> {
+    if DELETE_FAILURE.with(|slot| slot.get() == Some(point)) {
+        Err("Injected profile deletion failure".into())
+    } else {
+        Ok(())
+    }
+}
 pub(super) fn delete(id: &str) -> Result<(), String> {
     let profiles = list()?;
     if profiles.len() <= 1 {
@@ -469,24 +674,40 @@ pub(super) fn delete(id: &str) -> Result<(), String> {
     let device = nova_sync::local_device().map_err(|e| e.to_string())?;
     let mut store = owner.lock().unwrap();
     let _serial = WRITE_SERIAL.lock().unwrap();
-    RUNTIME.write().unwrap().retired.insert(id.into());
+    let revision_owner = ProfileStore::for_profile(id);
+    let revision = revision_owner.writing();
+    let mut staged = store.clone();
     let prefix = format!("profile:{id}:");
-    for domain in store.domains() {
+    for domain in staged.domains() {
         if domain.starts_with(&prefix) {
-            for (key, _) in store.records(&domain) {
-                store.set(&domain, &key, None, 0, device);
+            for (key, _) in staged.records(&domain) {
+                staged.set(&domain, &key, None, 0, device);
+                #[cfg(test)]
+                deletion_checkpoint(DeleteFailure::AfterTombstone)?;
             }
         }
     }
-    store.set(DELETIONS_DOMAIN, id, Some("1".into()), 0, device);
-    store.set(DOMAIN, id, None, 0, device);
+    staged.set(DELETIONS_DOMAIN, id, Some("1".into()), 0, device);
+    staged.set(DOMAIN, id, None, 0, device);
+    #[cfg(test)]
+    deletion_checkpoint(DeleteFailure::BeforeScan)?;
     for prefix in [prefix, format!("sync:baseline:profile:{id}:")] {
+        // Durable scans cannot see newly queued credentials or baselines. Clear
+        // those on the proposal too, without disturbing other owners' extras.
+        for key in staged.queued_extra_keys_with_prefix(&prefix) {
+            staged.queue_extra(&key, None);
+        }
         for (key, _) in nova_storage::try_scan_prefix(&prefix).map_err(|e| e.to_string())? {
-            store.queue_extra(&key, None);
+            staged.queue_extra(&key, None);
         }
     }
-    store.save().map_err(|e| e.to_string())?;
+    // Keep the owner and write serializer locked until durable publication.
+    // A failed proposal must not leak through a later unrelated Store save.
+    staged.save().map_err(|e| e.to_string())?;
+    *store = staged;
+    RUNTIME.write().unwrap().retired.insert(id.into());
     drop(store);
+    drop(revision);
     drop(_serial);
     nova_providers::plugin_settings::revoke_owner(
         &ProfileStore::for_profile(id).domain("plugin_settings"),

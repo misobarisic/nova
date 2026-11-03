@@ -287,6 +287,8 @@ impl Bridge {
     }
 
     pub(super) fn refresh_bookmarks(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         if profile_policy::entry_blocked() {
             return;
         }
@@ -305,11 +307,9 @@ impl Bridge {
         };
         groups.retain(|g| {
             g.scenes.first().is_some_and(|(_, i, _)| {
-                profile_policy::allows_title(
-                    &profiles::ProfileStore::capture(),
-                    &i.media_type,
-                    &i.title_id,
-                )
+                policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&i.media_type, &i.title_id))
             })
         });
         sort_groups(&mut groups, global.get_sort());

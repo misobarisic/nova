@@ -37,6 +37,7 @@ impl Bridge {
                 sessions,
                 account: Default::default(),
                 catalog_gen,
+                poster_intake: Arc::default(),
                 home_showcase_gen: Arc::new(AtomicU64::new(0)),
                 home_catalog_rows_gen: Arc::new(AtomicU64::new(0)),
                 #[cfg(feature = "desktop")]

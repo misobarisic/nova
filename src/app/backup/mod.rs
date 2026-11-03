@@ -1,10 +1,12 @@
 //! Selective personal-state archives and atomic, compensating local imports.
 mod adapters;
 mod archive;
+mod cleanup;
 mod ui;
 
 use crate::app::{self, profiles, profiles::ProfileStore};
 use archive::{Archive, Payload};
+use cleanup::Shared;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,9 +53,8 @@ struct PreviewRow {
     pub counts: Counts,
     pub notes: Vec<String>,
 }
-#[derive(Clone)]
 struct Preview {
-    pub archive: Archive,
+    pub archive: Shared<Archive>,
     pub choices: Vec<Choice>,
     // Keep skipped profiles too: asynchronous previews must match every choice.
     selection: Vec<Choice>,
@@ -293,7 +294,7 @@ fn count(local: &Payload, backup: &Payload, result: &Payload) -> Counts {
     counts
 }
 
-fn preview(archive: Archive, choices: Vec<Choice>) -> Result<Preview, String> {
+fn preview(archive: Shared<Archive>, choices: Vec<Choice>) -> Result<Preview, String> {
     app::persistence::flush()?;
     let selection = choices.clone();
     let choices = choices
@@ -809,7 +810,7 @@ fn delete_reviewed_recovery(reviewed: &[(String, String)]) -> Result<(), String>
     .map_err(|e| e.to_string())
 }
 
-fn undo_preview() -> Result<Preview, String> {
+fn undo_preview(permit: cleanup::Permit) -> Result<Preview, String> {
     let rows = nova_storage::try_scan_prefix(RECOVERY_PREFIX).map_err(|e| e.to_string())?;
     let (_, raw) = rows
         .iter()
@@ -874,7 +875,7 @@ fn undo_preview() -> Result<Preview, String> {
     };
     // Undo always gets a fresh exact preview. Intervening edits are visible
     // here and remain bound to the new target revisions until Apply.
-    preview(archive, choices)
+    preview(Shared::new(archive, permit), choices)
 }
 fn undo_targets() -> Result<Vec<String>, String> {
     let rows = nova_storage::try_scan_prefix(RECOVERY_PREFIX).map_err(|e| e.to_string())?;

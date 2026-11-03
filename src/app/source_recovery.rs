@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::Read,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
 };
 
@@ -62,6 +62,39 @@ pub(super) fn verified(identity: Option<&str>) -> bool {
         .get(identity)
         .is_some_and(|at| now >= *at && now - *at < TTL)
 }
+
+/// Keep one pending cumulative snapshot; the bounded channel only wakes the
+/// writer. A full wake channel must not discard newer success evidence.
+struct SuccessWriter {
+    latest: Arc<Mutex<Option<Vec<u8>>>>,
+    wake: mpsc::SyncSender<()>,
+}
+impl SuccessWriter {
+    fn spawn(
+        mut persist: impl FnMut(Vec<u8>) + Send + 'static,
+    ) -> (Self, std::thread::JoinHandle<()>) {
+        let latest = Arc::new(Mutex::new(None));
+        let pending = latest.clone();
+        let (wake, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            while receiver.recv().is_ok() {
+                // Release the slot lock before disk I/O or another submission
+                // would wait for the very write this mailbox separates out.
+                let raw = pending.lock().unwrap().take();
+                if let Some(raw) = raw {
+                    persist(raw);
+                }
+            }
+        });
+        (Self { latest, wake }, worker)
+    }
+
+    fn submit(&self, raw: Vec<u8>) {
+        *self.latest.lock().unwrap() = Some(raw);
+        let _ = self.wake.try_send(());
+    }
+}
+
 pub(super) fn remember(identity: &str) {
     if !valid_fingerprint(identity) {
         return;
@@ -71,31 +104,23 @@ pub(super) fn remember(identity: &str) {
     values.0.insert(identity.into(), now);
     values.prune(now);
     if let Ok(raw) = serde_json::to_vec(&*values) {
-        // Disk latency never blocks the playback tick. A bounded mailbox drops
-        // redundant snapshots when a write is already waiting.
-        static WRITER: OnceLock<std::sync::mpsc::SyncSender<Vec<u8>>> = OnceLock::new();
+        // Serialization stays ordered with the cumulative cache update. Only
+        // obsolete pending snapshots are replaced; disk I/O stays off this tick.
+        static WRITER: OnceLock<SuccessWriter> = OnceLock::new();
         let writer = WRITER.get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1);
             let directory = nova_config::app_cache_dir();
-            std::thread::spawn(move || {
-                while let Ok(mut raw) = rx.recv() {
-                    while let Ok(newest) = rx.try_recv() {
-                        raw = newest;
-                    }
-                    if std::fs::create_dir_all(&directory).is_ok() {
-                        let temporary = directory.join("source-success-v1.json.tmp");
-                        if std::fs::write(&temporary, raw).is_ok() {
-                            let _ = std::fs::rename(
-                                temporary,
-                                directory.join("source-success-v1.json"),
-                            );
-                        }
+            let (writer, _worker) = SuccessWriter::spawn(move |raw| {
+                if std::fs::create_dir_all(&directory).is_ok() {
+                    let temporary = directory.join("source-success-v1.json.tmp");
+                    if std::fs::write(&temporary, raw).is_ok() {
+                        let _ =
+                            std::fs::rename(temporary, directory.join("source-success-v1.json"));
                     }
                 }
             });
-            tx
+            writer
         });
-        let _ = writer.try_send(raw);
+        writer.submit(raw);
     }
 }
 
@@ -196,6 +221,67 @@ impl Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocked_success_writer_keeps_latest_cumulative_snapshot_without_another_submit() {
+        let (recorded, records) = mpsc::channel();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let worker_gate = gate.clone();
+        let (writer, worker) = SuccessWriter::spawn(move |raw| {
+            let first = raw == b"A";
+            recorded.send(raw).unwrap();
+            if first {
+                worker_gate.wait();
+            }
+        });
+        writer.submit(b"A".to_vec());
+        assert_eq!(records.recv_timeout(Duration::from_secs(5)).unwrap(), b"A");
+        // A is in progress, B fills the wake channel, and C must replace B
+        // even though its wakeup cannot be enqueued. Neither submission waits
+        // on the blocked sink because it never holds the pending-slot lock.
+        writer.submit(b"AB".to_vec());
+        writer.submit(b"ABC".to_vec());
+        assert_eq!(writer.latest.lock().unwrap().as_deref(), Some(&b"ABC"[..]));
+        drop(writer);
+        gate.wait();
+        assert_eq!(
+            records.recv_timeout(Duration::from_secs(5)).unwrap(),
+            b"ABC"
+        );
+        worker.join().unwrap();
+        assert!(records.try_recv().is_err());
+    }
+
+    #[test]
+    fn wake_after_pending_slot_take_is_not_lost() {
+        let (taken, observed) = mpsc::channel();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let worker_gate = gate.clone();
+        let (writer, worker) = SuccessWriter::spawn(move |raw| {
+            taken.send(raw).unwrap();
+            worker_gate.wait();
+        });
+        writer.submit(b"A".to_vec());
+        for raw in [b"A".as_slice(), b"AB", b"ABC"] {
+            assert_eq!(observed.recv_timeout(Duration::from_secs(5)).unwrap(), raw);
+            assert!(writer.latest.lock().unwrap().is_none());
+            // The sink is blocked after taking the slot; its next wake must
+            // still be retained even if it arrives before the next recv().
+            if raw != b"ABC" {
+                let next = if raw == b"A" {
+                    b"AB".as_slice()
+                } else {
+                    b"ABC"
+                };
+                writer.submit(next.to_vec());
+            }
+            gate.wait();
+        }
+        drop(writer);
+        worker.join().unwrap();
+        assert!(observed.try_recv().is_err());
+    }
+
     #[test]
     fn success_requires_sustained_real_progress_and_never_seek_or_background_time() {
         let start = Instant::now();

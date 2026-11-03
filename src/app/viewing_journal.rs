@@ -272,6 +272,17 @@ fn session_can_replace_rows(old: &ViewingSession, new: &ViewingSession) -> bool 
 }
 
 fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
+    if let Err(error) = persist_captured(owner, row) {
+        storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+    }
+}
+
+/// The transition writer needs an operation receipt, rather than a global
+/// error counter, before it may tear down the outgoing player.
+pub(super) fn persist_captured(
+    owner: &profiles::ProfileStore,
+    row: &ViewingSession,
+) -> Result<(), String> {
     // Independent checkpoints may arrive on different workers. Never let a
     // delayed one overwrite a newer duration or a completed/finalized row.
     let writer = writer(owner);
@@ -282,14 +293,11 @@ fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
             Ok(row) => Some(row),
             Err(error) => {
                 tracing::warn!(%error, "unreadable viewing session preserved");
-                return;
+                return Err(error.to_string());
             }
         },
         Ok(None) => None,
-        Err(error) => {
-            storage::report(error);
-            return;
-        }
+        Err(error) => return Err(error.to_string()),
     };
     if prior.as_ref().is_some_and(|old| {
         (old.viewing_run_start && !row.viewing_run_start)
@@ -299,16 +307,10 @@ fn persist_now(owner: &profiles::ProfileStore, row: &ViewingSession) {
                 && old.ended_at.is_some()
                 && row.ended_at.is_none())
     }) {
-        return;
+        return Ok(());
     }
-    match serde_json::to_string(row) {
-        Ok(raw) => {
-            if let Err(error) = activity_sync::persist_session(owner, &key, &raw) {
-                storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
-            }
-        }
-        Err(error) => tracing::warn!(%error, "viewing journal serialization failed"),
-    }
+    let raw = serde_json::to_string(row).map_err(|error| error.to_string())?;
+    activity_sync::persist_session(owner, &key, &raw).map_err(|error| error.to_string())
 }
 
 fn persist(owner: profiles::ProfileStore, row: ViewingSession) {
@@ -360,6 +362,11 @@ fn starts_viewing_run<'a>(
 }
 
 impl JournalTracker {
+    pub(super) fn transition_revision(&self) -> Option<(String, u64)> {
+        self.active
+            .as_ref()
+            .map(|active| (active.row.id.clone(), active.row.watched_seconds.to_bits()))
+    }
     fn ensure_loaded(&mut self, owner: &profiles::ProfileStore) {
         let recovering_active = self
             .active
@@ -449,6 +456,37 @@ impl JournalTracker {
     }
 
     fn finish(&mut self, at: u64) {
+        if let Some((owner, row)) = self.capture_finish(at) {
+            persist_now(&owner, &row);
+        }
+    }
+
+    fn preview_finish(&self, at: u64) -> Option<(profiles::ProfileStore, ViewingSession)> {
+        let active = self.active.as_ref()?;
+        if active.row.watched_seconds <= 0.0 {
+            return None;
+        }
+        let mut row = active.row.clone();
+        row.ended_at = Some(at);
+        Some((active.owner.clone(), row))
+    }
+    fn accept_finished(&mut self, row: &ViewingSession) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.row.id == row.id)
+        {
+            self.active = None;
+        }
+        if self
+            .rows
+            .get(&row.id)
+            .is_none_or(|current| current.watched_seconds <= row.watched_seconds)
+        {
+            self.rows.insert(row.id.clone(), row.clone());
+        }
+    }
+    fn capture_finish(&mut self, at: u64) -> Option<(profiles::ProfileStore, ViewingSession)> {
         if let Some(mut active) = self.active.take()
             && active.row.watched_seconds > 0.0
         {
@@ -458,8 +496,9 @@ impl JournalTracker {
             self.rows.insert(active.row.id.clone(), active.row.clone());
             // Finalization is durable before Stop, profile switch or process
             // shutdown returns; background checkpoints cannot overwrite it.
-            persist_now(&active.owner, &active.row);
+            return Some((active.owner, active.row));
         }
+        None
     }
 
     fn observe(
@@ -775,7 +814,35 @@ impl Bridge {
             .finish(now_secs());
     }
 
+    pub(super) fn preview_policy_journal(
+        &self,
+    ) -> Option<(profiles::ProfileStore, ViewingSession)> {
+        self.shared
+            .lock()
+            .unwrap()
+            .viewing_journal
+            .preview_finish(now_secs())
+    }
+    pub(super) fn accept_policy_journal(&self, row: &ViewingSession) {
+        self.shared
+            .lock()
+            .unwrap()
+            .viewing_journal
+            .accept_finished(row);
+    }
+    pub(super) fn capture_profile_journal(
+        &self,
+    ) -> Option<(profiles::ProfileStore, ViewingSession)> {
+        self.shared
+            .lock()
+            .unwrap()
+            .viewing_journal
+            .capture_finish(now_secs())
+    }
+
     pub(super) fn refresh_viewing_journal(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         if profile_policy::entry_blocked() {
             return;
         }
@@ -800,11 +867,9 @@ impl Bridge {
         let year = journal.get_year();
         let summary = summarize(
             tracker.rows.values().filter(|r| {
-                profile_policy::allows_title(
-                    &profiles::ProfileStore::capture(),
-                    &r.media_type,
-                    &r.title_id,
-                )
+                policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&r.media_type, &r.title_id))
             }),
             year,
         );
@@ -1058,6 +1123,52 @@ mod tests {
             replay: None,
             viewing_run_start: false,
         }
+    }
+
+    #[test]
+    fn ordered_stop_preview_leaves_live_journal_until_matching_durable_receipt() {
+        let owner = profiles::ProfileStore::capture();
+        let now = Instant::now();
+        let mut row = session("original", "Show", 20, 45.0, false, false);
+        row.ended_at = None;
+        let active = |row: ViewingSession| ActiveSession {
+            row,
+            owner: owner.clone(),
+            last_tick: now,
+            last_position: 45.0,
+            was_playing: false,
+            completion_eligible: false,
+            history_known: true,
+            started_position: 0.0,
+            media_duration: 600.0,
+            saved_seconds: 45.0,
+        };
+        let mut tracker = JournalTracker {
+            loaded: true,
+            active: Some(active(row.clone())),
+            rows: BTreeMap::from([(row.id.clone(), row)]),
+            ..Default::default()
+        };
+        let (_, captured) = tracker.preview_finish(90).unwrap();
+        assert!(tracker.active.as_ref().unwrap().row.ended_at.is_none());
+        assert!(tracker.rows["original"].ended_at.is_none());
+        tracker.accept_finished(&captured);
+        assert!(tracker.active.is_none());
+        assert_eq!(tracker.rows["original"].ended_at, Some(90));
+        tracker.active = Some(active(session(
+            "replacement",
+            "Other",
+            100,
+            1.0,
+            false,
+            false,
+        )));
+        tracker.accept_finished(&captured);
+        assert_eq!(
+            tracker.active.as_ref().unwrap().row.id,
+            "replacement",
+            "an old receipt cannot retire a new viewing session"
+        );
     }
 
     #[test]

@@ -568,6 +568,9 @@ impl Bridge {
             } else {
                 let new_gen = self.catalog_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.catalog_gen.store(new_gen, Ordering::Relaxed);
+                #[cfg(feature = "desktop")]
+                self.poster_tx.generation_changed();
+                self.poster_intake.invalidate();
                 new_gen
             };
 
@@ -663,6 +666,9 @@ impl Bridge {
     fn cancel_catalog_page(&self) {
         // Invalid selections also invalidate any response from the old source.
         self.catalog_gen.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "desktop")]
+        self.poster_tx.generation_changed();
+        self.poster_intake.invalidate();
         self.shared.lock().unwrap().loading_more = false;
         if let Some(app) = self.app() {
             app.set_loading_more(false);
@@ -901,28 +907,52 @@ impl Bridge {
             app.global::<nova_ui::DiscoverBridge>()
                 .invoke_remap_catalog_anchor(viewport.index as i32, mapped as i32);
         }
+        let mut background_saturated = false;
         for (index, preview) in projected.iter().enumerate() {
-            if let Some(url) = preview.poster.as_ref().filter(|url| !url.trim().is_empty()) {
+            if let Some(_url) = preview.poster.as_ref().filter(|url| !url.trim().is_empty()) {
                 if app
                     .get_catalog()
                     .row_data(index)
                     .is_some_and(|card| !card.is_loaded)
                 {
                     #[cfg(feature = "desktop")]
-                    self.poster_tx.send_lo(PosterJob {
-                        generation,
-                        index,
-                        url: url.clone(),
-                        library: false,
-                        display_key: Some(catalog_grouping::display_key(preview)),
-                    });
+                    if !background_saturated {
+                        let admission = self.queue_catalog_poster(
+                            generation,
+                            index,
+                            _url.clone(),
+                            poster_queue::Priority::Background,
+                        );
+                        background_saturated = matches!(
+                            admission,
+                            poster_queue::Admission::DeferredCapacity
+                                | poster_queue::Admission::Closed
+                                | poster_queue::Admission::Obsolete
+                        );
+                    }
                     #[cfg(not(feature = "desktop"))]
-                    self.fetch_card_poster(false, index, url.clone());
+                    if !background_saturated {
+                        background_saturated = matches!(
+                            self.enqueue_poster_intake(
+                                poster_intake::Surface::Catalog,
+                                index,
+                                false,
+                                String::new()
+                            ),
+                            poster_intake::Admission::DeferredCapacity
+                                | poster_intake::Admission::Closed
+                                | poster_intake::Admission::Obsolete
+                        );
+                    }
                 }
             } else {
                 self.recover_catalog_artwork(generation, index, "");
             }
         }
+        #[cfg(feature = "desktop")]
+        self.retry_visible_catalog_posters();
+        #[cfg(not(feature = "desktop"))]
+        self.refresh_poster_intake();
         if fresh && active_cache_settings().prefetch_metadata {
             self.prefetch_background_meta(&projected, generation);
         }
@@ -1014,6 +1044,7 @@ impl Bridge {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn catalog_poster_slot_matches(
         &self,
         generation: u64,
@@ -1032,6 +1063,87 @@ impl Bridge {
                     catalog_grouping::display_key(preview) == key
                         && preview.poster.as_deref().unwrap_or_default() == url
                 })
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(super) fn catalog_poster_job_matches(&self, key: &poster_queue::Key) -> bool {
+        key.generation == self.catalog_gen.load(Ordering::Acquire)
+            && key.revision == image_settings_revision()
+            && self
+                .shared
+                .lock()
+                .unwrap()
+                .previews
+                .get(key.index)
+                .is_some_and(|preview| {
+                    let source = catalog_source_identity(preview);
+                    source.id == key.id
+                        && source.media_type == key.media_type
+                        && source.addon_url == key.source
+                        && catalog_grouping::display_key(preview) == key.projection
+                        && preview.poster.as_deref() == Some(key.url.as_str())
+                })
+    }
+
+    /// Rejected visible work is rediscovered from the current model, not kept
+    /// as an unbounded list of stale scroll/profile requests.
+    #[cfg(feature = "desktop")]
+    pub(super) fn retry_visible_catalog_posters(&self) {
+        let Some(app) = self.app() else { return };
+        if self.poster_tx.queue.is_closed()
+            || app.get_show_home()
+            || app.get_show_library()
+            || app.get_more_open()
+            || app.get_show_settings()
+            || app.get_show_about()
+            || app.get_show_calendar()
+            || app.get_show_downloads()
+            || app.get_player_open()
+            || app.get_modal_visible()
+            || app.get_profiles_require_selection()
+            || app.get_discover_search_open()
+        {
+            return;
+        }
+        let _timing = perf::Timer::new("poster.visible_retry");
+        let model = app.get_catalog();
+        if model.row_count() == 0 {
+            return;
+        }
+        let (generation, first, last) = {
+            let state = self.shared.lock().unwrap();
+            let first = state.catalog_page.visible_first.min(model.row_count() - 1);
+            // Slint deliberately suppresses the initial scroll report. Seed a
+            // bounded first fetch window without waiting for another scroll.
+            let last = if state.catalog_page.visible_last <= first {
+                first.saturating_add(poster_queue::VISIBLE_CAPACITY - 1)
+            } else {
+                state.catalog_page.visible_last
+            }
+            .min(model.row_count() - 1);
+            (self.catalog_gen.load(Ordering::Acquire), first, last)
+        };
+        let center = first + (last - first) / 2;
+        let mut indices = (first..=last).collect::<Vec<_>>();
+        indices.sort_by_key(|index| index.abs_diff(center));
+        for (index, row) in indices
+            .into_iter()
+            .filter_map(|index| model.row_data(index).map(|row| (index, row)))
+            .filter(|(_, row)| !row.is_loaded && !row.poster_path.is_empty())
+            .take(poster_queue::VISIBLE_CAPACITY)
+        {
+            if matches!(
+                self.queue_catalog_poster(
+                    generation,
+                    index,
+                    row.poster_path.to_string(),
+                    poster_queue::Priority::Visible
+                ),
+                poster_queue::Admission::DeferredCapacity | poster_queue::Admission::Closed
+            ) {
+                break;
+            }
+        }
     }
 
     /// Prefetch season/episode metadata for catalog items in the background.
@@ -1247,11 +1359,29 @@ impl Bridge {
                 }
                 if pair_done {
                     bridge2.finish_metadata_prefetch(&type_, &id, true);
-                    run(bridge2, work, cached, revision);
                 } else {
                     // Try the next addon URL for this pair.
                     work.push_front((type_, id, urls));
-                    run(bridge2, work, cached, revision);
+                }
+                // Admission rejection can complete synchronously. Post the next
+                // request so a large library cannot recurse through all pairs.
+                // Parsing and cache writes above remain on the fetch worker.
+                let remaining = Arc::new(Mutex::new(Some(work)));
+                let queued = remaining.clone();
+                let next = bridge2.clone();
+                if profiles::invoke_from_event_loop(move || {
+                    let work = queued.lock().unwrap().take().unwrap_or_default();
+                    run(next, work, cached, revision);
+                })
+                .is_err()
+                {
+                    // No continuation will run: retire reservations instead of
+                    // leaving this owner's prefetch rows permanently pending.
+                    if let Some(work) = remaining.lock().unwrap().take() {
+                        for (type_, id, _) in work {
+                            bridge2.finish_metadata_prefetch(&type_, &id, false);
+                        }
+                    }
                 }
             });
         }
@@ -1269,9 +1399,16 @@ impl Bridge {
         let header = meta_header_from_item(item);
         merge_meta_header_for(type_, id, &header);
         if !header.background_url.is_empty() {
-            self.persist_backdrop_for(id, &header.background_url);
+            self.persist_backdrop_for(type_, id, &header.background_url);
         }
-        self.persist_header_for(id, &header.genres, &header.description, &header.year, false);
+        self.persist_header_for(
+            type_,
+            id,
+            &header.genres,
+            &header.description,
+            &header.year,
+            false,
+        );
         if item.videos.is_empty() {
             return 0;
         }
@@ -1938,7 +2075,8 @@ impl Bridge {
                         supports_skip: false,
                         next_skip: 0,
                         exhausted: true,
-                        results: profile_policy::local_previews(&trimmed),
+                        page_fingerprints: HashSet::new(),
+                        results: profile_policy::local_previews(&trimmed).into(),
                     }]
                 } else {
                     filtered_search_targets(&state.installed, &state.search_filters)
@@ -1994,7 +2132,7 @@ impl Bridge {
         target_indices: Vec<usize>,
         append: bool,
     ) {
-        let work: Vec<(usize, String, String)> = {
+        let work: Vec<(usize, String, String, SearchSourceReceipt)> = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.search_generation {
                 return;
@@ -2003,6 +2141,15 @@ impl Bridge {
                 .into_iter()
                 .filter_map(|index| {
                     let target = state.search_targets.get(index)?;
+                    let installed = state.installed.iter().find(|source| {
+                        source.url == target.addon_url && source.enabled && source.available
+                    })?;
+                    let source = SearchSourceReceipt {
+                        url: installed.url.clone(),
+                        generation: installed.generation,
+                        enabled: installed.enabled,
+                        available: installed.available,
+                    };
                     let addon = Addon::new(&target.addon_url).ok()?;
                     let mut extras = vec![("search", query.clone())];
                     if !target.genre.is_empty() {
@@ -2019,6 +2166,7 @@ impl Bridge {
                         index,
                         addon.catalog_url(&target.type_, &target.catalog_id, &refs),
                         target.type_.clone(),
+                        source,
                     ))
                 })
                 .collect::<Vec<_>>();
@@ -2034,7 +2182,7 @@ impl Bridge {
             return;
         }
 
-        for (target_index, url, type_) in work {
+        for (target_index, url, type_, source) in work {
             let bridge = self.clone();
             net::fetch_bytes(url, move |result| {
                 let mut page = result
@@ -2048,10 +2196,26 @@ impl Bridge {
                     }
                 }
                 let _ = crate::app::profiles::invoke_from_event_loop(move || {
-                    bridge.apply_search_results(generation, vec![(target_index, page)], append);
+                    let authority_current =
+                        bridge.shared.lock().unwrap().installed.iter().any(|now| {
+                            now.url == source.url
+                                && now.generation == source.generation
+                                && now.enabled == source.enabled
+                                && now.available == source.available
+                        });
+                    bridge.apply_search_results(
+                        generation,
+                        vec![(target_index, if authority_current { page } else { None })],
+                        append,
+                    );
                 });
             });
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn search_test_admit_page(&self, generation: u64, page: Vec<MetaPreview>) {
+        self.apply_search_results(generation, vec![(0, Some(page))], false);
     }
 
     pub(super) fn repaint_search(&self) {
@@ -2067,10 +2231,915 @@ impl Bridge {
         pages: Vec<(usize, Option<Vec<MetaPreview>>)>,
         append: bool,
     ) {
+        #[cfg(test)]
+        if std::env::var_os("NOVA_UI05_LEGACY").is_some() {
+            self.apply_search_results_legacy(generation, pages, append);
+            return;
+        }
+        #[cfg(test)]
+        let began = std::time::Instant::now();
+        #[cfg(test)]
+        let allocation_scope = search_publication_bench::AllocationScope::begin();
+        #[cfg(test)]
+        let (ingress_wait_ns, ingress_hold_ns);
+        let context = profiles::capture();
+        if !profiles::is_current(&context) {
+            return;
+        }
+        let (mut input, retired, needs_retraction) = {
+            #[cfg(test)]
+            let lock_waiting = std::time::Instant::now();
+            let mut state = self.shared.lock().unwrap();
+            #[cfg(test)]
+            {
+                ingress_wait_ns = lock_waiting.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            }
+            #[cfg(test)]
+            let lock_held = std::time::Instant::now();
+            if state.search_generation != generation {
+                return;
+            }
+            let stamp = state
+                .unified_search
+                .presentation_stamp(self.downloads.clone());
+            let local = state.unified_search.projection_local();
+            let sources = state
+                .installed
+                .iter()
+                .map(|source| SearchSourceReceipt {
+                    url: source.url.clone(),
+                    generation: source.generation,
+                    enabled: source.enabled,
+                    available: source.available,
+                })
+                .collect();
+            let history_entry =
+                SearchHistoryEntry::new(&state.search, &state.search_filters, &state.installed);
+            let pending_outcomes = state.search_pending_requests;
+            let query = state.search.clone();
+            let targets = state.search_targets.clone();
+            let Shared {
+                entries,
+                search_projection: view,
+                ..
+            } = &mut *state;
+            view.capture_entries(entries);
+            let needs_retraction = !view.frame.keys.is_empty()
+                && (profile_policy::entry_blocked()
+                    || view
+                        .policy_stamp
+                        .as_ref()
+                        .is_some_and(|prior| prior.visibility_key() != stamp.visibility_key())
+                    || view
+                        .published_scope
+                        .is_some_and(|scope| scope != local.scope)
+                    || !view.last_sources.is_empty() && view.last_sources != sources);
+            let mut retired = None;
+            if view.generation != generation {
+                view.generation = generation;
+                view.completed_outcomes = 0;
+                view.model_revision = view.model_revision.wrapping_add(1);
+                retired = Some(std::mem::take(&mut view.frame));
+            }
+            view.requested = view.requested.wrapping_add(1);
+            let captured = (
+                SearchProjectionRequest {
+                    context,
+                    bridge: self.clone(),
+                    generation,
+                    query,
+                    local,
+                    stamp,
+                    targets,
+                    sources,
+                    pages,
+                    discarded_outcomes: 0,
+                    sequence: view.requested,
+                    memory_revision: view.memory_revision,
+                    model_revision: view.model_revision,
+                    base_entries: view.base_entries.clone(),
+                    entry_deltas: view.entry_deltas.clone(),
+                    frame: view.frame.clone(),
+                    append,
+                    #[cfg(test)]
+                    ingress: Arc::new(AtomicU64::new(0)),
+                    #[cfg(test)]
+                    ingress_details: Arc::new(Mutex::new(SearchIngressDetails::default())),
+                    pending_outcomes,
+                    applied_outcomes: view.completed_outcomes,
+                    history_entry,
+                },
+                retired,
+                needs_retraction,
+            );
+            #[cfg(test)]
+            {
+                ingress_hold_ns = lock_held.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            }
+            captured
+        };
+        if needs_retraction {
+            self.retract_search_projection();
+            let state = self.shared.lock().unwrap();
+            input.frame = state.search_projection.frame.clone();
+            input.model_revision = state.search_projection.model_revision;
+        }
+        #[cfg(test)]
+        let ingress = input.ingress.clone();
+        #[cfg(test)]
+        let ingress_details = input.ingress_details.clone();
+        self.enqueue_search_projection(input);
+        drop(retired);
+        #[cfg(test)]
+        ingress.store(
+            u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Release,
+        );
+        #[cfg(test)]
+        {
+            *ingress_details.lock().unwrap() = SearchIngressDetails {
+                allocator: allocation_scope.finish(),
+                wait_ns: ingress_wait_ns,
+                hold_ns: ingress_hold_ns,
+            };
+        }
+    }
+
+    pub(super) fn process_search_projection(
+        &self,
+        task: (SearchProjectionRequest, SearchProjectionProcessor),
+        work: Arc<Mutex<unified_search::SearchWork>>,
+    ) {
+        #[cfg(test)]
+        let preparation_began = std::time::Instant::now();
+        #[cfg(test)]
+        let preparation_allocations = search_publication_bench::AllocationScope::begin();
+        let (request, mut processor) = task;
+        let context = request.context.clone();
+        let prepared = profiles::with_context(context, || {
+            let current = || {
+                profiles::is_current(&request.context)
+                    && work.lock().unwrap().projection_current(&request)
+            };
+            let query_current = || {
+                profiles::is_current(&request.context)
+                    && work.lock().unwrap().projection_query_current(&request)
+            };
+            processor.prepare(request.clone(), current, query_current)
+        });
+        drop(request);
+        #[cfg(test)]
+        let prepared = prepared.map(|mut prepared| {
+            prepared.stats.elapsed_ns =
+                preparation_began.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            prepared.stats.allocator = preparation_allocations.finish();
+            prepared
+        });
+        work.lock().unwrap().finish_projection(processor);
+        if let Some(prepared) = prepared {
+            let bridge = prepared.request.bridge.clone();
+            let _ = profiles::with_context(prepared.request.context.clone(), || {
+                profiles::invoke_from_event_loop(move || {
+                    bridge.publish_search_projection(prepared, work)
+                })
+            });
+        }
+    }
+
+    fn publish_search_projection(
+        &self,
+        mut prepared: PreparedSearchProjection,
+        work: Arc<Mutex<unified_search::SearchWork>>,
+    ) {
+        #[cfg(test)]
+        let _sample = search_publication_bench::Callback::begin();
         let Some(app) = self.app() else { return };
+        if !profiles::is_current(&prepared.request.context)
+            || !work.lock().unwrap().projection_current(&prepared.request)
+        {
+            return;
+        }
+        let request = &prepared.request;
+        if profile_policy::entry_blocked() {
+            self.retract_search_projection();
+            return;
+        }
+        let (basis, needs_replan) = {
+            #[cfg(test)]
+            let lock_sample = search_publication_bench::SharedLock::waiting();
+            let mut state = self.shared.lock().unwrap();
+            #[cfg(test)]
+            let _lock_sample = lock_sample.acquired();
+            if state.search_generation != request.generation
+                || state.search != request.query
+                || state.unified_search.projection_local().scope != request.local.scope
+            {
+                return;
+            }
+            let sources: Vec<_> = state
+                .installed
+                .iter()
+                .map(|source| SearchSourceReceipt {
+                    url: source.url.clone(),
+                    generation: source.generation,
+                    enabled: source.enabled,
+                    available: source.available,
+                })
+                .collect();
+            if sources != request.sources {
+                return;
+            }
+            {
+                let Shared {
+                    entries,
+                    search_projection,
+                    ..
+                } = &mut *state;
+                search_projection.capture_entries(entries);
+            }
+            (
+                state.search_projection.frame.clone(),
+                state.search_projection.model_revision != request.model_revision
+                    || state.search_projection.memory_revision != request.memory_revision,
+            )
+        };
+        if needs_replan {
+            self.repaint_search();
+            return;
+        }
+        let model = app.get_search_results();
+        if model
+            .as_any()
+            .downcast_ref::<VecModel<MediaCard>>()
+            .is_none()
+        {
+            // The initial empty Slint property need not be a VecModel. Install
+            // its mutable model once; retained search delegates keep theirs.
+            let initial = model.row_count() == 0 && basis.keys.is_empty();
+            app.set_search_results(Rc::new(VecModel::<MediaCard>::from(vec![])).into());
+            if !initial {
+                self.retract_search_projection();
+                self.repaint_search();
+                return;
+            }
+        }
+        let model = app.get_search_results();
+        if model.row_count() != basis.keys.len() {
+            self.retract_search_projection();
+            self.repaint_search();
+            return;
+        }
+        #[cfg(test)]
+        let card_sample = search_publication_bench::Phase::begin("cards");
+        let mut old = HashMap::new();
+        for (index, key) in basis.keys.iter().enumerate() {
+            if let Some(row) = model.row_data(index) {
+                old.insert(key.clone(), (index, row));
+            }
+        }
+        let focused = (app.get_kb_active() && app.get_discover_kb_zone() == 3)
+            .then(|| app.get_discover_kb_idx() as usize)
+            .and_then(|at| basis.keys.get(at))
+            .and_then(|key| prepared.frame.keys.iter().position(|next| next == key));
+        let mut cards = Vec::with_capacity(prepared.rows.len());
+        let mut poster_jobs = Vec::new();
+        for (index, row) in prepared.rows.iter_mut().enumerate() {
+            let mut card = MediaCard {
+                id: row.key.1.clone().into(),
+                title: row.title.clone().into(),
+                year: row.context.clone().into(),
+                badge: row.badge.clone().into(),
+                poster_path: row.poster.clone().into(),
+                ..Default::default()
+            };
+            if let Some((at, painted)) = old.remove(&row.key) {
+                if painted.poster_path.as_str()
+                    != basis
+                        .poster_urls
+                        .get(at)
+                        .map(String::as_str)
+                        .unwrap_or_default()
+                    && painted.poster_path.as_str() != row.poster
+                {
+                    // A direct UI delivery changed the URL after preparation.
+                    // Preserve that newer memory paint rather than replaying
+                    // the older plain row or capturing Image on the worker.
+                    row.poster = painted.poster_path.to_string();
+                    card.poster_path = painted.poster_path.clone();
+                    prepared.metas[index].poster =
+                        (!row.poster.is_empty()).then(|| row.poster.clone());
+                    Arc::make_mut(&mut Arc::make_mut(&mut prepared.frame).poster_urls)[index] =
+                        row.poster.clone();
+                    Arc::make_mut(&mut Arc::make_mut(&mut prepared.frame).poster_overrides)
+                        .insert(row.key.clone(), row.poster.clone());
+                }
+                if painted.poster_path == card.poster_path {
+                    card.poster = painted.poster;
+                    card.is_loaded = painted.is_loaded;
+                }
+            }
+            if !card.is_loaded {
+                poster_jobs.push((
+                    index,
+                    row.key.clone(),
+                    row.source.clone(),
+                    row.poster.clone(),
+                ));
+            }
+            cards.push(card);
+        }
+        #[cfg(test)]
+        drop(card_sample);
+        if !request.stamp.current() {
+            self.repaint_search();
+            return;
+        }
+        let Some(model) = model.as_any().downcast_ref::<VecModel<MediaCard>>() else {
+            self.repaint_search();
+            return;
+        };
+        let mut cards: Vec<_> = cards.into_iter().map(Some).collect();
+        #[cfg(test)]
+        let model_sample = search_publication_bench::Phase::begin("model");
+        for edit in &prepared.plan {
+            match *edit {
+                SearchModelEdit::Move(from, to) => {
+                    let card = model.remove(from);
+                    model.insert(to, card);
+                    #[cfg(test)]
+                    search_publication_bench::model_edit("move");
+                }
+                SearchModelEdit::Insert(at) => {
+                    model.insert(at, cards[at].as_ref().unwrap().clone());
+                    #[cfg(test)]
+                    search_publication_bench::model_edit("insert");
+                }
+                SearchModelEdit::Set(at) => {
+                    model.set_row_data(at, cards[at].take().unwrap());
+                    #[cfg(test)]
+                    search_publication_bench::model_edit("set");
+                }
+                SearchModelEdit::Remove(at) => {
+                    model.remove(at);
+                    #[cfg(test)]
+                    search_publication_bench::model_edit("remove");
+                }
+            }
+        }
+        if let Some(at) = focused {
+            app.set_discover_kb_idx(at as i32);
+        }
+        #[cfg(test)]
+        drop(model_sample);
+        let model_changed = !basis.keys.is_empty() || !prepared.rows.is_empty();
+        let sequence = request.sequence;
+        let generation = request.generation;
+        let append = request.append;
+        let (pending, can_load_more, retired, old_policy, memory_changed) = {
+            #[cfg(test)]
+            let lock_sample = search_publication_bench::SharedLock::waiting();
+            let mut state = self.shared.lock().unwrap();
+            #[cfg(test)]
+            let _lock_sample = lock_sample.acquired();
+            {
+                let Shared {
+                    entries,
+                    search_projection,
+                    ..
+                } = &mut *state;
+                search_projection.capture_entries(entries);
+            }
+            let memory_changed = state.search_projection.memory_revision != request.memory_revision;
+            let retired = std::mem::replace(&mut state.search_previews, prepared.metas);
+            state.search_targets = prepared.targets;
+            let completed = prepared
+                .completed_outcomes
+                .saturating_sub(state.search_projection.completed_outcomes)
+                as usize;
+            state.search_projection.completed_outcomes = prepared.completed_outcomes;
+            state.search_pending_requests = state.search_pending_requests.saturating_sub(completed);
+            let pending = state.search_pending_requests;
+            if pending == 0 {
+                state.search_loading_more = false;
+            }
+            let can_load_more =
+                pending == 0 && state.search_targets.iter().any(|target| !target.exhausted);
+            let view = &mut state.search_projection;
+            view.published = view.published.max(sequence);
+            if model_changed {
+                view.model_revision = view.model_revision.wrapping_add(1);
+            }
+            view.frame = prepared.frame;
+            view.base_entries = prepared.entries;
+            if !memory_changed {
+                view.entry_deltas = Arc::default();
+            }
+            let old_policy = std::mem::replace(&mut view.policy, prepared.policy);
+            view.policy_requires_saved = prepared.policy_requires_saved;
+            view.local_sort_overrides.clear();
+            view.policy_stamp = Some(request.stamp.clone());
+            view.last_sources = request.sources.clone();
+            view.published_scope = Some(request.local.scope);
+            (pending, can_load_more, retired, old_policy, memory_changed)
+        };
+        drop(retired);
+        drop(old_policy);
+        if memory_changed {
+            // Background admission can alter plain entries while Slint applies
+            // edits. Retain that delta and overlay it before this callback ends.
+            self.repaint_search_memory();
+            return;
+        }
+        #[cfg(test)]
+        search_publication_bench::prepared_stats(
+            request.ingress.load(Ordering::Acquire),
+            &request.ingress_details.lock().unwrap(),
+            &prepared.stats,
+        );
+        #[cfg(test)]
+        let poster_sample = search_publication_bench::Phase::begin("posters");
+        for (index, key, source, url) in poster_jobs {
+            self.fetch_prepared_search_poster(generation, index, key, source, url);
+        }
+        #[cfg(test)]
+        drop(poster_sample);
+        if !request.stamp.current() || profile_policy::entry_blocked() {
+            self.retract_search_projection();
+            self.repaint_search();
+            return;
+        }
+        let catalogs_visible = app.get_search_scope() <= 1;
+        app.set_search_loading(pending > 0 && !append && catalogs_visible);
+        app.set_search_loading_more(pending > 0 && append && catalogs_visible);
+        app.set_search_can_load_more(can_load_more && catalogs_visible);
+        if let Some(history) = prepared.history {
+            self.apply_search_history(&history);
+        }
+        #[cfg(test)]
+        search_publication_bench::publication_complete(generation, sequence);
+    }
+
+    pub(super) fn repaint_search_memory(&self) {
+        let Some(app) = self.app() else { return };
+        let scoped = profiles::ProfileStore::capture().is_scoped();
+        let (frame, deltas, policy, policy_valid, requires_saved, scope, query) = {
+            let mut state = self.shared.lock().unwrap();
+            let stamp = state
+                .unified_search
+                .presentation_stamp(self.downloads.clone());
+            let scope = state.unified_search.projection_local().scope;
+            let query = state.search.clone();
+            let state_sources: Vec<_> = state
+                .installed
+                .iter()
+                .map(|source| SearchSourceReceipt {
+                    url: source.url.clone(),
+                    generation: source.generation,
+                    enabled: source.enabled,
+                    available: source.available,
+                })
+                .collect();
+            let Shared {
+                entries,
+                search_projection: view,
+                ..
+            } = &mut *state;
+            view.capture_entries(entries);
+            let source_current = view.last_sources.is_empty() || view.last_sources == state_sources;
+            let valid = !profile_policy::entry_blocked()
+                && source_current
+                && (!scoped
+                    || view.policy.is_some()
+                        && view.policy_stamp.as_ref().is_some_and(|prior| {
+                            prior.instance() == stamp.instance()
+                                && prior.visibility_key() == stamp.visibility_key()
+                        }));
+            (
+                view.frame.clone(),
+                view.entry_deltas.clone(),
+                view.policy.clone(),
+                valid,
+                view.policy_requires_saved,
+                scope,
+                query,
+            )
+        };
+        if !policy_valid {
+            self.retract_search_projection();
+            self.repaint_search();
+            return;
+        }
+        // Clone only the plain key/URL plan basis outside Shared; full remote
+        // metadata remains immutable. Each admitted fact changes sparse rows.
+        let focused_key = (app.get_kb_active() && app.get_discover_kb_zone() == 3)
+            .then(|| app.get_discover_kb_idx() as usize)
+            .and_then(|at| frame.keys.get(at).cloned());
+        let mut keys = (*frame.keys).clone();
+        let mut urls = (*frame.poster_urls).clone();
+        let mut changes = Vec::new();
+        for ((kind, id), fact) in deltas.iter() {
+            let allowed = !scoped
+                || policy
+                    .as_ref()
+                    .is_some_and(|policy| policy.allows(kind, id));
+            let title = fact.as_ref().filter(|_| allowed).and_then(|fact| {
+                unified_search::memory_saved_document(
+                    &query,
+                    kind,
+                    id,
+                    &fact.name,
+                    &fact.year,
+                    &fact.poster,
+                )
+            });
+            let key = (kind.clone(), id.clone(), String::new());
+            let restore = frame
+                .remote_rank
+                .get(&key)
+                .map(|&at| (frame.remote[at].clone(), frame.remote_rows[at].clone(), at));
+            changes.push((kind.clone(), id.clone(), key, fact.clone(), title, restore));
+        }
+        let mut edits = Vec::new();
+        let mut retired = Vec::new();
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.search_previews.len() != keys.len() {
+                drop(state);
+                self.repaint_search();
+                return;
+            }
+            for (kind, id, key, fact, title, restore) in changes {
+                let global = unified_search::global_id(&id);
+                let denied = requires_saved && fact.is_none();
+                if denied {
+                    for at in (0..state.search_previews.len()).rev() {
+                        let meta = &state.search_previews[at];
+                        let parent = meta
+                            .extra
+                            .get("novaSearchTitle")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(&meta.id);
+                        if meta.type_ == kind && parent == id {
+                            retired.push(state.search_previews.remove(at));
+                            keys.remove(at);
+                            urls.remove(at);
+                            edits.push(SearchMemoryEdit::Remove(at));
+                        }
+                    }
+                    continue;
+                }
+                if scope <= 1 && global {
+                    for at in 0..state.search_previews.len() {
+                        let meta = &mut state.search_previews[at];
+                        if meta.type_ == kind
+                            && meta.id == id
+                            && !meta.extra.contains_key("novaLocalSearchAction")
+                        {
+                            if fact.is_some() {
+                                meta.extra.insert("novaSearchLabel".into(), "Saved".into());
+                            } else {
+                                meta.extra.remove("novaSearchLabel");
+                            }
+                            let (badge, context) = unified_search::card_text(meta);
+                            let force = fact.as_ref().is_some_and(|fact| {
+                                fact.poster_admitted && !fact.poster.is_empty()
+                            });
+                            let poster = if force {
+                                fact.as_ref().unwrap().poster.clone()
+                            } else {
+                                urls[at].clone()
+                            };
+                            let row = PreparedSearchRow {
+                                key: keys[at].clone(),
+                                source: meta
+                                    .extra
+                                    .get("novaSourceUrl")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default()
+                                    .into(),
+                                title: meta.title(),
+                                context,
+                                badge,
+                                poster,
+                            };
+                            urls[at] = row.poster.clone();
+                            edits.push(SearchMemoryEdit::Set(at, row, force));
+                        }
+                    }
+                }
+                let at = keys.iter().position(|old| old == &key).filter(|at| {
+                    state.search_previews[*at]
+                        .extra
+                        .get("novaLocalSearchAction")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("Title")
+                });
+                if matches!(scope, 0 | 2) {
+                    if let Some(meta) = title {
+                        let force = fact
+                            .as_ref()
+                            .is_some_and(|fact| fact.poster_admitted && !fact.poster.is_empty());
+                        let (badge, context) = unified_search::card_text(&meta);
+                        let poster = if force {
+                            fact.as_ref().unwrap().poster.clone()
+                        } else {
+                            at.or_else(|| {
+                                global
+                                    .then(|| keys.iter().position(|old| old == &key))
+                                    .flatten()
+                            })
+                            .and_then(|index| urls.get(index).cloned())
+                            .or_else(|| restore.as_ref().map(|(_, row, _)| row.poster.clone()))
+                            .unwrap_or_else(|| meta.poster.clone().unwrap_or_default())
+                        };
+                        let row = PreparedSearchRow {
+                            key: key.clone(),
+                            source: String::new(),
+                            title: meta.title(),
+                            context,
+                            badge,
+                            poster,
+                        };
+                        let mut old_at = at.or_else(|| {
+                            global
+                                .then(|| keys.iter().position(|old| old == &key))
+                                .flatten()
+                        });
+                        let sort = row.title.to_lowercase();
+                        let to = keys
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| Some(*index) != old_at)
+                            .position(|(index, old)| {
+                                if !state.search_previews[index]
+                                    .extra
+                                    .contains_key("novaLocalSearchAction")
+                                {
+                                    return true;
+                                }
+                                let old_sort = state
+                                    .search_projection
+                                    .local_sort_overrides
+                                    .get(old)
+                                    .or_else(|| frame.local_sort.get(old));
+                                old_sort.is_some_and(|name| {
+                                    (name.as_str(), old.1.as_str(), old.0.as_str())
+                                        > (sort.as_str(), key.1.as_str(), key.0.as_str())
+                                })
+                            })
+                            .unwrap_or(keys.len() - usize::from(old_at.is_some()));
+                        let local_count = state
+                            .search_previews
+                            .iter()
+                            .filter(|meta| meta.extra.contains_key("novaLocalSearchAction"))
+                            .count();
+                        let was_local = old_at.is_some_and(|at| {
+                            state.search_previews[at]
+                                .extra
+                                .contains_key("novaLocalSearchAction")
+                        });
+                        if !was_local && local_count >= 150 {
+                            if to >= 150 {
+                                continue;
+                            }
+                            let evicted = state
+                                .search_previews
+                                .iter()
+                                .rposition(|meta| meta.extra.contains_key("novaLocalSearchAction"))
+                                .unwrap();
+                            let evicted_key = keys.remove(evicted);
+                            urls.remove(evicted);
+                            retired.push(state.search_previews.remove(evicted));
+                            edits.push(SearchMemoryEdit::Remove(evicted));
+                            if let Some(index) = old_at.as_mut()
+                                && *index > evicted
+                            {
+                                *index -= 1;
+                            }
+                            // An evicted portable saved title may still exist
+                            // as a catalog hit beyond the bounded local prefix.
+                            if scope == 0
+                                && unified_search::global_id(&evicted_key.1)
+                                && let Some(&rank) = frame.remote_rank.get(&evicted_key)
+                            {
+                                let meta = frame.remote[rank].clone();
+                                let row = frame.remote_rows[rank].clone();
+                                let restore_at = keys
+                                    .iter()
+                                    .enumerate()
+                                    .position(|(index, key)| {
+                                        !state.search_previews[index]
+                                            .extra
+                                            .contains_key("novaLocalSearchAction")
+                                            && frame
+                                                .remote_rank
+                                                .get(key)
+                                                .is_some_and(|other| *other > rank)
+                                    })
+                                    .unwrap_or(keys.len());
+                                state.search_previews.insert(restore_at, meta);
+                                keys.insert(restore_at, evicted_key);
+                                urls.insert(restore_at, row.poster.clone());
+                                edits.push(SearchMemoryEdit::Insert(restore_at, row));
+                                if let Some(index) = old_at.as_mut()
+                                    && *index >= restore_at
+                                {
+                                    *index += 1;
+                                }
+                            }
+                        }
+                        if let Some(old_at) = old_at {
+                            retired
+                                .push(std::mem::replace(&mut state.search_previews[old_at], meta));
+                            urls[old_at] = row.poster.clone();
+                            edits.push(SearchMemoryEdit::Set(old_at, row.clone(), force));
+                            if old_at != to {
+                                let meta = state.search_previews.remove(old_at);
+                                state.search_previews.insert(to, meta);
+                                let k = keys.remove(old_at);
+                                keys.insert(to, k);
+                                let url = urls.remove(old_at);
+                                urls.insert(to, url);
+                                edits.push(SearchMemoryEdit::Move(old_at, to));
+                            }
+                        } else {
+                            state.search_previews.insert(to, meta);
+                            keys.insert(to, key.clone());
+                            urls.insert(to, row.poster.clone());
+                            edits.push(SearchMemoryEdit::Insert(to, row));
+                        }
+                        state
+                            .search_projection
+                            .local_sort_overrides
+                            .insert(key, sort);
+                    } else if let Some(at) = at {
+                        if scope == 0 && global {
+                            if let Some((meta, row, rank)) = restore {
+                                retired
+                                    .push(std::mem::replace(&mut state.search_previews[at], meta));
+                                urls[at] = row.poster.clone();
+                                edits.push(SearchMemoryEdit::Set(at, row, false));
+                                let to = keys
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(index, _)| *index != at)
+                                    .position(|(index, key)| {
+                                        !state.search_previews[index]
+                                            .extra
+                                            .contains_key("novaLocalSearchAction")
+                                            && frame
+                                                .remote_rank
+                                                .get(key)
+                                                .is_some_and(|other| *other > rank)
+                                    })
+                                    .unwrap_or(keys.len() - 1);
+                                if at != to {
+                                    let meta = state.search_previews.remove(at);
+                                    state.search_previews.insert(to, meta);
+                                    let key = keys.remove(at);
+                                    keys.insert(to, key);
+                                    let url = urls.remove(at);
+                                    urls.insert(to, url);
+                                    edits.push(SearchMemoryEdit::Move(at, to));
+                                }
+                            } else {
+                                retired.push(state.search_previews.remove(at));
+                                keys.remove(at);
+                                urls.remove(at);
+                                edits.push(SearchMemoryEdit::Remove(at));
+                            }
+                        } else {
+                            retired.push(state.search_previews.remove(at));
+                            keys.remove(at);
+                            urls.remove(at);
+                            edits.push(SearchMemoryEdit::Remove(at));
+                        }
+                    }
+                }
+            }
+            let view = &mut state.search_projection;
+            view.model_revision = view.model_revision.wrapping_add(1);
+            // The sparse overlay has already adopted this scope. Its ensuing
+            // worker request must not retract those accepted rows as old scope.
+            view.published_scope = Some(scope);
+            view.frame = Arc::new(SearchPlainFrame {
+                keys: Arc::new(keys),
+                poster_urls: Arc::new(urls),
+                poster_overrides: frame.poster_overrides.clone(),
+                poster_stamp: frame.poster_stamp,
+                remote: frame.remote.clone(),
+                remote_rows: frame.remote_rows.clone(),
+                remote_rank: frame.remote_rank.clone(),
+                local_sort: frame.local_sort.clone(),
+            });
+        }
+        let model = app.get_search_results();
+        if let Some(model) = model.as_any().downcast_ref::<VecModel<MediaCard>>() {
+            for edit in edits {
+                match edit {
+                    SearchMemoryEdit::Remove(at) => {
+                        model.remove(at);
+                    }
+                    SearchMemoryEdit::Move(from, to) => {
+                        let card = model.remove(from);
+                        model.insert(to, card);
+                    }
+                    SearchMemoryEdit::Insert(at, row) => model.insert(at, search_plain_card(&row)),
+                    SearchMemoryEdit::Set(at, mut row, force) => {
+                        let mut card = search_plain_card(&row);
+                        if let Some(current) = model.row_data(at) {
+                            if !force
+                                && current.poster_path.as_str()
+                                    != frame
+                                        .poster_urls
+                                        .get(at)
+                                        .map(String::as_str)
+                                        .unwrap_or_default()
+                            {
+                                row.poster = current.poster_path.to_string();
+                                card.poster_path = current.poster_path.clone();
+                            }
+                            if current.poster_path == card.poster_path {
+                                card.poster = current.poster;
+                                card.is_loaded = current.is_loaded;
+                            }
+                        }
+                        model.set_row_data(at, card);
+                    }
+                }
+            }
+        }
+        if let Some(key) = focused_key {
+            let keys = self
+                .shared
+                .lock()
+                .unwrap()
+                .search_projection
+                .frame
+                .keys
+                .clone();
+            if let Some(at) = keys.iter().position(|current| current == &key) {
+                app.set_discover_kb_idx(at as i32);
+            }
+        }
+        drop(retired);
+        self.repaint_search();
+    }
+
+    fn retract_search_projection(&self) {
+        let old = {
+            let mut state = self.shared.lock().unwrap();
+            state.search_projection.model_revision =
+                state.search_projection.model_revision.wrapping_add(1);
+            let frame = state.search_projection.frame.clone();
+            state.search_projection.frame = Arc::new(SearchPlainFrame {
+                keys: Arc::default(),
+                poster_urls: Arc::default(),
+                poster_overrides: frame.poster_overrides.clone(),
+                poster_stamp: frame.poster_stamp,
+                remote: frame.remote.clone(),
+                remote_rows: frame.remote_rows.clone(),
+                remote_rank: frame.remote_rank.clone(),
+                local_sort: frame.local_sort.clone(),
+            });
+            std::mem::take(&mut state.search_previews)
+        };
+        if let Some(app) = self.app() {
+            let model = app.get_search_results();
+            if let Some(model) = model.as_any().downcast_ref::<VecModel<MediaCard>>() {
+                while model.row_count() > 0 {
+                    model.remove(model.row_count() - 1);
+                }
+            }
+        }
+        drop(old);
+    }
+
+    #[cfg(test)]
+    fn apply_search_results_legacy(
+        &self,
+        generation: u64,
+        pages: Vec<(usize, Option<Vec<MetaPreview>>)>,
+        append: bool,
+    ) {
+        #[cfg(test)]
+        let _publication_sample = search_publication_bench::Callback::begin();
+        let Some(app) = self.app() else { return };
+        let context = profiles::capture();
+        let version = progress_projection::revision();
+        #[cfg(test)]
+        let policy_sample = search_publication_bench::Phase::begin("policy");
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture_browse(&profiles::ProfileStore::capture());
+        #[cfg(test)]
+        drop(policy_sample);
         let delivered = !pages.is_empty();
         let (old_previews, ranked_metas, new_count, can_load_more, pending) = {
+            #[cfg(test)]
+            let lock_sample = search_publication_bench::SharedLock::waiting();
             let mut state = self.shared.lock().unwrap();
+            #[cfg(test)]
+            let _lock_sample = lock_sample.acquired();
             if generation != state.search_generation {
                 return;
             }
@@ -2084,12 +3153,13 @@ impl Bridge {
             let query = state.search.clone();
             let mut merged = ranked_search_results(&query, &state.search_targets);
             merged.retain(|m| {
-                profile_policy::allows_browse_title(
-                    &profiles::ProfileStore::capture(),
-                    &m.type_,
-                    &m.id,
-                )
+                policy
+                    .as_ref()
+                    .is_ok_and(|policy| policy.allows(&m.type_, &m.id))
             });
+            if !profiles::is_current(&context) || progress_projection::revision() != version {
+                return;
+            }
             let merged = unified_search::merge(&state, merged);
             let old_keys: HashSet<_> = old_previews
                 .iter()
@@ -2121,6 +3191,8 @@ impl Bridge {
         // Rebuild in relevance order while carrying already-decoded posters
         // across position changes. Poster completions are resolved by metadata
         // identity below, so an in-flight image remains attached to its item.
+        #[cfg(test)]
+        let card_sample = search_publication_bench::Phase::begin("cards");
         let old_model = app.get_search_results();
         let mut old_cards = HashMap::new();
         for (index, meta) in old_previews.iter().enumerate() {
@@ -2134,11 +3206,17 @@ impl Bridge {
         for meta in &ranked_metas {
             let key = unified_search::result_key(meta);
             let mut known = meta.clone();
-            reuse_discover_poster(
-                &mut known,
-                read_meta_header_for(&meta.type_, &meta.id).as_ref(),
-                &self.shared.lock().unwrap().entries,
-            );
+            let header = read_meta_header_for(&meta.type_, &meta.id);
+            #[cfg(test)]
+            search_publication_bench::header_read(header.is_some());
+            {
+                #[cfg(test)]
+                let lock_sample = search_publication_bench::SharedLock::waiting();
+                let state = self.shared.lock().unwrap();
+                #[cfg(test)]
+                let _lock_sample = lock_sample.acquired();
+                reuse_discover_poster(&mut known, header.as_ref(), &state.entries);
+            }
             let mut card = search_media_card(&known);
             if let Some(old) = old_cards.remove(&key)
                 && old.poster_path == card.poster_path
@@ -2158,20 +3236,36 @@ impl Bridge {
         let focused_index = (app.get_kb_active() && app.get_discover_kb_zone() == 3)
             .then(|| app.get_discover_kb_idx() as usize)
             .and_then(|index| unified_search::restored_focus(&old_previews, &ranked_metas, index));
+        #[cfg(test)]
+        drop(card_sample);
+        #[cfg(test)]
+        let model_sample = search_publication_bench::Phase::begin("model");
         update_search_result_model(&app, &old_previews, &ranked_metas, cards);
         if let Some(index) = focused_index {
             app.set_discover_kb_idx(index as i32);
         }
-
+        #[cfg(test)]
+        drop(model_sample);
+        #[cfg(test)]
+        let poster_sample = search_publication_bench::Phase::begin("posters");
         for (type_, id, poster) in poster_jobs {
             self.fetch_search_card_poster(type_, id, poster, generation);
         }
+        #[cfg(test)]
+        drop(poster_sample);
         let catalogs_visible = app.get_search_scope() <= 1;
         app.set_search_loading(pending > 0 && !append && catalogs_visible);
         app.set_search_loading_more(pending > 0 && append && catalogs_visible);
         app.set_search_can_load_more(can_load_more && catalogs_visible);
         if !append && pending == 0 && delivered {
-            let query = self.shared.lock().unwrap().search.clone();
+            let query = {
+                #[cfg(test)]
+                let lock_sample = search_publication_bench::SharedLock::waiting();
+                let state = self.shared.lock().unwrap();
+                #[cfg(test)]
+                let _lock_sample = lock_sample.acquired();
+                state.search.clone()
+            };
             self.remember_search(&query);
         }
         crate::web_log(&format!(
@@ -2685,7 +3779,8 @@ fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {
                 supports_skip: catalog.supports_extra("skip"),
                 next_skip: 0,
                 exhausted: false,
-                results: Vec::new(),
+                page_fingerprints: HashSet::new(),
+                results: Arc::default(),
             });
         }
     }
@@ -2865,12 +3960,13 @@ fn unique_search_results(targets: &[SearchTarget]) -> Vec<MetaPreview> {
     let mut seen = HashSet::new();
     targets
         .iter()
-        .flat_map(|target| &target.results)
+        .flat_map(|target| target.results.iter())
         .filter(|meta| !meta.id.is_empty() && seen.insert(unified_search::result_key(meta)))
         .cloned()
         .collect()
 }
 
+#[cfg(test)]
 fn update_search_result_model(
     app: &AppWindow,
     old_previews: &[MetaPreview],
@@ -2879,10 +3975,14 @@ fn update_search_result_model(
 ) {
     let model = app.get_search_results();
     let Some(model) = model.as_any().downcast_ref::<VecModel<MediaCard>>() else {
+        #[cfg(test)]
+        search_publication_bench::model_edit("replace");
         app.set_search_results(Rc::new(VecModel::from(cards)).into());
         return;
     };
     if model.row_count() != old_previews.len() {
+        #[cfg(test)]
+        search_publication_bench::model_edit("replace");
         app.set_search_results(Rc::new(VecModel::from(cards)).into());
         return;
     }
@@ -2901,17 +4001,25 @@ fn update_search_result_model(
                 .find_map(|(at, old_key)| (old_key == &key).then_some(at))
             {
                 let previous_card = model.remove(previous_index);
+                #[cfg(test)]
+                search_publication_bench::model_edit("move");
                 model.insert(index, previous_card);
                 current_keys.remove(previous_index);
                 current_keys.insert(index, key);
             } else {
+                #[cfg(test)]
+                search_publication_bench::model_edit("insert");
                 model.insert(index, card.clone());
                 current_keys.insert(index, key);
             }
         }
         model.set_row_data(index, card);
+        #[cfg(test)]
+        search_publication_bench::model_edit("set");
     }
     while current_keys.len() > new_previews.len() {
+        #[cfg(test)]
+        search_publication_bench::model_edit("remove");
         model.remove(current_keys.len() - 1);
         current_keys.pop();
     }
@@ -2938,14 +4046,44 @@ fn record_search_source_page(
     for meta in &mut metas {
         unified_search::tag_catalog(meta, &target.addon_url);
     }
-    if metas.is_empty() || !target.supports_skip {
+    let raw_len = metas.len();
+    if raw_len == 0 || !target.supports_skip {
         target.exhausted = true;
     } else {
-        target.next_skip += metas.len();
+        // The provider cursor counts its raw rows, including duplicates.
+        target.next_skip = target.next_skip.saturating_add(raw_len);
     }
-    target.results.extend(metas);
+    if raw_len == 0 {
+        return;
+    }
+    let mut identities: Vec<_> = metas.iter().map(unified_search::result_key).collect();
+    identities.sort();
+    identities.dedup();
+    let fingerprint = nova_providers::catalog_grouping::projection_fingerprint(&identities);
+    if !target.page_fingerprints.insert(fingerprint) {
+        target.exhausted = true;
+        return;
+    }
+    let mut seen: HashSet<_> = target
+        .results
+        .iter()
+        .map(unified_search::result_key)
+        .collect();
+    let previous_len = target.results.len();
+    // Keep the first metadata from each source, matching display deduplication.
+    Arc::make_mut(&mut target.results).extend(
+        metas
+            .into_iter()
+            .filter(|meta| seen.insert(unified_search::result_key(meta))),
+    );
+    // A source may cycle through new subsets of earlier pages without repeating
+    // any one page verbatim. No new identities means it cannot advance the view.
+    if target.results.len() == previous_len {
+        target.exhausted = true;
+    }
 }
 
+#[cfg(test)]
 fn ranked_search_results(query: &str, targets: &[SearchTarget]) -> Vec<MetaPreview> {
     let mut results = unique_search_results(targets);
     // Stable sorting preserves declared source and provider result order for
@@ -2954,7 +4092,10 @@ fn ranked_search_results(query: &str, targets: &[SearchTarget]) -> Vec<MetaPrevi
     results
 }
 
+#[cfg(test)]
 fn search_relevance_score(query: &str, meta: &MetaPreview) -> u32 {
+    #[cfg(test)]
+    search_publication_bench::score_call();
     let title = meta.title();
     let year = meta.year_str();
     search_match_score(query, &title, year.as_deref())
@@ -2963,20 +4104,24 @@ fn search_relevance_score(query: &str, meta: &MetaPreview) -> u32 {
 /// Rank exact, prefix, phrase, complete-token and typo-tolerant title matches
 /// in descending tiers. Weak partial-token matches remain at the bottom, and
 /// all provider results stay visible regardless of score.
+#[cfg(test)]
 fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
     let query = normalize_search_text(query);
     let title = normalize_search_text(title);
+    let year = year.map(normalize_search_text);
+    search_match_score_normalized(&query, &title, year.as_deref())
+}
+fn search_match_score_normalized(query: &str, title: &str, year: Option<&str>) -> u32 {
     if query.is_empty() || title.is_empty() {
         return 0;
     }
 
-    let mut title_and_year = title.clone();
-    if let Some(year) = year {
-        let year = normalize_search_text(year);
-        if !year.is_empty() {
-            title_and_year.push(' ');
-            title_and_year.push_str(&year);
-        }
+    let mut title_and_year = title.to_owned();
+    if let Some(year) = year
+        && !year.is_empty()
+    {
+        title_and_year.push(' ');
+        title_and_year.push_str(year);
     }
 
     if query == title {
@@ -2990,7 +4135,7 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
         .chars()
         .count()
         .saturating_sub(query.chars().count());
-    if title.starts_with(&query) || title_and_year.starts_with(&query) {
+    if title.starts_with(query) || title_and_year.starts_with(query) {
         return 900_000u32.saturating_sub(suffix_len.min(10_000) as u32);
     }
 
@@ -3093,7 +4238,7 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
     for width in min_window..=max_window {
         for start in 0..=title_tokens.len() - width {
             let window = title_tokens[start..start + width].join(" ");
-            best_similarity = best_similarity.max(normalized_edit_similarity(&query, &window));
+            best_similarity = best_similarity.max(normalized_edit_similarity(query, &window));
         }
     }
     if best_similarity >= 750 {
@@ -3138,31 +4283,34 @@ fn normalized_edit_similarity(left: &str, right: &str) -> u32 {
 }
 
 fn damerau_levenshtein(left: &[char], right: &[char]) -> usize {
-    let mut distances = vec![vec![0; right.len() + 1]; left.len() + 1];
-    for (index, row) in distances.iter_mut().enumerate() {
-        row[0] = index;
-    }
-    for (index, distance) in distances[0].iter_mut().enumerate() {
-        *distance = index;
-    }
-
+    // OSA distance is symmetric; keep the three row buffers on the shorter side.
+    let (left, right) = if left.len() < right.len() {
+        (right, left)
+    } else {
+        (left, right)
+    };
+    let mut older = vec![0; right.len() + 1];
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
     for left_index in 1..=left.len() {
+        current[0] = left_index;
         for right_index in 1..=right.len() {
             let substitution_cost = usize::from(left[left_index - 1] != right[right_index - 1]);
-            distances[left_index][right_index] = (distances[left_index - 1][right_index] + 1)
-                .min(distances[left_index][right_index - 1] + 1)
-                .min(distances[left_index - 1][right_index - 1] + substitution_cost);
+            current[right_index] = (previous[right_index] + 1)
+                .min(current[right_index - 1] + 1)
+                .min(previous[right_index - 1] + substitution_cost);
             if left_index > 1
                 && right_index > 1
                 && left[left_index - 1] == right[right_index - 2]
                 && left[left_index - 2] == right[right_index - 1]
             {
-                distances[left_index][right_index] = distances[left_index][right_index]
-                    .min(distances[left_index - 2][right_index - 2] + 1);
+                current[right_index] = current[right_index].min(older[right_index - 2] + 1);
             }
         }
+        std::mem::swap(&mut older, &mut previous);
+        std::mem::swap(&mut previous, &mut current);
     }
-    distances[left.len()][right.len()]
+    previous[right.len()]
 }
 
 /// A thin catalog can omit artwork that Detail/Library already knows. Prefer
@@ -3363,9 +4511,2481 @@ pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
         .collect()
 }
 
+enum SearchMemoryEdit {
+    Remove(usize),
+    Move(usize, usize),
+    Insert(usize, PreparedSearchRow),
+    Set(usize, PreparedSearchRow, bool),
+}
+fn search_plain_card(row: &PreparedSearchRow) -> MediaCard {
+    MediaCard {
+        id: row.key.1.clone().into(),
+        title: row.title.clone().into(),
+        year: row.context.clone().into(),
+        badge: row.badge.clone().into(),
+        poster_path: row.poster.clone().into(),
+        ..Default::default()
+    }
+}
+type SearchResultKey = (String, String, String);
+type SearchEntryKey = (String, String);
+#[derive(Clone, PartialEq, Eq)]
+struct SearchEntryFact {
+    name: String,
+    year: String,
+    poster: String,
+    poster_admitted: bool,
+}
+#[derive(Clone, Default)]
+struct SearchPlainFrame {
+    keys: Arc<Vec<SearchResultKey>>,
+    poster_urls: Arc<Vec<String>>,
+    poster_overrides: Arc<HashMap<SearchResultKey, String>>,
+    poster_stamp: Option<(u64, u64)>,
+    remote: Arc<Vec<MetaPreview>>,
+    remote_rows: Arc<Vec<PreparedSearchRow>>,
+    remote_rank: Arc<HashMap<SearchResultKey, usize>>,
+    local_sort: Arc<HashMap<SearchResultKey, String>>,
+}
+#[derive(Clone)]
+struct PreparedSearchRow {
+    key: SearchResultKey,
+    source: String,
+    title: String,
+    context: String,
+    badge: String,
+    poster: String,
+}
+#[derive(Default)]
+pub(super) struct SearchProjectionView {
+    generation: u64,
+    requested: u64,
+    published: u64,
+    completed_outcomes: u64,
+    model_revision: u64,
+    memory_revision: u64,
+    seen_entries: HashMap<String, HashMap<String, SearchEntryFact>>,
+    seen_count: usize,
+    seeded_entries: bool,
+    base_entries: Arc<HashMap<SearchEntryKey, SearchEntryFact>>,
+    entry_deltas: Arc<HashMap<SearchEntryKey, Option<SearchEntryFact>>>,
+    frame: Arc<SearchPlainFrame>,
+    policy: Option<Arc<profile_policy::TitlePolicySnapshot>>,
+    policy_stamp: Option<unified_search::PresentationStamp>,
+    policy_requires_saved: bool,
+    local_sort_overrides: HashMap<SearchResultKey, String>,
+    last_sources: Vec<SearchSourceReceipt>,
+    published_scope: Option<i32>,
+}
+impl SearchProjectionView {
+    fn capture_entries(&mut self, entries: &[LibraryEntry]) {
+        let matches = |entry: &LibraryEntry| {
+            self.seen_entries
+                .get(entry.type_.as_str())
+                .and_then(|titles| titles.get(entry.id.as_str()))
+                .is_some_and(|old| {
+                    old.name == entry.name
+                        && old.year == entry.year
+                        && old.poster == entry.poster_url
+                })
+        };
+        if entries.len() == self.seen_count && entries.iter().all(matches) {
+            self.seeded_entries = true;
+            return;
+        }
+        let live: HashSet<_> = entries
+            .iter()
+            .map(|entry| (entry.type_.as_str(), entry.id.as_str()))
+            .collect();
+        let removed: Vec<_> = self
+            .seen_entries
+            .iter()
+            .flat_map(|(kind, titles)| titles.keys().map(move |id| (kind, id)))
+            .filter(|(kind, id)| !live.contains(&(kind.as_str(), id.as_str())))
+            .map(|(kind, id)| (kind.clone(), id.clone()))
+            .collect();
+        let changes = Arc::make_mut(&mut self.entry_deltas);
+        for (kind, id) in removed {
+            self.seen_entries.get_mut(&kind).unwrap().remove(&id);
+            changes.insert((kind, id), None);
+        }
+        for entry in entries {
+            let titles = self.seen_entries.entry(entry.type_.clone()).or_default();
+            if titles.get(entry.id.as_str()).is_some_and(|old| {
+                old.name == entry.name && old.year == entry.year && old.poster == entry.poster_url
+            }) {
+                continue;
+            }
+            let poster_admitted = self.seeded_entries
+                && titles
+                    .get(entry.id.as_str())
+                    .is_none_or(|old| old.poster != entry.poster_url)
+                || changes
+                    .get(&(entry.type_.clone(), entry.id.clone()))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|fact| fact.poster_admitted && fact.poster == entry.poster_url);
+            let fact = SearchEntryFact {
+                name: entry.name.clone(),
+                year: entry.year.clone(),
+                poster: entry.poster_url.clone(),
+                poster_admitted,
+            };
+            titles.insert(entry.id.clone(), fact.clone());
+            changes.insert((entry.type_.clone(), entry.id.clone()), Some(fact));
+        }
+        self.seen_count = entries.len();
+        self.seeded_entries = true;
+        self.memory_revision = self.memory_revision.wrapping_add(1);
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SearchSourceReceipt {
+    url: String,
+    generation: u64,
+    enabled: bool,
+    available: bool,
+}
+#[derive(Clone)]
+pub(super) struct SearchProjectionRequest {
+    pub(super) context: profiles::Context,
+    pub(super) bridge: Bridge,
+    generation: u64,
+    query: String,
+    local: unified_search::ProjectionLocal,
+    stamp: unified_search::PresentationStamp,
+    targets: Vec<SearchTarget>,
+    sources: Vec<SearchSourceReceipt>,
+    pages: Vec<(usize, Option<Vec<MetaPreview>>)>,
+    discarded_outcomes: usize,
+    sequence: u64,
+    memory_revision: u64,
+    model_revision: u64,
+    base_entries: Arc<HashMap<SearchEntryKey, SearchEntryFact>>,
+    entry_deltas: Arc<HashMap<SearchEntryKey, Option<SearchEntryFact>>>,
+    frame: Arc<SearchPlainFrame>,
+    append: bool,
+    #[cfg(test)]
+    ingress: Arc<AtomicU64>,
+    #[cfg(test)]
+    ingress_details: Arc<Mutex<SearchIngressDetails>>,
+    pending_outcomes: usize,
+    applied_outcomes: u64,
+    history_entry: SearchHistoryEntry,
+}
+impl SearchProjectionRequest {
+    pub(super) fn query(&self) -> &str {
+        &self.query
+    }
+    pub(super) fn same_activation(&self, context: &profiles::Context, instance: u64) -> bool {
+        self.context == *context && self.stamp.instance() == instance
+    }
+}
+struct SearchProjectionOwner {
+    context: profiles::Context,
+    generation: u64,
+    query: String,
+    scope: i32,
+    stamp: unified_search::PresentationStamp,
+    memory_revision: u64,
+    sources: Vec<SearchSourceReceipt>,
+}
+impl SearchProjectionOwner {
+    fn from(request: &SearchProjectionRequest) -> Self {
+        let mut context = request.context.clone();
+        context.session = None;
+        Self {
+            context,
+            generation: request.generation,
+            query: request.query.clone(),
+            scope: request.local.scope,
+            stamp: request.stamp.clone(),
+            memory_revision: request.memory_revision,
+            sources: request.sources.clone(),
+        }
+    }
+    fn matches(&self, request: &SearchProjectionRequest) -> bool {
+        self.context == request.context
+            && self.generation == request.generation
+            && self.query == request.query
+            && self.scope == request.local.scope
+            && self.stamp == request.stamp
+            && self.memory_revision == request.memory_revision
+            && self.sources == request.sources
+    }
+}
+#[derive(Default)]
+pub(super) struct SearchProjectionQueue {
+    pub(super) latest: Option<SearchProjectionRequest>,
+    owner: Option<SearchProjectionOwner>,
+    processor: SearchProjectionProcessor,
+}
+impl SearchProjectionQueue {
+    pub(super) fn submit(
+        &mut self,
+        mut request: SearchProjectionRequest,
+    ) -> Option<SearchProjectionRequest> {
+        let mut retired = None;
+        if let Some(mut prior) = self.latest.take() {
+            if prior.context == request.context
+                && prior.generation == request.generation
+                && prior.query == request.query
+                && prior.stamp.instance() == request.stamp.instance()
+            {
+                request.discarded_outcomes += prior.discarded_outcomes;
+                if prior.sources == request.sources {
+                    prior.pages.append(&mut request.pages);
+                    request.pages = std::mem::take(&mut prior.pages);
+                } else {
+                    // A page admitted before an authority change settles its
+                    // old request, but cannot supply rows to the new authority.
+                    request.discarded_outcomes += prior.pages.len();
+                }
+                retired = Some(prior);
+            } else {
+                retired = Some(prior);
+            }
+        }
+        self.owner = Some(SearchProjectionOwner::from(&request));
+        self.latest = Some(request);
+        retired
+    }
+    pub(super) fn query_current(&self, request: &SearchProjectionRequest) -> bool {
+        self.owner.as_ref().is_some_and(|owner| {
+            owner.context == request.context
+                && owner.generation == request.generation
+                && owner.query == request.query
+                && owner.stamp.instance() == request.stamp.instance()
+        })
+    }
+    pub(super) fn current(&self, request: &SearchProjectionRequest) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.matches(request))
+            && request.stamp.current()
+    }
+    pub(super) fn take(&mut self) -> Option<(SearchProjectionRequest, SearchProjectionProcessor)> {
+        self.latest
+            .take()
+            .map(|request| (request, std::mem::take(&mut self.processor)))
+    }
+    pub(super) fn put_processor(&mut self, processor: SearchProjectionProcessor) {
+        self.processor = processor;
+    }
+}
+type SearchProjectionIdentity = (String, u64, u64, u64, String);
+#[derive(Default)]
+pub(super) struct SearchProjectionProcessor {
+    owner: Option<SearchProjectionIdentity>,
+    targets: Vec<SearchTarget>,
+    source_receipts: Vec<SearchSourceReceipt>,
+    header_stamp: Option<(u64, u64)>,
+    headers: HashMap<SearchEntryKey, Option<String>>,
+    header_order: VecDeque<SearchEntryKey>,
+    header_bytes: usize,
+    scores: HashMap<SearchResultKey, u32>,
+    score_stamp: Option<(u64, u64)>,
+    normalized_query: String,
+    completed_outcomes: u64,
+}
+#[cfg(test)]
+#[derive(Default, Clone)]
+struct SearchIngressDetails {
+    allocator: search_publication_bench::AllocationSample,
+    wait_ns: u64,
+    hold_ns: u64,
+}
+#[cfg(test)]
+#[derive(Default, Clone)]
+struct SearchPreparationStats {
+    elapsed_ns: u64,
+    header_reads: u64,
+    header_decodes: u64,
+    score_calls: u64,
+    #[cfg(test)]
+    allocator: search_publication_bench::AllocationSample,
+}
+struct PreparedSearchProjection {
+    request: SearchProjectionRequest,
+    targets: Vec<SearchTarget>,
+    metas: Vec<MetaPreview>,
+    rows: Vec<PreparedSearchRow>,
+    frame: Arc<SearchPlainFrame>,
+    entries: Arc<HashMap<SearchEntryKey, SearchEntryFact>>,
+    policy: Option<Arc<profile_policy::TitlePolicySnapshot>>,
+    policy_requires_saved: bool,
+    plan: Vec<SearchModelEdit>,
+    #[cfg(test)]
+    stats: SearchPreparationStats,
+    completed_outcomes: u64,
+    history: Option<Vec<SearchHistoryEntry>>,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum SearchModelEdit {
+    Move(usize, usize),
+    Insert(usize),
+    Set(usize),
+    Remove(usize),
+}
+fn search_edit_plan(old: &[SearchResultKey], new: &[SearchResultKey]) -> Vec<SearchModelEdit> {
+    let mut plan = Vec::new();
+    if new.starts_with(old) {
+        for index in 0..new.len() {
+            if index >= old.len() {
+                plan.push(SearchModelEdit::Insert(index));
+            }
+            plan.push(SearchModelEdit::Set(index));
+        }
+        return plan;
+    }
+    let positions: HashMap<_, _> = old.iter().enumerate().map(|(at, key)| (key, at)).collect();
+    let mut live = vec![0usize; old.len() + 1];
+    for (i, value) in live.iter_mut().enumerate().skip(1) {
+        *value = i.isolate_lowest_one();
+    }
+    let mut remaining = old.len();
+    for (index, key) in new.iter().enumerate() {
+        if let Some(&original) = positions.get(key) {
+            let mut at = original + 1;
+            let mut rank = 0;
+            while at > 0 {
+                rank += live[at];
+                at -= at.isolate_lowest_one();
+            }
+            let previous = index + rank - 1;
+            if previous != index {
+                plan.push(SearchModelEdit::Move(previous, index));
+            }
+            let mut at = original + 1;
+            while at < live.len() {
+                live[at] -= 1;
+                at += at.isolate_lowest_one();
+            }
+            remaining -= 1;
+        } else {
+            plan.push(SearchModelEdit::Insert(index));
+        }
+        plan.push(SearchModelEdit::Set(index));
+    }
+    for left in (0..remaining).rev() {
+        plan.push(SearchModelEdit::Remove(new.len() + left));
+    }
+    plan
+}
+#[cfg(test)]
+static SEARCH_PROJECTION_TEST_GATE: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+impl SearchProjectionProcessor {
+    fn reset_headers(&mut self) {
+        self.headers.clear();
+        self.header_order.clear();
+        self.header_bytes = 0;
+        self.header_stamp = None;
+    }
+    fn select_owner(&mut self, owner: SearchProjectionIdentity) -> bool {
+        if self.owner.as_ref() == Some(&owner) {
+            return false;
+        }
+        self.reset_headers();
+        self.owner = Some(owner);
+        true
+    }
+    fn replace_sources(
+        &mut self,
+        sources: &[SearchSourceReceipt],
+    ) -> Option<Vec<SearchSourceReceipt>> {
+        if self.source_receipts == sources {
+            return None;
+        }
+        self.reset_headers();
+        Some(std::mem::replace(
+            &mut self.source_receipts,
+            sources.to_vec(),
+        ))
+    }
+    fn prepare(
+        &mut self,
+        request: SearchProjectionRequest,
+        current: impl Fn() -> bool,
+        query_current: impl Fn() -> bool,
+    ) -> Option<PreparedSearchProjection> {
+        if !query_current() {
+            return None;
+        }
+        let owner = (
+            request.context.id.clone(),
+            request.context.epoch,
+            request.stamp.instance(),
+            request.generation,
+            request.query.clone(),
+        );
+        if self.select_owner(owner) {
+            self.targets = request.targets.clone();
+            self.source_receipts = request.sources.clone();
+            self.scores.clear();
+            self.completed_outcomes = 0;
+            self.normalized_query = normalize_search_text(&request.query);
+        }
+        if let Some(old_sources) = self.replace_sources(&request.sources) {
+            let old = std::mem::take(&mut self.targets);
+            self.targets = request
+                .targets
+                .iter()
+                .map(|target| {
+                    let mut next = target.clone();
+                    let before = old_sources
+                        .iter()
+                        .find(|source| source.url == target.addon_url);
+                    let after = request
+                        .sources
+                        .iter()
+                        .find(|source| source.url == target.addon_url);
+                    let unchanged = before == after
+                        && after.is_some_and(|source| source.enabled && source.available);
+                    if unchanged {
+                        if let Some(prior) = old.iter().find(|prior| {
+                            prior.addon_url == target.addon_url
+                                && prior.type_ == target.type_
+                                && prior.catalog_id == target.catalog_id
+                                && prior.genre == target.genre
+                        }) {
+                            next = prior.clone();
+                        }
+                    } else {
+                        next.results = Arc::default();
+                        next.page_fingerprints.clear();
+                        next.next_skip = 0;
+                    }
+                    next
+                })
+                .collect();
+            self.scores.clear();
+        }
+        self.completed_outcomes = self
+            .completed_outcomes
+            .saturating_add(request.discarded_outcomes as u64);
+        for (index, mut page) in request.pages.iter().cloned() {
+            if let Some(target) = self.targets.get(index)
+                && request
+                    .sources
+                    .iter()
+                    .find(|source| source.url == target.addon_url)
+                    .is_some_and(|source| !source.enabled || !source.available)
+            {
+                page = None;
+            }
+            record_search_page_outcome(&mut self.targets, index, page);
+            self.completed_outcomes = self.completed_outcomes.wrapping_add(1);
+        }
+        #[cfg(test)]
+        {
+            let gate = SEARCH_PROJECTION_TEST_GATE.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate();
+            }
+        }
+        if !current() {
+            return None;
+        }
+        let mut entries = (*request.base_entries).clone();
+        for (key, value) in request.entry_deltas.iter() {
+            if let Some(value) = value {
+                entries.insert(key.clone(), value.clone());
+            } else {
+                entries.remove(key);
+            }
+        }
+        let entries = Arc::new(entries);
+        let saved: HashSet<_> = entries.keys().cloned().collect();
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture_browse(&profiles::ProfileStore::capture())
+                .ok()
+                .map(Arc::new);
+        if !current() {
+            return None;
+        }
+        #[cfg(test)]
+        let mut stats = SearchPreparationStats::default();
+        if self.score_stamp != Some(request.stamp.metadata_key()) {
+            self.scores.clear();
+            self.score_stamp = Some(request.stamp.metadata_key());
+        }
+        let mut remote = unique_search_results(&self.targets);
+        remote.sort_by_cached_key(|meta| {
+            let key = unified_search::result_key(meta);
+            let score = *self.scores.entry(key).or_insert_with(|| {
+                #[cfg(test)]
+                {
+                    stats.score_calls += 1;
+                }
+                {
+                    let title = normalize_search_text(&meta.title());
+                    let year = meta.year_str().map(|year| normalize_search_text(&year));
+                    search_match_score_normalized(&self.normalized_query, &title, year.as_deref())
+                }
+            });
+            std::cmp::Reverse(score)
+        });
+        let requires_saved = profile_policy::restricted() && !profile_policy::management_browsing();
+        let allowed = |kind: &str, id: &str| {
+            policy
+                .as_ref()
+                .is_some_and(|policy| policy.allows(kind, id))
+                && (!requires_saved || entries.contains_key(&(kind.to_owned(), id.to_owned())))
+        };
+        remote.retain(|meta| allowed(&meta.type_, &meta.id));
+        let local = unified_search::replace_saved_documents(
+            &request.local,
+            entries
+                .iter()
+                .filter(|((kind, id), _)| allowed(kind, id))
+                .filter_map(|((kind, id), fact)| {
+                    unified_search::memory_saved_document(
+                        &request.query,
+                        kind,
+                        id,
+                        &fact.name,
+                        &fact.year,
+                        &fact.poster,
+                    )
+                }),
+            &saved,
+        );
+        let metas = unified_search::merge_plain(&local, &saved, remote.clone());
+        if self.header_stamp != Some(request.stamp.metadata_key()) {
+            self.headers.clear();
+            self.header_order.clear();
+            self.header_bytes = 0;
+            self.header_stamp = Some(request.stamp.metadata_key());
+        }
+        let mut hydrate = |meta: &MetaPreview| -> PreparedSearchRow {
+            let key = (meta.type_.clone(), meta.id.clone());
+            let poster = self.headers.get(&key).cloned().unwrap_or_else(|| {
+                #[cfg(test)]
+                {
+                    stats.header_reads += 1;
+                }
+                let header = read_meta_header_for(&meta.type_, &meta.id);
+                #[cfg(test)]
+                {
+                    stats.header_decodes += u64::from(header.is_some());
+                }
+                let poster = header.and_then(|header| {
+                    (!header.poster_url.trim().is_empty()).then_some(header.poster_url)
+                });
+                let bytes = key.0.len() + key.1.len() + poster.as_ref().map_or(0, String::len);
+                const MAX_BYTES: usize = 4 * 1024 * 1024;
+                const MAX_HEADERS: usize = 16_384;
+                while self.headers.len() >= MAX_HEADERS
+                    || self.header_bytes.saturating_add(bytes) > MAX_BYTES
+                {
+                    let Some(old) = self.header_order.pop_front() else {
+                        break;
+                    };
+                    if let Some(value) = self.headers.remove(&old) {
+                        self.header_bytes = self.header_bytes.saturating_sub(
+                            old.0.len() + old.1.len() + value.as_ref().map_or(0, String::len),
+                        );
+                    }
+                }
+                if bytes <= MAX_BYTES {
+                    self.header_bytes += bytes;
+                    self.header_order.push_back(key.clone());
+                    self.headers.insert(key.clone(), poster.clone());
+                }
+                poster
+            });
+            let poster = request
+                .entry_deltas
+                .get(&key)
+                .and_then(Option::as_ref)
+                .filter(|fact| fact.poster_admitted && !fact.poster.trim().is_empty())
+                .map(|fact| fact.poster.clone())
+                .or_else(|| {
+                    (request.frame.poster_stamp == Some(request.stamp.metadata_key()))
+                        .then(|| {
+                            request
+                                .frame
+                                .poster_overrides
+                                .get(&unified_search::result_key(meta))
+                        })
+                        .flatten()
+                        .cloned()
+                })
+                .or(poster)
+                .or_else(|| {
+                    entries.get(&key).and_then(|entry| {
+                        (!entry.poster.trim().is_empty()).then(|| entry.poster.clone())
+                    })
+                })
+                .or_else(|| meta.poster.clone())
+                .unwrap_or_default();
+            let (badge, context) = unified_search::card_text(meta);
+            PreparedSearchRow {
+                key: unified_search::result_key(meta),
+                source: meta
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                title: meta.title(),
+                context,
+                badge,
+                poster,
+            }
+        };
+        let rows: Vec<_> = metas.iter().map(&mut hydrate).collect();
+        let remote_rows = remote.iter().map(&mut hydrate).collect();
+        let frame = Arc::new(SearchPlainFrame {
+            keys: Arc::new(rows.iter().map(|row| row.key.clone()).collect()),
+            poster_urls: Arc::new(rows.iter().map(|row| row.poster.clone()).collect()),
+            poster_stamp: Some(request.stamp.metadata_key()),
+            poster_overrides: Arc::new(
+                rows.iter()
+                    .filter_map(|row| {
+                        let typed = (row.key.0.clone(), row.key.1.clone());
+                        let admitted = request
+                            .entry_deltas
+                            .get(&typed)
+                            .and_then(Option::as_ref)
+                            .is_some_and(|fact| fact.poster_admitted && !fact.poster.is_empty());
+                        let retained = request.frame.poster_stamp
+                            == Some(request.stamp.metadata_key())
+                            && request.frame.poster_overrides.contains_key(&row.key);
+                        (admitted || retained).then(|| (row.key.clone(), row.poster.clone()))
+                    })
+                    .collect(),
+            ),
+            remote_rank: Arc::new(
+                remote
+                    .iter()
+                    .enumerate()
+                    .map(|(at, meta)| (unified_search::result_key(meta), at))
+                    .collect(),
+            ),
+            local_sort: Arc::new(
+                metas
+                    .iter()
+                    .filter(|meta| meta.extra.contains_key("novaLocalSearchAction"))
+                    .map(|meta| (unified_search::result_key(meta), meta.name.to_lowercase()))
+                    .collect(),
+            ),
+            remote: Arc::new(remote),
+            remote_rows: Arc::new(remote_rows),
+        });
+        let plan = search_edit_plan(&request.frame.keys, &frame.keys);
+        if !current() {
+            return None;
+        }
+        let newly_completed = self
+            .completed_outcomes
+            .saturating_sub(request.applied_outcomes) as usize;
+        let history = if newly_completed > 0
+            && request.pending_outcomes.saturating_sub(newly_completed) == 0
+            && !request.append
+        {
+            let mut history = read_search_history();
+            remember_search_entry(&mut history, request.history_entry.clone());
+            if current() {
+                write_json("discover:search_history:v2", &history);
+                Some(history)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Some(PreparedSearchProjection {
+            request,
+            targets: self.targets.clone(),
+            metas,
+            rows,
+            frame,
+            entries,
+            policy,
+            policy_requires_saved: requires_saved,
+            plan,
+            #[cfg(test)]
+            stats,
+            completed_outcomes: self.completed_outcomes,
+            history,
+        })
+    }
+}
+
+#[cfg(test)]
+mod search_publication_bench {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::{Cell, RefCell};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static COUNTING: AtomicUsize = AtomicUsize::new(0);
+    thread_local! {
+        static ALLOCATION_SCOPE: Cell<bool> = const { Cell::new(false) };
+        static ALLOCATIONS: Cell<AllocationSample> = const { Cell::new(AllocationSample::empty()) };
+        static CURRENT: RefCell<Option<Active>> = const { RefCell::new(None) };
+        static SAMPLES: RefCell<Vec<Sample>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[derive(Clone, Copy, Default, serde::Serialize)]
+    pub(super) struct AllocationSample {
+        allocations: u64,
+        reallocations: u64,
+        deallocations: u64,
+        requested_bytes: u64,
+    }
+    impl AllocationSample {
+        const fn empty() -> Self {
+            Self {
+                allocations: 0,
+                reallocations: 0,
+                deallocations: 0,
+                requested_bytes: 0,
+            }
+        }
+    }
+
+    // The library test executable otherwise uses System. This test-only wrapper
+    // delegates unchanged; counting is scoped to the callback's UI thread, and
+    // no benchmark TLS/counters are touched during ordinary test allocations.
+    struct MeasuredSystem;
+    #[global_allocator]
+    static ALLOCATOR: MeasuredSystem = MeasuredSystem;
+    fn allocation(kind: u8, size: usize) {
+        if COUNTING.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let _ = ALLOCATION_SCOPE.try_with(|scope| {
+            if scope.get() {
+                let _ = ALLOCATIONS.try_with(|value| {
+                    let mut sample = value.get();
+                    match kind {
+                        0 => sample.allocations += 1,
+                        1 => sample.reallocations += 1,
+                        _ => sample.deallocations += 1,
+                    }
+                    if kind != 2 {
+                        sample.requested_bytes += size as u64;
+                    }
+                    value.set(sample);
+                });
+            }
+        });
+    }
+    unsafe impl GlobalAlloc for MeasuredSystem {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                allocation(0, layout.size());
+            }
+            ptr
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc_zeroed(layout) };
+            if !ptr.is_null() {
+                allocation(0, layout.size());
+            }
+            ptr
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let result = unsafe { System.realloc(ptr, layout, size) };
+            if !result.is_null() {
+                allocation(1, size);
+            }
+            result
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            allocation(2, 0);
+            unsafe { System.dealloc(ptr, layout) };
+        }
+    }
+
+    #[derive(Clone, Default, serde::Serialize)]
+    struct Sample {
+        callback_ns: u64,
+        ingress_ns: u64,
+        ingress_shared_wait_ns: u64,
+        ingress_shared_hold_ns: u64,
+        ingress_allocator: AllocationSample,
+        worker_preparation_ns: u64,
+        worker_header_reads: u64,
+        worker_header_decodes: u64,
+        worker_score_calls: u64,
+        worker_allocator: AllocationSample,
+        shared_wait_ns: u64,
+        shared_hold_ns: u64,
+        shared_acquisitions: u64,
+        policy_snapshot_ns: u64,
+        card_preparation_ns: u64,
+        model_diff_ns: u64,
+        poster_dispatch_ns: u64,
+        poster_slot_validations: u64,
+        poster_fallback_scans: u64,
+        poster_source_checks: u64,
+        header_reads: u64,
+        header_decodes: u64,
+        score_calls: u64,
+        model_replacements: u64,
+        model_moves: u64,
+        model_inserts: u64,
+        model_removes: u64,
+        model_sets: u64,
+        allocator: AllocationSample,
+    }
+    struct Active {
+        began: Instant,
+        sample: Sample,
+        recovery_counts: [u64; 3],
+    }
+    fn ns(value: std::time::Duration) -> u64 {
+        u64::try_from(value.as_nanos()).unwrap_or(u64::MAX)
+    }
+    fn update(body: impl FnOnce(&mut Sample)) {
+        if ENABLED.load(Ordering::Relaxed) {
+            CURRENT.with(|active| {
+                if let Some(active) = active.borrow_mut().as_mut() {
+                    body(&mut active.sample);
+                }
+            });
+        }
+    }
+    pub(super) struct AllocationScope(bool);
+    impl AllocationScope {
+        pub(super) fn begin() -> Self {
+            let active = ENABLED.load(Ordering::Relaxed)
+                && ALLOCATION_SCOPE.with(|scope| !scope.replace(true));
+            if active {
+                ALLOCATIONS.with(|sample| sample.set(AllocationSample::empty()));
+                COUNTING.fetch_add(1, Ordering::Relaxed);
+            }
+            Self(active)
+        }
+        pub(super) fn finish(mut self) -> AllocationSample {
+            let sample = if self.0 {
+                ALLOCATIONS.with(Cell::get)
+            } else {
+                AllocationSample::empty()
+            };
+            self.stop();
+            sample
+        }
+        fn stop(&mut self) {
+            if self.0 {
+                ALLOCATION_SCOPE.with(|scope| scope.set(false));
+                COUNTING.fetch_sub(1, Ordering::Relaxed);
+                self.0 = false;
+            }
+        }
+    }
+    impl Drop for AllocationScope {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+    pub(super) struct Callback(bool);
+    impl Callback {
+        pub(super) fn begin() -> Self {
+            if !ENABLED.load(Ordering::Relaxed) {
+                return Self(false);
+            }
+            let begin = CURRENT.with(|active| {
+                if active.borrow().is_some() {
+                    return false;
+                }
+                *active.borrow_mut() = Some(Active {
+                    began: Instant::now(),
+                    sample: Sample::default(),
+                    recovery_counts: posters::search_recovery_counts(),
+                });
+                true
+            });
+            if begin {
+                ALLOCATIONS.with(|sample| sample.set(AllocationSample::empty()));
+                ALLOCATION_SCOPE.with(|scope| scope.set(true));
+                COUNTING.fetch_add(1, Ordering::Relaxed);
+            }
+            Self(begin)
+        }
+    }
+    impl Drop for Callback {
+        fn drop(&mut self) {
+            if !self.0 {
+                return;
+            }
+            COUNTING.fetch_sub(1, Ordering::Relaxed);
+            ALLOCATION_SCOPE.with(|scope| scope.set(false));
+            let mut active = CURRENT.with(|active| active.borrow_mut().take().unwrap());
+            let recovery = posters::search_recovery_counts();
+            active.sample.poster_slot_validations = recovery[0] - active.recovery_counts[0];
+            active.sample.poster_fallback_scans = recovery[1] - active.recovery_counts[1];
+            active.sample.poster_source_checks = recovery[2] - active.recovery_counts[2];
+            active.sample.callback_ns = ns(active.began.elapsed());
+            active.sample.allocator = ALLOCATIONS.with(Cell::get);
+            SAMPLES.with(|samples| samples.borrow_mut().push(active.sample));
+        }
+    }
+    pub(super) struct SharedLock {
+        waiting: Option<Instant>,
+        held: Option<Instant>,
+    }
+    impl SharedLock {
+        pub(super) fn waiting() -> Self {
+            Self {
+                waiting: ENABLED.load(Ordering::Relaxed).then(Instant::now),
+                held: None,
+            }
+        }
+        pub(super) fn acquired(mut self) -> Self {
+            if let Some(waiting) = self.waiting.take() {
+                let now = Instant::now();
+                update(|sample| {
+                    sample.shared_wait_ns += ns(now.duration_since(waiting));
+                    sample.shared_acquisitions += 1;
+                });
+                self.held = Some(now);
+            }
+            self
+        }
+    }
+    impl Drop for SharedLock {
+        fn drop(&mut self) {
+            if let Some(held) = self.held {
+                update(|sample| sample.shared_hold_ns += ns(held.elapsed()));
+            }
+        }
+    }
+    static WAIT_GENERATION: AtomicU64 = AtomicU64::new(0);
+    static WAIT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    pub(super) fn prepared_stats(
+        ingress: u64,
+        details: &SearchIngressDetails,
+        stats: &SearchPreparationStats,
+    ) {
+        update(|sample| {
+            sample.ingress_ns = ingress;
+            sample.ingress_shared_wait_ns = details.wait_ns;
+            sample.ingress_shared_hold_ns = details.hold_ns;
+            sample.ingress_allocator = details.allocator;
+            sample.worker_preparation_ns = stats.elapsed_ns;
+            sample.worker_header_reads = stats.header_reads;
+            sample.worker_header_decodes = stats.header_decodes;
+            sample.worker_score_calls = stats.score_calls;
+            sample.worker_allocator = stats.allocator;
+        });
+    }
+    pub(super) fn publication_complete(generation: u64, sequence: u64) {
+        if ENABLED.load(Ordering::Relaxed)
+            && WAIT_GENERATION.load(Ordering::Acquire) == generation
+            && sequence >= WAIT_SEQUENCE.load(Ordering::Acquire)
+        {
+            slint::quit_event_loop().unwrap();
+        }
+    }
+    pub(super) fn header_read(decoded: bool) {
+        update(|sample| {
+            sample.header_reads += 1;
+            sample.header_decodes += u64::from(decoded);
+        });
+    }
+    pub(super) fn score_call() {
+        update(|sample| sample.score_calls += 1);
+    }
+    pub(super) struct Phase {
+        name: &'static str,
+        began: Option<Instant>,
+    }
+    impl Phase {
+        pub(super) fn begin(name: &'static str) -> Self {
+            Self {
+                name,
+                began: ENABLED.load(Ordering::Relaxed).then(Instant::now),
+            }
+        }
+    }
+    impl Drop for Phase {
+        fn drop(&mut self) {
+            if let Some(began) = self.began {
+                let elapsed = ns(began.elapsed());
+                update(|sample| match self.name {
+                    "policy" => sample.policy_snapshot_ns += elapsed,
+                    "cards" => sample.card_preparation_ns += elapsed,
+                    "model" => sample.model_diff_ns += elapsed,
+                    _ => sample.poster_dispatch_ns += elapsed,
+                });
+            }
+        }
+    }
+    pub(super) fn model_edit(kind: &str) {
+        update(|sample| match kind {
+            "replace" => sample.model_replacements += 1,
+            "move" => sample.model_moves += 1,
+            "insert" => sample.model_inserts += 1,
+            "remove" => sample.model_removes += 1,
+            _ => sample.model_sets += 1,
+        });
+    }
+    fn take_sample() -> Sample {
+        SAMPLES.with(|samples| {
+            let mut samples = samples.borrow_mut();
+            assert_eq!(
+                samples.len(),
+                1,
+                "one real publication callback per scheduled delivery"
+            );
+            samples.pop().unwrap()
+        })
+    }
+    fn percentile(samples: &[u64], percent: usize) -> u64 {
+        let mut values = samples.to_vec();
+        values.sort_unstable();
+        values[((values.len() * percent).div_ceil(100)).saturating_sub(1)]
+    }
+    fn target(index: usize) -> SearchTarget {
+        SearchTarget {
+            addon_url: format!("https://ui05-{index}.invalid/manifest.json"),
+            type_: "movie".into(),
+            catalog_id: format!("fixed-{index}"),
+            genre_options: Vec::new(),
+            genre: String::new(),
+            supports_skip: true,
+            next_skip: 0,
+            exhausted: false,
+            page_fingerprints: HashSet::new(),
+            results: Arc::default(),
+        }
+    }
+    fn metadata(rows: usize, providers: usize) -> Vec<Vec<MetaPreview>> {
+        let mut pages = vec![Vec::new(); providers];
+        for row in 0..rows {
+            let source = row % providers;
+            let mut meta = MetaPreview {
+                id: if row % 2 == 0 {
+                    format!("tt{:07}", 1_000_000 + row)
+                } else {
+                    format!("opaque-{}", row / providers)
+                },
+                type_: if row % 11 == 0 { "series" } else { "movie" }.into(),
+                name: match row % 5 {
+                    0 => "Signal".into(),
+                    1 => format!("Signal Journey {row}"),
+                    2 => format!("The Silent Signal {row}"),
+                    3 => format!("Sginal Adventure {row}"),
+                    _ => format!("Unrelated Story {row}"),
+                },
+                ..Default::default()
+            };
+            meta.extra
+                .insert("year".into(), serde_json::json!(2020 + row % 7));
+            unified_search::tag_catalog(&mut meta, &target(source).addon_url);
+            pages[source].push(meta);
+        }
+        pages
+    }
+    type ResultKey = (String, String, String);
+    type Signature = Vec<(ResultKey, u32, String, String, String, serde_json::Value)>;
+    fn signature(metas: &[MetaPreview]) -> Signature {
+        metas
+            .iter()
+            .map(|meta| {
+                let (badge, context) = unified_search::card_text(meta);
+                (
+                    unified_search::result_key(meta),
+                    search_relevance_score("Signal", meta),
+                    meta.name.clone(),
+                    badge,
+                    context,
+                    meta.extra
+                        .get("novaLocalSearchAction")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect()
+    }
+    // Match Discover's actual button label, including its trusted caption.
+    // Title alone can select a different unbadged row with the same name, or
+    // find nothing when only badged rows are mounted by the viewport.
+    fn card_accessible_label(card: &MediaCard) -> String {
+        let mut label = card.title.to_string();
+        if !card.badge.is_empty() {
+            label.push_str(", ");
+            label.push_str(card.badge.as_str());
+            if !card.year.is_empty() {
+                label.push_str(", ");
+                label.push_str(card.year.as_str());
+            }
+        }
+        label
+    }
+
+    #[test]
+    fn publication_fixture_uses_discover_card_accessible_labels() {
+        for (badge, year, expected) in [
+            ("", "2026", "Signal"),
+            ("Saved", "", "Signal, Saved"),
+            ("Saved", "2026", "Signal, Saved, 2026"),
+        ] {
+            let card = MediaCard {
+                title: "Signal".into(),
+                badge: badge.into(),
+                year: year.into(),
+                ..Default::default()
+            };
+            assert_eq!(card_accessible_label(&card), expected);
+        }
+    }
+    fn deliver(
+        bridge: &Bridge,
+        generation: u64,
+        pages: Vec<(usize, Option<Vec<MetaPreview>>)>,
+    ) -> Sample {
+        let bridge = bridge.clone();
+        WAIT_GENERATION.store(generation, Ordering::Release);
+        WAIT_SEQUENCE.store(u64::MAX, Ordering::Release);
+        profiles::invoke_account(move || {
+            bridge.apply_search_results(generation, pages, false);
+            if std::env::var_os("NOVA_UI05_LEGACY").is_some() {
+                slint::quit_event_loop().unwrap();
+            } else {
+                WAIT_SEQUENCE.store(
+                    bridge.shared.lock().unwrap().search_projection.requested,
+                    Ordering::Release,
+                );
+            }
+        })
+        .unwrap();
+        ENABLED.store(true, Ordering::Relaxed);
+        slint::run_event_loop().unwrap();
+        ENABLED.store(false, Ordering::Relaxed);
+        WAIT_GENERATION.store(0, Ordering::Release);
+        take_sample()
+    }
+
+    #[test]
+    #[ignore = "explicit native UI05 publication baseline; no timing assertions"]
+    fn search_publication_native_baseline() {
+        const CHILD: &str = "NOVA_UI05_PUBLICATION_ROOT";
+        let Some(root) = std::env::var_os(CHILD) else {
+            let root =
+                std::env::temp_dir().join(format!("nova-ui05-baseline-{}", std::process::id()));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, &root)
+                .args([
+                    "--exact",
+                    "app::catalog::search_publication_bench::search_publication_native_baseline",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let completed = root.join("completed").is_file();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success() && completed,
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(false);
+        app.set_discover_search_open(true);
+        app.set_search_text("Signal".into());
+        app.set_discover_search_animate_results(false);
+        app.set_discover_scroll_y(137.0);
+        app.window().set_size(slint::PhysicalSize::new(1280, 800));
+        app.show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        #[cfg(feature = "desktop")]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx::closed(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let repeats = std::env::var("NOVA_UI05_REPEATS")
+            .ok()
+            .map(|v| v.parse::<usize>().unwrap())
+            .unwrap_or(3);
+        assert!((1..=100).contains(&repeats));
+        let sizes: Vec<usize> = std::env::var("NOVA_UI05_ROWS")
+            .unwrap_or_else(|_| "100,1000,10000".into())
+            .split(',')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        assert!(!sizes.is_empty() && sizes.iter().all(|n| [100, 1000, 10000].contains(n)));
+        let mut exact_output = std::env::var_os("NOVA_UI05_SIGNATURES")
+            .map(|path| std::fs::File::create(path).unwrap());
+        let mut expected_output = std::env::var_os("NOVA_UI05_EXPECT_SIGNATURES").map(|path| {
+            use std::io::BufRead;
+            std::io::BufReader::new(std::fs::File::open(path).unwrap())
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+                .collect::<std::collections::VecDeque<_>>()
+        });
+        let mut generation = 100;
+        for providers in [1, 10, 30] {
+            for &rows in &sizes {
+                let pages = metadata(rows, providers);
+                let entries: Vec<LibraryEntry> = pages
+                    .iter()
+                    .flatten()
+                    .filter(|meta| meta.id.starts_with("tt") && meta.id.ends_with('0'))
+                    .map(|meta| {
+                        serde_json::from_value(
+                            serde_json::json!({"id":meta.id,"type_":meta.type_,"name":meta.name}),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                let header = serde_json::to_string(&MetaHeader {
+                    description: "fixed benchmark metadata ".repeat(8),
+                    year: "2026".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+                let headers: Vec<_> = pages
+                    .iter()
+                    .flatten()
+                    .map(|meta| (meta_header_key(&meta.type_, &meta.id), Some(header.clone())))
+                    .collect();
+                storage::try_write_batch(&headers).unwrap();
+                for order_name in ["forward", "reverse", "interleaved"] {
+                    let mut order: Vec<_> = (0..providers).collect();
+                    if order_name == "reverse" {
+                        order.reverse();
+                    }
+                    if order_name == "interleaved" {
+                        order.sort_by_key(|i| (i % 2, std::cmp::Reverse(*i)));
+                    }
+                    let mut callbacks = Vec::new();
+                    let mut waits = Vec::new();
+                    let mut holds = Vec::new();
+                    let mut first_latencies = Vec::new();
+                    let mut last_latencies = Vec::new();
+                    for repeat in 0..repeats {
+                        generation += 1;
+                        let mut oracle_targets: Vec<_> = (0..providers).map(target).collect();
+                        {
+                            let mut state = bridge.shared.lock().unwrap();
+                            state.search = "Signal".into();
+                            state.search_generation = generation;
+                            state.search_targets = (0..providers).map(target).collect();
+                            state.search_previews.clear();
+                            state.search_pending_requests = providers;
+                            state.entries = entries.clone();
+                            // Fixed cached metadata only. No fixture addon may
+                            // issue HTTP or retain a pending artwork recovery.
+                            state.installed = vec![Installed {
+                                available: true,
+                                generation: 0,
+                                url: "https://ui05-disabled.invalid/manifest.json".into(),
+                                label: "UI05 fixed metadata".into(),
+                                enabled: false,
+                                configure_ok: None,
+                                manifest: Manifest {
+                                    id: "ui05-disabled".into(),
+                                    version: "1".into(),
+                                    name: "UI05 fixed metadata".into(),
+                                    description: None,
+                                    resources: Vec::new(),
+                                    types: Vec::new(),
+                                    catalogs: Vec::new(),
+                                    id_prefixes: Vec::new(),
+                                    logo: None,
+                                    background: None,
+                                    extra: Default::default(),
+                                },
+                            }];
+                            state.pending_artwork_recovery.clear();
+                        }
+                        app.set_search_results(
+                            Rc::new(VecModel::from(Vec::<MediaCard>::new())).into(),
+                        );
+                        app.set_kb_active(true);
+                        app.set_discover_kb_zone(3);
+                        app.set_discover_kb_idx(0);
+                        app.set_discover_search_animate_results(false);
+                        let model_identity = app.get_search_results();
+                        let mut anchor: Option<ResultKey> = None;
+                        let mut reference_pixel = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+                        reference_pixel
+                            .make_mut_bytes()
+                            .copy_from_slice(&[17, 31, 47, 255]);
+                        let mut first = None;
+                        let stream_started = Instant::now();
+                        let mut validation_time = std::time::Duration::ZERO;
+                        for (stage, &source) in order.iter().enumerate() {
+                            let validation_started = Instant::now();
+                            record_search_page_outcome(
+                                &mut oracle_targets,
+                                source,
+                                Some(pages[source].clone()),
+                            );
+                            let oracle = {
+                                let mut state = bridge.shared.lock().unwrap();
+                                let actual_targets = std::mem::replace(
+                                    &mut state.search_targets,
+                                    oracle_targets.clone(),
+                                );
+                                let expected = unified_search::merge(
+                                    &state,
+                                    ranked_search_results("Signal", &state.search_targets),
+                                );
+                                oracle_targets =
+                                    std::mem::replace(&mut state.search_targets, actual_targets);
+                                expected
+                            };
+                            let expected_signature = signature(&oracle);
+                            validation_time += validation_started.elapsed();
+                            let sample = deliver(
+                                &bridge,
+                                generation,
+                                vec![(source, Some(pages[source].clone()))],
+                            );
+                            let delivered_at =
+                                ns(stream_started.elapsed().saturating_sub(validation_time));
+                            first.get_or_insert(delivered_at);
+                            let validation_started = Instant::now();
+                            let actual = bridge.shared.lock().unwrap().search_previews.clone();
+                            assert_eq!(
+                                signature(&actual),
+                                expected_signature,
+                                "stage ordering/score/action mismatch"
+                            );
+                            assert!(
+                                !actual.is_empty(),
+                                "each completed provider can publish without a fan-out barrier"
+                            );
+                            if stage + 1 == order.len() {
+                                assert_eq!(actual.len(), rows);
+                            }
+                            assert!(
+                                bridge
+                                    .shared
+                                    .lock()
+                                    .unwrap()
+                                    .pending_artwork_recovery
+                                    .is_empty()
+                            );
+                            if std::env::var_os("NOVA_UI05_LEGACY").is_some() {
+                                assert_eq!(sample.header_reads, actual.len() as u64);
+                                assert_eq!(sample.header_decodes, actual.len() as u64);
+                                assert_eq!(sample.score_calls, actual.len() as u64);
+                            } else {
+                                assert_eq!(
+                                    sample.header_reads, 0,
+                                    "publication cannot read metadata cache"
+                                );
+                                assert_eq!(sample.header_decodes, 0);
+                                assert_eq!(sample.score_calls, 0);
+                                assert!(sample.worker_preparation_ns > 0);
+                                assert!(sample.ingress_ns > 0);
+                            }
+                            assert!(sample.allocator.allocations > 0);
+                            assert_eq!(
+                                sample.model_replacements, 0,
+                                "retain the existing VecModel"
+                            );
+                            assert!(std::ptr::eq(
+                                model_identity.as_any(),
+                                app.get_search_results().as_any()
+                            ));
+                            assert!(
+                                !app.get_discover_search_animate_results(),
+                                "retained result publication cannot rearm entrance"
+                            );
+                            if let Some(key) = anchor.as_ref() {
+                                let at = actual
+                                    .iter()
+                                    .position(|meta| &unified_search::result_key(meta) == key)
+                                    .unwrap();
+                                assert_eq!(
+                                    app.get_discover_kb_idx() as usize,
+                                    at,
+                                    "focused owner identity survives staged reorder"
+                                );
+                                let card = app.get_search_results().row_data(at).unwrap();
+                                assert!(card.is_loaded);
+                                assert_eq!(
+                                    card.poster.to_rgba8().unwrap().as_bytes(),
+                                    reference_pixel.as_bytes()
+                                );
+                            } else {
+                                let key = unified_search::result_key(&actual[0]);
+                                let model = app.get_search_results();
+                                let model = model
+                                    .as_any()
+                                    .downcast_ref::<VecModel<MediaCard>>()
+                                    .unwrap();
+                                let mut card = model.row_data(0).unwrap();
+                                card.poster = Image::from_rgba8(reference_pixel.clone());
+                                card.is_loaded = true;
+                                model.set_row_data(0, card);
+                                anchor = Some(key);
+                            }
+                            for (index, meta) in actual.iter().enumerate() {
+                                let card = app.get_search_results().row_data(index).unwrap();
+                                assert_eq!(card.id.as_str(), meta.id);
+                                assert_eq!(card.title.as_str(), meta.title());
+                                assert_eq!(card.badge.as_str(), unified_search::card_text(meta).0);
+                                assert_eq!(card.year.as_str(), unified_search::card_text(meta).1);
+                            }
+                            let manifest = serde_json::json!({"providers":providers,"rows":rows,"order":order_name,"stage":stage,"source":source,"signature":expected_signature});
+                            if repeat == 0 {
+                                use std::io::Write;
+                                if let Some(file) = exact_output.as_mut() {
+                                    writeln!(file, "{manifest}").unwrap();
+                                }
+                                if let Some(expected) = expected_output.as_mut() {
+                                    assert_eq!(
+                                        expected.pop_front().unwrap(),
+                                        manifest,
+                                        "saved native baseline signature mismatch"
+                                    );
+                                }
+                            }
+                            println!(
+                                "UI05_CALLBACK {}",
+                                serde_json::json!({"providers":providers,"rows":rows,"order":order_name,"repeat":repeat,"stage":stage,"visible":actual.len(),"source":source,"delivery_ns":delivered_at,"signature":nova_providers::catalog_grouping::projection_fingerprint(&expected_signature),"sample":sample})
+                            );
+                            callbacks.push(sample.callback_ns);
+                            waits.push(sample.shared_wait_ns);
+                            holds.push(sample.shared_hold_ns);
+                            if stage + 1 == order.len() {
+                                last_latencies.push(delivered_at);
+                            }
+                            validation_time += validation_started.elapsed();
+                        }
+                        first_latencies.push(first.unwrap());
+                        // A steady-state repaint must retain model/image/focus and
+                        // not restart the entrance before a new 40ms reveal timer.
+                        // Let Discover's deferred focus-follow settle naturally.
+                        // Under viewport mounting, row zero need not be present:
+                        // the retained logical focus is the visible card to test.
+                        assert!(app.get_kb_active());
+                        assert_eq!(app.get_discover_kb_zone(), 3);
+                        assert!(app.get_discover_search_open());
+                        assert!(!app.get_show_home());
+                        let focused_before = app.get_discover_kb_idx();
+                        let focused_key = anchor.as_ref().unwrap();
+                        assert_eq!(
+                            &unified_search::result_key(
+                                &bridge.shared.lock().unwrap().search_previews
+                                    [focused_before as usize]
+                            ),
+                            focused_key,
+                        );
+                        let focused_label = card_accessible_label(
+                            &app.get_search_results()
+                                .row_data(focused_before as usize)
+                                .unwrap(),
+                        );
+                        for _ in 0..10 {
+                            i_slint_backend_testing::mock_elapsed_time(
+                                std::time::Duration::from_millis(100),
+                            );
+                            if let Some(row) =
+                                i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                                    &app,
+                                    &focused_label,
+                                )
+                                .next()
+                            {
+                                let _ = row.computed_opacity();
+                            }
+                        }
+                        let opacity = || {
+                            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                                &app, &focused_label,
+                            )
+                            .next()
+                            .unwrap_or_else(|| panic!(
+                                "headless Discover instantiates the retained focused delegate: label={focused_label:?}, focused_index={}, search_open={}, scope={}, search_scroll={}, rows={}",
+                                app.get_discover_kb_idx(), app.get_discover_search_open(), app.get_search_scope(),
+                                app.get_discover_search_scroll_y(), app.get_search_results().row_count(),
+                            ))
+                            .computed_opacity()
+                        };
+                        assert_eq!(app.get_discover_kb_idx(), focused_before);
+                        assert!(
+                            opacity() > 0.99,
+                            "settled focused search delegate is visible"
+                        );
+                        let prior = signature(&bridge.shared.lock().unwrap().search_previews);
+                        let browse_scroll = app.get_discover_scroll_y();
+                        let search_scroll = app.get_discover_search_scroll_y();
+                        let repaint = deliver(&bridge, generation, Vec::new());
+                        assert_eq!(
+                            signature(&bridge.shared.lock().unwrap().search_previews),
+                            prior
+                        );
+                        assert_eq!(
+                            repaint.model_moves
+                                + repaint.model_inserts
+                                + repaint.model_removes
+                                + repaint.model_replacements,
+                            0
+                        );
+                        assert!(!app.get_discover_search_animate_results());
+                        assert_eq!(app.get_discover_kb_idx(), focused_before);
+                        assert_eq!(
+                            app.get_discover_scroll_y(),
+                            browse_scroll,
+                            "search repaint preserves independent browse scroll"
+                        );
+                        assert_eq!(
+                            app.get_discover_search_scroll_y(),
+                            search_scroll,
+                            "search repaint preserves its settled focus-follow viewport"
+                        );
+                        assert!(std::ptr::eq(
+                            model_identity.as_any(),
+                            app.get_search_results().as_any()
+                        ));
+                        let key = anchor.as_ref().unwrap();
+                        let at = bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .search_previews
+                            .iter()
+                            .position(|meta| &unified_search::result_key(meta) == key)
+                            .unwrap();
+                        let card = app.get_search_results().row_data(at).unwrap();
+                        assert!(card.is_loaded);
+                        assert_eq!(
+                            card.poster.to_rgba8().unwrap().as_bytes(),
+                            reference_pixel.as_bytes()
+                        );
+                        i_slint_backend_testing::mock_elapsed_time(
+                            std::time::Duration::from_millis(20),
+                        );
+                        assert!(
+                            opacity() > 0.99,
+                            "retained delegate cannot start another entrance"
+                        );
+                        assert!(app.get_kb_active());
+                        assert_eq!(app.get_discover_kb_zone(), 3);
+                        assert_eq!(app.get_discover_kb_idx(), focused_before);
+                        assert_eq!(app.get_discover_search_scroll_y(), search_scroll);
+                        assert_eq!(app.get_discover_scroll_y(), browse_scroll);
+                    }
+                    println!(
+                        "UI05_SUMMARY {}",
+                        serde_json::json!({"providers":providers,"rows":rows,"order":order_name,"repeats":repeats,"callbacks":callbacks.len(),"callback_ns":{"p50":percentile(&callbacks,50),"p95":percentile(&callbacks,95),"p99":percentile(&callbacks,99)},"shared_wait_ns":{"p50":percentile(&waits,50),"p95":percentile(&waits,95),"p99":percentile(&waits,99)},"shared_hold_ns":{"p50":percentile(&holds,50),"p95":percentile(&holds,95),"p99":percentile(&holds,99)},"first_delivery_ns":{"p50":percentile(&first_latencies,50),"p95":percentile(&first_latencies,95),"p99":percentile(&first_latencies,99)},"last_delivery_ns":{"p50":percentile(&last_latencies,50),"p95":percentile(&last_latencies,95),"p99":percentile(&last_latencies,99)}})
+                    );
+                }
+            }
+        }
+        if let Some(expected) = expected_output {
+            assert!(expected.is_empty(), "all saved stages replayed");
+        }
+        std::fs::write(root.join("completed"), "ok").unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settle_test_projection(bridge: &Bridge) {
+        let until = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            profiles::invoke_account(|| slint::quit_event_loop().unwrap()).unwrap();
+            slint::run_event_loop().unwrap();
+            let state = bridge.shared.lock().unwrap();
+            if state.search_projection.published == state.search_projection.requested {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "search projection did not settle: requested={} published={} model_revision={} memory_revision={} scope={} published_scope={:?} raw={} basis={} model={}",
+                state.search_projection.requested,
+                state.search_projection.published,
+                state.search_projection.model_revision,
+                state.search_projection.memory_revision,
+                state.unified_search.projection_local().scope,
+                state.search_projection.published_scope,
+                state.search_previews.len(),
+                state.search_projection.frame.keys.len(),
+                bridge.app().unwrap().get_search_results().row_count()
+            );
+            drop(state);
+            std::thread::yield_now();
+        }
+    }
+
+    fn blocked_projection_invalidation_case(name: &str, case: &str) {
+        super::super::profile_actions_tests::isolated(name, |fixture| {
+            let bridge = &fixture.bridge;
+            let original_owner = profiles::ProfileStore::capture();
+            let app = bridge.app().unwrap();
+            let bob = (case == "profile").then(|| profiles::create("Projection Bob").unwrap());
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.search = "N".into();
+                state.search_generation = 81;
+                state.search_targets = vec![search_target("owner")];
+                state.installed = vec![Installed {
+                    url: state.search_targets[0].addon_url.clone(),
+                    label: "Fixture".into(),
+                    enabled: true,
+                    available: true,
+                    configure_ok: None,
+                    generation: 1,
+                    manifest: serde_json::from_value(serde_json::json!({
+                        "id":"fixture", "name":"Fixture", "version":"1", "types":["movie"],
+                        "resources":[], "catalogs":[]
+                    }))
+                    .unwrap(),
+                }];
+            }
+            app.set_discover_search_open(true);
+            // One-character local query registers the real semantic clock while
+            // avoiding a corpus scan; admission still uses the actual callback.
+            bridge.refresh_local_search("N");
+            settle_test_projection(bridge);
+            let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+            let (release, blocked) = std::sync::mpsc::sync_channel(1);
+            let blocked = Mutex::new(blocked);
+            let once = AtomicBool::new(true);
+            *SEARCH_PROJECTION_TEST_GATE.lock().unwrap() = Some(Arc::new(move || {
+                if once.swap(false, Ordering::AcqRel) {
+                    entered.send(()).unwrap();
+                    blocked
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(30))
+                        .unwrap();
+                }
+            }));
+            struct Reset;
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    SEARCH_PROJECTION_TEST_GATE.lock().unwrap().take();
+                }
+            }
+            let _reset = Reset;
+            bridge.shared.lock().unwrap().search_pending_requests = 1;
+            bridge.search_test_admit_page(81, vec![search_meta("tt9911000", "Needle revoked")]);
+            waiting.recv_timeout(Duration::from_secs(15)).unwrap();
+            match case {
+                "query" => bridge.search_edited("M"),
+                "scope" => bridge.pick_search_scope(2),
+                "profile" => {
+                    bridge.switch_profile(bob.as_ref().unwrap());
+                    bridge.wait_profile_activation();
+                    assert!(app.get_profiles_error().is_empty());
+                    bridge.search_edited("M");
+                }
+                "policy" => {
+                    profile_policy::save(
+                        &profiles::ProfileStore::capture(),
+                        &profile_policy::ProfilePolicy {
+                            restricted: true,
+                            pin: "1234".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                    bridge.repaint_search();
+                }
+                "removed-addon" => {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.installed.clear();
+                    state.search_targets.clear();
+                    state.search_pending_requests = 0;
+                    drop(state);
+                    bridge.repaint_search();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(app.get_search_results().row_count(), 0);
+            release.send(()).unwrap();
+            settle_test_projection(bridge);
+            assert!(
+                bridge.shared.lock().unwrap().search_previews.is_empty(),
+                "{case}"
+            );
+            assert_eq!(app.get_search_results().row_count(), 0, "{case}");
+            if matches!(case, "query" | "profile") {
+                for owner in [original_owner, profiles::ProfileStore::capture()] {
+                    let history: Vec<SearchHistoryEntry> = owner
+                        .read("discover:search_history:v2")
+                        .unwrap()
+                        .map(|raw| serde_json::from_str(&raw).unwrap())
+                        .unwrap_or_default();
+                    assert!(
+                        history.iter().all(|entry| entry.query != "N"),
+                        "rejected {case} preparation must not write its old query history"
+                    );
+                }
+            }
+        });
+    }
+    macro_rules! blocked_projection_case {
+        ($name:ident, $case:literal) => {
+            #[test]
+            fn $name() {
+                blocked_projection_invalidation_case(
+                    concat!(module_path!(), "::", stringify!($name)),
+                    $case,
+                );
+            }
+        };
+    }
+    blocked_projection_case!(projection_blocked_search_edit_rejects_old_rows, "query");
+    blocked_projection_case!(projection_blocked_scope_change_rejects_old_rows, "scope");
+    blocked_projection_case!(
+        projection_blocked_profile_switch_rejects_old_rows,
+        "profile"
+    );
+    blocked_projection_case!(projection_blocked_policy_change_rejects_old_rows, "policy");
+    blocked_projection_case!(
+        projection_blocked_addon_removal_rejects_old_rows,
+        "removed-addon"
+    );
+
+    #[test]
+    fn projection_memory_overlay_keeps_local_cap_and_focused_identity() {
+        super::super::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::projection_memory_overlay_keeps_local_cap_and_focused_identity"
+            ),
+            |fixture| {
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                let entry = |at: usize| {
+                    serde_json::from_value::<LibraryEntry>(serde_json::json!({
+                    "id": format!("tt{}", 2000000 + at), "type_":"movie", "name": format!("Needle {at:03}")
+                })).unwrap()
+                };
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.search = "Needle".into();
+                    state.search_generation = 45;
+                    state.search_pending_requests = 1;
+                    state.search_targets = vec![search_target("owner")];
+                    state.entries = (100..250).map(entry).collect();
+                }
+                app.set_discover_search_open(true);
+                bridge.refresh_local_search("Needle");
+                bridge.pick_search_scope(0);
+                bridge.search_test_admit_page(45, vec![]);
+                settle_test_projection(bridge);
+                assert_eq!(app.get_search_results().row_count(), 150);
+                app.set_kb_active(true);
+                app.set_discover_kb_zone(3);
+                app.set_discover_kb_idx(10);
+                let focused = app.get_search_results().row_data(10).unwrap().id;
+                bridge.shared.lock().unwrap().entries.push(entry(0));
+                bridge.repaint_search_memory();
+                let model = app.get_search_results();
+                assert_eq!(model.row_count(), 150);
+                assert_eq!(model.row_data(0).unwrap().title.as_str(), "Needle 000");
+                assert_eq!(model.row_data(149).unwrap().title.as_str(), "Needle 248");
+                assert_eq!(
+                    model
+                        .row_data(app.get_discover_kb_idx() as usize)
+                        .unwrap()
+                        .id,
+                    focused
+                );
+                settle_test_projection(bridge);
+                assert_eq!(model.row_count(), 150);
+                assert_eq!(model.row_data(0).unwrap().title.as_str(), "Needle 000");
+                assert_eq!(model.row_data(149).unwrap().title.as_str(), "Needle 248");
+                assert_eq!(
+                    model
+                        .row_data(app.get_discover_kb_idx() as usize)
+                        .unwrap()
+                        .id,
+                    focused
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn projection_preserves_admitted_title_and_direct_image_across_replans() {
+        super::super::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::projection_preserves_admitted_title_and_direct_image_across_replans"
+            ),
+            |fixture| {
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.search = "Needle".into();
+                    state.search_generation = 44;
+                    state.search_pending_requests = 1;
+                    state.search_targets = vec![search_target("owner")];
+                    state.entries = serde_json::from_value(serde_json::json!([
+                        {"id":"tt10001", "type_":"movie", "name":"Needle saved old"}
+                    ]))
+                    .unwrap();
+                }
+                app.set_discover_search_open(true);
+                bridge.refresh_local_search("Needle");
+                bridge.pick_search_scope(0);
+                bridge.search_test_admit_page(44, vec![search_meta("tt10001", "Needle provider")]);
+                settle_test_projection(bridge);
+                assert_eq!(
+                    app.get_search_results().row_data(0).unwrap().title.as_str(),
+                    "Needle saved old"
+                );
+                let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+                let (release, blocked) = std::sync::mpsc::sync_channel(1);
+                let blocked = Mutex::new(blocked);
+                let once = AtomicBool::new(true);
+                *SEARCH_PROJECTION_TEST_GATE.lock().unwrap() = Some(Arc::new(move || {
+                    if once.swap(false, Ordering::AcqRel) {
+                        entered.send(()).unwrap();
+                        blocked
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(30))
+                            .unwrap();
+                    }
+                }));
+                struct Reset;
+                impl Drop for Reset {
+                    fn drop(&mut self) {
+                        SEARCH_PROJECTION_TEST_GATE.lock().unwrap().take();
+                    }
+                }
+                let _reset = Reset;
+                bridge.repaint_search();
+                waiting.recv_timeout(Duration::from_secs(15)).unwrap();
+                let model = app.get_search_results();
+                let mut row = model.row_data(0).unwrap();
+                row.poster_path = "memory://newer-ui05".into();
+                row.poster = slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                    &[3u8, 7, 11, 255],
+                    1,
+                    1,
+                ));
+                row.is_loaded = true;
+                model.set_row_data(0, row);
+                bridge.shared.lock().unwrap().entries[0].name = "Needle accepted title".into();
+                bridge.repaint_search_memory();
+                assert_eq!(
+                    model.row_data(0).unwrap().title.as_str(),
+                    "Needle accepted title"
+                );
+                assert_eq!(
+                    model.row_data(0).unwrap().poster_path.as_str(),
+                    "memory://newer-ui05"
+                );
+                release.send(()).unwrap();
+                settle_test_projection(bridge);
+                // A second ordinary projection must retain the memory URL too,
+                // rather than reverting after its first preservation receipt.
+                bridge.repaint_search();
+                settle_test_projection(bridge);
+                let row = app.get_search_results().row_data(0).unwrap();
+                assert_eq!(row.title.as_str(), "Needle accepted title");
+                assert_eq!(row.poster_path.as_str(), "memory://newer-ui05");
+                assert!(row.is_loaded);
+                assert_eq!(row.poster.to_rgba8().unwrap().as_bytes(), &[3, 7, 11, 255]);
+                assert_eq!(
+                    bridge.shared.lock().unwrap().entries[0].name,
+                    "Needle accepted title"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn projection_source_authority_change_retracts_running_and_pending_pages() {
+        super::super::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::projection_source_authority_change_retracts_running_and_pending_pages"
+            ),
+            |fixture| {
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.search = "Needle".into();
+                    state.search_generation = 41;
+                    state.search_pending_requests = 2;
+                    state.search_targets = vec![search_target("owner")];
+                    state.installed = vec![Installed {
+                        url: state.search_targets[0].addon_url.clone(),
+                        label: "Fixture".into(),
+                        enabled: true,
+                        available: true,
+                        configure_ok: None,
+                        generation: 1,
+                        manifest: serde_json::from_value(serde_json::json!({
+                            "id":"fixture", "name":"Fixture", "version":"1", "types":["movie"],
+                            "resources":[], "catalogs":[]
+                        }))
+                        .unwrap(),
+                    }];
+                }
+                app.set_discover_search_open(true);
+                let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+                let (release, blocked) = std::sync::mpsc::sync_channel(1);
+                let blocked = Mutex::new(blocked);
+                let once = AtomicBool::new(true);
+                *SEARCH_PROJECTION_TEST_GATE.lock().unwrap() = Some(Arc::new(move || {
+                    if once.swap(false, Ordering::AcqRel) {
+                        entered.send(()).unwrap();
+                        blocked
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(30))
+                            .unwrap();
+                    }
+                }));
+                struct Reset;
+                impl Drop for Reset {
+                    fn drop(&mut self) {
+                        SEARCH_PROJECTION_TEST_GATE.lock().unwrap().take();
+                    }
+                }
+                let _reset = Reset;
+                bridge.search_test_admit_page(
+                    41,
+                    vec![search_meta("tt10001", "Needle revoked active")],
+                );
+                waiting.recv_timeout(Duration::from_secs(15)).unwrap();
+                bridge.search_test_admit_page(
+                    41,
+                    vec![search_meta("tt10002", "Needle revoked queued")],
+                );
+                // No query/search generation change: authority alone invalidates
+                // both the running accumulator and the coalesced old page.
+                bridge.shared.lock().unwrap().installed[0].generation = 2;
+                bridge.repaint_search();
+                assert_eq!(app.get_search_results().row_count(), 0);
+                release.send(()).unwrap();
+                let until = std::time::Instant::now() + Duration::from_secs(15);
+                loop {
+                    profiles::invoke_account(|| slint::quit_event_loop().unwrap()).unwrap();
+                    slint::run_event_loop().unwrap();
+                    let state = bridge.shared.lock().unwrap();
+                    if state.search_projection.published == state.search_projection.requested {
+                        break;
+                    }
+                    drop(state);
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "authority projection did not settle"
+                    );
+                    std::thread::yield_now();
+                }
+                let state = bridge.shared.lock().unwrap();
+                assert!(state.search_previews.is_empty());
+                assert!(state.search_targets[0].results.is_empty());
+                assert_eq!(state.search_pending_requests, 0);
+                assert_eq!(state.search_projection.last_sources[0].generation, 2);
+                assert_eq!(app.get_search_results().row_count(), 0);
+            },
+        );
+    }
+
+    #[test]
+    fn projection_header_cache_isolated_across_equal_metadata_stamps() {
+        let mut worker = SearchProjectionProcessor::default();
+        let owner = |instance| ("same-profile".into(), 7, instance, 11, "Needle".into());
+        let typed = ("movie".into(), "tt123".into());
+        let numeric_stamp = (19, 0);
+        assert!(worker.select_owner(owner(1)));
+        worker.header_stamp = Some(numeric_stamp);
+        worker
+            .headers
+            .insert(typed.clone(), Some("old-owner-url".into()));
+        worker.header_order.push_back(typed.clone());
+        worker.header_bytes = 100;
+        assert!(!worker.select_owner(owner(1)));
+        assert!(worker.headers.contains_key(&typed));
+        assert!(worker.select_owner(owner(2)));
+        assert!(worker.headers.is_empty());
+        assert!(worker.header_order.is_empty());
+        assert_eq!(worker.header_bytes, 0);
+        assert_eq!(worker.header_stamp, None);
+        // Equal numeric revisions in the new owner cannot hit the old URL.
+        worker.header_stamp = Some(numeric_stamp);
+        worker
+            .headers
+            .insert(typed.clone(), Some("new-owner-url".into()));
+        let source = SearchSourceReceipt {
+            url: "https://owner.example".into(),
+            generation: 1,
+            enabled: true,
+            available: true,
+        };
+        assert!(
+            worker
+                .replace_sources(std::slice::from_ref(&source))
+                .is_some()
+        );
+        assert!(worker.headers.is_empty());
+        worker.header_stamp = Some(numeric_stamp);
+        worker
+            .headers
+            .insert(typed.clone(), Some("before-authority-change".into()));
+        let mut replaced = source;
+        replaced.generation = 2;
+        assert!(
+            worker
+                .replace_sources(std::slice::from_ref(&replaced))
+                .is_some()
+        );
+        assert!(worker.headers.is_empty());
+        assert_eq!(worker.header_stamp, None);
+    }
+
+    #[test]
+    fn projection_plan_preserves_legacy_edit_sequence() {
+        fn key(value: usize) -> SearchResultKey {
+            ("movie".into(), value.to_string(), String::new())
+        }
+        fn reference(old: &[SearchResultKey], new: &[SearchResultKey]) -> Vec<SearchModelEdit> {
+            let mut keys = old.to_vec();
+            let mut edits = Vec::new();
+            for (at, key) in new.iter().enumerate() {
+                if keys.get(at) != Some(key) {
+                    if let Some(from) = keys
+                        .iter()
+                        .enumerate()
+                        .skip(at + 1)
+                        .find_map(|(index, old)| (old == key).then_some(index))
+                    {
+                        let key = keys.remove(from);
+                        keys.insert(at, key);
+                        edits.push(SearchModelEdit::Move(from, at));
+                    } else {
+                        keys.insert(at, key.clone());
+                        edits.push(SearchModelEdit::Insert(at));
+                    }
+                }
+                edits.push(SearchModelEdit::Set(at));
+            }
+            while keys.len() > new.len() {
+                keys.pop();
+                edits.push(SearchModelEdit::Remove(keys.len()));
+            }
+            edits
+        }
+        let mut seed = 0xa0761d6478bd642fu64;
+        for _ in 0..2000 {
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for value in 0..48 {
+                seed ^= seed << 7;
+                seed ^= seed >> 9;
+                if seed & 1 != 0 {
+                    old.push(key(value));
+                }
+                if seed & 2 != 0 {
+                    new.push(key(value));
+                }
+            }
+            for at in (1..new.len()).rev() {
+                seed ^= seed << 7;
+                seed ^= seed >> 9;
+                let other = seed as usize % (at + 1);
+                new.swap(at, other);
+            }
+            assert_eq!(search_edit_plan(&old, &new), reference(&old, &new));
+        }
+    }
+
+    #[test]
+    fn projection_entry_capture_tracks_searchable_deltas_only() {
+        let mut view = SearchProjectionView::default();
+        let mut entry: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id": "tt-ui05", "type_": "movie", "name": "Signal", "year": "2020",
+            "poster_url": "old"
+        }))
+        .unwrap();
+        view.capture_entries(std::slice::from_ref(&entry));
+        let revision = view.memory_revision;
+        assert!(
+            !view
+                .entry_deltas
+                .values()
+                .next()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .poster_admitted
+        );
+        view.capture_entries(std::slice::from_ref(&entry));
+        assert_eq!(view.memory_revision, revision);
+        entry.categories.push("New category".into());
+        view.capture_entries(std::slice::from_ref(&entry));
+        assert_eq!(view.memory_revision, revision);
+        entry.name = "Signal changed".into();
+        view.capture_entries(std::slice::from_ref(&entry));
+        assert_eq!(view.memory_revision, revision + 1);
+        entry.poster_url = "new".into();
+        view.capture_entries(std::slice::from_ref(&entry));
+        let typed = ("movie".into(), "tt-ui05".into());
+        assert!(view.entry_deltas[&typed].as_ref().unwrap().poster_admitted);
+        view.capture_entries(&[]);
+        assert!(view.entry_deltas[&typed].is_none());
+    }
+
+    fn matrix_distance_reference(left: &[char], right: &[char]) -> usize {
+        let mut distances = vec![vec![0; right.len() + 1]; left.len() + 1];
+        for (index, row) in distances.iter_mut().enumerate() {
+            row[0] = index;
+        }
+        for (index, distance) in distances[0].iter_mut().enumerate() {
+            *distance = index;
+        }
+
+        for left_index in 1..=left.len() {
+            for right_index in 1..=right.len() {
+                let substitution_cost = usize::from(left[left_index - 1] != right[right_index - 1]);
+                distances[left_index][right_index] = (distances[left_index - 1][right_index] + 1)
+                    .min(distances[left_index][right_index - 1] + 1)
+                    .min(distances[left_index - 1][right_index - 1] + substitution_cost);
+                if left_index > 1
+                    && right_index > 1
+                    && left[left_index - 1] == right[right_index - 2]
+                    && left[left_index - 2] == right[right_index - 1]
+                {
+                    distances[left_index][right_index] = distances[left_index][right_index]
+                        .min(distances[left_index - 2][right_index - 2] + 1);
+                }
+            }
+        }
+        distances[left.len()][right.len()]
+    }
+
+    fn matrix_search_score_reference(query: &str, title: &str, year: Option<&str>) -> u32 {
+        let query = normalize_search_text(query);
+        let title = normalize_search_text(title);
+        if query.is_empty() || title.is_empty() {
+            return 0;
+        }
+
+        let mut title_and_year = title.clone();
+        if let Some(year) = year {
+            let year = normalize_search_text(year);
+            if !year.is_empty() {
+                title_and_year.push(' ');
+                title_and_year.push_str(&year);
+            }
+        }
+
+        if query == title {
+            return 1_000_000;
+        }
+        if query == title_and_year {
+            return 990_000;
+        }
+
+        let suffix_len = title_and_year
+            .chars()
+            .count()
+            .saturating_sub(query.chars().count());
+        if title.starts_with(&query) || title_and_year.starts_with(&query) {
+            return 900_000u32.saturating_sub(suffix_len.min(10_000) as u32);
+        }
+
+        let padded_title = format!(" {title_and_year} ");
+        let padded_query = format!(" {query} ");
+        if let Some(position) = padded_title.find(&padded_query) {
+            return 820_000u32.saturating_sub(position.min(10_000) as u32 * 10);
+        }
+
+        let query_tokens: Vec<&str> = query.split_whitespace().collect();
+        let title_tokens: Vec<&str> = title_and_year.split_whitespace().collect();
+        if query_tokens.is_empty() || title_tokens.is_empty() {
+            return 0;
+        }
+
+        // Match exact tokens first and then the strongest remaining fuzzy pairs.
+        // This is a one-to-one assignment, so one generic title word cannot stand
+        // in for several query words. Short words stay exact-only to avoid noisy
+        // fuzzy hits such as matching unrelated three-letter titles.
+        let mut candidates = Vec::new();
+        for (query_index, query_token) in query_tokens.iter().enumerate() {
+            for (title_index, title_token) in title_tokens.iter().enumerate() {
+                let similarity = if query_token == title_token {
+                    1_000
+                } else if query_token.chars().all(char::is_numeric)
+                    || query_token.chars().count() < 4
+                    || title_token.chars().count() < 4
+                {
+                    0
+                } else {
+                    matrix_similarity_reference(query_token, title_token)
+                };
+                if similarity == 1_000 || similarity >= 700 {
+                    candidates.push((similarity, query_index, title_index));
+                }
+            }
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+
+        let mut used_query = vec![false; query_tokens.len()];
+        let mut used_title = vec![false; title_tokens.len()];
+        let mut matches = Vec::new();
+        for (similarity, query_index, title_index) in candidates {
+            if !used_query[query_index] && !used_title[title_index] {
+                used_query[query_index] = true;
+                used_title[title_index] = true;
+                matches.push((query_index, title_index, similarity));
+            }
+        }
+
+        let exact_hits = matches
+            .iter()
+            .filter(|(_, _, score)| *score == 1_000)
+            .count();
+        let fuzzy_hits = matches.len() - exact_hits;
+        if matches.len() == query_tokens.len() {
+            if fuzzy_hits == 0 {
+                return 720_000;
+            }
+            let average_fuzzy = matches
+                .iter()
+                .filter(|(_, _, score)| *score < 1_000)
+                .map(|(_, _, score)| *score)
+                .sum::<u32>()
+                / fuzzy_hits as u32;
+            return 600_000 + exact_hits.min(20) as u32 * 1_000 + average_fuzzy / 20;
+        }
+
+        // Partial matching needs at least two useful tokens and roughly two
+        // thirds of the query. This keeps a shared word from ranking above a
+        // complete typo-tolerant title match.
+        if matches.len() > 1 && matches.len() * 3 >= query_tokens.len() * 2 {
+            return 300_000
+                + (matches.len() as u32 * 100_000 / query_tokens.len() as u32)
+                + exact_hits.min(20) as u32 * 1_000;
+        }
+
+        // Compare the whole query with short title-word windows for joined or
+        // split names (for example "spiderman" / "spider man"). Keep numeric
+        // tokens exact even in this fallback.
+        let numeric_tokens_match = query_tokens
+            .iter()
+            .filter(|token| token.chars().all(char::is_numeric))
+            .all(|query_token| title_tokens.contains(query_token));
+        if query.chars().count() < 3 || !numeric_tokens_match {
+            return 0;
+        }
+        let min_window = query_tokens.len().saturating_sub(1).max(1);
+        let max_window = (query_tokens.len() + 1).min(title_tokens.len());
+        if min_window > max_window {
+            return 0;
+        }
+        let mut best_similarity = 0;
+        for width in min_window..=max_window {
+            for start in 0..=title_tokens.len() - width {
+                let window = title_tokens[start..start + width].join(" ");
+                best_similarity = best_similarity.max(matrix_similarity_reference(&query, &window));
+            }
+        }
+        if best_similarity >= 750 {
+            550_000 + best_similarity * 100
+        } else {
+            0
+        }
+    }
+
+    fn matrix_similarity_reference(left: &str, right: &str) -> u32 {
+        let left: Vec<char> = left.chars().collect();
+        let right: Vec<char> = right.chars().collect();
+        let max_len = left.len().max(right.len());
+        if max_len == 0 {
+            return 1_000;
+        }
+        let distance = matrix_distance_reference(&left, &right).min(max_len);
+        ((max_len - distance) * 1_000 / max_len) as u32
+    }
+
+    #[test]
+    fn fuzzy_three_rows_match_matrix_exhaustively() {
+        let mut strings = vec![Vec::new()];
+        for length in 1..=5 {
+            for bits in 0..1usize << length {
+                strings.push(
+                    (0..length)
+                        .map(|bit| if bits & (1 << bit) == 0 { 'a' } else { 'b' })
+                        .collect(),
+                );
+            }
+        }
+        let mut pairs = 0;
+        for left in &strings {
+            for right in &strings {
+                assert_eq!(
+                    damerau_levenshtein(left, right),
+                    matrix_distance_reference(left, right),
+                    "{left:?} / {right:?}"
+                );
+                pairs += 1;
+            }
+        }
+        assert_eq!(pairs, 3_969);
+    }
+
+    #[test]
+    fn fuzzy_three_rows_match_matrix_for_unicode_and_random_sequences() {
+        for (left, right, expected) in [
+            ("", "", 0),
+            ("", "猫🙂", 2),
+            ("a", "", 1),
+            ("abc", "abxc", 1),
+            ("abc", "ac", 1),
+            ("abc", "axc", 1),
+            ("ab", "ba", 1),
+            ("aab", "aba", 1),
+            ("猫🙂", "🙂猫", 1),
+            ("café", "cafe\u{301}", 2),
+            ("é", "e\u{301}", 2),
+            ("CA", "ABC", 3), // OSA differs from unrestricted Damerau here.
+            ("👩\u{200d}💻", "💻\u{200d}👩", 2),
+        ] {
+            let a: Vec<_> = left.chars().collect();
+            let b: Vec<_> = right.chars().collect();
+            assert_eq!(
+                damerau_levenshtein(&a, &b),
+                expected,
+                "{left:?} / {right:?}"
+            );
+            assert_eq!(
+                damerau_levenshtein(&a, &b),
+                matrix_distance_reference(&a, &b)
+            );
+            assert_eq!(
+                normalized_edit_similarity(left, right),
+                matrix_similarity_reference(left, right)
+            );
+        }
+        let alphabet = [
+            'a',
+            'b',
+            'é',
+            '\u{301}',
+            '猫',
+            '🙂',
+            '\u{200d}',
+            'Ж',
+            'ß',
+            '\u{10ffff}',
+            '\0',
+        ];
+        let mut seed = 0x0a51_6d27_f389_42bcu64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize
+        };
+        for _ in 0..4_096 {
+            let left_len = next() % 97;
+            let right_len = next() % 97;
+            let left: Vec<_> = (0..left_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
+            let right: Vec<_> = (0..right_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
+            assert_eq!(
+                damerau_levenshtein(&left, &right),
+                matrix_distance_reference(&left, &right),
+                "{left:?} / {right:?}"
+            );
+            assert_eq!(
+                damerau_levenshtein(&right, &left),
+                matrix_distance_reference(&left, &right)
+            );
+        }
+    }
+
+    #[test]
+    fn fuzzy_three_rows_preserve_thousand_title_scores_and_stable_ranking() {
+        let titles = [
+            "Star Wars",
+            "Star Trek",
+            "Spider Man",
+            "Amélie",
+            "猫の映画",
+            "Život",
+            "Movie",
+            "Repeated repeated",
+            "🙂 Adventure",
+            "Straße",
+        ];
+        let corpus: Vec<_> = (0..1_000)
+            .map(|index| {
+                (
+                    titles[index % titles.len()],
+                    format!("{}", 1980 + index % 47),
+                )
+            })
+            .collect();
+        for query in [
+            "satr wars",
+            "star war",
+            "wars star",
+            "spiderman",
+            "Amelie",
+            "猫の映",
+            "žviot",
+            "Movie 2020",
+            "Repeated",
+            "🙂 adventrue",
+            "STRASSE",
+            "",
+            "ab",
+            "a",
+        ] {
+            let new_scores: Vec<_> = corpus
+                .iter()
+                .map(|(title, year)| search_match_score(query, title, Some(year)))
+                .collect();
+            let old_scores: Vec<_> = corpus
+                .iter()
+                .map(|(title, year)| matrix_search_score_reference(query, title, Some(year)))
+                .collect();
+            assert_eq!(new_scores, old_scores, "{query}");
+            let mut new_order: Vec<_> = (0..corpus.len()).collect();
+            let mut old_order = new_order.clone();
+            new_order.sort_by_key(|&index| std::cmp::Reverse(new_scores[index]));
+            old_order.sort_by_key(|&index| std::cmp::Reverse(old_scores[index]));
+            assert_eq!(new_order, old_order, "{query}");
+        }
+    }
 
     fn grouping_preview(id: &str, parent: &str, season: u32, owner: &str) -> MetaPreview {
         serde_json::from_value(serde_json::json!({"id":id,"type":"series","name":id,"poster":format!("https://images.invalid/{id}.jpg"),"novaSourceUrl":owner,"novaCatalogGrouping":{"version":1,"kind":"series_member","parentIds":[parent],"season":season}})).unwrap()
@@ -3501,11 +7121,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(7)),
                 player,
                 downloads,
@@ -3675,11 +7293,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -3954,11 +7570,9 @@ mod tests {
         app.show().unwrap();
         app.set_show_home(true);
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4234,6 +7848,177 @@ mod tests {
         );
     }
 
+    #[test]
+    fn search_pagination_stops_identical_and_reordered_pages_after_two_requests() {
+        for reverse in [false, true] {
+            let mut targets = vec![search_target("repeating")];
+            let page: Vec<_> = (0..100)
+                .map(|index| search_meta(&format!("opaque-{index}"), "First metadata"))
+                .collect();
+            record_search_source_page(&mut targets, 0, page.clone());
+            assert!(!targets[0].exhausted);
+            let mut repeat = page;
+            if reverse {
+                repeat.reverse();
+            }
+            for meta in &mut repeat {
+                meta.name = "Changed duplicate".into();
+            }
+            record_search_source_page(&mut targets, 0, repeat);
+            assert_eq!(
+                targets[0].next_skip, 200,
+                "raw provider cursor includes repeated rows"
+            );
+            assert_eq!(targets[0].results.len(), 100);
+            assert!(
+                targets[0]
+                    .results
+                    .iter()
+                    .all(|meta| meta.name == "First metadata")
+            );
+            assert!(targets[0].exhausted);
+            assert_eq!(
+                targets.iter().filter(|target| !target.exhausted).count(),
+                0,
+                "a third request is ineligible"
+            );
+        }
+    }
+
+    #[test]
+    fn search_pagination_retains_first_metadata_and_advances_raw_overlap_cursor() {
+        let mut targets = vec![search_target("overlap")];
+        record_search_source_page(
+            &mut targets,
+            0,
+            vec![
+                search_meta("a", "First a"),
+                search_meta("a", "Duplicate a"),
+                search_meta("b", "First b"),
+            ],
+        );
+        assert_eq!(targets[0].results.len(), 2);
+        assert_eq!(targets[0].next_skip, 3);
+        record_search_source_page(
+            &mut targets,
+            0,
+            vec![
+                search_meta("b", "New b"),
+                search_meta("c", "First c"),
+                search_meta("c", "Duplicate c"),
+            ],
+        );
+        assert_eq!(targets[0].next_skip, 6);
+        assert!(!targets[0].exhausted);
+        assert_eq!(
+            targets[0]
+                .results
+                .iter()
+                .map(|meta| meta.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert_eq!(
+            targets[0]
+                .results
+                .iter()
+                .map(|meta| meta.name.as_str())
+                .collect::<Vec<_>>(),
+            ["First a", "First b", "First c"]
+        );
+        // This subset never occurred as a page, but has no new identities.
+        record_search_source_page(
+            &mut targets,
+            0,
+            vec![search_meta("a", "Again"), search_meta("c", "Again")],
+        );
+        assert_eq!(targets[0].next_skip, 8);
+        assert_eq!(targets[0].results.len(), 3);
+        assert!(targets[0].exhausted);
+    }
+
+    #[test]
+    fn search_pagination_tracks_each_catalogue_and_addon_owner_independently() {
+        let mut targets = vec![
+            search_target("first"),
+            search_target("same-addon-other-catalogue"),
+            search_target("different-addon"),
+        ];
+        targets[1].addon_url = targets[0].addon_url.clone();
+        for index in 0..targets.len() {
+            record_search_source_page(
+                &mut targets,
+                index,
+                vec![search_meta("local-42", "First title")],
+            );
+        }
+        // The two catalogues share an addon-native identity; the other owner
+        // retains its own opaque title even when its ID and name are equal.
+        assert_eq!(unique_search_results(&targets).len(), 2);
+        record_search_source_page(&mut targets, 0, vec![search_meta("local-42", "Repeated")]);
+        assert!(targets[0].exhausted);
+        for index in [1, 2] {
+            assert!(!targets[index].exhausted);
+            record_search_source_page(
+                &mut targets,
+                index,
+                vec![search_meta("new-local", "New title")],
+            );
+            assert_eq!(targets[index].results.len(), 2);
+            assert!(!targets[index].exhausted);
+        }
+        assert_eq!(unique_search_results(&targets).len(), 4);
+        record_search_source_page(&mut targets, 1, Vec::new());
+        assert!(targets[1].exhausted);
+        assert!(!targets[2].exhausted);
+    }
+
+    #[test]
+    fn search_pagination_empty_single_page_and_failure_keep_terminal_semantics() {
+        let mut targets = vec![
+            search_target("empty"),
+            search_target("single"),
+            search_target("retry"),
+        ];
+        record_search_page_outcome(&mut targets, 0, Some(Vec::new()));
+        assert!(targets[0].exhausted);
+        assert_eq!(targets[0].next_skip, 0);
+        targets[1].supports_skip = false;
+        record_search_page_outcome(
+            &mut targets,
+            1,
+            Some(vec![
+                search_meta("a", "First"),
+                search_meta("a", "Duplicate"),
+            ]),
+        );
+        assert!(targets[1].exhausted);
+        assert_eq!(targets[1].results.len(), 1);
+        assert_eq!(targets[1].next_skip, 0);
+        record_search_source_page(&mut targets, 2, vec![search_meta("a", "First")]);
+        record_search_page_outcome(&mut targets, 2, None);
+        assert!(!targets[2].exhausted);
+        assert_eq!(targets[2].next_skip, 1);
+        record_search_page_outcome(&mut targets, 2, Some(vec![search_meta("b", "Retry")]));
+        assert!(!targets[2].exhausted);
+        assert_eq!(targets[2].next_skip, 2);
+        assert_eq!(targets[2].results.len(), 2);
+    }
+
+    #[test]
+    fn search_pagination_cursor_saturates_without_discarding_new_rows() {
+        let mut targets = vec![search_target("overflow")];
+        targets[0].next_skip = usize::MAX - 1;
+        record_search_source_page(
+            &mut targets,
+            0,
+            vec![search_meta("a", "A"), search_meta("b", "B")],
+        );
+        assert_eq!(targets[0].next_skip, usize::MAX);
+        assert_eq!(targets[0].results.len(), 2);
+        assert!(!targets[0].exhausted);
+    }
+
     fn search_target(id: &str) -> SearchTarget {
         SearchTarget {
             addon_url: format!("https://{id}.example/manifest.json"),
@@ -4244,7 +8029,8 @@ mod tests {
             supports_skip: true,
             next_skip: 0,
             exhausted: false,
-            results: Vec::new(),
+            page_fingerprints: HashSet::new(),
+            results: Arc::default(),
         }
     }
 
@@ -4449,11 +8235,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

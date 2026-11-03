@@ -116,6 +116,170 @@ pub(super) fn wire_page_navigation(app: &AppWindow, bridge: &Bridge) {
         });
 }
 
+#[cfg(feature = "desktop")]
+struct PosterPool {
+    queue: Arc<poster_queue::Queue<PosterJob>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "desktop")]
+impl Drop for PosterPool {
+    fn drop(&mut self) {
+        // BRIDGE retains the sender, so process/window shutdown must explicitly
+        // close intake. Closed take exits even if a UI delivery still owns a lane.
+        self.queue.close();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn start_poster_pool(app: &AppWindow, generation: Arc<AtomicU64>) -> (PosterTx, PosterPool) {
+    let requested = std::env::var("NOVA_POSTER_WORKERS").ok();
+    let count = poster_queue::worker_count(
+        requested.as_deref(),
+        thread::available_parallelism()
+            .ok()
+            .map(|count| count.get()),
+    );
+    if requested.as_ref().is_some_and(|value| {
+        value
+            .parse::<usize>()
+            .ok()
+            .is_none_or(|count| !(1..=8).contains(&count))
+    }) {
+        tracing::warn!("invalid NOVA_POSTER_WORKERS; using bounded desktop default");
+    }
+    let timing = perf::enabled();
+    let run_id = timing.then(|| {
+        std::env::var("NOVA_PERF_RUN_ID")
+            .ok()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 64
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+            })
+            .unwrap_or_else(|| "unassigned".into())
+    });
+    let queue = poster_queue::Queue::<PosterJob>::new(
+        generation,
+        Arc::new(image_settings_revision),
+        count,
+        timing,
+    );
+    let retry_queue = Arc::downgrade(&queue);
+    queue.set_retry(Arc::new(move || {
+        let weak = retry_queue.clone();
+        if profiles::invoke_account(move || {
+            let Some(queue) = weak.upgrade() else { return };
+            queue.retry_started();
+            if queue.is_closed() {
+                return;
+            }
+            let bridge = bridge::with_global_bridge(Clone::clone);
+            if let Some(bridge) = bridge {
+                // A release from Alice may repump Bob's current viewport; never
+                // retain the releasing job's profile or row list for this retry.
+                profiles::with_context(profiles::active_context(), || {
+                    bridge.retry_visible_catalog_posters();
+                });
+            }
+        })
+        .is_err()
+            && let Some(queue) = retry_queue.upgrade()
+        {
+            queue.retry_started();
+        }
+    }));
+    let mut workers = Vec::new();
+    for index in 0..count {
+        let queue = queue.clone();
+        let app = app.as_weak();
+        let run_id = run_id.clone();
+        match std::thread::Builder::new().name(format!("nova-poster-{index}")).spawn(move || {
+            while let Some(work) = queue.take() {
+                let poster_queue::Work { job, completion, priority, queue_wait } = work;
+                if let Some(wait) = queue_wait {
+                    let state = queue.snapshot();
+                    tracing::debug!(target: "nova_perf", operation = "poster.take",
+                        run_id = run_id.as_deref().unwrap_or("unassigned"),
+                        priority = if priority == poster_queue::Priority::Visible { "visible" } else { "background" },
+                        queue_wait_us = u64::try_from(wait.as_micros()).unwrap_or(u64::MAX),
+                        visible = state.visible, background = state.background, active = state.active,
+                        peak_pending = state.peak_pending, peak_active = state.peak_active,
+                        deferred = state.deferred, obsolete = state.obsolete, promoted = state.promoted,
+                        deduplicated = state.deduplicated, "poster queue sample");
+                }
+                if !completion.is_live() || !profiles::is_current(&job.context) || !job.settings.is_current() {
+                    completion.retry_current();
+                    continue;
+                }
+                let current_slot = profiles::with_context(job.context.clone(), || {
+                    bridge::with_global_bridge(Clone::clone)
+                        .is_some_and(|bridge| bridge.catalog_poster_job_matches(&job.key))
+                });
+                if !current_slot { completion.retry_current(); continue; }
+                // Keep this desktop pool synchronous. Submitting and waiting on
+                // MED-07's artwork pool here would misrepresent worker counts
+                // and risk nesting blocking work into the same executor.
+                let pixels = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    profiles::with_context(job.context.clone(), || {
+                        job.inventory.with(|| job.settings.with(|| {
+                            display_pixels(&job.key.url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)))
+                        }))
+                    })
+                })).ok().flatten();
+                if !completion.is_live() || !job.settings.is_current() {
+                    completion.retry_current();
+                    continue;
+                }
+                let app = app.clone();
+                let _ = profiles::with_context(job.context.clone(), || {
+                    profiles::invoke_from_event_loop(move || {
+                        let _completion = completion;
+                        if !_completion.is_live() || !job.settings.is_current() {
+                            _completion.retry_current();
+                            return;
+                        }
+                        let Some(bridge) = bridge::with_global_bridge(Clone::clone) else { return };
+                        if !bridge.catalog_poster_job_matches(&job.key) { return; }
+                        let Some(app) = app.upgrade() else { return };
+                        if app.get_catalog().row_data(job.key.index).is_none_or(|row| {
+                            row.id.as_str() != job.key.id || row.poster_path.as_str() != job.key.url
+                        }) { return; }
+                        if let Some(pixels) = pixels {
+                            app.invoke_set_card_poster(job.key.index as i32, Image::from_rgba8(pixels));
+                        } else {
+                            bridge.recover_catalog_artwork(job.key.generation, job.key.index, &job.key.url);
+                        }
+                    })
+                });
+            }
+        }) {
+            Ok(worker) => workers.push(worker),
+            Err(error) => tracing::warn!(%error, "unable to start desktop poster worker"),
+        }
+    }
+    if workers.is_empty() {
+        queue.close();
+    }
+    if timing {
+        tracing::debug!(target: "nova_perf", operation = "poster.pool",
+            run_id = run_id.as_deref().unwrap_or("unassigned"), configured_workers = count,
+            actual_workers = workers.len(), visible_capacity = poster_queue::VISIBLE_CAPACITY,
+            background_capacity = poster_queue::BACKGROUND_CAPACITY, "poster pool configuration");
+    }
+    (
+        PosterTx {
+            queue: queue.clone(),
+        },
+        PosterPool { queue, workers },
+    )
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
     // (src/player.rs). Like the reference prototype, the app runs on the
@@ -138,6 +302,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     crate::diagnostics::init();
+    let startup_perf = Rc::new(std::cell::RefCell::new(perf::WindowStartup::app_entry()));
+    let startup_timer = perf::Timer::new("startup.initialize");
     net::init_metadata_transport();
     // Set the native frame theme before its first creation, avoiding a light
     // title-bar flash. Keep Windows decorations and caption-button behavior.
@@ -149,7 +315,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             attributes.with_theme(Some(slint::winit_030::winit::window::Theme::Dark))
         })
         .select()?;
-    let app = AppWindow::new()?;
+    let app = {
+        let _section = perf::Timer::new("startup.create_window");
+        AppWindow::new()?
+    };
     nova_ui::initialize_fonts(app.window());
     app.set_app_version(crate::version::DISPLAY.into());
     app.set_update_is_development(!crate::version::is_release());
@@ -216,156 +385,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let catalog_gen = Arc::new(AtomicU64::new(0));
 
     #[cfg(feature = "desktop")]
-    // Poster download pipeline; pixels live only in the shared byte-budgeted cache.
-    // Dual intake: `hi` carries near-viewport (pre)loads from `visible_range`,
-    // `lo` carries the background full-grid sweeps. Workers always drain `hi`
-    // first so scrolling into new rows never waits behind far-away images.
-    let tx = {
-        let (hi_tx, hi_rx) = mpsc::channel::<PosterJob>();
-        let (lo_tx, lo_rx) = mpsc::channel::<PosterJob>();
-        let hi_rx = Arc::new(Mutex::new(hi_rx));
-        let lo_rx = Arc::new(Mutex::new(lo_rx));
-        let num_workers = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-
-        fn next_job(
-            hi_rx: &Arc<Mutex<mpsc::Receiver<PosterJob>>>,
-            lo_rx: &Arc<Mutex<mpsc::Receiver<PosterJob>>>,
-        ) -> Result<PosterJob, ()> {
-            // Priority intake: never give up on timeout — an idle timeout
-            // just means "loop and check the other lane". Only disconnect
-            // (both senders dropped at shutdown) ends the worker.
-            loop {
-                // Fast path: a preload is already waiting — take it without
-                // blocking so scrolls stay responsive while a sweep is queued.
-                if let Ok(job) = hi_rx.lock().unwrap().try_recv() {
-                    return Ok(job);
-                }
-                // No preload waiting: block briefly for one (a scroll may land
-                // while we idle), then fall back to one background job.
-                match hi_rx
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_millis(10))
-                {
-                    Ok(job) => return Ok(job),
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        // High-priority lane gone: block on the background lane.
-                        return lo_rx.lock().unwrap().recv().map_err(|_| ());
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-                if let Ok(job) = lo_rx.lock().unwrap().try_recv() {
-                    return Ok(job);
-                }
-                match lo_rx
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_millis(50))
-                {
-                    Ok(job) => return Ok(job),
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        // Background lane gone: block on the preload lane.
-                        return hi_rx.lock().unwrap().recv().map_err(|_| ());
-                    }
-                    // Both lanes empty: loop around and poll `hi` again so a
-                    // preload that landed during the wait is never stuck
-                    // behind the next park.
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                }
-            }
-        }
-
-        for _ in 0..num_workers {
-            let hi_rx = hi_rx.clone();
-            let lo_rx = lo_rx.clone();
-            let app_weak = app.as_weak();
-            let catalog_gen = catalog_gen.clone();
-
-            std::thread::spawn(move || {
-                while let Ok(job) = next_job(&hi_rx, &lo_rx) {
-                    // Drop stale jobs before fetching: fast scrolling queues
-                    // downloads for generations the user already left; each
-                    // would otherwise burn a full fetch + decode + disk
-                    // write for an image that can never be shown.
-                    if job.generation != catalog_gen.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let revision = image_settings_revision();
-                    if let Some(display) =
-                        display_pixels(&job.url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)))
-                    {
-                        let app_weak = app_weak.clone();
-                        let catalog_gen = catalog_gen.clone();
-
-                        let _ = profiles::invoke_account(move || {
-                            // Drop stale posters (catalog changed since dispatch).
-                            if job.generation != catalog_gen.load(Ordering::Relaxed)
-                                || image_settings_revision() != revision
-                            {
-                                return;
-                            }
-                            if job.display_key.as_ref().is_some_and(|key| {
-                                bridge::with_global_bridge(|bridge| {
-                                    bridge.catalog_poster_slot_matches(
-                                        job.generation,
-                                        job.index,
-                                        key,
-                                        &job.url,
-                                    )
-                                }) == Some(false)
-                            }) {
-                                return;
-                            }
-                            if let Some(app) = app_weak.upgrade() {
-                                let model = if job.library {
-                                    app.get_library()
-                                } else {
-                                    app.get_catalog()
-                                };
-                                if model
-                                    .row_data(job.index)
-                                    .is_none_or(|row| row.poster_path.as_str() != job.url)
-                                {
-                                    return;
-                                }
-                                let img = Image::from_rgba8(display);
-                                if job.library {
-                                    app.invoke_set_library_poster(job.index as i32, img);
-                                } else {
-                                    app.invoke_set_card_poster(job.index as i32, img.clone());
-                                }
-                            }
-                        });
-                    } else if !job.library {
-                        let _ = profiles::invoke_account(move || {
-                            bridge::with_global_bridge(|bridge| {
-                                if job.display_key.as_ref().is_none_or(|key| {
-                                    bridge.catalog_poster_slot_matches(
-                                        job.generation,
-                                        job.index,
-                                        key,
-                                        &job.url,
-                                    )
-                                }) {
-                                    bridge.recover_catalog_artwork(
-                                        job.generation,
-                                        job.index,
-                                        &job.url,
-                                    );
-                                }
-                            });
-                        });
-                    }
-                }
-            });
-        }
-        PosterTx {
-            hi: hi_tx,
-            lo: lo_tx,
-        }
-    };
+    let (tx, poster_pool) = start_poster_pool(&app, catalog_gen.clone());
 
     // In-app player (same window, like the reference prototype): mpv underlay
     // on desktop, HTML5 video element on web. Same public API either way.
@@ -374,7 +394,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(any(feature = "desktop", target_os = "android"))]
     let first_frame_job = after_first_frame.clone();
     #[cfg(any(feature = "desktop", target_os = "android"))]
+    let render_perf = startup_perf.clone();
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     let player = crate::player::Player::setup_with_render_observer(&app, move |state| {
+        if matches!(state, slint::RenderingState::AfterRendering) {
+            render_perf.borrow_mut().after_render();
+        }
         if matches!(state, slint::RenderingState::AfterRendering)
             && let Some(job) = first_frame_job.borrow_mut().take()
         {
@@ -417,6 +442,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
 
+    let _poster_intake_owner = poster_intake::RunOwner(bridge.poster_intake.clone());
     bridge.wire_remote_playback();
     bridge.wire_party();
     #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
@@ -1218,6 +1244,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             state.cache_settings = read_settings();
             state.download_settings = read_download_settings();
             set_active_cache_settings(state.cache_settings.clone());
+            bridge.install_applied_settings(&state.cache_settings);
         }
         bridge.settings_to_ui();
 
@@ -1635,6 +1662,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _timer = slint::Timer::default();
     let tick_player = player.clone();
     let tick_bridge = bridge.clone();
+    let tick_startup_perf = startup_perf.clone();
     #[cfg(feature = "desktop")]
     let tick_window = desktop_window.clone();
     let mut episode_day = today_days();
@@ -1643,31 +1671,84 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
-            tick_bridge.retry_profile_services();
+            let _tick = perf::Timer::new("ui.tick");
+            let needs_rows = tick_startup_perf.borrow().needs_rows();
+            if needs_rows
+                && let Some(app) = tick_bridge.app()
+                && !app.get_profiles_require_selection()
+                && !app.get_onboarding_visible()
+                && !app.get_player_open()
+            {
+                // Polling reports row availability with up to one tick of delay;
+                // it does not claim those rows have reached the display.
+                let rows = match current_nav(&app) {
+                    0 => {
+                        app.get_home_continue().row_count()
+                            + app.get_home_new_episodes().row_count()
+                            + app.get_home_upcoming().row_count()
+                            + app.get_home_catalog_cards().row_count()
+                    }
+                    2 => app.get_library().row_count(),
+                    _ => 0,
+                };
+                tick_startup_perf.borrow_mut().observe_rows(rows);
+            }
+            {
+                let _section = perf::Timer::new("ui.retry_profile_services");
+                tick_bridge.retry_profile_services();
+            }
             #[cfg(target_os = "android")]
-            release_reminders_android::poll_tap(&tick_bridge);
+            {
+                let _section = perf::Timer::new("ui.poll_reminder_tap");
+                release_reminders_android::poll_tap(&tick_bridge);
+            }
             if let Some(app) = tick_bridge.app() {
                 #[cfg(feature = "desktop")]
-                tick_window.tick(&app, &tick_player);
+                {
+                    let _section = perf::Timer::new("ui.desktop_window_tick");
+                    tick_window.tick(&app, &tick_player);
+                }
                 app.set_persistence_failed(
                     storage::last_error().is_some() || persistence::failed(),
                 );
             }
-            tick_bridge.refresh_stremio_surfaces_if_visible();
+            {
+                let _section = perf::Timer::new("ui.refresh_stremio_surfaces_if_visible");
+                tick_bridge.refresh_stremio_surfaces_if_visible();
+            }
             let today = today_days();
             if today != episode_day {
                 episode_day = today;
-                tick_bridge.refresh_library_progress_ui();
+                {
+                    let _section = perf::Timer::new("ui.refresh_library_progress_ui");
+                    tick_bridge.refresh_library_progress_ui();
+                }
             }
             if episode_inventory_check.elapsed() >= Duration::from_secs(60) {
                 episode_inventory_check = std::time::Instant::now();
-                tick_bridge.refresh_saved_episode_metadata();
-                tick_bridge.reconcile_release_reminders();
+                {
+                    let _section = perf::Timer::new("ui.refresh_saved_episode_metadata");
+                    tick_bridge.refresh_saved_episode_metadata();
+                }
+                {
+                    let _section = perf::Timer::new("ui.reconcile_release_reminders");
+                    tick_bridge.reconcile_release_reminders();
+                }
             }
             let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());
-            tick_bridge.refresh_sleep_timer();
-            tick_player.tick();
-            tick_bridge.poll_addon_subtitles();
+            {
+                let _section = perf::Timer::new("ui.refresh_sleep_timer");
+                tick_bridge.refresh_sleep_timer();
+            }
+            {
+                let _section = perf::Timer::new("ui.player_tick");
+                tick_player.tick();
+            }
+            tick_bridge.poll_provider_relay();
+            {
+                let _section = perf::Timer::new("ui.poll_addon_subtitles");
+                tick_bridge.poll_addon_subtitles();
+            }
             if was_open
                 && tick_bridge.app().is_some_and(|app| !app.get_player_open())
                 && tick_bridge
@@ -1678,26 +1759,71 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .as_ref()
                     .is_some_and(|intent| intent.in_app)
             {
-                tick_bridge.complete_playback_close();
+                {
+                    let _section = perf::Timer::new("ui.complete_playback_close");
+                    tick_bridge.complete_playback_close();
+                }
             }
-            tick_bridge.remote_tick();
-            tick_bridge.party_tick();
-            tick_bridge.flush_playback_preferences(false);
-            tick_bridge.note_player_progress_from_ui();
-            tick_bridge.refresh_playback_tools();
-            tick_bridge.refresh_playback_end_menu();
-            tick_bridge.player_stats_tick();
+            {
+                let _section = perf::Timer::new("ui.remote_tick");
+                tick_bridge.remote_tick();
+            }
+            {
+                let _section = perf::Timer::new("ui.party_tick");
+                tick_bridge.party_tick();
+            }
+            {
+                let _section = perf::Timer::new("ui.flush_playback_preferences");
+                tick_bridge.flush_playback_preferences(false);
+            }
+            {
+                let _section = perf::Timer::new("ui.note_player_progress_from_ui");
+                tick_bridge.note_player_progress_from_ui();
+            }
+            {
+                let _section = perf::Timer::new("ui.refresh_playback_tools");
+                tick_bridge.refresh_playback_tools();
+            }
+            {
+                let _section = perf::Timer::new("ui.refresh_playback_end_menu");
+                tick_bridge.refresh_playback_end_menu();
+            }
+            {
+                let _section = perf::Timer::new("ui.player_stats_tick");
+                tick_bridge.player_stats_tick();
+            }
             #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
-            media_controls.publish(&tick_bridge);
-            tick_bridge.refresh_intro_skip();
-            tick_bridge.note_torrent_progress_from_ui();
-            tick_bridge.refresh_download_rows();
-            tick_bridge.smart_offline_tick();
+            {
+                let _section = perf::Timer::new("ui.publish_media_controls");
+                media_controls.publish(&tick_bridge);
+            }
+            {
+                let _section = perf::Timer::new("ui.refresh_intro_skip");
+                tick_bridge.refresh_intro_skip();
+            }
+            {
+                let _section = perf::Timer::new("ui.note_torrent_progress_from_ui");
+                tick_bridge.note_torrent_progress_from_ui();
+            }
+            {
+                let _section = perf::Timer::new("ui.refresh_download_rows");
+                tick_bridge.refresh_download_rows();
+                tick_bridge.refresh_unified_search_downloads();
+                tick_bridge.calendar_tick();
+                tick_bridge.poster_intake_tick();
+            }
+            {
+                let _section = perf::Timer::new("ui.smart_offline_tick");
+                tick_bridge.smart_offline_tick();
+            }
             if tick_bridge
                 .app()
                 .is_some_and(|app| app.get_show_downloads())
             {
-                tick_bridge.refresh_downloads_page();
+                {
+                    let _section = perf::Timer::new("ui.refresh_downloads_page");
+                    tick_bridge.refresh_downloads_page();
+                }
             }
         },
     );
@@ -1710,8 +1836,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_secs(2),
         move || {
-            sync_tick_bridge.replay_sync_projection();
-            addon_packages::reconcile(&sync_tick_bridge);
+            let _tick = perf::Timer::new("sync.tick");
+            {
+                let _section = perf::Timer::new("sync.replay_sync_projection");
+                sync_tick_bridge.replay_sync_projection();
+            }
+            {
+                let _section = perf::Timer::new("sync.addon_packages_reconcile");
+                addon_packages::reconcile(&sync_tick_bridge);
+            }
             // Android doesn't surface connectivity changes to native code, so
             // poll the active network and hand changes to iroh.
             #[cfg(target_os = "android")]
@@ -1723,7 +1856,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|a| a.get_show_settings())
                 .unwrap_or(false)
             {
-                sync_tick_bridge.sync_status_to_ui();
+                {
+                    let _section = perf::Timer::new("sync.sync_status_to_ui");
+                    sync_tick_bridge.sync_status_to_ui();
+                }
             }
         },
     );
@@ -1748,7 +1884,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     crate::web_log("nova: startup complete, entering event loop");
+    drop(startup_timer);
     let result = app.run();
+    bridge.close_profile_activations();
+    bridge.poster_intake.close();
+    #[cfg(feature = "desktop")]
+    drop(poster_pool);
     #[cfg(all(target_os = "android", not(feature = "desktop")))]
     {
         sync::retire_sync_request(
@@ -1777,6 +1918,362 @@ mod tests {
     use super::*;
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use slint::platform::{PointerEventButton, WindowEvent};
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn desktop_poster_capacity_retries_stationary_viewport_and_discover_return() {
+        const CHILD: &str = "NOVA_POSTER_VIEWPORT_CHILD";
+        let Some(root) = std::env::var_os(CHILD) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-poster-viewport-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("NOVA_POSTER_WORKERS", "1")
+                .args(["--exact", "app::run::tests::desktop_poster_capacity_retries_stationary_viewport_and_discover_return", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+
+        // Exercise the real synchronous pool, captured profile authority and
+        // Slint retry callbacks. No visible_range/scroll callback drives this test.
+        fn pump_until(app: &AppWindow, ready: impl Fn() -> bool + 'static) {
+            let started = std::time::Instant::now();
+            let timer = Rc::new(slint::Timer::default());
+            let stop = Rc::downgrade(&timer);
+            let outcome = Rc::new(std::cell::Cell::new(None));
+            let observed = outcome.clone();
+            timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_millis(5),
+                move || {
+                    // The testing backend updates timers before dispatching
+                    // even an already-queued Quit. Post exactly one Quit so
+                    // another pump cannot inherit a duplicate exit request.
+                    if observed.get().is_some() {
+                        return;
+                    }
+                    let satisfied = ready();
+                    if satisfied || started.elapsed() > Duration::from_secs(8) {
+                        observed.set(Some(satisfied));
+                        if let Some(timer) = stop.upgrade() {
+                            timer.stop();
+                        }
+                        slint::quit_event_loop().unwrap();
+                    }
+                },
+            );
+            // ComponentHandle::run hides its window after returning, which
+            // queues another last-window Quit in the testing backend. Keep
+            // the same window shown across this fixture's separate pumps.
+            app.show().unwrap();
+            slint::run_event_loop().unwrap();
+            timer.stop();
+            assert_eq!(
+                outcome.get(),
+                Some(true),
+                "event loop must reach its current predicate before the deadline"
+            );
+        }
+        fn blocked_image() -> (
+            String,
+            mpsc::Receiver<()>,
+            mpsc::Sender<()>,
+            std::thread::JoinHandle<()>,
+        ) {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/blocked.png", listener.local_addr().unwrap());
+            let (started, observed) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(8);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "poster worker never connected"
+                            );
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(8)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(8)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                started.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(8)).unwrap();
+                let mut png = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::new_rgba8(2, 3)
+                    .write_to(&mut png, image::ImageFormat::Png)
+                    .unwrap();
+                let body = png.into_inner();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            (url, observed, release, server)
+        }
+        fn install_rows(
+            bridge: &Bridge,
+            app: &AppWindow,
+            generation: u64,
+            blocker: &str,
+        ) -> String {
+            let target = poster_queue::VISIBLE_CAPACITY + 1;
+            let previews = (0..=target)
+                .map(|index| {
+                    let url = if index == 0 {
+                        blocker.to_owned()
+                    } else {
+                        format!("https://fixture.invalid/{generation}/{index}.png")
+                    };
+                    if index != 0 {
+                        decoded_cache_insert(
+                            &image_cache_key(&url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
+                            SharedPixelBuffer::new(2, 3),
+                        );
+                    }
+                    serde_json::from_value::<MetaPreview>(serde_json::json!({
+                    "id": format!("row-{index}"), "type": "movie", "name": format!("Row {index}"),
+                    "poster": url, "novaSourceUrl": "https://fixture.invalid/source"
+                })).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let target_url = previews[target].poster.clone().unwrap();
+            app.set_catalog(
+                Rc::new(VecModel::from(
+                    previews
+                        .iter()
+                        .map(|preview| MediaCard {
+                            id: preview.id.clone().into(),
+                            poster_path: preview.poster.clone().unwrap().into(),
+                            ..Default::default()
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.previews = previews;
+            }
+            target_url
+        }
+        fn fill_while_blocked(bridge: &Bridge, generation: u64) {
+            for index in 1..=poster_queue::VISIBLE_CAPACITY {
+                let url = bridge.shared.lock().unwrap().previews[index]
+                    .poster
+                    .clone()
+                    .unwrap();
+                assert_eq!(
+                    bridge.queue_catalog_poster(
+                        generation,
+                        index,
+                        url,
+                        poster_queue::Priority::Visible
+                    ),
+                    poster_queue::Admission::Queued
+                );
+            }
+            assert_eq!(
+                bridge.poster_tx.queue.snapshot().visible,
+                poster_queue::VISIBLE_CAPACITY
+            );
+            // Establish the initial viewport through the production callback
+            // only after filling intake. No further scroll event is sent.
+            let target = (poster_queue::VISIBLE_CAPACITY + 1) as i32;
+            bridge.visible_range(false, target, target);
+            bridge.retry_visible_catalog_posters();
+            assert!(bridge.poster_tx.queue.snapshot().deferred > 0);
+        }
+
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        profiles::initialize().unwrap();
+        set_active_cache_settings(CacheSettings {
+            cache_images: false,
+            ..Default::default()
+        });
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(false);
+        app.set_more_open(false);
+        app.set_profiles_require_selection(false);
+        let generation = Arc::new(AtomicU64::new(1));
+        let (tx, pool) = start_poster_pool(&app, generation.clone());
+        let bridge = Bridge::new(
+            app.as_weak(),
+            tx,
+            generation.clone(),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        bridge::install_global_bridge(&bridge);
+        // Owner-capture errors fail closed before leaf dispatch, while still
+        // delivering one terminal completion so caller bookkeeping can retire.
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut missing_owner = profiles::capture();
+        missing_owner.session = None;
+        let count = completed.clone();
+        profiles::with_context(missing_owner, || {
+            net::fetch_image(
+                "https://fixture.invalid/missing-owner.png".into(),
+                ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                move |pixels| {
+                    assert!(pixels.is_none());
+                    count.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+        });
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        let store = profiles::ProfileStore::capture();
+        let previous_addons = store.read("addons").unwrap();
+        store
+            .write("addons", "OwnerCaptureError: malformed inventory fixture")
+            .unwrap();
+        let count = completed.clone();
+        net::fetch_image(
+            "https://fixture.invalid/invalid-inventory.png".into(),
+            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+            move |pixels| {
+                assert!(pixels.is_none());
+                count.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        store
+            .write_batch(&[("addons".into(), previous_addons)])
+            .unwrap();
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
+        let target = poster_queue::VISIBLE_CAPACITY + 1;
+
+        for hidden in [false, true] {
+            let current = generation.fetch_add(1, Ordering::AcqRel) + 1;
+            bridge.poster_tx.generation_changed();
+            let (url, observed, release, server) = blocked_image();
+            let target_url = install_rows(&bridge, &app, current, &url);
+            assert_eq!(
+                bridge.queue_catalog_poster(current, 0, url, poster_queue::Priority::Visible),
+                poster_queue::Admission::Queued
+            );
+            observed.recv_timeout(Duration::from_secs(8)).unwrap();
+            fill_while_blocked(&bridge, current);
+            assert!(!app.get_catalog().row_data(target).unwrap().is_loaded);
+            // Neither an obsolete generation nor a foreign owner can obtain a
+            // registration or paint the still-visible target.
+            assert_eq!(
+                bridge.queue_catalog_poster(
+                    current - 1,
+                    target,
+                    target_url.clone(),
+                    poster_queue::Priority::Visible
+                ),
+                poster_queue::Admission::Obsolete
+            );
+            profiles::with_context(profiles::context_for("foreign-owner"), || {
+                assert_eq!(
+                    bridge.queue_catalog_poster(
+                        current,
+                        target,
+                        target_url.clone(),
+                        poster_queue::Priority::Visible
+                    ),
+                    poster_queue::Admission::Obsolete
+                );
+            });
+            app.set_show_home(hidden);
+            release.send(()).unwrap();
+            server.join().unwrap();
+            let weak = app.as_weak();
+            let queue = bridge.poster_tx.queue.clone();
+            pump_until(&app, move || {
+                let snapshot = queue.snapshot();
+                snapshot.active == 0
+                    && snapshot.visible == 0
+                    && (hidden
+                        || weak
+                            .upgrade()
+                            .unwrap()
+                            .get_catalog()
+                            .row_data(target)
+                            .unwrap()
+                            .is_loaded)
+            });
+            assert_eq!(
+                bridge.poster_tx.queue.snapshot().active,
+                0,
+                "pool must finish within deadline"
+            );
+            assert_eq!(bridge.poster_tx.queue.snapshot().visible, 0);
+            if hidden {
+                assert!(
+                    !app.get_catalog().row_data(target).unwrap().is_loaded,
+                    "capacity release must not repopulate hidden Discover"
+                );
+                bridge.show_discover_page();
+                let weak = app.as_weak();
+                pump_until(&app, move || {
+                    weak.upgrade()
+                        .unwrap()
+                        .get_catalog()
+                        .row_data(target)
+                        .unwrap()
+                        .is_loaded
+                });
+            }
+            assert!(
+                app.get_catalog().row_data(target).unwrap().is_loaded,
+                "current viewport must eventually paint without another scroll"
+            );
+        }
+
+        // A genuinely running old-generation fetch must not paint the new
+        // model even when its index, typed identity and URL are unchanged.
+        let current = generation.fetch_add(1, Ordering::AcqRel) + 1;
+        bridge.poster_tx.generation_changed();
+        let (url, observed, release, server) = blocked_image();
+        install_rows(&bridge, &app, current, &url);
+        assert_eq!(
+            bridge.queue_catalog_poster(current, 0, url, poster_queue::Priority::Visible),
+            poster_queue::Admission::Queued
+        );
+        observed.recv_timeout(Duration::from_secs(8)).unwrap();
+        generation.fetch_add(1, Ordering::AcqRel);
+        bridge.poster_tx.generation_changed();
+        app.set_show_home(true);
+        release.send(()).unwrap();
+        server.join().unwrap();
+        let queue = bridge.poster_tx.queue.clone();
+        pump_until(&app, move || queue.snapshot().active == 0);
+        assert_eq!(bridge.poster_tx.queue.snapshot().active, 0);
+        assert!(
+            !app.get_catalog().row_data(0).unwrap().is_loaded,
+            "obsolete running work must never paint"
+        );
+        drop(pool);
+        assert!(
+            bridge.poster_tx.queue.is_closed(),
+            "run-local close works despite static Bridge retention"
+        );
+    }
 
     fn tap(app: &AppWindow, element: ElementHandle) {
         let position = element.absolute_position();
@@ -1858,11 +2355,9 @@ mod tests {
         #[cfg(feature = "desktop")]
         let bridge = {
             // No poster workers consume requests in this empty fixture.
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

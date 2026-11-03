@@ -6,13 +6,446 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct State {
-    archive: Option<Archive>,
+    archive: Option<Shared<Archive>>,
     choices: Vec<Choice>,
-    preview: Option<Preview>,
+    preview: Option<Shared<Preview>>,
     selected_profiles: BTreeSet<String>,
     selected_components: BTreeSet<String>,
     recovery_review: Option<Vec<(String, String)>>,
+    pending: Option<Pending>,
+    running: Option<(u64, profiles::Context)>,
+    generation: u64,
 }
+impl State {
+    fn defer(&mut self, pending: Pending) {
+        self.pending = Some(pending);
+    }
+    fn cancel_pending(&mut self) -> bool {
+        self.pending.take().is_some()
+    }
+    fn clear_payloads(&mut self) {
+        self.archive = None;
+        self.choices.clear();
+        self.preview = None;
+    }
+    fn preview_input(&self) -> Option<(Shared<Archive>, Vec<Choice>)> {
+        self.archive
+            .as_ref()
+            .map(|archive| (archive.clone(), self.choices.clone()))
+    }
+
+    fn matches_preview(&self, preview: &Preview) -> bool {
+        self.choices == preview.selection
+            && self.archive.as_ref().map(|archive| &archive.checksum)
+                == Some(&preview.archive.checksum)
+    }
+}
+#[derive(Clone, Copy)]
+enum Operation {
+    Import,
+    Build,
+    Apply,
+    Undo,
+}
+struct Pending {
+    operation: Operation,
+    owner: profiles::Context,
+    selection: Option<(Vec<Choice>, String)>,
+}
+impl Pending {
+    fn matches(&self, state: &State) -> bool {
+        profiles::is_current(&self.owner)
+            && self.selection.as_ref().is_none_or(|(choices, checksum)| {
+                &state.choices == choices
+                    && state
+                        .archive
+                        .as_ref()
+                        .is_some_and(|archive| &archive.checksum == checksum)
+            })
+    }
+}
+type PendingUi = (slint::Weak<crate::AppWindow>, std::sync::Weak<Mutex<State>>);
+static PENDING_UI: Mutex<Option<PendingUi>> = Mutex::new(None);
+static WAKE_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn wake_pending() {
+    use std::sync::atomic::Ordering;
+    if WAKE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if slint::invoke_from_event_loop(|| {
+        WAKE_PENDING.store(false, Ordering::Release);
+        let target = PENDING_UI.lock().unwrap().clone();
+        if let Some((app, state)) = target
+            && let (Some(app), Some(state)) = (app.upgrade(), state.upgrade())
+        {
+            profiles::with_context(profiles::active_context(), || {
+                dispatch_pending(&app, &state)
+            });
+        }
+    })
+    .is_err()
+    {
+        WAKE_PENDING.store(false, Ordering::Release);
+    }
+}
+fn request_operation(app: &crate::AppWindow, state: &Arc<Mutex<State>>, operation: Operation) {
+    if !allowed() {
+        return;
+    }
+    let mut state_guard = state.lock().unwrap();
+    let selection = match operation {
+        Operation::Build | Operation::Apply => {
+            if matches!(operation, Operation::Apply)
+                && state_guard
+                    .preview
+                    .as_ref()
+                    .is_none_or(|preview| !state_guard.matches_preview(preview))
+            {
+                changed(app, &mut state_guard);
+                status(
+                    app,
+                    "Selection changed; rebuild the preview before importing",
+                );
+                return;
+            }
+            let Some(archive) = &state_guard.archive else {
+                return;
+            };
+            Some((state_guard.choices.clone(), archive.checksum.clone()))
+        }
+        _ => None,
+    };
+    // Superseding a deferred descriptor drops only choices/checksum/context.
+    // It never creates another worker or retains another immutable payload.
+    state_guard.defer(Pending {
+        operation,
+        owner: profiles::capture(),
+        selection,
+    });
+    drop(state_guard);
+    dispatch_pending(app, state);
+}
+fn dispatch_pending(app: &crate::AppWindow, state: &Arc<Mutex<State>>) {
+    let pending = {
+        let mut state = state.lock().unwrap();
+        if let Some((_, owner)) = &state.running {
+            if profiles::is_current(owner) {
+                return;
+            }
+            state.running = None;
+            state.generation = state.generation.wrapping_add(1);
+        }
+        let Some(pending) = state.pending.take() else {
+            return;
+        };
+        if !pending.matches(&state) {
+            app.global::<crate::BackupBridge>().set_busy(false);
+            status(
+                app,
+                "Selection changed; rebuild the preview before importing",
+            );
+            return;
+        }
+        pending
+    };
+    if !allowed() {
+        app.global::<crate::BackupBridge>().set_busy(false);
+        return;
+    }
+    let count = if matches!(pending.operation, Operation::Undo) {
+        2
+    } else {
+        1
+    };
+    let mut reservation = match cleanup::reserve(count) {
+        Ok(Some(reservation)) => reservation,
+        Ok(None) => {
+            state.lock().unwrap().defer(pending);
+            app.global::<crate::BackupBridge>().set_busy(true);
+            return;
+        }
+        Err(error) => {
+            app.global::<crate::BackupBridge>().set_busy(false);
+            status(app, &error);
+            return;
+        }
+    };
+    let generation = {
+        let mut state = state.lock().unwrap();
+        if !pending.matches(&state) {
+            app.global::<crate::BackupBridge>().set_busy(false);
+            return;
+        }
+        state.generation = state.generation.wrapping_add(1);
+        let generation = state.generation;
+        state.running = Some((generation, pending.owner.clone()));
+        generation
+    };
+    app.global::<crate::BackupBridge>().set_busy(true);
+    match pending.operation {
+        Operation::Import => start_import(app, state, generation, reservation.take()),
+        Operation::Build => start_preview(app, state, generation, reservation.take()),
+        Operation::Apply => start_apply(app, state, generation, reservation.take()),
+        Operation::Undo => start_undo(
+            app,
+            state,
+            generation,
+            reservation.take(),
+            reservation.take(),
+        ),
+    }
+}
+fn finish_operation(app: &crate::AppWindow, state: &Arc<Mutex<State>>, generation: u64) -> bool {
+    let mut state = state.lock().unwrap();
+    if state.running.as_ref().map(|(current, _)| *current) != Some(generation) {
+        return false;
+    }
+    state.running = None;
+    app.global::<crate::BackupBridge>().set_busy(false);
+    wake_pending();
+    true
+}
+fn start_import(
+    app: &crate::AppWindow,
+    state: &Arc<Mutex<State>>,
+    generation: u64,
+    permit: cleanup::Permit,
+) {
+    status(app, "Choose a backup file…");
+    let weak = app.as_weak();
+    let state = state.clone();
+    let context = profiles::capture();
+    app::documents::open("nova-backup", move |result| {
+        let result = result.and_then(|bytes| {
+            bytes
+                .map(|bytes| {
+                    let archive = archive::decode(&bytes)?;
+                    let choices = super::choices(&archive)?;
+                    Ok((Shared::new(archive, permit), choices))
+                })
+                .transpose()
+        });
+        profiles::with_context(context, || {
+            let _ = profiles::invoke_from_event_loop(move || {
+                if let Some(app) = weak.upgrade() {
+                    if !finish_operation(&app, &state, generation) {
+                        return;
+                    }
+                    match result {
+                        Ok(Some((archive, choices))) => {
+                            let unsupported = archive.unsupported.join(", ");
+                            let mut state = state.lock().unwrap();
+                            state.archive = Some(archive);
+                            state.choices = choices;
+                            app.global::<crate::BackupBridge>().set_replace(false);
+                            changed(&app, &mut state);
+                            publish_options(&app, &state);
+                            if unsupported.is_empty() {
+                                status(
+                                    &app,
+                                    "Choose target profiles and components, then rebuild the preview",
+                                );
+                            } else {
+                                status(
+                                    &app,
+                                    &format!(
+                                        "{}: {unsupported}",
+                                        text::tr("Unsupported optional components")
+                                    ),
+                                );
+                            }
+                        }
+                        Ok(None) => status(&app, "Import cancelled"),
+                        Err(error) => status(&app, &error),
+                    }
+                }
+            });
+        });
+    });
+}
+fn start_preview(
+    app: &crate::AppWindow,
+    state: &Arc<Mutex<State>>,
+    generation: u64,
+    permit: cleanup::Permit,
+) {
+    let input = state.lock().unwrap().preview_input();
+    let Some((archive, choices)) = input else {
+        finish_operation(app, state, generation);
+        return;
+    };
+    if !targets_allowed(
+        choices
+            .iter()
+            .filter(|choice| choice.included && !choice.create && !choice.components.is_empty())
+            .map(|choice| choice.target.clone()),
+    ) {
+        finish_operation(app, state, generation);
+        return;
+    }
+    status(app, "Preparing import preview…");
+    let weak = app.as_weak();
+    let state = state.clone();
+    profiles::thread::spawn(move || {
+        let result = super::preview(archive, choices).map(|preview| Shared::new(preview, permit));
+        let _ = profiles::invoke_from_event_loop(move || {
+            if let Some(app) = weak.upgrade()
+                && finish_operation(&app, &state, generation)
+            {
+                show_preview(&app, &state, result);
+            }
+        });
+    });
+}
+fn start_undo(
+    app: &crate::AppWindow,
+    state: &Arc<Mutex<State>>,
+    generation: u64,
+    archive_permit: cleanup::Permit,
+    preview_permit: cleanup::Permit,
+) {
+    let weak = app.as_weak();
+    let state = state.clone();
+    // Recovery receipts can contain large before/after maps. Read target IDs
+    // and destroy that temporary receipt on the admitted worker as well.
+    profiles::thread::spawn(move || {
+        let ids = super::undo_targets();
+        let _ = profiles::invoke_from_event_loop(move || {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            if state
+                .lock()
+                .unwrap()
+                .running
+                .as_ref()
+                .map(|(current, _)| *current)
+                != Some(generation)
+            {
+                return;
+            }
+            let ids = match ids {
+                Ok(ids) => ids,
+                Err(error) => {
+                    finish_operation(&app, &state, generation);
+                    status(&app, &error);
+                    return;
+                }
+            };
+            if !targets_allowed(ids.into_iter()) {
+                finish_operation(&app, &state, generation);
+                return;
+            }
+            let weak = app.as_weak();
+            profiles::thread::spawn(move || {
+                let result = super::undo_preview(archive_permit)
+                    .map(|preview| Shared::new(preview, preview_permit));
+                let _ = profiles::invoke_from_event_loop(move || {
+                    if let Some(app) = weak.upgrade() {
+                        if !finish_operation(&app, &state, generation) {
+                            return;
+                        }
+                        if let Ok(preview) = &result {
+                            let mut state = state.lock().unwrap();
+                            state.archive = Some(preview.archive.clone());
+                            state.choices = preview.selection.clone();
+                            publish_options(&app, &state);
+                            app.global::<crate::BackupBridge>().set_replace(true);
+                        }
+                        show_preview(&app, &state, result);
+                    }
+                });
+            });
+        });
+    });
+}
+
+fn start_apply(
+    app: &crate::AppWindow,
+    state: &Arc<Mutex<State>>,
+    generation: u64,
+    permit: cleanup::Permit,
+) {
+    let preview = {
+        let mut guard = state.lock().unwrap();
+        let Some(preview) = guard.preview.clone() else {
+            drop(guard);
+            finish_operation(app, state, generation);
+            return;
+        };
+        if !guard.matches_preview(&preview) {
+            changed(app, &mut guard);
+            drop(guard);
+            finish_operation(app, state, generation);
+            status(
+                app,
+                "Selection changed; rebuild the preview before importing",
+            );
+            return;
+        }
+        preview
+    };
+    let targets = preview
+        .choices
+        .iter()
+        .map(|choice| choice.target.clone())
+        .collect::<Vec<_>>();
+    if !targets_allowed(targets.iter().cloned()) {
+        finish_operation(app, state, generation);
+        return;
+    }
+    let prepared =
+        app::bridge::with_global_bridge(|bridge| bridge.profile_import_prepare(&targets))
+            .unwrap_or(Err("Application is unavailable".into()));
+    if let Err(error) = prepared {
+        finish_operation(app, state, generation);
+        status(app, &error);
+        return;
+    }
+    status(app, "Importing selected data…");
+    let weak = app.as_weak();
+    let state = state.clone();
+    // The extra admission permit bounds raw transaction/recovery construction
+    // even while the input Preview is shared with the visible UI.
+    std::thread::spawn(move || {
+        let result = super::apply(&preview);
+        drop(preview);
+        drop(permit);
+        let _ = profiles::invoke_account(move || {
+            if let Some(app) = weak.upgrade() {
+                let current = finish_operation(&app, &state, generation);
+                if current {
+                    changed(&app, &mut state.lock().unwrap());
+                }
+                // The committed transaction is account-owned even if this UI
+                // operation was closed or superseded during profile quiescence.
+                match result {
+                    Ok(domains) => {
+                        activate(domains);
+                        app::bridge::with_global_bridge(|bridge| {
+                            bridge.profile_import_committed(&targets)
+                        });
+                        if current {
+                            status(
+                                &app,
+                                "Import complete. Recovery copy saved; Undo is available.",
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        app::bridge::with_global_bridge(|bridge| {
+                            bridge.profile_import_committed(&targets)
+                        });
+                        if current {
+                            status(&app, &error);
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
 fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
     std::rc::Rc::new(VecModel::from(rows)).into()
 }
@@ -197,6 +630,8 @@ fn targets_allowed(mut ids: impl Iterator<Item = String>) -> bool {
 
 pub(super) fn install(app: &crate::AppWindow) {
     let state = Arc::new(Mutex::new(State::default()));
+    *PENDING_UI.lock().unwrap() = Some((app.as_weak(), Arc::downgrade(&state)));
+    cleanup::set_notify(wake_pending);
     let ui = app.global::<crate::BackupBridge>();
     let weak = app.as_weak();
     let state_open = state.clone();
@@ -208,9 +643,17 @@ pub(super) fn install(app: &crate::AppWindow) {
         }
         let Some(app) = weak.upgrade() else { return };
         let mut state = state_open.lock().unwrap();
-        state.archive = None;
-        state.choices.clear();
-        state.preview = None;
+        if state
+            .running
+            .as_ref()
+            .is_some_and(|(_, owner)| profiles::is_current(owner))
+        {
+            return;
+        }
+        state.cancel_pending();
+        state.running = None;
+        state.generation = state.generation.wrapping_add(1);
+        state.clear_payloads();
         state.recovery_review = None;
         state.selected_profiles = BTreeSet::from([profiles::current_id()]);
         state.selected_components = adapters::COMPONENTS
@@ -234,8 +677,13 @@ pub(super) fn install(app: &crate::AppWindow) {
     ui.on_closed(move || {
         if let Some(app) = weak.upgrade() {
             let ui = app.global::<crate::BackupBridge>();
-            if !ui.get_busy() {
-                state_closed.lock().unwrap().recovery_review = None;
+            let mut state = state_closed.lock().unwrap();
+            if !ui.get_busy() || state.pending.is_some() && state.running.is_none() {
+                state.cancel_pending();
+                state.clear_payloads();
+                state.generation = state.generation.wrapping_add(1);
+                state.recovery_review = None;
+                ui.set_busy(false);
                 ui.set_recovery_confirmation(false);
                 ui.set_open(false);
                 app::bridge::with_global_bridge(|bridge| bridge.close_profile_management());
@@ -278,7 +726,7 @@ pub(super) fn install(app: &crate::AppWindow) {
                 .map(|choice| {
                     (
                         choice.source.clone(),
-                        components_for_preset(preset, state.archive.as_ref(), &choice.source),
+                        components_for_preset(preset, state.archive.as_deref(), &choice.source),
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
@@ -388,8 +836,8 @@ pub(super) fn install(app: &crate::AppWindow) {
                     }
                     choice.target = target.id.clone();
                     choice.create = false;
-                } else if let Some(archive) = state.archive.clone()
-                    && let Ok(fresh) = super::choices(&archive)
+                } else if let Some(archive) = state.archive.as_deref()
+                    && let Ok(fresh) = super::choices(archive)
                     && let Some(new) = fresh
                         .into_iter()
                         .find(|new| new.source.as_str() == source.as_str())
@@ -473,169 +921,26 @@ pub(super) fn install(app: &crate::AppWindow) {
             }
         });
     });
-    let weak = app.as_weak();
-    let state_import = state.clone();
-    ui.on_import_file(move || {
-        if !allowed() {return}
-        let Some(app)=weak.upgrade() else {return};app.global::<crate::BackupBridge>().set_busy(true);status(&app,"Choose a backup file…");
-        let weak=app.as_weak();let state=state_import.clone();let context=profiles::capture();
-        app::documents::open("nova-backup",move |result| {
-            let result=result.and_then(|bytes|bytes.map(|bytes|archive::decode(&bytes).and_then(|archive|super::choices(&archive).map(|choices|(archive,choices)))).transpose());
-            profiles::with_context(context,|| {let _=profiles::invoke_from_event_loop(move ||if let Some(app)=weak.upgrade() {
-                app.global::<crate::BackupBridge>().set_busy(false);
-                match result {Ok(Some((archive,choices)))=>{let unsupported=archive.unsupported.join(", ");let mut state=state.lock().unwrap();state.archive=Some(archive);state.choices=choices;app.global::<crate::BackupBridge>().set_replace(false);changed(&app,&mut state);publish_options(&app,&state);if unsupported.is_empty() {status(&app,"Choose target profiles and components, then rebuild the preview");} else {status(&app,&format!("{}: {unsupported}",text::tr("Unsupported optional components")));}},Ok(None)=>status(&app,"Import cancelled"),Err(error)=>status(&app,&error)}
-            });});
-        });
-    });
-    let weak = app.as_weak();
-    let state_preview = state.clone();
-    ui.on_build_preview(move || {
-        if !allowed() {
-            return;
-        }
-        let Some(app) = weak.upgrade() else { return };
-        let input = {
-            let state = state_preview.lock().unwrap();
-            state
-                .archive
-                .clone()
-                .map(|archive| (archive, state.choices.clone()))
-        };
-        let Some((archive, choices)) = input else {
-            return;
-        };
-        if !targets_allowed(
-            choices
-                .iter()
-                .filter(|choice| choice.included && !choice.create && !choice.components.is_empty())
-                .map(|choice| choice.target.clone()),
-        ) {
-            return;
-        }
-        app.global::<crate::BackupBridge>().set_busy(true);
-        status(&app, "Preparing import preview…");
+    for operation in [
+        Operation::Import,
+        Operation::Build,
+        Operation::Apply,
+        Operation::Undo,
+    ] {
         let weak = app.as_weak();
-        let state = state_preview.clone();
-        profiles::thread::spawn(move || {
-            let result = super::preview(archive, choices);
-            let _ = profiles::invoke_from_event_loop(move || {
-                if let Some(app) = weak.upgrade() {
-                    show_preview(&app, &state, result);
-                }
-            });
-        });
-    });
-    let weak = app.as_weak();
-    let state_apply = state.clone();
-    ui.on_apply_import(move || {
-        if !allowed() {
-            return;
-        }
-        let Some(app) = weak.upgrade() else { return };
-        let preview = {
-            let mut state = state_apply.lock().unwrap();
-            let Some(preview) = state.preview.clone() else {
-                return;
-            };
-            if preview.selection != state.choices
-                || state.archive.as_ref().map(|archive| &archive.checksum)
-                    != Some(&preview.archive.checksum)
-            {
-                changed(&app, &mut state);
-                status(
-                    &app,
-                    "Selection changed; rebuild the preview before importing",
-                );
-                return;
-            }
-            preview
-        };
-        let targets = preview
-            .choices
-            .iter()
-            .map(|choice| choice.target.clone())
-            .collect::<Vec<_>>();
-        if !targets_allowed(targets.iter().cloned()) {
-            return;
-        }
-        let prepared =
-            app::bridge::with_global_bridge(|bridge| bridge.profile_import_prepare(&targets))
-                .unwrap_or(Err("Application is unavailable".into()));
-        if let Err(error) = prepared {
-            status(&app, &error);
-            return;
-        }
-        app.global::<crate::BackupBridge>().set_busy(true);
-        status(&app, "Importing selected data…");
-        let weak = app.as_weak();
-        let state = state_apply.clone();
-        // The transaction's completion is account-owned. Quiescing an active
-        // profile deliberately invalidates its old activation callbacks.
-        std::thread::spawn(move || {
-            let result = super::apply(&preview);
-            let _ = profiles::invoke_account(move || {
-                if let Some(app) = weak.upgrade() {
-                    app.global::<crate::BackupBridge>().set_busy(false);
-                    let mut state = state.lock().unwrap();
-                    changed(&app, &mut state);
-                    match result {
-                        Ok(domains) => {
-                            activate(domains);
-                            app::bridge::with_global_bridge(|bridge| {
-                                bridge.profile_import_committed(&targets)
-                            });
-                            status(
-                                &app,
-                                "Import complete. Recovery copy saved; Undo is available.",
-                            );
-                        }
-                        Err(error) => {
-                            app::bridge::with_global_bridge(|bridge| {
-                                bridge.profile_import_committed(&targets)
-                            });
-                            status(&app, &error);
-                        }
-                    }
-                }
-            });
-        });
-    });
-    let weak = app.as_weak();
-    let state_undo = state.clone();
-    ui.on_undo(move || {
-        if !allowed() {
-            return;
-        }
-        let Some(app) = weak.upgrade() else { return };
-        let ids = match super::undo_targets() {
-            Ok(ids) => ids,
-            Err(error) => {
-                status(&app, &error);
-                return;
+        let state = state.clone();
+        let callback = move || {
+            if let Some(app) = weak.upgrade() {
+                request_operation(&app, &state, operation);
             }
         };
-        if !targets_allowed(ids.into_iter()) {
-            return;
+        match operation {
+            Operation::Import => ui.on_import_file(callback),
+            Operation::Build => ui.on_build_preview(callback),
+            Operation::Apply => ui.on_apply_import(callback),
+            Operation::Undo => ui.on_undo(callback),
         }
-        app.global::<crate::BackupBridge>().set_busy(true);
-        let weak = app.as_weak();
-        let state = state_undo.clone();
-        profiles::thread::spawn(move || {
-            let result = super::undo_preview();
-            let _ = profiles::invoke_from_event_loop(move || {
-                if let Some(app) = weak.upgrade() {
-                    if let Ok(preview) = &result {
-                        let mut state = state.lock().unwrap();
-                        state.archive = Some(preview.archive.clone());
-                        state.choices = preview.selection.clone();
-                        publish_options(&app, &state);
-                        app.global::<crate::BackupBridge>().set_replace(true);
-                    }
-                    show_preview(&app, &state, result);
-                }
-            });
-        });
-    });
+    }
     let weak = app.as_weak();
     let state_delete = state.clone();
     ui.on_delete_recovery(move || {
@@ -765,17 +1070,14 @@ pub(super) fn components_for_preset(
 fn show_preview(
     app: &crate::AppWindow,
     state: &Arc<Mutex<State>>,
-    result: Result<Preview, String>,
+    result: Result<Shared<Preview>, String>,
 ) {
     let ui = app.global::<crate::BackupBridge>();
     ui.set_busy(false);
     match result {
         Ok(preview) => {
             let mut state = state.lock().unwrap();
-            if state.choices != preview.selection
-                || state.archive.as_ref().map(|archive| &archive.checksum)
-                    != Some(&preview.archive.checksum)
-            {
+            if !state.matches_preview(&preview) {
                 changed(app, &mut state);
                 status(
                     app,
@@ -811,7 +1113,9 @@ fn activate(domains: Vec<String>) {
         }
     }
     let failures = app::io::write_failures();
-    let published = app::bridge::with_global_bridge(|bridge| bridge.sync_apply(domains)).is_some();
+    let published =
+        app::bridge::with_global_bridge(|bridge| bridge.sync_apply_synchronously(domains))
+            .is_some();
     app::bridge::with_global_bridge(|bridge| bridge.reconcile_release_reminders());
     if !published || app::io::write_failures() != failures {
         return;
@@ -826,6 +1130,194 @@ mod model_tests {
     use super::*;
     use i_slint_core::model::{ModelChangeListener, ModelChangeListenerContainer};
     use std::{cell::RefCell, pin::Pin};
+
+    fn archive_handle(checksum: &str) -> Shared<Archive> {
+        cleanup::share_for_test(Archive {
+            manifest: archive::Manifest {
+                format: "nova-backup".into(),
+                version: 1,
+                created_at: 1,
+                app_version: "test".into(),
+                archive_id: "shared".into(),
+                profiles: Vec::new(),
+                packages: Vec::new(),
+            },
+            payloads: BTreeMap::new(),
+            checksum: checksum.into(),
+            unsupported: Vec::new(),
+            undo_after: None,
+            packages: BTreeMap::new(),
+            undo_local: None,
+        })
+    }
+
+    fn preview_handle(archive: Shared<Archive>, selection: Vec<Choice>) -> Shared<Preview> {
+        cleanup::share_for_test(Preview {
+            archive,
+            choices: selection.clone(),
+            selection,
+            rows: Vec::new(),
+            revisions: BTreeMap::new(),
+            edits: BTreeMap::new(),
+            domains: BTreeMap::new(),
+            before: BTreeMap::new(),
+            after: BTreeMap::new(),
+            local_expected: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn immutable_dispatch_handles_share_archive_preview_and_release_after_last_owner() {
+        let archive = archive_handle("receipt");
+        let archive_weak = archive.weak();
+        let mut state = State {
+            archive: Some(archive.clone()),
+            ..Default::default()
+        };
+        let (worker_archive, choices) = state.preview_input().unwrap();
+        assert!(Shared::ptr_eq(&archive, &worker_archive));
+        let preview = preview_handle(worker_archive, choices);
+        assert!(Shared::ptr_eq(&archive, &preview.archive));
+        state.preview = Some(preview.clone());
+        let apply_handle = state.preview.clone().unwrap();
+        assert!(Shared::ptr_eq(&preview, &apply_handle));
+        assert!(state.matches_preview(&apply_handle));
+        let preview_weak = preview.weak();
+        drop(archive);
+        drop(preview);
+        state.clear_payloads();
+        assert!(
+            archive_weak.strong_count() > 0,
+            "the captured Apply handle still owns its immutable inputs"
+        );
+        drop(apply_handle);
+        cleanup::wait_for_drop(&preview_weak);
+        cleanup::wait_for_drop(&archive_weak);
+        assert!(preview_weak.strong_count() == 0);
+        assert!(
+            archive_weak.strong_count() == 0,
+            "clearing state must not leave an ownership cycle"
+        );
+    }
+
+    #[test]
+    fn immutable_preview_receipt_still_checks_all_choices_and_archive_checksum() {
+        let choice = Choice {
+            included: false,
+            source: "p1".into(),
+            target: "default".into(),
+            name: "Profile".into(),
+            create: false,
+            components: BTreeSet::new(),
+            replace: false,
+            use_backup: BTreeSet::new(),
+        };
+        let archive = archive_handle("receipt");
+        let mut state = State {
+            archive: Some(archive.clone()),
+            choices: vec![choice],
+            ..Default::default()
+        };
+        let preview = preview_handle(archive, state.choices.clone());
+        assert!(state.matches_preview(&preview));
+        state.choices[0].included = true;
+        assert!(
+            !state.matches_preview(&preview),
+            "even a skipped source is part of the receipt"
+        );
+        state.choices[0].included = false;
+        state.choices[0].target = "other".into();
+        assert!(!state.matches_preview(&preview));
+        state.choices[0].target = "default".into();
+        state.archive = Some(archive_handle("different"));
+        assert!(!state.matches_preview(&preview));
+        state.archive = Some(archive_handle("receipt"));
+        assert!(
+            state.matches_preview(&preview),
+            "checksum equality remains the existing archive receipt semantics"
+        );
+        state.archive = None;
+        assert!(!state.matches_preview(&preview));
+    }
+
+    #[test]
+    fn cleanup_pending_descriptor_is_latest_bounded_cancellable_and_revalidates_receipts() {
+        const ROOT: &str = "NOVA_BACKUP_PENDING_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-backup-pending-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root).args(["--exact", "app::backup::ui::model_tests::cleanup_pending_descriptor_is_latest_bounded_cancellable_and_revalidates_receipts", "--nocapture"])
+                .output().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        nova_storage::init_at(&std::path::PathBuf::from(root));
+        profiles::initialize().unwrap();
+        let owner = profiles::capture();
+        let mut state = State {
+            archive: Some(archive_handle("receipt")),
+            ..Default::default()
+        };
+        let pending = |operation| Pending {
+            operation,
+            owner: owner.clone(),
+            selection: Some((Vec::new(), "receipt".into())),
+        };
+        let held = cleanup::reserve(3).unwrap().unwrap();
+        assert!(cleanup::reserve(1).unwrap().is_none());
+        assert!(cleanup::reserve(2).unwrap().is_none());
+        for _ in 0..1000 {
+            state.defer(pending(Operation::Build));
+        }
+        state.defer(pending(Operation::Undo));
+        assert!(matches!(
+            state.pending.as_ref().unwrap().operation,
+            Operation::Undo
+        ));
+        assert!(state.pending.as_ref().unwrap().matches(&state));
+        assert_eq!(
+            cleanup::admitted_for_test(),
+            4,
+            "pending descriptors cannot reserve partial pipelines or own another payload"
+        );
+        assert!(state.cancel_pending());
+        assert!(!state.cancel_pending());
+        assert_eq!(cleanup::admitted_for_test(), 4);
+        drop(held);
+        assert_eq!(cleanup::admitted_for_test(), 1);
+        let mut stale = pending(Operation::Build);
+        stale.owner.epoch = stale.owner.epoch.wrapping_add(1);
+        assert!(!stale.matches(&state));
+        let mut stale = pending(Operation::Build);
+        stale.selection.as_mut().unwrap().1 = "different".into();
+        assert!(!stale.matches(&state));
+        let mut stale = pending(Operation::Build);
+        stale.selection.as_mut().unwrap().0.push(Choice {
+            included: false,
+            source: "removed".into(),
+            target: "default".into(),
+            name: "Skipped".into(),
+            create: false,
+            components: BTreeSet::new(),
+            replace: false,
+            use_backup: BTreeSet::new(),
+        });
+        assert!(
+            !stale.matches(&state),
+            "skipped choices remain part of deferred dispatch validation"
+        );
+        state.archive = None;
+    }
 
     #[derive(Default)]
     struct Changes(RefCell<Vec<usize>>);

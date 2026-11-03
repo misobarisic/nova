@@ -22,6 +22,7 @@ pub(super) fn last_publication_micros() -> u64 {
 pub(super) fn invalidate() {
     super::smart_offline::trigger();
     REVISION.fetch_add(1, Ordering::AcqRel);
+    super::calendar::invalidate();
 }
 
 pub(super) fn revision() -> u64 {
@@ -269,6 +270,7 @@ fn prepare_with_aliases(
     proof_stamp: library::DisplayProofStamp,
     proof_modal: Option<media_identity::TitleKey>,
 ) -> Prepared {
+    let policy = profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
     let groups = Arc::new(if let Some(identity) = identity {
         library::display_groups_from_index(&data.entries, identity)
     } else {
@@ -276,17 +278,20 @@ fn prepare_with_aliases(
             metadata.episodes(type_, id).as_ref().clone()
         })
     });
-    let library_view = library::prepare_cached_view(
+    let library_view = library::prepare_cached_view_with_policy(
         &data,
         view,
         metadata,
         activity,
         &groups,
         proof_modal.clone(),
+        &policy,
     );
     let cards = library_view.select(view);
-    let home = home::prepare_progress_home(&mut data, metadata, activity, new_hidden, &groups);
-    watch_history::prepare_progress_history(&mut data, metadata, hidden);
+    let home = home::prepare_progress_home_with_policy(
+        &mut data, metadata, activity, new_hidden, &groups, &policy,
+    );
+    watch_history::prepare_progress_history_with_policy(&mut data, metadata, hidden, &policy);
     // This map covers filtered-out Library titles as well as visible cards.
     let activity_actions = data
         .entries
@@ -737,6 +742,29 @@ mod tests {
     }
 
     #[test]
+    fn bulk_progress_projection_captures_one_policy_for_all_three_views() {
+        for count in [100, 1_000, 10_000] {
+            let state = Shared {
+                entries: (0..count)
+                    .map(|index| entry(&index.to_string(), "movie"))
+                    .collect(),
+                ..Default::default()
+            };
+            let metadata = Metadata::new(|_, _| (None, None), || true);
+            let before = profile_policy::snapshot_capture_count();
+            let _ = prepare(
+                state,
+                &View::default(),
+                &metadata,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+            );
+            assert_eq!(profile_policy::snapshot_capture_count() - before, 1);
+        }
+    }
+
+    #[test]
     fn prepared_rows_keep_returning_resume_upcoming_and_history_distinct() {
         let mut state = Shared {
             entries: vec![
@@ -993,11 +1021,9 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

@@ -427,28 +427,55 @@ pub(super) fn initialize(bridge: &Bridge) {
     state.loaded_packages = loaded;
 }
 
-pub(super) fn project(bridge: &Bridge, raw: &str) -> Result<(), String> {
-    let mut descriptors = parse(raw)?;
-    {
-        let state = bridge.shared.lock().unwrap();
-        for (id, incoming) in &mut descriptors {
-            // LWW sync clocks do not establish package version precedence.
-            // Keep rejection durable: checking only at activation leaves the
-            // rejected descriptor on disk, where startup would trust it.
-            let loaded = state
+#[derive(Clone)]
+pub(super) struct PackageProjectionInput {
+    descriptors: BTreeMap<String, PackageDescriptor>,
+    loaded: BTreeMap<String, PackageDescriptor>,
+}
+impl PackageProjectionInput {
+    pub(super) fn capture(state: &Shared) -> Self {
+        Self {
+            descriptors: state.package_descriptors.clone(),
+            loaded: state
                 .loaded_packages
-                .get(id)
-                .map(|package| PackageDescriptor::from_package(package));
-            for accepted in [state.package_descriptors.get(id), loaded.as_ref()]
-                .into_iter()
-                .flatten()
-            {
-                if accepted_update(Some(accepted), incoming).is_err() {
-                    *incoming = accepted.clone();
+                .iter()
+                .map(|(id, package)| (id.clone(), PackageDescriptor::from_package(package)))
+                .collect(),
+        }
+    }
+    pub(super) fn matches(&self, state: &Shared) -> bool {
+        self.descriptors == state.package_descriptors
+            && self.loaded.len() == state.loaded_packages.len()
+            && self.loaded.iter().all(|(id, descriptor)| {
+                state
+                    .loaded_packages
+                    .get(id)
+                    .is_some_and(|package| descriptor.matches(package))
+            })
+    }
+    pub(super) fn prepare(&self, raw: &str) -> Result<BTreeMap<String, PackageDescriptor>, String> {
+        let mut descriptors = parse(raw)?;
+        {
+            for (id, incoming) in &mut descriptors {
+                // LWW sync clocks do not establish package version precedence.
+                // Keep rejection durable: checking only at activation leaves the
+                // rejected descriptor on disk, where startup would trust it.
+                for accepted in [self.descriptors.get(id), self.loaded.get(id)]
+                    .into_iter()
+                    .flatten()
+                {
+                    if accepted_update(Some(accepted), incoming).is_err() {
+                        *incoming = accepted.clone();
+                    }
                 }
             }
         }
+        Ok(descriptors)
     }
+}
+pub(super) fn project(bridge: &Bridge, raw: &str) -> Result<(), String> {
+    let input = PackageProjectionInput::capture(&bridge.shared.lock().unwrap());
+    let descriptors = input.prepare(raw)?;
     let raw = serde_json::to_string(&descriptors).map_err(|e| e.to_string())?;
     sync::persist_sync_snapshot(KEY, &raw, false).map_err(|e| e.to_string())?;
     bridge.shared.lock().unwrap().package_descriptors = descriptors.clone();
@@ -491,8 +518,34 @@ pub(super) fn remove(bridge: &Bridge, url: &str) {
 }
 
 pub(super) fn reconcile(bridge: &Bridge) {
+    reconcile_inner(bridge, true);
+}
+pub(super) fn reconcile_after_projection(bridge: &Bridge) {
+    reconcile_inner(bridge, false);
+}
+pub(super) fn remember_owned_projection(owner: &profiles::ProfileStore) -> Result<(), String> {
+    owner.run(|| {
+        let descriptors = owner
+            .read(KEY)
+            .map_err(|error| error.to_string())?
+            .map(|raw| parse(&raw))
+            .transpose()?
+            .unwrap_or_default();
+        let addons: Vec<AddonStore> = owner
+            .read("addons")
+            .map_err(|error| error.to_string())?
+            .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+            .transpose()?
+            .unwrap_or_default();
+        remember_ids(&descriptors, &addons);
+        Ok(())
+    })
+}
+fn reconcile_inner(bridge: &Bridge, remember: bool) {
     let descriptors = bridge.shared.lock().unwrap().package_descriptors.clone();
-    remember_ids(&descriptors, &snapshot_addons(bridge));
+    if remember {
+        remember_ids(&descriptors, &snapshot_addons(bridge));
+    }
     let (jobs, unavailable) = {
         let mut state = bridge.shared.lock().unwrap();
         let members: HashSet<String> = state
@@ -1070,11 +1123,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

@@ -2,6 +2,10 @@
 use super::*;
 
 fn isolated(name: &str, test: impl FnOnce(AppWindow, Bridge)) {
+    isolated_impl(name, false, test);
+}
+
+fn isolated_impl(name: &str, profile: bool, test: impl FnOnce(AppWindow, Bridge)) {
     const TEST_DIR: &str = "NOVA_ARTWORK_DELIVERY_TEST_DIR";
     let Some(root) = std::env::var_os(TEST_DIR) else {
         let root = std::env::temp_dir().join(format!(
@@ -30,6 +34,9 @@ fn isolated(name: &str, test: impl FnOnce(AppWindow, Bridge)) {
     let root = PathBuf::from(root);
     i_slint_backend_testing::init_integration_test_with_mock_time();
     storage::init_at(&root);
+    if profile {
+        profiles::initialize().unwrap();
+    }
     decoded_cache_clear();
     set_decoded_cache_budget(0);
     let app = AppWindow::new().unwrap();
@@ -39,11 +46,9 @@ fn isolated(name: &str, test: impl FnOnce(AppWindow, Bridge)) {
     let downloads = DownloadCoordinator::new(root.join("downloads"));
     #[cfg(feature = "desktop")]
     let bridge = {
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             downloads,
@@ -407,6 +412,7 @@ fn remote_recipe_refresh_rebuilds_calendar_and_current_detail_work_once() {
             app.set_calendar_all(true);
             app.set_modal_visible(true);
             bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
             bridge.apply_season_cards();
             bridge.apply_episode_rows();
             let calendar_identity = app
@@ -516,6 +522,519 @@ fn home_fallback_completion_upgrades_newly_supplied_preferred_background() {
                     .loading_url
                     .is_none()
             );
+        },
+    );
+}
+
+fn colliding_entries(order: [&str; 2], url: &str) -> Vec<LibraryEntry> {
+    order
+        .into_iter()
+        .map(|type_| {
+            serde_json::from_value(serde_json::json!({
+                "id": "local-42", "type_": type_, "name": type_,
+                "poster_url": url, "background_url": format!("old-{type_}"),
+                "added_at_secs": 1
+            }))
+            .unwrap()
+        })
+        .collect()
+}
+
+fn assert_saved_entries(bridge: &Bridge, expected: &[LibraryEntry]) {
+    assert_eq!(bridge.shared.lock().unwrap().entries, expected);
+    persistence::flush().unwrap();
+    // Read the committed JSON directly, bypassing pending-library snapshots.
+    assert_eq!(read_json::<Vec<LibraryEntry>>("library").unwrap(), expected);
+}
+
+#[test]
+fn typed_artwork_helpers_preserve_colliding_titles_and_restart() {
+    isolated(
+        "typed_artwork_helpers_preserve_colliding_titles_and_restart",
+        |_, bridge| {
+            let writer = persistence::start().unwrap();
+            for order in [["movie", "series"], ["series", "movie"]] {
+                for target in ["movie", "series"] {
+                    let mut expected = colliding_entries(order, "old-poster");
+                    bridge.shared.lock().unwrap().entries = expected.clone();
+                    bridge.persist_library();
+                    let index = expected
+                        .iter()
+                        .position(|entry| entry.type_ == target)
+                        .unwrap();
+                    bridge.persist_poster_for(target, "local-42", "new-poster");
+                    expected[index].poster_url = "new-poster".into();
+                    assert_saved_entries(&bridge, &expected);
+                    bridge.persist_backdrop_for(target, "local-42", "new-backdrop");
+                    expected[index].background_url = "new-backdrop".into();
+                    assert_saved_entries(&bridge, &expected);
+                    bridge.persist_header_for(
+                        target,
+                        "local-42",
+                        &["Drama".into()],
+                        "Synopsis",
+                        "2026",
+                        false,
+                    );
+                    expected[index].genres = vec!["Drama".into()];
+                    expected[index].description = "Synopsis".into();
+                    expected[index].year = "2026".into();
+                    assert_saved_entries(&bridge, &expected);
+                    bridge.persist_header_for(
+                        target,
+                        "local-42",
+                        &["Comedy".into()],
+                        "New synopsis",
+                        "2027",
+                        true,
+                    );
+                    expected[index].genres = vec!["Comedy".into()];
+                    expected[index].description = "New synopsis".into();
+                    expected[index].year = "2027".into();
+                    assert_saved_entries(&bridge, &expected);
+                    // Restart's Library reload uses these persisted typed entries.
+                    bridge.shared.lock().unwrap().entries.clear();
+                    bridge.shared.lock().unwrap().entries = read_persisted_library();
+                    assert_saved_entries(&bridge, &expected);
+                }
+            }
+            let expected = bridge.shared.lock().unwrap().entries.clone();
+            drop(writer);
+            // No writer or pending snapshot survives this reload.
+            bridge.shared.lock().unwrap().entries.clear();
+            bridge.shared.lock().unwrap().entries = read_persisted_library();
+            assert_saved_entries(&bridge, &expected);
+        },
+    );
+}
+
+#[test]
+fn typed_artwork_publication_paints_only_retained_identity() {
+    isolated(
+        "typed_artwork_publication_paints_only_retained_identity",
+        |app, bridge| {
+            for order in [["movie", "series"], ["series", "movie"]] {
+                for target in ["movie", "series"] {
+                    let entries = colliding_entries(order, "same-old-url");
+                    {
+                        let mut state = bridge.shared.lock().unwrap();
+                        state.entries = entries.clone();
+                        state.library_displayed = entries
+                            .iter()
+                            .map(|entry| (entry.type_.clone(), entry.id.clone()))
+                            .collect();
+                    }
+                    let model: slint::ModelRc<MediaCard> = Rc::new(VecModel::from(
+                        entries
+                            .iter()
+                            .map(|entry| MediaCard {
+                                id: entry.id.clone().into(),
+                                // Deliberately identical translated labels cannot identify a row.
+                                media_type: "Localized title".into(),
+                                poster_path: entry.poster_url.clone().into(),
+                                poster: Image::from_rgba8(SharedPixelBuffer::new(3, 2)),
+                                is_loaded: true,
+                                ..Default::default()
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into();
+                    app.set_library(model.clone());
+                    bridge.publish_discover_poster(
+                        target,
+                        "local-42",
+                        "repaired-url",
+                        &SharedPixelBuffer::new(8, 5),
+                    );
+                    for (index, entry) in entries.iter().enumerate() {
+                        let row = model.row_data(index).unwrap();
+                        assert_eq!(
+                            dimensions(row.poster),
+                            if entry.type_ == target {
+                                (8, 5)
+                            } else {
+                                (3, 2)
+                            }
+                        );
+                        assert_eq!(
+                            row.poster_path.as_str(),
+                            if entry.type_ == target {
+                                "repaired-url"
+                            } else {
+                                "same-old-url"
+                            }
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn typed_library_recovery_preserves_type_for_equal_failed_urls() {
+    isolated(
+        "typed_library_recovery_preserves_type_for_equal_failed_urls",
+        |_, bridge| {
+            for order in [["movie", "series"], ["series", "movie"]] {
+                for url in ["", "same-failed-url"] {
+                    for target in ["movie", "series"] {
+                        {
+                            let mut state = bridge.shared.lock().unwrap();
+                            state.entries = colliding_entries(order, url);
+                            state.installed.clear();
+                            state.pending_artwork_recovery.clear();
+                        }
+                        bridge.recover_library_artwork_for_test(target, "local-42", url);
+                        let state = bridge.shared.lock().unwrap();
+                        assert_eq!(state.pending_artwork_recovery.len(), 1);
+                        assert!(state.pending_artwork_recovery.contains_key(&(
+                            target.into(),
+                            "local-42".into(),
+                            url.into(),
+                            String::new()
+                        )));
+                        drop(state);
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .pending_artwork_recovery
+                            .clear();
+                        bridge.recover_library_artwork_for_test(
+                            target,
+                            "local-42",
+                            "expired-request-url",
+                        );
+                        assert!(
+                            bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .pending_artwork_recovery
+                                .is_empty()
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn typed_artwork_completion_from_previous_profile_is_discarded() {
+    isolated_impl(
+        "typed_artwork_completion_from_previous_profile_is_discarded",
+        true,
+        |_, bridge| {
+            let owner = profiles::ProfileStore::capture();
+            bridge.shared.lock().unwrap().entries =
+                colliding_entries(["movie", "series"], "original");
+            bridge.persist_library();
+            let stale = bridge.clone();
+            let called = Arc::new(AtomicBool::new(false));
+            let observed = called.clone();
+            let outgoing = profiles::active_context();
+            let (release, delayed) = std::sync::mpsc::channel();
+            let completion = std::thread::spawn(move || {
+                delayed.recv().unwrap();
+                profiles::with_context(outgoing, || {
+                    profiles::invoke_from_event_loop(move || {
+                        observed.store(true, Ordering::Relaxed);
+                        stale.publish_discover_poster(
+                            "series",
+                            "local-42",
+                            "stale-url",
+                            &SharedPixelBuffer::new(8, 5),
+                        );
+                    })
+                    .unwrap();
+                });
+            });
+            let other = profiles::create("Other artwork owner").unwrap();
+            bridge.switch_profile(&other);
+            bridge.wait_profile_activation();
+            assert_eq!(profiles::active_context().id, other);
+            assert_eq!(profiles::ProfileStore::capture().id(), other);
+            assert_eq!(bridge.sessions.active().id, other);
+            // Queue only after publication, while retaining the outgoing receipt.
+            release.send(()).unwrap();
+            completion.join().unwrap();
+            let expected = colliding_entries(["series", "movie"], "private");
+            bridge.shared.lock().unwrap().entries = expected.clone();
+            bridge.persist_library();
+            slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+            slint::run_event_loop().unwrap();
+            assert!(!called.load(Ordering::Relaxed));
+            assert_saved_entries(&bridge, &expected);
+            let original: Vec<LibraryEntry> =
+                serde_json::from_str(&owner.read("library").unwrap().unwrap()).unwrap();
+            assert_eq!(original, colliding_entries(["movie", "series"], "original"));
+        },
+    );
+}
+
+#[test]
+fn calendar_worker_reuses_metadata_and_rejects_superseded_and_failed_receipts() {
+    isolated_impl(
+        "calendar_worker_reuses_metadata_and_rejects_superseded_and_failed_receipts",
+        true,
+        |app, bridge| {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .with_test_writer()
+                .try_init()
+                .expect("isolated fixture tracing subscriber");
+            let owner = profiles::ProfileStore::capture();
+            let day = today_days();
+            let (year, month, date) = home::civil_from_days(day);
+            let video = |id: &str| Video {
+                id: id.into(),
+                season: Some(1),
+                episode: Some(1),
+                released: Some(format!("{year:04}-{month:02}-{date:02}")),
+                ..Default::default()
+            };
+            let entry: LibraryEntry = serde_json::from_value(serde_json::json!({
+                "id":"calendar-worker", "type_":"series", "name":"Calendar Worker"
+            }))
+            .unwrap();
+            bridge.shared.lock().unwrap().entries = vec![entry.clone()];
+            owner
+                .write("library", &serde_json::to_string(&vec![entry]).unwrap())
+                .unwrap();
+            detail::write_episodes_cache_for("series", "calendar-worker", &[video("first")]);
+            app.set_show_calendar(true);
+            app.set_calendar_all(true);
+            app.set_calendar_first(home::month_first(day) as i32);
+            app.set_calendar_selected(day as i32);
+            calendar::metadata_delay(100);
+            let cold = std::time::Instant::now();
+            bridge.apply_calendar_to_ui();
+            eprintln!(
+                "STATE-02 cold callback {:?} with injected 100ms metadata read",
+                cold.elapsed()
+            );
+            // Supersede a cold request before it can publish its old inventory.
+            detail::write_episodes_cache_for("series", "calendar-worker", &[video("latest")]);
+            calendar::snapshot_committed(&owner, &episodes_key("series", "calendar-worker"));
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            calendar::metadata_delay(0);
+            assert_eq!(app.get_calendar_rows().row_count(), 1);
+            assert!(
+                app.get_calendar_rows()
+                    .row_data(0)
+                    .unwrap()
+                    .key
+                    .contains("latest")
+            );
+            let baseline = calendar::counters(&bridge);
+            let policy_reads = profile_policy::snapshot_capture_count();
+            let mut maximum = Duration::ZERO;
+            let reads = detail::trace_episode_reads(|| {
+                for offset in 0..1000 {
+                    let started = std::time::Instant::now();
+                    bridge.calendar_pick((day + i64::from(offset % 35)) as i32);
+                    app.set_calendar_view(offset % 3);
+                    app.set_calendar_search(if offset % 2 == 0 {
+                        " worker ".into()
+                    } else {
+                        "".into()
+                    });
+                    bridge.calendar_reset();
+                    maximum = maximum.max(started.elapsed());
+                }
+                bridge.calendar_today();
+                bridge.calendar_step(1);
+                bridge.calendar_step(-1);
+            });
+            eprintln!(
+                "STATE-02 warm callback pair maximum {maximum:?}, 1000 selections/views/queries"
+            );
+            assert!(
+                reads.is_empty(),
+                "warm navigation reopened episode wrappers: {reads:?}"
+            );
+            assert_eq!(
+                calendar::counters(&bridge),
+                baseline,
+                "warm navigation must not capture, read or build"
+            );
+            assert_eq!(profile_policy::snapshot_capture_count(), policy_reads);
+
+            bridge.shared.lock().unwrap().progress.insert(
+                progress_map_key("calendar-worker", "latest"),
+                EpisodeProgress {
+                    position_secs: 12.0,
+                    duration_secs: 120.0,
+                    play_count: 5,
+                    ..Default::default()
+                },
+            );
+            progress_projection::invalidate();
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            let position = calendar::counters(&bridge);
+            assert_eq!(position.1, baseline.1, "positions must retain metadata");
+            assert_eq!(position.2, baseline.2, "positions must retain policy");
+            assert_eq!(
+                position.3, baseline.3,
+                "positions must retain the immutable projection"
+            );
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .progress
+                .get_mut(&progress_map_key("calendar-worker", "latest"))
+                .unwrap()
+                .watched = true;
+            progress_projection::invalidate();
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            let watched = calendar::counters(&bridge);
+            assert_eq!(watched.1, baseline.1);
+            assert_eq!(
+                watched.3,
+                baseline.3 + 1,
+                "watched facts rebuild without metadata reads"
+            );
+
+            // A successfully committed corrupt inventory retires the old rows.
+            owner
+                .write(&episodes_key("series", "calendar-worker"), "{broken")
+                .unwrap();
+            calendar::snapshot_committed(&owner, &episodes_key("series", "calendar-worker"));
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            assert_eq!(app.get_calendar_count(), 0);
+            assert_eq!(app.get_calendar_rows().row_count(), 0);
+            // The ordinary metadata writer first reads the old inventory and
+            // intentionally refuses to overwrite corrupt snapshots. Repair the
+            // injected fixture explicitly through the same owner used to inject
+            // corruption, then publish the successful commit receipt.
+            owner
+                .write(
+                    &episodes_key("series", "calendar-worker"),
+                    &serde_json::to_string(&vec![video("recovered")]).unwrap(),
+                )
+                .unwrap();
+            assert!(
+                owner
+                    .read(&episodes_key("series", "calendar-worker"))
+                    .unwrap()
+                    .unwrap()
+                    .contains("recovered")
+            );
+            calendar::snapshot_committed(&owner, &episodes_key("series", "calendar-worker"));
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            app.set_calendar_view(0);
+            bridge.calendar_pick(day as i32);
+            assert_eq!(app.get_calendar_rows().row_count(), 1);
+
+            // The collection layer rejects malformed JSON before commit.
+            // Use valid JSON with an invalid policy schema to exercise a
+            // committed policy that the foreground must reject closed.
+            owner
+                .write(profile_policy::KEY, r#"{"version":"broken"}"#)
+                .unwrap();
+            assert!(profile_policy::load(&owner).is_err());
+            calendar::snapshot_committed(&owner, profile_policy::KEY);
+            bridge.apply_calendar_to_ui();
+            assert_eq!(
+                app.get_calendar_rows().row_count(),
+                0,
+                "changed permissions fail closed before worker publication"
+            );
+            calendar::settle(&bridge);
+            assert_eq!(app.get_calendar_count(), 0);
+            assert!(
+                app.get_calendar_cells()
+                    .iter()
+                    .all(|row| row.preview.is_empty())
+            );
+
+            // An outgoing activation may finish reading after a new one opens.
+            owner.write(profile_policy::KEY, "{}").unwrap();
+            assert!(
+                profile_policy::load(&owner).is_ok(),
+                "fixture policy repair must succeed"
+            );
+            // Publish the recovered policy through its normal validated owner
+            // path. A raw-only snapshot has no sync baseline; target preparation
+            // would seed it later and correctly invalidate source authorization.
+            profile_policy::save(&owner, &profile_policy::ProfilePolicy::default()).unwrap();
+            eprintln!(
+                "calendar after policy save pending={:?}",
+                nova_sync::local_store()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .pending_domains()
+            );
+            // The application tick projects and acknowledges pending local
+            // policy records. This isolated fixture drives that normal path
+            // explicitly before capturing the switch authorization receipt.
+            let policy_domain = owner.domain(profile_policy::DOMAIN);
+            bridge.sync_apply_and_wait(vec![policy_domain.clone()]);
+            assert!(
+                !nova_sync::local_store()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .pending_domains()
+                    .contains(&policy_domain)
+            );
+            calendar::snapshot_committed(&owner, profile_policy::KEY);
+            let (reading, release_read) = calendar::metadata_barrier();
+            calendar::snapshot_committed(&owner, &episodes_key("series", "calendar-worker"));
+            bridge.apply_calendar_to_ui();
+            reading
+                .recv_timeout(Duration::from_secs(10))
+                .expect("outgoing metadata read did not start");
+            let other = profiles::create("Other Calendar owner").unwrap();
+            eprintln!(
+                "calendar before switch source={} target={} pending={:?}",
+                owner.id(),
+                other,
+                nova_sync::local_store()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .pending_domains()
+            );
+            bridge.switch_profile(&other);
+            bridge.wait_profile_activation();
+            eprintln!(
+                "calendar after activation pending={:?}",
+                nova_sync::local_store()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .pending_domains()
+            );
+            assert_eq!(
+                profiles::active_context().id,
+                other,
+                "target activation failed: {}",
+                app.get_profiles_error()
+            );
+            assert_eq!(profiles::ProfileStore::capture().id(), other);
+            assert_eq!(bridge.sessions.active().id, other);
+            assert!(bridge.shared.lock().unwrap().entries.is_empty());
+            release_read.send(()).unwrap();
+            app.set_show_calendar(true);
+            bridge.apply_calendar_to_ui();
+            calendar::settle(&bridge);
+            calendar::metadata_delay(0);
+            assert_eq!(
+                app.get_calendar_rows().row_count(),
+                0,
+                "outgoing results cannot populate the incoming activation"
+            );
+            assert_eq!(app.get_calendar_count(), 0);
         },
     );
 }

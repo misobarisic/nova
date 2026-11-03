@@ -2,16 +2,16 @@
 use super::*;
 use std::sync::mpsc;
 
-struct Fixture {
+pub(super) struct Fixture {
     app: AppWindow,
-    bridge: Bridge,
+    pub(super) bridge: Bridge,
     _writer: Option<persistence::Worker>,
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
+impl Fixture {
+    pub(super) fn stop_actors(&self) {
         // Retained callbacks may still own draining sessions. Stop every actor
-        // through its original allocation before the isolated database closes.
+        // through its original allocation so no writer survives this barrier.
         let sessions = self.bridge.sessions.all();
         for session in &sessions {
             profiles::with_context(session.context(), || {
@@ -29,11 +29,19 @@ impl Drop for Fixture {
             std::thread::sleep(Duration::from_millis(10));
         }
         self.bridge.sessions.reap();
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.bridge.wait_profile_activation();
+        self.bridge.close_profile_activations();
+        self.stop_actors();
         persistence::flush().unwrap();
     }
 }
 
-fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
+pub(super) fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
     const ROOT: &str = "NOVA_PROFILE_ACTIONS_TEST_ROOT";
     let Some(root) = std::env::var_os(ROOT) else {
         let root = std::env::temp_dir().join(format!(
@@ -56,6 +64,10 @@ fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
             ])
             .output()
             .unwrap();
+        if std::env::var_os("NOVA_STATE05_TIMINGS").is_some() {
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        }
         let completed = root.join("completed").is_file();
         let _ = std::fs::remove_dir_all(&root);
         assert!(
@@ -73,13 +85,9 @@ fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
     #[cfg(feature = "desktop")]
-    let (hi, _) = mpsc::channel();
-    #[cfg(feature = "desktop")]
-    let (lo, _) = mpsc::channel();
-    #[cfg(feature = "desktop")]
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx { hi, lo },
+        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),
@@ -97,6 +105,7 @@ fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
     persistence::register_collections();
     let writer = persistence::start();
     bridge.switch_profile(profiles::DEFAULT_ID);
+    bridge.wait_profile_activation();
     assert!(app.get_profiles_error().is_empty());
     let fixture = Fixture {
         app,
@@ -110,6 +119,7 @@ fn isolated(name: &str, test: impl FnOnce(&Fixture)) {
 
 fn select(fixture: &Fixture, id: &str) {
     fixture.bridge.switch_profile(id);
+    fixture.bridge.wait_profile_activation();
     assert!(fixture.app.get_profiles_error().is_empty());
     assert_eq!(profiles::active_context().id, id);
     assert!(!fixture.app.get_profiles_require_selection());
@@ -278,6 +288,11 @@ fn drain_account_queue() {
     .unwrap();
     slint::run_event_loop().unwrap();
     assert!(drained.load(Ordering::Acquire));
+    // Event-loop callbacks may resolve the global bridge themselves. Never
+    // retain its mutex while waiting for the asynchronous activation receipt.
+    if let Some(bridge) = bridge::with_global_bridge(Clone::clone) {
+        bridge.wait_profile_activation();
+    }
 }
 
 #[test]
@@ -378,6 +393,7 @@ fn failed_selection_write_keeps_outgoing_playback_and_profile_active() {
                 },
             );
             fixture.bridge.switch_profile(&bob);
+            fixture.bridge.wait_profile_activation();
             assert!(!fixture.app.get_profiles_error().is_empty());
             assert_eq!(profiles::active_context(), active);
             assert_eq!(profiles::device_preferences().active_profile, active.id);
@@ -607,6 +623,7 @@ fn activation_preflight_keeps_the_active_session_when_incoming_data_is_corrupt()
                 let owner = profiles::ProfileStore::for_profile(&incoming);
                 owner.write(key, "{broken JSON").unwrap();
                 fixture.bridge.switch_profile(&incoming);
+                fixture.bridge.wait_profile_activation();
                 assert!(
                     !fixture.app.get_profiles_error().is_empty(),
                     "{key} must fail preflight"
@@ -760,6 +777,7 @@ fn incoming_unsupported_setting_protection_stays_with_its_durable_profile() {
             // validation fails. The active profile must never inherit them.
             incoming.write("library", "{broken JSON").unwrap();
             fixture.bridge.switch_profile(&bob);
+            fixture.bridge.wait_profile_activation();
             assert!(!fixture.app.get_profiles_error().is_empty());
             assert_eq!(profiles::active_context().id, profiles::DEFAULT_ID);
             fixture
@@ -974,22 +992,28 @@ fn pin_selection_cancellation_revisions_and_restricted_exit_are_atomic() {
                 ..Default::default()
             };
             child_owner
-                .write(
+                .persist_snapshot(
                     profile_policy::KEY,
                     &serde_json::to_string(&policy).unwrap(),
+                    false,
                 )
                 .unwrap();
             fixture.bridge.switch_profile(&child);
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context(), initial);
             assert!(fixture.app.global::<crate::MoreBridge>().get_pin_open());
             fixture.bridge.submit_profile_pin("12");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context(), initial);
             fixture.bridge.cancel_profile_pin();
             assert_eq!(profiles::active_context(), initial);
             fixture.bridge.switch_profile(&child);
+            fixture.bridge.wait_profile_activation();
             fixture.bridge.submit_profile_pin("0012");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context().id, child);
             fixture.bridge.switch_profile(&initial.id);
+            fixture.bridge.wait_profile_activation();
             assert_eq!(
                 profiles::active_context().id,
                 child,
@@ -997,17 +1021,22 @@ fn pin_selection_cancellation_revisions_and_restricted_exit_are_atomic() {
             );
             fixture.bridge.cancel_profile_pin();
             fixture.bridge.switch_profile(&initial.id);
+            fixture.bridge.wait_profile_activation();
             fixture.bridge.submit_profile_pin("0012");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context().id, initial.id);
             fixture.bridge.switch_profile(&child);
+            fixture.bridge.wait_profile_activation();
             policy.pin = "0034".into();
             child_owner
-                .write(
+                .persist_snapshot(
                     profile_policy::KEY,
                     &serde_json::to_string(&policy).unwrap(),
+                    false,
                 )
                 .unwrap();
             fixture.bridge.submit_profile_pin("0012");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(
                 profiles::active_context().id,
                 initial.id,
@@ -1015,8 +1044,10 @@ fn pin_selection_cancellation_revisions_and_restricted_exit_are_atomic() {
             );
             assert!(!fixture.app.global::<crate::MoreBridge>().get_pin_open());
             fixture.bridge.switch_profile(&child);
+            fixture.bridge.wait_profile_activation();
             profiles::delete(&child).unwrap();
             fixture.bridge.submit_profile_pin("0034");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(
                 profiles::active_context().id,
                 initial.id,
@@ -1042,9 +1073,10 @@ fn locked_startup_defers_preparation_projection_and_models_until_pin() {
                 ..Default::default()
             };
             owner
-                .write(
+                .persist_snapshot(
                     profile_policy::KEY,
                     &serde_json::to_string(&policy).unwrap(),
+                    false,
                 )
                 .unwrap();
             let entry: LibraryEntry = serde_json::from_value(
@@ -1070,6 +1102,7 @@ fn locked_startup_defers_preparation_projection_and_models_until_pin() {
                 .store(0, Ordering::Release);
             assert!(profile_policy::initialize_entry_gate(&owner));
             fixture.bridge.activate_profile(owner.id(), true).unwrap();
+            fixture.bridge.wait_profile_activation();
             fixture.bridge.refresh_watch_queue();
             fixture.bridge.refresh_bookmarks();
             fixture.bridge.refresh_viewing_journal();
@@ -1078,7 +1111,7 @@ fn locked_startup_defers_preparation_projection_and_models_until_pin() {
             fixture.bridge.refresh_release_reminders();
             fixture
                 .bridge
-                .sync_apply(vec![owner.domain(sync::DOMAIN_LIBRARY)]);
+                .sync_apply_and_wait(vec![owner.domain(sync::DOMAIN_LIBRARY)]);
             assert_eq!(
                 profiles::active_context(),
                 original,
@@ -1100,15 +1133,23 @@ fn locked_startup_defers_preparation_projection_and_models_until_pin() {
                 0
             );
             fixture.bridge.switch_profile(owner.id());
+            fixture.bridge.wait_profile_activation();
             fixture.bridge.submit_profile_pin("12");
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context(), original);
             assert!(fixture.bridge.shared.lock().unwrap().entries.is_empty());
             fixture.bridge.cancel_profile_pin();
             assert!(profile_policy::entry_blocked());
-            owner.write("settings", "{}").unwrap();
-            owner.write("addons", "[]").unwrap();
+            // Recovery repairs durable bytes through an explicit detached
+            // owner; the locked, unloaded UI allocation remains read-only.
+            owner.run(|| {
+                owner.write("settings", "{}").unwrap();
+                owner.write("addons", "[]").unwrap();
+            });
             fixture.bridge.switch_profile(owner.id());
+            fixture.bridge.wait_profile_activation();
             fixture.bridge.submit_profile_pin("0012");
+            fixture.bridge.wait_profile_activation();
             assert!(!profile_policy::entry_blocked());
             assert_ne!(profiles::active_context().epoch, original.epoch);
             assert_eq!(
@@ -1208,6 +1249,386 @@ fn policy_editor_toggles_exact_entities_after_durable_order_changes() {
                 profile_policy::load(&owner).unwrap().allowed_addons,
                 vec!["https://source/config-a"]
             );
+        },
+    );
+}
+
+// Exercise the full deletion caller with real storage and pending Store work.
+// Each wrapper runs in its own process, as profile/runtime state is global.
+fn failed_deletion_preserves_transaction(
+    fixture: &Fixture,
+    failure: Option<profiles::DeleteFailure>,
+) {
+    // Tracking startup calls publish_shared(), which saves the shared Store
+    // even without changing records. Join these unrelated writers before
+    // seeding pending work so the snapshots isolate the deletion transaction.
+    // The persistence barrier alone does not wait for profile actors.
+    fixture.stop_actors();
+    persistence::flush().unwrap();
+    let target = profiles::active_context();
+    let survivor = profiles::create("Survivor").unwrap();
+    let child_domain = profiles::domain_for(&target.id, "state04_fixture");
+    let snapshot = profiles::storage_key_for(&target.id, "state04_snapshot");
+    let baseline = format!("sync:baseline:{child_domain}");
+    let queued_snapshot =
+        profiles::storage_key_for(&target.id, "tracking:state04_queued_credentials");
+    let queued_baseline = format!("sync:baseline:profile:{}:state04_queued", target.id);
+    assert!(
+        nova_storage::try_get_str(&queued_snapshot)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        nova_storage::try_get_str(&queued_baseline)
+            .unwrap()
+            .is_none()
+    );
+    nova_storage::try_set_str(&snapshot, "snapshot").unwrap();
+    nova_storage::try_set_str(&baseline, "baseline").unwrap();
+    let cache = profiles::cache_dir(&target.id);
+    std::fs::create_dir_all(&cache).unwrap();
+    let sentinel = cache.join("state04-sentinel");
+    std::fs::write(&sentinel, "keep").unwrap();
+    let owner = nova_sync::local_store().unwrap();
+    let device = nova_sync::local_device().unwrap();
+    {
+        let mut store = owner.lock().unwrap();
+        store.set(&child_domain, "child", Some("child".into()), 0, device);
+        store.save().unwrap();
+        store.set("state04_unrelated", "dirty", Some("keep".into()), 0, device);
+        store.queue_extra("state04_unrelated_extra", Some("keep extra".into()));
+        // Preserve even a pre-existing queued baseline owned by the target.
+        store.queue_extra(&baseline, Some("pending baseline".into()));
+        store.queue_extra(&queued_snapshot, Some("queued credentials".into()));
+        store.queue_extra(&queued_baseline, Some("queued baseline".into()));
+    }
+    let before_live = format!("{:?}", owner.lock().unwrap());
+    let before_disk = nova_storage::try_scan_prefix("").unwrap();
+    if let Some(point) = failure {
+        profiles::with_delete_failure(point, || fixture.bridge.delete_profile(&target.id));
+    } else {
+        // Store::save reaches the actual atomic storage batch and fails schema
+        // validation. The clock value is an object, never an array.
+        nova_storage::register_collection(
+            "sync:records:hlc",
+            nova_storage::CollectionKind::Array {
+                id_field: "id".into(),
+            },
+        );
+        fixture.bridge.delete_profile(&target.id);
+        nova_storage::register_collection("sync:records:hlc", nova_storage::CollectionKind::Object);
+    }
+    assert!(!fixture.app.get_profiles_error().is_empty());
+    assert_eq!(profiles::active_context(), target);
+    assert_eq!(profiles::device_preferences().active_profile, target.id);
+    assert!(profiles::writable(&target.id));
+    assert!(
+        sentinel.is_file(),
+        "failed deletion must not clean the cache"
+    );
+    assert_eq!(
+        format!("{:?}", owner.lock().unwrap()),
+        before_live,
+        "records, clock, pending domains, dirty records and extras must be unchanged"
+    );
+    assert_eq!(nova_storage::try_scan_prefix("").unwrap(), before_disk);
+    {
+        let mut store = owner.lock().unwrap();
+        store.set(
+            "state04_unrelated",
+            "later",
+            Some("later".into()),
+            0,
+            device,
+        );
+        store.save().unwrap();
+        assert_eq!(
+            store
+                .record(&child_domain, "child")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("child")
+        );
+        assert!(
+            store
+                .record(profiles::DELETIONS_DOMAIN, &target.id)
+                .is_none()
+        );
+        assert!(
+            store
+                .record(profiles::DOMAIN, &target.id)
+                .unwrap()
+                .value
+                .is_some()
+        );
+    }
+    assert_eq!(
+        nova_storage::try_get_str(&snapshot).unwrap().as_deref(),
+        Some("snapshot")
+    );
+    assert_eq!(
+        nova_storage::try_get_str(&baseline).unwrap().as_deref(),
+        Some("pending baseline")
+    );
+    assert_eq!(
+        nova_storage::try_get_str("state04_unrelated_extra")
+            .unwrap()
+            .as_deref(),
+        Some("keep extra")
+    );
+    assert_eq!(
+        nova_storage::try_get_str(&queued_snapshot)
+            .unwrap()
+            .as_deref(),
+        Some("queued credentials")
+    );
+    assert_eq!(
+        nova_storage::try_get_str(&queued_baseline)
+            .unwrap()
+            .as_deref(),
+        Some("queued baseline")
+    );
+    let durable = nova_sync::Store::load();
+    assert_eq!(
+        durable
+            .record(&child_domain, "child")
+            .unwrap()
+            .value
+            .as_deref(),
+        Some("child")
+    );
+    assert!(
+        durable
+            .record(profiles::DELETIONS_DOMAIN, &target.id)
+            .is_none()
+    );
+    assert!(profiles::writable(&target.id));
+    assert!(
+        profiles::list()
+            .unwrap()
+            .iter()
+            .any(|profile| profile.id == survivor)
+    );
+    // The outgoing owner remains usable after the failed transaction.
+    storage::try_set_str("plugin_settings", "{}").unwrap();
+}
+
+#[test]
+fn failed_deletion_before_scan_preserves_live_and_durable_state() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::failed_deletion_before_scan_preserves_live_and_durable_state"
+        ),
+        |fixture| {
+            failed_deletion_preserves_transaction(
+                fixture,
+                Some(profiles::DeleteFailure::BeforeScan),
+            );
+        },
+    );
+}
+
+#[test]
+fn failed_deletion_after_tombstone_preserves_live_and_durable_state() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::failed_deletion_after_tombstone_preserves_live_and_durable_state"
+        ),
+        |fixture| {
+            failed_deletion_preserves_transaction(
+                fixture,
+                Some(profiles::DeleteFailure::AfterTombstone),
+            );
+        },
+    );
+}
+
+#[test]
+fn failed_deletion_commit_preserves_live_and_durable_state() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::failed_deletion_commit_preserves_live_and_durable_state"
+        ),
+        |fixture| {
+            failed_deletion_preserves_transaction(fixture, None);
+        },
+    );
+}
+
+#[test]
+fn successful_active_deletion_commits_before_survivor_transition_and_rejects_late_writer() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::successful_active_deletion_commits_before_survivor_transition_and_rejects_late_writer"
+        ),
+        |fixture| {
+            let target = profiles::active_context();
+            let survivor = profiles::create("Survivor").unwrap();
+            let domain = profiles::domain_for(&target.id, "state04_fixture");
+            let snapshot = profiles::storage_key_for(&target.id, "state04_snapshot");
+            let baseline = format!("sync:baseline:{domain}");
+            let queued_snapshot =
+                profiles::storage_key_for(&target.id, "tracking:state04_queued_credentials");
+            let queued_baseline = format!("sync:baseline:profile:{}:state04_queued", target.id);
+            let unrelated =
+                profiles::storage_key_for(&survivor, "tracking:state04_queued_credentials");
+            assert!(
+                nova_storage::try_get_str(&queued_snapshot)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                nova_storage::try_get_str(&queued_baseline)
+                    .unwrap()
+                    .is_none()
+            );
+            nova_storage::try_set_str(&snapshot, "snapshot").unwrap();
+            nova_storage::try_set_str(&baseline, "baseline").unwrap();
+            let owner = nova_sync::local_store().unwrap();
+            let device = nova_sync::local_device().unwrap();
+            {
+                let mut store = owner.lock().unwrap();
+                store.set(&domain, "child", Some("child".into()), 0, device);
+                store.save().unwrap();
+                store.queue_extra("state04_unrelated_extra", Some("keep".into()));
+                store.queue_extra(&queued_snapshot, Some("queued credentials".into()));
+                store.queue_extra(&queued_baseline, Some("queued baseline".into()));
+                store.queue_extra(&unrelated, Some("survivor credentials".into()));
+            }
+            let cache = profiles::cache_dir(&target.id);
+            std::fs::create_dir_all(&cache).unwrap();
+            let (release, released) = mpsc::channel();
+            let writer = profiles::thread::spawn(move || {
+                released.recv().unwrap();
+                storage::try_set_str("plugin_settings", "{}")
+            });
+            fixture.bridge.delete_profile(&target.id);
+            assert!(fixture.app.get_profiles_error().is_empty());
+            assert_eq!(
+                profiles::active_context(),
+                target,
+                "survivor publication is queued after the commit"
+            );
+            assert!(
+                nova_sync::Store::load()
+                    .record(profiles::DELETIONS_DOMAIN, &target.id)
+                    .is_some()
+            );
+            drain_account_queue();
+            assert_eq!(profiles::active_context().id, survivor);
+            assert_eq!(profiles::device_preferences().active_profile, survivor);
+            assert!(!profiles::writable(&target.id));
+            release.send(()).unwrap();
+            assert!(writer.join().unwrap().is_err());
+            assert!(!cache.exists());
+            assert!(nova_storage::try_get_str(&snapshot).unwrap().is_none());
+            assert!(nova_storage::try_get_str(&baseline).unwrap().is_none());
+            assert!(
+                nova_storage::try_get_str(&queued_snapshot)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                nova_storage::try_get_str(&queued_baseline)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                nova_storage::try_get_str(&unrelated).unwrap().as_deref(),
+                Some("survivor credentials")
+            );
+            assert_eq!(
+                nova_storage::try_get_str("state04_unrelated_extra")
+                    .unwrap()
+                    .as_deref(),
+                Some("keep")
+            );
+            for store in [owner.lock().unwrap().clone(), nova_sync::Store::load()] {
+                assert!(store.record(&domain, "child").unwrap().is_deleted());
+                assert!(
+                    store
+                        .record(profiles::DOMAIN, &target.id)
+                        .unwrap()
+                        .is_deleted()
+                );
+                assert_eq!(
+                    store
+                        .record(profiles::DELETIONS_DOMAIN, &target.id)
+                        .unwrap()
+                        .value
+                        .as_deref(),
+                    Some("1")
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn direct_deletion_removes_queued_only_owner_data_before_any_cleanup_refresh() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::direct_deletion_removes_queued_only_owner_data_before_any_cleanup_refresh"
+        ),
+        |fixture| {
+            persistence::flush().unwrap();
+            let target = profiles::active_context();
+            let survivor = profiles::create("Survivor").unwrap();
+            let snapshot =
+                profiles::storage_key_for(&target.id, "tracking:state04_queued_credentials");
+            let baseline = format!("sync:baseline:profile:{}:state04_queued", target.id);
+            let unrelated =
+                profiles::storage_key_for(&survivor, "tracking:state04_queued_credentials");
+            for key in [&snapshot, &baseline, &unrelated] {
+                assert!(nova_storage::try_get_str(key).unwrap().is_none());
+            }
+            let owner = nova_sync::local_store().unwrap();
+            {
+                let mut store = owner.lock().unwrap();
+                store.queue_extra(&snapshot, Some("queued credentials".into()));
+                store.queue_extra(&baseline, Some("queued baseline".into()));
+                store.queue_extra(&unrelated, Some("survivor credentials".into()));
+            }
+            profiles::delete(&target.id).unwrap();
+            // Inspect immediately: list()/Bridge refresh has an independent
+            // cleanup path that must not hide a leak in the delete transaction.
+            assert_eq!(profiles::active_context(), target);
+            assert!(!profiles::writable(&target.id));
+            for key in [&snapshot, &baseline] {
+                assert!(nova_storage::try_get_str(key).unwrap().is_none());
+                assert!(owner.lock().unwrap().extra_value(key).unwrap().is_none());
+            }
+            assert_eq!(
+                nova_storage::try_get_str(&unrelated).unwrap().as_deref(),
+                Some("survivor credentials")
+            );
+            {
+                let mut store = owner.lock().unwrap();
+                store.set(
+                    "state04_unrelated",
+                    "later",
+                    Some("later".into()),
+                    0,
+                    nova_sync::local_device().unwrap(),
+                );
+                store.save().unwrap();
+            }
+            assert!(nova_storage::try_get_str(&snapshot).unwrap().is_none());
+            assert!(nova_storage::try_get_str(&baseline).unwrap().is_none());
+            assert_eq!(
+                nova_storage::try_get_str(&unrelated).unwrap().as_deref(),
+                Some("survivor credentials")
+            );
+            // Restore an active survivor only after all direct-commit checks.
+            fixture.bridge.refresh_profiles();
+            drain_account_queue();
+            assert_eq!(profiles::active_context().id, survivor);
         },
     );
 }

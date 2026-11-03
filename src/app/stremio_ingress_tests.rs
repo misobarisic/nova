@@ -48,6 +48,7 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
                 .stremio()
                 .surfaces_dirty
                 .store(true, Ordering::Release);
+            let hidden = calendar::counters(&fixture.bridge);
             fixture.bridge.refresh_stremio_surfaces_if_visible();
             assert!(
                 fixture
@@ -57,6 +58,11 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
                     .load(Ordering::Acquire)
             );
             assert_eq!(app.get_calendar_cells().row_count(), 0);
+            assert_eq!(
+                calendar::counters(&fixture.bridge),
+                hidden,
+                "hidden refresh must not capture or build Calendar"
+            );
             app.set_modal_visible(false);
             fixture.bridge.refresh_stremio_surfaces_if_visible();
             assert!(
@@ -66,6 +72,10 @@ fn hidden_surfaces_wait_for_reveal_and_refresh_the_visible_calendar() {
                     .surfaces_dirty
                     .load(Ordering::Acquire)
             );
+            // Reveal consumes the coalesced dirty flag and requests the cold
+            // projection. Publication arrives asynchronously from Calendar's
+            // real worker; wait for that receipt before inspecting its model.
+            calendar::settle(&fixture.bridge);
             assert_eq!(app.get_calendar_cells().row_count(), 42);
         },
     );
@@ -138,6 +148,7 @@ fn stalled_old_profile_worker_cannot_snapshot_or_save_the_replacement_library() 
             waiting.recv_timeout(Duration::from_secs(10)).unwrap();
             let replacement = profiles::create("Bob").unwrap();
             fixture.bridge.switch_profile(&replacement);
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context().id, replacement);
             let mut private_entry = ordered_ingress_entry("bob-private");
             private_entry.type_ = "movie".into();
@@ -239,10 +250,12 @@ fn accepted_upload_after_bridge_switch_is_checkpointed_only_for_issuing_profile(
             waiting.recv_timeout(Duration::from_secs(10)).unwrap();
             let replacement = profiles::create("Bob").unwrap();
             fixture.bridge.switch_profile(&replacement);
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context().id, replacement);
             let selected = profiles::ProfileStore::capture();
             assert!(selected.read(&key).unwrap().is_none());
             fixture.bridge.switch_profile(issuing.id());
+            fixture.bridge.wait_profile_activation();
             assert_eq!(profiles::active_context().id, issuing.id());
             let returning_handle = fixture.bridge.stremio();
             assert!(!Arc::ptr_eq(&original_handle, &returning_handle));
@@ -440,8 +453,6 @@ fn isolated_with_options(
     }
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
-    let (hi, _) = mpsc::channel();
-    let (lo, _) = mpsc::channel();
     persist_sync_snapshot("library", "[]", true).unwrap();
     persist_sync_snapshot(EPISODE_PROGRESS_KEY, "{}", true).unwrap();
     let connection = Connection {
@@ -475,7 +486,7 @@ fn isolated_with_options(
     // by attaching it to a profile-enabled Context afterward.
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx { hi, lo },
+        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),

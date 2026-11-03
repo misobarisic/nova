@@ -104,11 +104,9 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
-    let (hi, _) = mpsc::channel();
-    let (lo, _) = mpsc::channel();
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx { hi, lo },
+        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),
@@ -517,4 +515,73 @@ fn explicit_unwatch_of_an_unprojected_row_is_still_a_distinct_action() {
             .as_deref(),
         Some(first.as_str())
     );
+}
+
+#[test]
+fn coverage_key_grouping_keeps_restricted_profile_native_titles_separate() {
+    const ROOT: &str = "NOVA_COVERAGE_GROUP_POLICY_ROOT";
+    let Some(root) = std::env::var_os(ROOT) else {
+        let root = std::env::temp_dir().join(format!(
+            "nova-coverage-group-policy-{}-{}",
+            std::process::id(),
+            nova_config::now_ms()
+        ));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env(ROOT, &root)
+            .args(["--exact", "app::progress_identity_tests::coverage_key_grouping_keeps_restricted_profile_native_titles_separate", "--nocapture"])
+            .output().unwrap();
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    storage::init_at(&PathBuf::from(root));
+    profiles::initialize().unwrap();
+    let owner = profiles::ProfileStore::capture();
+    let entries: Vec<LibraryEntry> = [ORIGINAL, CANONICAL]
+        .into_iter()
+        .enumerate()
+        .map(|(added, id)| {
+            serde_json::from_value(
+                serde_json::json!({"id":id,"type_":"series","name":id,"added_at_secs":added}),
+            )
+            .unwrap()
+        })
+        .collect();
+    let index = media_identity::IdentityIndex::new(entries.iter().map(|entry| {
+        media_identity::TitleInventory {
+            media_type: entry.type_.clone(),
+            series_id: entry.id.clone(),
+            videos: videos(),
+        }
+    }));
+    let grouped = library::display_groups_from_index(&entries, &index);
+    assert!(!grouped.is_representative("series", CANONICAL));
+    let policy = profile_policy::ProfilePolicy {
+        pin: "1234".into(),
+        restricted: true,
+        allowed_titles: vec![profile_policy::AllowedTitle {
+            media_type: "series".into(),
+            title_id: CANONICAL.into(),
+        }],
+        ..Default::default()
+    };
+    owner
+        .write(
+            profile_policy::KEY,
+            &serde_json::to_string(&policy).unwrap(),
+        )
+        .unwrap();
+    let grouped = library::display_groups_from_index(&entries, &index);
+    let prepared = library::prepare_display_groups(&entries, |_, _| {
+        panic!("restricted grouping must not load alias inventories")
+    });
+    for id in [ORIGINAL, CANONICAL] {
+        assert!(grouped.is_representative("series", id));
+        assert!(prepared.is_representative("series", id));
+    }
 }

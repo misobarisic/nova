@@ -1,5 +1,358 @@
 use super::*;
 use serde_json::json;
+
+fn projection_fixture(name: &str, body: impl FnOnce(Bridge, [Connection; SERVICE_COUNT])) {
+    const ROOT: &str = "NOVA_LIST_PROJECTION_TEST_ROOT";
+    let Some(root) = std::env::var_os(ROOT) else {
+        let root = std::env::temp_dir().join(format!(
+            "nova-list-projection-{}-{}",
+            std::process::id(),
+            name.rsplit("::").next().unwrap()
+        ));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env(ROOT, &root)
+            .args([
+                "--exact",
+                name.strip_prefix("nova::").unwrap_or(name),
+                "--include-ignored",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        let completed = root.join("completed").is_file();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(
+            output.status.success() && completed,
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        return;
+    };
+    let root = PathBuf::from(root);
+    storage::init_at(&root);
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = AppWindow::new().unwrap();
+    let player = crate::player::Player::setup(&app);
+    #[cfg(feature = "desktop")]
+    let bridge = Bridge::new(
+        app.as_weak(),
+        PosterTx::closed(),
+        Arc::new(AtomicU64::new(0)),
+        player,
+        DownloadCoordinator::new(root.join("downloads")),
+    );
+    #[cfg(not(feature = "desktop"))]
+    let bridge = Bridge::new(
+        app.as_weak(),
+        Arc::new(AtomicU64::new(0)),
+        player,
+        DownloadCoordinator::new(root.join("downloads")),
+    );
+    let connections: [Connection; SERVICE_COUNT] = std::array::from_fn(|i| {
+        let mut connection = account();
+        connection.credentials.service = service(i);
+        connection
+    });
+    let owner = nova_sync::local_store().unwrap();
+    let mut store = owner.lock().unwrap();
+    for (i, connection) in connections.iter().enumerate() {
+        store.set(
+            &sync::profile_domain(DOMAIN),
+            &format!("connection:{i}"),
+            Some(serde_json::to_string(connection).unwrap()),
+            0,
+            nova_sync::local_device().unwrap(),
+        );
+    }
+    store.queue_extra(
+        &profiles::storage_key(nova_tracking::EVENT_COUNTER_KEY),
+        Some("5".into()),
+    );
+    store.mark_pending(&sync::profile_domain(DOMAIN));
+    store.save().unwrap();
+    drop(store);
+    body(bridge, connections);
+    std::fs::write(root.join("completed"), name).unwrap();
+}
+
+fn incoming_projection_grant(i: usize, connection: &Connection, title: &str, grant: &str) {
+    let owner = nova_sync::local_store().unwrap();
+    let mut store = owner.lock().unwrap();
+    let mut value = selected();
+    value.grant = grant.into();
+    let raw = serde_json::to_string(&value).unwrap();
+    let domain = sync::profile_domain(DOMAIN);
+    assert!(store.apply(
+        &domain,
+        &selection_key(i, connection, "movie", title),
+        nova_sync::Record {
+            version: nova_sync::Version::new(nova_config::now_ms(), 1, 99, false),
+            value: Some(raw),
+        }
+    ));
+    store.save().unwrap();
+}
+
+fn projection_pending() -> bool {
+    nova_sync::local_store()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .pending_domains()
+        .contains(&sync::profile_domain(DOMAIN))
+}
+
+fn projection_watch(sequence: u64) {
+    let owner = nova_sync::local_store().unwrap();
+    let mut store = owner.lock().unwrap();
+    record_watched_events(
+        &mut store,
+        &HashMap::new(),
+        &[nova_tracking::WatchChange {
+            series_id: "new-title".into(),
+            episode_id: "new-title".into(),
+            watched: true,
+            started: false,
+        }],
+        sequence,
+        false,
+    );
+    store.queue_extra(
+        &profiles::storage_key(nova_tracking::EVENT_COUNTER_KEY),
+        Some(sequence.to_string()),
+    );
+    store.save().unwrap();
+}
+
+#[test]
+fn captured_projection_basis_retains_grant_arriving_after_service_zero() {
+    projection_fixture(
+        concat!(
+            module_path!(),
+            "::captured_projection_basis_retains_grant_arriving_after_service_zero"
+        ),
+        |bridge, connections| {
+            let mut worker = Worker::new(
+                bridge,
+                Client::new(Arc::new(Fake {
+                    requests: Mutex::new(Vec::new()),
+                })),
+            );
+            incoming_projection_grant(0, &connections[0], "old-title", "old-grant");
+            worker.project_pending_with(|i| {
+                if i == 0 {
+                    incoming_projection_grant(0, &connections[0], "new-title", "new-grant");
+                    projection_watch(6);
+                }
+            });
+            assert!(projection_pending());
+            let key = boundary_key(0, &connections[0], "movie", "new-title", "new-grant");
+            assert!(storage::try_get_str(&key).unwrap().is_none());
+            worker.project_pending_with(|i| {
+                if i == 0 {
+                    projection_watch(7);
+                }
+            });
+            assert!(!projection_pending());
+            assert_eq!(storage::try_get_str(&key).unwrap().as_deref(), Some("6"));
+            worker.project_pending();
+            assert_eq!(storage::try_get_str(&key).unwrap().as_deref(), Some("6"));
+        },
+    );
+}
+
+#[test]
+fn projection_failure_keeps_pending_and_normal_pass_clears_captured_basis() {
+    projection_fixture(
+        concat!(
+            module_path!(),
+            "::projection_failure_keeps_pending_and_normal_pass_clears_captured_basis"
+        ),
+        |bridge, connections| {
+            let mut worker = Worker::new(
+                bridge,
+                Client::new(Arc::new(Fake {
+                    requests: Mutex::new(Vec::new()),
+                })),
+            );
+            incoming_projection_grant(1, &connections[1], "invalid-title", "");
+            worker.project_pending();
+            assert!(projection_pending());
+            assert!(worker.retry[1] > 5);
+            let mut valid = selected();
+            valid.grant = "fixed-grant".into();
+            worker
+                .set_record(
+                    &selection_key(1, &connections[1], "movie", "invalid-title"),
+                    Some(&valid),
+                )
+                .unwrap();
+            worker.project_pending();
+            assert!(!projection_pending());
+            assert!(worker.capture_pending_projection().unwrap().is_none());
+        },
+    );
+}
+
+struct ProjectionVerification {
+    entered: mpsc::SyncSender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+}
+impl nova_list_services::Transport for ProjectionVerification {
+    fn send(
+        &self,
+        request: nova_list_services::Request,
+    ) -> Result<nova_list_services::Response, ApiError> {
+        assert!(request.url.starts_with("https://api.mdblist.com/user"));
+        self.entered.send(()).unwrap();
+        self.resume
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap();
+        Ok(nova_list_services::Response {
+            status: 200,
+            retry_after: None,
+            has_more: false,
+            pagination: None,
+            body: json!({"user_id":"owner", "username":"Owner"}),
+        })
+    }
+}
+
+#[test]
+fn remote_grant_during_slow_verification_waits_for_its_own_projection_boundary() {
+    projection_fixture(
+        concat!(
+            module_path!(),
+            "::remote_grant_during_slow_verification_waits_for_its_own_projection_boundary"
+        ),
+        |bridge, connections| {
+            let (entered, waiting) = mpsc::sync_channel(1);
+            let (release, resume) = mpsc::sync_channel(1);
+            let mut worker = Worker::new(
+                bridge,
+                Client::new(Arc::new(ProjectionVerification {
+                    entered,
+                    resume: Mutex::new(resume),
+                })),
+            );
+            incoming_projection_grant(0, &connections[0], "old-title", "old-grant");
+            worker.project_pending();
+            assert!(!projection_pending());
+            let task = profiles::thread::spawn(move || {
+                worker.restore(1).unwrap();
+                worker
+            });
+            waiting.recv_timeout(Duration::from_secs(15)).unwrap();
+            incoming_projection_grant(0, &connections[0], "new-title", "slow-grant");
+            projection_watch(6);
+            release.send(()).unwrap();
+            let mut worker = task.join().unwrap();
+            assert!(projection_pending());
+            let key = boundary_key(0, &connections[0], "movie", "new-title", "slow-grant");
+            assert!(storage::try_get_str(&key).unwrap().is_none());
+            worker.project_pending();
+            assert!(!projection_pending());
+            assert_eq!(storage::try_get_str(&key).unwrap().as_deref(), Some("6"));
+        },
+    );
+}
+
+#[test]
+#[ignore = "explicit 3-service 1k/10k projection workload"]
+fn projection_workload_three_services_captures_only_processed_grants() {
+    projection_fixture(
+        concat!(
+            module_path!(),
+            "::projection_workload_three_services_captures_only_processed_grants"
+        ),
+        |bridge, connections| {
+            let mut worker = Worker::new(
+                bridge,
+                Client::new(Arc::new(Fake {
+                    requests: Mutex::new(Vec::new()),
+                })),
+            );
+            for rows in [1_000, 10_000] {
+                let owner = nova_sync::local_store().unwrap();
+                let mut store = owner.lock().unwrap();
+                for (key, _) in
+                    store.records_with_prefix(&sync::profile_domain(DOMAIN), "selected:")
+                {
+                    store.remove_migrated_record(&sync::profile_domain(DOMAIN), &key);
+                }
+                for (i, connection) in connections.iter().enumerate() {
+                    for row in 0..rows {
+                        let id = format!("opaque-{rows}-{row}");
+                        store.set(
+                            &sync::profile_domain(DOMAIN),
+                            &selection_key(i, connection, "movie", &id),
+                            Some(serde_json::to_string(&selected()).unwrap()),
+                            0,
+                            nova_sync::local_device().unwrap(),
+                        );
+                    }
+                }
+                store.mark_pending(&sync::profile_domain(DOMAIN));
+                store.save().unwrap();
+                drop(store);
+                let start = Instant::now();
+                let captured = worker
+                    .capture_pending_projection()
+                    .unwrap()
+                    .unwrap()
+                    .sources
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>();
+                worker.project_pending();
+                assert!(!projection_pending());
+                let (entered, waiting) = mpsc::sync_channel(1);
+                let (release, resume) = mpsc::sync_channel(1);
+                worker.client = Client::new(Arc::new(ProjectionVerification {
+                    entered,
+                    resume: Mutex::new(resume),
+                }));
+                worker.verified[1] = false;
+                worker.next[1] = Instant::now();
+                let task = profiles::thread::spawn(move || {
+                    worker.restore(1).unwrap();
+                    worker
+                });
+                waiting.recv_timeout(Duration::from_secs(15)).unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+                incoming_projection_grant(
+                    0,
+                    &connections[0],
+                    &format!("late-{rows}"),
+                    &format!("grant-{rows}"),
+                );
+                release.send(()).unwrap();
+                worker = task.join().unwrap();
+                assert!(projection_pending());
+                let second = worker
+                    .capture_pending_projection()
+                    .unwrap()
+                    .unwrap()
+                    .sources
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>();
+                worker.project_pending();
+                assert!(!projection_pending());
+                assert!(worker.capture_pending_projection().unwrap().is_none());
+                println!(
+                    "STATE07 rows_per_service={rows} passes=2 processed_grants={} first_pass={captured} second_pass={second} elapsed_us={}",
+                    captured + second,
+                    start.elapsed().as_micros()
+                );
+            }
+        },
+    );
+}
 fn selected() -> Selection {
     Selection {
         enabled: true,
@@ -261,11 +614,9 @@ fn actor_filters_remote_imports_and_exports_by_account_title_and_current_consent
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
     let player = crate::player::Player::setup(&app);
-    let (hi, _) = mpsc::channel();
-    let (lo, _) = mpsc::channel();
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx { hi, lo },
+        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),
@@ -910,4 +1261,198 @@ fn trakt_typed_playback_regressions(
     assert!(handle.has_trakt_observation("series", id, None));
     assert!(!handle.has_trakt_observation("movie", id, None));
     *handle.playback.lock().unwrap() = None;
+}
+
+fn targeted_source(kind: MediaType, id: &str, episodes: Vec<(String, Episode)>) -> Source {
+    let mut entry = movie(id);
+    if kind != MediaType::Movie {
+        entry.type_ = "series".into();
+    }
+    Source {
+        entry,
+        ids: MediaIds::default(),
+        kind,
+        episodes,
+        unmapped: 0,
+    }
+}
+
+fn targeted_row(title: &str, native: &str, position: f64, duration: f64) -> EpisodeProgress {
+    EpisodeProgress {
+        series_id: title.into(),
+        episode_id: native.into(),
+        position_secs: position,
+        duration_secs: duration,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn merge_captures_only_existing_native_targets_from_disjoint_history() {
+    let source = targeted_source(
+        MediaType::Show,
+        "A",
+        vec![
+            (
+                "native-one".into(),
+                Episode {
+                    season: 1,
+                    number: 1,
+                },
+            ),
+            (
+                "missing-two".into(),
+                Episode {
+                    season: 1,
+                    number: 2,
+                },
+            ),
+            (
+                "native-three".into(),
+                Episode {
+                    season: 1,
+                    number: 3,
+                },
+            ),
+        ],
+    );
+    let targets = progress_targets(&source);
+    let mut history = HashMap::new();
+    for native in ["native-one", "native-three", "unmapped"] {
+        history.insert(
+            progress_map_key("A", native),
+            targeted_row("A", native, 30.0, 120.0),
+        );
+    }
+    for index in 0..1_000 {
+        let native = index.to_string();
+        history.insert(
+            progress_map_key("B", &native),
+            targeted_row("B", &native, 10.0, 100.0),
+        );
+    }
+    let captured = capture_target_progress(&history, "A", &targets);
+    assert_eq!(captured.len(), 2);
+    assert!(captured.len() <= targets.len());
+    assert_eq!(
+        captured[&progress_map_key("A", "native-one")],
+        history[&progress_map_key("A", "native-one")]
+    );
+    assert!(!captured.contains_key(&progress_map_key("A", "missing-two")));
+    assert!(!captured.contains_key(&progress_map_key("A", "unmapped")));
+    assert!(captured.values().all(|row| row.series_id == "A"));
+}
+
+#[test]
+fn merge_target_receipts_reject_relevant_changes_and_preserve_unrelated_edits() {
+    let a = progress_map_key("A", "native");
+    let b = progress_map_key("B", "native");
+    let mut current = HashMap::from([
+        (a.clone(), targeted_row("A", "native", 10.0, 100.0)),
+        (b.clone(), targeted_row("B", "native", 20.0, 100.0)),
+    ]);
+    let targets = vec![("native".into(), None)];
+    let before = capture_target_progress(&current, "A", &targets);
+    let patch = HashMap::from([(a.clone(), targeted_row("A", "native", 70.0, 100.0))]);
+    current.get_mut(&b).unwrap().position_secs = 80.0;
+    assert!(progress_patch_is_current(&current, &before, &patch));
+    let edited_b = current[&b].clone();
+    current.extend(patch.clone());
+    assert_eq!(current[&b], edited_b);
+    assert_eq!(current[&a], patch[&a]);
+    assert!(!progress_patch_is_current(&current, &before, &patch));
+    current.remove(&a);
+    assert!(!progress_patch_is_current(&current, &before, &patch));
+    let absent = capture_target_progress(&current, "A", &targets);
+    assert!(absent.is_empty());
+    assert!(progress_patch_is_current(&current, &absent, &patch));
+    current.insert(a, targeted_row("A", "native", 1.0, 100.0));
+    assert!(!progress_patch_is_current(&current, &absent, &patch));
+}
+
+#[test]
+fn merge_recaptures_each_source_after_intervening_local_edits() {
+    let mut history = HashMap::from([
+        (
+            progress_map_key("A", "native"),
+            targeted_row("A", "native", 10.0, 100.0),
+        ),
+        (
+            progress_map_key("B", "native"),
+            targeted_row("B", "native", 20.0, 100.0),
+        ),
+    ]);
+    let targets = vec![("native".into(), None)];
+    let a = capture_target_progress(&history, "A", &targets);
+    history
+        .get_mut(&progress_map_key("B", "native"))
+        .unwrap()
+        .position_secs = 60.0;
+    let b = capture_target_progress(&history, "B", &targets);
+    assert_eq!(a.len(), 1);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[&progress_map_key("B", "native")].position_secs, 60.0);
+    assert_eq!(a[&progress_map_key("A", "native")].position_secs, 10.0);
+}
+
+#[test]
+fn merge_target_capture_preserves_movie_duration_sparse_mapping_and_empty_inventory() {
+    let movie = targeted_source(MediaType::Movie, "movie", Vec::new());
+    let movie_targets = progress_targets(&movie);
+    assert_eq!(movie_targets, vec![("movie".into(), None)]);
+    let mut history = HashMap::from([
+        (
+            progress_map_key("movie", "movie"),
+            targeted_row("movie", "movie", 30.0, 120.0),
+        ),
+        (
+            progress_map_key("series", "opaque-native"),
+            targeted_row("series", "opaque-native", 30.0, 0.0),
+        ),
+        (
+            progress_map_key("series", "unmatched-remote"),
+            targeted_row("series", "unmatched-remote", 60.0, 120.0),
+        ),
+    ]);
+    let captured = capture_target_progress(&history, "movie", &movie_targets);
+    assert_eq!(
+        resume_percent(&captured[&progress_map_key("movie", "movie")]),
+        Some(25.0)
+    );
+    let mapped = Episode {
+        season: 4,
+        number: 9,
+    };
+    let series = targeted_source(
+        MediaType::Show,
+        "series",
+        vec![("opaque-native".into(), mapped)],
+    );
+    let targets = progress_targets(&series);
+    assert_eq!(targets, vec![("opaque-native".into(), Some(mapped))]);
+    let captured = capture_target_progress(&history, "series", &targets);
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        resume_percent(&captured[&progress_map_key("series", "opaque-native")]),
+        None
+    );
+    assert!(!captured.contains_key(&progress_map_key("series", "unmatched-remote")));
+    assert!(targets.iter().all(|(_, episode)| *episode
+        != Some(Episode {
+            season: 4,
+            number: 10
+        })));
+    history
+        .get_mut(&progress_map_key("series", "opaque-native"))
+        .unwrap()
+        .duration_secs = 120.0;
+    let captured = capture_target_progress(&history, "series", &targets);
+    assert_eq!(
+        resume_percent(&captured[&progress_map_key("series", "opaque-native")]),
+        Some(25.0)
+    );
+    let empty = targeted_source(MediaType::Show, "series", Vec::new());
+    let targets = progress_targets(&empty);
+    assert!(targets.is_empty());
+    assert!(capture_target_progress(&history, "series", &targets).is_empty());
 }

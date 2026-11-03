@@ -7,9 +7,71 @@ use std::sync::{Condvar, mpsc};
 
 const MAX_PENDING: usize = 64;
 static ACTIVE: Mutex<Option<Arc<Queue>>> = Mutex::new(None);
+#[cfg(test)]
+static NEXT_TEST_SAVE: Mutex<Option<Arc<TestSaveGate>>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(super) struct TestSaveGate {
+    entered: mpsc::Sender<()>,
+    released: Mutex<bool>,
+    changed: Condvar,
+}
+#[cfg(test)]
+impl TestSaveGate {
+    pub(super) fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+    fn wait(&self) {
+        self.entered.send(()).unwrap();
+        let mut released = self.released.lock().unwrap();
+        while !*released {
+            released = self.changed.wait(released).unwrap();
+        }
+    }
+}
+#[cfg(test)]
+pub(super) fn hold_next_save() -> (Arc<TestSaveGate>, mpsc::Receiver<()>) {
+    let (entered, receipt) = mpsc::channel();
+    let gate = Arc::new(TestSaveGate {
+        entered,
+        released: Mutex::new(false),
+        changed: Condvar::new(),
+    });
+    assert!(
+        NEXT_TEST_SAVE
+            .lock()
+            .unwrap()
+            .replace(gate.clone())
+            .is_none()
+    );
+    (gate, receipt)
+}
 thread_local! {
     static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static RESERVATIONS: std::cell::RefCell<Vec<Reserved>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+thread_local! {
+    static BEFORE_QUEUE_ADMISSION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn before_queue_admission() {
+    let hook = BEFORE_QUEUE_ADMISSION.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+#[cfg(test)]
+pub(super) fn with_admission_pause<R>(
+    hook: impl FnOnce() + 'static,
+    action: impl FnOnce() -> R,
+) -> R {
+    BEFORE_QUEUE_ADMISSION
+        .with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
+    let result = action();
+    BEFORE_QUEUE_ADMISSION.with(|slot| slot.borrow_mut().take());
+    result
 }
 #[derive(Clone)]
 struct Reserved {
@@ -33,11 +95,25 @@ impl Drop for Reservation {
         });
         let mut state = reserved.queue.state.lock().unwrap();
         state.reserved -= reserved.remaining.get();
+        let continuation = (state.reserved == 0 && state.pending.len() < MAX_PENDING)
+            .then(|| state.capacity_continuation.take())
+            .flatten();
         reserved.queue.changed.notify_all();
+        drop(state);
+        if let Some(continuation) = continuation {
+            continuation();
+        }
     }
 }
 
 pub(super) fn reserve(count: usize) -> Option<Reservation> {
+    if !profiles::authoritative_edits_allowed() {
+        io::record_write_failure(storage::Error::new(
+            storage::ErrorKind::Transaction,
+            "Profile reload in progress; edit not accepted",
+        ));
+        return None;
+    }
     if applying() || IN_WORKER.get() {
         return Some(Reservation(None));
     }
@@ -80,6 +156,89 @@ enum Snapshot {
     Library(Vec<LibraryEntry>),
     Progress(HashMap<String, EpisodeProgress>, bool),
     External(Box<ExternalPatch>, mpsc::Sender<Result<(), String>>, bool),
+    Transition(Arc<profile_actions::OutgoingTransition>),
+    Operation(Arc<dyn OrderedOperation>),
+}
+
+/// Plain captured work on the same bounded writer as local snapshots. Failed
+/// attempts retain this exact Arc at the head until success or shutdown.
+pub(super) trait OrderedOperation: Send + Sync {
+    fn save(&self) -> Result<(), String>;
+    fn failed(&self, _error: &str) {}
+}
+impl<F: Fn() -> Result<(), String> + Send + Sync> OrderedOperation for F {
+    fn save(&self) -> Result<(), String> {
+        self()
+    }
+}
+pub(super) fn retry_ordered_head() {
+    if let Some(queue) = ACTIVE.lock().unwrap().clone() {
+        let mut state = queue.state.lock().unwrap();
+        if !state.pending.is_empty() {
+            state.error = None;
+            state.retry = true;
+            queue.changed.notify_all();
+        }
+    }
+}
+pub(super) fn has_ordered_writer() -> bool {
+    ACTIVE.lock().unwrap().is_some()
+}
+/// No UI mutation has occurred. Busy/capacity/reservation contention retains the
+/// coordinator continuation; it may retry without overtaking admitted edits.
+pub(super) fn try_ordered_operation(
+    operation: Arc<dyn OrderedOperation>,
+    source: Option<&profiles::Context>,
+) -> Result<Option<u64>, String> {
+    let queue = ACTIVE
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("persistence worker unavailable")?;
+    let snapshot = Arc::new(Snapshot::Operation(operation));
+    let mut state = match queue.state.try_lock() {
+        Ok(state) => state,
+        Err(_) => return Ok(None),
+    };
+    if source
+        .and_then(|source| source.session.as_ref())
+        .is_some_and(|session| !session.authoritative_edits_allowed())
+    {
+        return Err("Profile reload in progress; edit not accepted".into());
+    }
+    if state.stop || state.closing {
+        return Err("persistence worker closing".into());
+    }
+    if state.reserved > 0 || state.pending.len() + state.reserved >= MAX_PENDING {
+        return Ok(None);
+    }
+    state.next += 1;
+    let sequence = state.next;
+    state
+        .pending
+        .push_back((sequence, profiles::ProfileStore::account(), snapshot));
+    queue.changed.notify_all();
+    Ok(Some(sequence))
+}
+
+pub(super) fn when_ordered_capacity(callback: impl FnOnce() + Send + 'static) {
+    let Some(queue) = ACTIVE.lock().unwrap().clone() else {
+        callback();
+        return;
+    };
+    let Ok(mut state) = queue.state.try_lock() else {
+        let _ = profiles::invoke_account(callback);
+        return;
+    };
+    if state.stop || state.closing || (state.reserved == 0 && state.pending.len() < MAX_PENDING) {
+        drop(state);
+        callback();
+    } else {
+        // Exactly one logical sync coordinator has one waiting phase. Latest
+        // requests coalesce there rather than accumulating queue waiters.
+        debug_assert!(state.capacity_continuation.is_none());
+        state.capacity_continuation = Some(Box::new(callback));
+    }
 }
 
 /// A remote materialization changes only these records. Resolve it against
@@ -153,10 +312,19 @@ impl Snapshot {
         matches!(self, Self::Progress(_, true))
     }
     fn save(&self, owner: &profiles::ProfileStore) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            let gate = NEXT_TEST_SAVE.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.wait();
+            }
+        }
         let (key, raw) = match self {
             Self::Library(entries) => ("library", serde_json::to_string(entries)),
             Self::Progress(map, _) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map)),
             Self::External(patch, _, projection) => return patch.save(owner, *projection),
+            Self::Transition(capture) => return capture.save(owner),
+            Self::Operation(operation) => return operation.save(),
         };
         let raw = raw.map_err(|error| error.to_string())?;
         let save = || {
@@ -173,7 +341,8 @@ impl Snapshot {
 }
 #[derive(Default)]
 struct State {
-    pending: VecDeque<(u64, profiles::ProfileStore, Snapshot)>,
+    pending: VecDeque<(u64, profiles::ProfileStore, Arc<Snapshot>)>,
+    capacity_continuation: Option<Box<dyn FnOnce() + Send>>,
     reserved: usize,
     next: u64,
     completed: u64,
@@ -201,7 +370,12 @@ impl Queue {
     }
 
     fn reserve(self: &Arc<Self>, count: usize) -> Result<Reservation, String> {
+        #[cfg(test)]
+        before_queue_admission();
         let mut state = self.state.lock().unwrap();
+        if !profiles::authoritative_edits_allowed() {
+            return Err("Profile reload in progress; edit not accepted".into());
+        }
         if state.stop
             || state.closing
             || state.error.is_some()
@@ -223,6 +397,9 @@ impl Queue {
     }
 
     fn enqueue(&self, snapshot: Snapshot) -> Result<bool, String> {
+        // Allocate immutable ownership before taking the queue lock. Worker
+        // attempts and pending readers retain handles, never copy this payload.
+        let snapshot = Arc::new(snapshot);
         let owner = profiles::ProfileStore::capture();
         let reserved = RESERVATIONS.with(|slots| {
             slots
@@ -236,7 +413,12 @@ impl Queue {
                 })
                 .cloned()
         });
+        #[cfg(test)]
+        before_queue_admission();
         let mut state = self.state.lock().unwrap();
+        if !profiles::authoritative_edits_allowed() {
+            return Err("Profile reload in progress; edit not accepted".into());
+        }
         if let Some(reserved) = reserved {
             // A producer admitted before shutdown must finish in this queue;
             // a synchronous fallback would overtake its earlier snapshots.
@@ -271,9 +453,15 @@ impl Queue {
         Ok(true)
     }
     fn flush(&self) -> Result<(), String> {
+        let (target, sync_target) = {
+            let state = self.state.lock().unwrap();
+            (state.next, state.sync_requested)
+        };
+        self.wait_through(target, sync_target)
+    }
+
+    fn wait_through(&self, target: u64, sync_target: u64) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
-        let target = state.next;
-        let sync_target = state.sync_requested;
         if state.completed >= target && state.sync_finished >= sync_target {
             return Ok(());
         }
@@ -381,10 +569,11 @@ impl Worker {
                     .unwrap_or_else(|_| {
                         Err("persistence worker panicked; pending saves retained".into())
                     });
-                    if let Snapshot::External(_, done, _) = &snapshot {
+                    if let Snapshot::External(_, done, _) = snapshot.as_ref() {
                         let _ = done.send(result.clone());
                     }
                     let mut state = worker.state.lock().unwrap();
+                    let failure = result.as_ref().err().cloned();
                     match result {
                         Ok(()) => {
                             state.pending.pop_front();
@@ -394,7 +583,31 @@ impl Worker {
                         }
                         Err(error) => state.error = Some(error),
                     }
+                    let blocked: Vec<_> = if failure.is_some() {
+                        state
+                            .pending
+                            .iter()
+                            .filter_map(|(_, _, snapshot)| match snapshot.as_ref() {
+                                Snapshot::Operation(operation) => Some(operation.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let continuation = (state.reserved == 0 && state.pending.len() < MAX_PENDING)
+                        .then(|| state.capacity_continuation.take())
+                        .flatten();
                     worker.changed.notify_all();
+                    drop(state);
+                    if let Some(error) = failure {
+                        for operation in blocked {
+                            operation.failed(&error);
+                        }
+                    }
+                    if let Some(continuation) = continuation {
+                        continuation();
+                    }
                 }
             })?;
         Ok(Self {
@@ -428,7 +641,11 @@ impl Drop for Worker {
             *active = None;
         }
         drop(active);
-        self.queue.state.lock().unwrap().stop = true;
+        {
+            let mut state = self.queue.state.lock().unwrap();
+            state.stop = true;
+            state.capacity_continuation.take();
+        }
         self.queue.changed.notify_all();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -469,6 +686,77 @@ pub(super) fn flush() -> Result<(), String> {
     let queue = ACTIVE.lock().unwrap().clone();
     queue.map_or(Ok(()), |queue| queue.flush())
 }
+
+/// A fixed admission watermark: work arriving later cannot extend this wait.
+/// It is captured on UI, but may only be waited on by a coordinator worker.
+#[derive(Clone)]
+pub(super) struct Watermark {
+    queue: Option<Arc<Queue>>,
+    sequence: u64,
+    sync: u64,
+}
+impl Watermark {
+    pub(super) fn wait(&self) -> Result<(), String> {
+        self.queue
+            .as_ref()
+            .map_or(Ok(()), |queue| queue.wait_through(self.sequence, self.sync))
+    }
+}
+
+pub(super) fn watermark() -> Watermark {
+    let queue = ACTIVE.lock().unwrap().clone();
+    let (sequence, sync) = queue.as_ref().map_or((0, 0), |queue| {
+        let state = queue.state.lock().unwrap();
+        (state.next, state.sync_requested)
+    });
+    Watermark {
+        queue,
+        sequence,
+        sync,
+    }
+}
+
+pub(super) fn try_admission_revision() -> Option<u64> {
+    let queue = ACTIVE.try_lock().ok()?.clone();
+    match queue {
+        Some(queue) => Some(queue.state.try_lock().ok()?.next),
+        None => Some(0),
+    }
+}
+pub(super) fn admission_revision() -> u64 {
+    watermark().sequence
+}
+
+pub(super) struct TransitionWait {
+    watermark: Watermark,
+    fallback: Option<Arc<profile_actions::OutgoingTransition>>,
+    owner: profiles::ProfileStore,
+}
+impl TransitionWait {
+    pub(super) fn queued(&self) -> bool {
+        self.fallback.is_none()
+    }
+    pub(super) fn wait(self) -> Result<(), String> {
+        self.watermark.wait()?;
+        if let Some(capture) = self.fallback {
+            capture.save(&self.owner)?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn enqueue_transition(
+    capture: profile_actions::OutgoingTransition,
+) -> Result<TransitionWait, String> {
+    let owner = profiles::ProfileStore::capture();
+    let capture = Arc::new(capture);
+    let queued = enqueue(Snapshot::Transition(capture.clone()))?;
+    Ok(TransitionWait {
+        watermark: watermark(),
+        fallback: (!queued).then_some(capture),
+        owner,
+    })
+}
 pub(super) fn flush_report() {
     if let Err(error) = flush() {
         io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
@@ -490,6 +778,21 @@ pub(super) fn request_local_sync() {
 pub(super) fn failed() -> bool {
     let queue = ACTIVE.lock().unwrap().clone();
     queue.is_some_and(|queue| queue.state.lock().unwrap().error.is_some())
+}
+
+/// Close under the same lock used for the final admission checks. A producer
+/// either admitted before this close (and appears in the following watermark),
+/// or observes the closed source and cannot enqueue a stale snapshot.
+pub(super) fn close_import_admission(
+    session: &Arc<profile_session::ProfileSession>,
+) -> Option<u64> {
+    let queue = ACTIVE.lock().unwrap().clone();
+    if let Some(queue) = queue {
+        let _state = queue.state.lock().unwrap();
+        session.close_edit_admission()
+    } else {
+        session.close_edit_admission()
+    }
 }
 
 /// Never wait for queue capacity on the event loop. A busy writer makes the
@@ -514,13 +817,21 @@ pub(super) fn try_progress_projection(
 }
 
 fn try_patch(patch: ExternalPatch, projection: bool) -> Option<mpsc::Receiver<Result<(), String>>> {
+    if !profiles::authoritative_edits_allowed() {
+        return None;
+    }
     // Without the ordered writer there is nowhere to retain a failed save.
     // Leave Shared untouched and delivery pending rather than launch a
     // one-shot write whose failure could later look like a successful no-op.
     let queue = ACTIVE.lock().unwrap().clone()?;
     let (done, receipt) = mpsc::channel();
+    let snapshot = Arc::new(Snapshot::External(Box::new(patch), done, projection));
+    let owner = profiles::ProfileStore::capture();
+    #[cfg(test)]
+    before_queue_admission();
     let mut state = queue.state.try_lock().ok()?;
-    if state.pending.len() + state.reserved >= MAX_PENDING
+    if !profiles::authoritative_edits_allowed()
+        || state.pending.len() + state.reserved >= MAX_PENDING
         || state.reserved > 0
         || state.stop
         || state.closing
@@ -529,11 +840,7 @@ fn try_patch(patch: ExternalPatch, projection: bool) -> Option<mpsc::Receiver<Re
     }
     state.next += 1;
     let sequence = state.next;
-    state.pending.push_back((
-        sequence,
-        profiles::ProfileStore::capture(),
-        Snapshot::External(Box::new(patch), done, projection),
-    ));
+    state.pending.push_back((sequence, owner, snapshot));
     queue.changed.notify_all();
     Some(receipt)
 }
@@ -543,6 +850,9 @@ pub(super) fn running() -> bool {
     ACTIVE.lock().unwrap().is_some()
 }
 fn enqueue(snapshot: Snapshot) -> Result<bool, String> {
+    if !profiles::authoritative_edits_allowed() {
+        return Err("Profile reload in progress; edit not accepted".into());
+    }
     if applying() || IN_WORKER.get() {
         return Ok(false);
     }
@@ -574,7 +884,7 @@ pub(super) fn write_progress(map: &HashMap<String, EpisodeProgress>) {
         map.clone(),
         nova_sync::is_playback_checkpoint(),
     )) {
-        Ok(true) => {}
+        Ok(true) => unified_search::progress_admitted(&profiles::ProfileStore::capture(), map),
         Ok(false) => write_json(EPISODE_PROGRESS_KEY, map),
         Err(error) => {
             io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error))
@@ -586,20 +896,23 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
         return None;
     }
     let queue = ACTIVE.lock().unwrap().clone()?;
+    let current = profiles::ProfileStore::capture();
     let (base, edits) = {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
         for (_, owner, snapshot) in state.pending.iter().rev() {
-            if owner != &profiles::ProfileStore::capture() {
+            if owner != &current {
                 continue;
             }
-            match snapshot {
-                Snapshot::Library(entries) => {
-                    base = Some(entries.clone());
+            match snapshot.as_ref() {
+                Snapshot::Library(_) => {
+                    base = Some(snapshot.clone());
                     break;
                 }
-                Snapshot::External(patch, _, _) => edits.extend(patch.library.iter().cloned()),
+                Snapshot::External(patch, _, _) if patch.library.is_some() => {
+                    edits.push(snapshot.clone())
+                }
                 _ => {}
             }
         }
@@ -608,9 +921,21 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
     if base.is_none() && edits.is_empty() {
         return None;
     }
-    let mut entries = base.unwrap_or_else(|| read_json("library").unwrap_or_default());
-    for edit in edits.into_iter().rev() {
-        edit.apply(&mut entries);
+    // The handles above describe one coherent queue view. Clone and apply its
+    // immutable payloads after releasing the mutex, preserving chronology.
+    let mut entries = base.map_or_else(
+        || read_json("library").unwrap_or_default(),
+        |snapshot| match snapshot.as_ref() {
+            Snapshot::Library(entries) => entries.clone(),
+            _ => unreachable!(),
+        },
+    );
+    for snapshot in edits.into_iter().rev() {
+        if let Snapshot::External(patch, _, _) = snapshot.as_ref()
+            && let Some(edit) = &patch.library
+        {
+            edit.apply(&mut entries);
+        }
     }
     Some(entries)
 }
@@ -619,21 +944,25 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
         return None;
     }
     let queue = ACTIVE.lock().unwrap().clone()?;
+    let current = profiles::ProfileStore::capture();
     let (base, edits) = {
         let state = queue.state.lock().unwrap();
         let mut base = None;
         let mut edits = Vec::new();
         for (_, owner, snapshot) in state.pending.iter().rev() {
-            if owner != &profiles::ProfileStore::capture() {
+            if owner != &current {
                 continue;
             }
-            match snapshot {
-                Snapshot::Progress(map, _) => {
-                    base = Some(map.clone());
+            match snapshot.as_ref() {
+                Snapshot::Progress(_, _) => {
+                    base = Some(snapshot.clone());
                     break;
                 }
+                Snapshot::Transition(capture) if capture.progress.is_some() => {
+                    edits.push(snapshot.clone());
+                }
                 Snapshot::External(patch, _, _) if !patch.progress.is_empty() => {
-                    edits.push(patch.progress.clone())
+                    edits.push(snapshot.clone())
                 }
                 _ => {}
             }
@@ -643,9 +972,20 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
     if base.is_none() && edits.is_empty() {
         return None;
     }
-    let mut progress = base.unwrap_or_else(|| read_json(EPISODE_PROGRESS_KEY).unwrap_or_default());
-    for edit in edits.into_iter().rev() {
-        progress.extend(edit);
+    let mut progress = base.map_or_else(
+        || read_json(EPISODE_PROGRESS_KEY).unwrap_or_default(),
+        |snapshot| match snapshot.as_ref() {
+            Snapshot::Progress(map, _) => map.clone(),
+            _ => unreachable!(),
+        },
+    );
+    for snapshot in edits.into_iter().rev() {
+        if let Snapshot::External(patch, _, _) = snapshot.as_ref() {
+            progress.extend(patch.progress.clone());
+        }
+        if let Snapshot::Transition(capture) = snapshot.as_ref() {
+            progress.extend(capture.progress.as_ref().unwrap().clone());
+        }
     }
     Some(progress)
 }
@@ -653,6 +993,211 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_closes_before_watermark_and_rejects_delayed_old_context_admissions() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::import_closes_before_watermark_and_rejects_delayed_old_context_admissions"
+            ),
+            |fixture| {
+                for mode in 0..3 {
+                    fixture.stop_actors();
+                    flush().unwrap();
+                    let bridge = &fixture.bridge;
+                    let source = profiles::active_context();
+                    let owner = profiles::ProfileStore::for_profile(&source.id);
+                    let stale: LibraryEntry = serde_json::from_value(serde_json::json!({
+                        "id":"stale", "type_":"movie", "name":"Before import", "added_at_secs":1,
+                    }))
+                    .unwrap();
+                    owner
+                        .persist_snapshot(
+                            "library",
+                            &serde_json::to_string(&vec![stale.clone()]).unwrap(),
+                            false,
+                        )
+                        .unwrap();
+                    bridge.shared.lock().unwrap().entries = vec![stale.clone()];
+                    let (paused, pausing) = mpsc::channel();
+                    let (release, released) = mpsc::channel();
+                    let (admitted, admission) = mpsc::channel();
+                    let worker = std::thread::spawn({
+                        let source = source.clone();
+                        move || {
+                            profiles::with_context(source, || {
+                                let accepted = with_admission_pause(
+                                    move || {
+                                        paused.send(()).unwrap();
+                                        released.recv_timeout(Duration::from_secs(5)).unwrap();
+                                    },
+                                    || match mode {
+                                        0 => reserve(1).is_some(),
+                                        1 => enqueue(Snapshot::Library(vec![stale.clone()]))
+                                            .is_ok_and(|queued| queued),
+                                        _ => try_external(ExternalPatch {
+                                            library: Some(ExternalLibraryEdit {
+                                                id: stale.id.clone(),
+                                                media_type: stale.type_.clone(),
+                                                entry: Some(stale),
+                                            }),
+                                            ..Default::default()
+                                        })
+                                        .is_some(),
+                                    },
+                                );
+                                admitted.send(accepted).unwrap();
+                            })
+                        }
+                    });
+                    pausing.recv_timeout(Duration::from_secs(5)).unwrap();
+                    let closed = Arc::new(AtomicBool::new(false));
+                    profile_policy::with_import_wait_hook(
+                        {
+                            let closed = closed.clone();
+                            move || {
+                                assert!(
+                                    !profiles::authoritative_edits_allowed(),
+                                    "source must close before the final wait"
+                                );
+                                closed.store(true, Ordering::Release);
+                                release.send(()).unwrap();
+                                assert!(
+                                    !admission.recv_timeout(Duration::from_secs(5)).unwrap(),
+                                    "late admission mode {mode} passed the closed source"
+                                );
+                            }
+                        },
+                        || bridge.profile_import_prepare(std::slice::from_ref(&source.id)),
+                    )
+                    .unwrap();
+                    worker.join().unwrap();
+                    assert!(closed.load(Ordering::Acquire));
+                    let imported: LibraryEntry = serde_json::from_value(serde_json::json!({
+                        "id":"imported", "type_":"movie", "name":format!("Imported {mode}"), "added_at_secs":2,
+                    })).unwrap();
+                    let raw = serde_json::to_string(&vec![imported.clone()]).unwrap();
+                    owner.persist_snapshot("library", &raw, false).unwrap();
+                    // Registered collections canonicalize object-key order.
+                    // Retain the committed bytes as the exact no-overwrite
+                    // receipt, after checking the imported typed contents.
+                    let raw = owner.read("library").unwrap().unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<Vec<LibraryEntry>>(&raw).unwrap(),
+                        vec![imported.clone()]
+                    );
+                    flush().unwrap();
+                    assert_eq!(
+                        owner.read("library").unwrap().as_deref(),
+                        Some(raw.as_str())
+                    );
+                    bridge.profile_import_committed(std::slice::from_ref(&source.id));
+                    bridge.wait_profile_activation();
+                    assert_ne!(profiles::active_context().epoch, source.epoch);
+                    assert_eq!(bridge.shared.lock().unwrap().entries, vec![imported]);
+                    assert_eq!(
+                        owner.read("library").unwrap().as_deref(),
+                        Some(raw.as_str())
+                    );
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn failed_pre_import_wait_reopens_only_its_owned_current_allocation() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::failed_pre_import_wait_reopens_only_its_owned_current_allocation"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let source = profiles::active_context();
+                bridge.app().unwrap().set_player_open(true);
+                let key = progress_map_key("schema-fixture", "episode");
+                let mut failure_map = HashMap::from([(
+                    key.clone(),
+                    EpisodeProgress {
+                        series_id: "schema-fixture".into(),
+                        episode_id: "episode".into(),
+                        position_secs: 1.0,
+                        duration_secs: 100.0,
+                        ..Default::default()
+                    },
+                )]);
+                nova_storage::register_collection(
+                    "sync:records:hlc",
+                    nova_storage::CollectionKind::Array {
+                        id_field: "id".into(),
+                    },
+                );
+                write_progress(&failure_map);
+                assert!(flush().is_err());
+                assert!(
+                    bridge
+                        .profile_import_prepare(std::slice::from_ref(&source.id))
+                        .is_err()
+                );
+                assert_eq!(profiles::active_context(), source);
+                assert!(
+                    profiles::authoritative_edits_allowed(),
+                    "failed quiescence must restore its prior usable admission state"
+                );
+                assert!(bridge.app().unwrap().get_player_open());
+                assert_eq!(
+                    bridge.profile_loaded_epoch.load(Ordering::Acquire),
+                    source.epoch
+                );
+                nova_storage::register_collection(
+                    "sync:records:hlc",
+                    nova_storage::CollectionKind::Object,
+                );
+                flush().unwrap();
+                assert!(reserve(1).is_some());
+
+                // A newer close invalidates the failing attempt's ticket.
+                nova_storage::register_collection(
+                    "sync:records:hlc",
+                    nova_storage::CollectionKind::Array {
+                        id_field: "id".into(),
+                    },
+                );
+                failure_map.get_mut(&key).unwrap().position_secs = 2.0;
+                write_progress(&failure_map);
+                assert!(flush().is_err());
+                let allocation = bridge.sessions.active();
+                let newer = allocation.clone();
+                assert!(
+                    profile_policy::with_import_wait_hook(
+                        move || newer.block_authoritative_edits(),
+                        || bridge.profile_import_prepare(std::slice::from_ref(&source.id))
+                    )
+                    .is_err()
+                );
+                assert!(
+                    !allocation.authoritative_edits_allowed(),
+                    "an older failure cannot undo a newer close"
+                );
+                assert!(
+                    bridge
+                        .profile_import_prepare(std::slice::from_ref(&source.id))
+                        .is_err()
+                );
+                assert!(
+                    !allocation.authoritative_edits_allowed(),
+                    "an already closed reload is never reopened by a failed import"
+                );
+                nova_storage::register_collection(
+                    "sync:records:hlc",
+                    nova_storage::CollectionKind::Object,
+                );
+                flush().unwrap();
+            },
+        );
+    }
 
     #[test]
     #[cfg(feature = "desktop")]
@@ -682,11 +1227,9 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -974,11 +1517,9 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -1279,10 +1820,16 @@ mod tests {
     fn failed_head_stays_queued_and_later_edits_cannot_overtake_it() {
         let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let saved = Arc::new(Mutex::new(Vec::new()));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
         let worker = Worker::spawn({
             let failing = failing.clone();
             let saved = saved.clone();
+            let attempts = attempts.clone();
             move |_, snapshot| {
+                attempts
+                    .lock()
+                    .unwrap()
+                    .push((position(snapshot), std::ptr::from_ref(snapshot) as usize));
                 if failing.load(Ordering::Relaxed) {
                     return Err("injected write failure".into());
                 }
@@ -1294,11 +1841,26 @@ mod tests {
         worker.queue.enqueue(progress(1.0, false)).unwrap();
         worker.queue.enqueue(progress(0.0, false)).unwrap();
         assert!(worker.queue.flush().is_err());
-        assert_eq!(worker.queue.state.lock().unwrap().pending.len(), 2);
+        let queued_head = {
+            let state = worker.queue.state.lock().unwrap();
+            assert_eq!(state.pending.len(), 2);
+            state.pending.front().unwrap().2.clone()
+        };
+        assert_eq!(position(&queued_head), 1.0);
         assert!(saved.lock().unwrap().is_empty());
         failing.store(false, Ordering::Relaxed);
         worker.queue.flush().unwrap();
         assert_eq!(*saved.lock().unwrap(), vec![1.0, 0.0]);
+        let attempts = attempts.lock().unwrap();
+        let head_attempts = attempts.iter().filter(|(position, _)| *position == 1.0);
+        assert!(head_attempts.clone().count() >= 2);
+        for (_, pointer) in head_attempts {
+            assert_eq!(
+                *pointer,
+                Arc::as_ptr(&queued_head) as usize,
+                "failed and successful attempts must borrow the queued payload itself"
+            );
+        }
     }
     #[test]
     fn shutdown_drains_pending_saves() {

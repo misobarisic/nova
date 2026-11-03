@@ -116,6 +116,7 @@ impl Bridge {
     /// Rust formats text before passing it to Slint, so existing model values
     /// must be refreshed explicitly when the selected language changes.
     fn refresh_language_dependent_ui(&self) {
+        self.refresh_unified_search_presentation();
         self.apply_category_rows();
         self.update_library_badges();
         self.refresh_home_language_text();
@@ -206,11 +207,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

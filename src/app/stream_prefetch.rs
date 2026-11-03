@@ -341,6 +341,7 @@ impl Bridge {
                     complete(match &result {
                         Ok(bytes) => Ok(StreamResponse::fetched(bytes.clone(), &response_url)),
                         Err(error) => Err(net::FetchError {
+                            kind: error.kind,
                             status: error.status,
                             message: error.message.clone(),
                         }),
@@ -463,11 +464,9 @@ mod tests {
         {
             let app = AppWindow::new().unwrap();
             let player = crate::player::Player::setup(&app);
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             let bridge = Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 DownloadCoordinator::new(root.join(format!("downloads-{preload_ready}"))),
@@ -707,11 +706,9 @@ mod tests {
         storage::init_at(&root);
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

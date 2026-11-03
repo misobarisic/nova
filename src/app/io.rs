@@ -2,6 +2,11 @@
 //! and human-readable formatting.
 use super::*;
 static UNREADABLE_KEYS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+// Invalid incoming records must not let local derived writes overwrite the
+// retained snapshot. Keep this separate from corrupt native bytes: a valid
+// remote correction may repair this guard only after its commit succeeds.
+static INVALID_PROJECTIONS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+static NEXT_PROJECTION_GUARD: AtomicU64 = AtomicU64::new(1);
 static WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn write_failures() -> u64 {
     WRITE_FAILURES.load(Ordering::Relaxed)
@@ -18,11 +23,49 @@ pub(crate) fn block_unreadable(key: &str) {
         .insert(profiles::storage_key(key));
 }
 pub(crate) fn writable_key(key: &str) -> bool {
+    projection_writable_key(key)
+        && !INVALID_PROJECTIONS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|keys| keys.contains_key(&profiles::storage_key(key)))
+}
+pub(crate) fn projection_writable_key(key: &str) -> bool {
     !UNREADABLE_KEYS
         .lock()
         .unwrap()
         .as_ref()
         .is_some_and(|keys| keys.contains(&profiles::storage_key(key)))
+}
+pub(crate) fn block_projection(key: &str) {
+    INVALID_PROJECTIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            profiles::storage_key(key),
+            NEXT_PROJECTION_GUARD.fetch_add(1, Ordering::Relaxed),
+        );
+}
+pub(crate) fn projection_guard(key: &str) -> Option<u64> {
+    INVALID_PROJECTIONS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|keys| keys.get(&profiles::storage_key(key)).copied())
+}
+/// Called under the Store owner lock only after its captured basis was fully
+/// acknowledged. A later malformed attempt owns a different guard ticket.
+pub(crate) fn projection_acknowledged(key: &str, captured: Option<u64>) {
+    let Some(captured) = captured else {
+        return;
+    };
+    if let Some(keys) = INVALID_PROJECTIONS.lock().unwrap().as_mut() {
+        let key = profiles::storage_key(key);
+        if keys.get(&key) == Some(&captured) {
+            keys.remove(&key);
+        }
+    }
 }
 
 /// Only local metadata is eligible; user state and sync wire values retain
@@ -65,12 +108,7 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> 
 }
 /// Serialize a value to JSON and write it to the KV store.
 pub(crate) fn write_json(key: &str, value: &(impl Serialize + ?Sized)) {
-    if UNREADABLE_KEYS
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|keys| keys.contains(&profiles::storage_key(key)))
-    {
+    if !writable_key(key) {
         storage::report(storage::Error::new(
             storage::ErrorKind::Schema,
             "unreadable app data retained; writes blocked until recovery",

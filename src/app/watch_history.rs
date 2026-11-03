@@ -390,6 +390,8 @@ impl Bridge {
     }
 
     fn current_history_entries(&self, resume_only: bool) -> Vec<HistoryEntry> {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         let visible_ids: HashSet<String> = self
             .app()
             .map(|app| {
@@ -417,11 +419,9 @@ impl Bridge {
         drop(state);
         let hidden: HashMap<String, u64> = read_json(HIDDEN_KEY).unwrap_or_default();
         rows.retain(|row| {
-            profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &row.type_,
-                &row.series_id,
-            )
+            policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&row.type_, &row.series_id))
         });
         rows = filter_history(rows, &visible_continue, &hidden, &identities, resume_only);
         rows.truncate(WATCH_HISTORY_MAX);
@@ -909,10 +909,21 @@ mod tests {
 
 /// History joins share the worker's typed metadata snapshot. Publication can
 /// then rebuild catalog models without reopening any episode/header cache.
+#[cfg(test)]
 pub(super) fn prepare_progress_history(
     state: &mut Shared,
     metadata: &super::progress_projection::Metadata<'_>,
     hidden: &HashMap<String, u64>,
+) {
+    let policy = profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
+    prepare_progress_history_with_policy(state, metadata, hidden, &policy)
+}
+
+pub(super) fn prepare_progress_history_with_policy(
+    state: &mut Shared,
+    metadata: &super::progress_projection::Metadata<'_>,
+    hidden: &HashMap<String, u64>,
+    policy: &Result<profile_policy::TitlePolicySnapshot, String>,
 ) {
     let candidates = history_candidates(&state.progress, &state.entries, false);
     let identities = Arc::new(HistoryIdentities::prepare(
@@ -939,11 +950,9 @@ pub(super) fn prepare_progress_history(
             history_candidates(&state.progress, &state.entries, resume_only)
         };
         rows.retain(|row| {
-            profile_policy::allows_title(
-                &profiles::ProfileStore::capture(),
-                &row.type_,
-                &row.series_id,
-            )
+            policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&row.type_, &row.series_id))
         });
         rows = filter_history(rows, &visible, hidden, &identities, resume_only);
         rows.truncate(WATCH_HISTORY_MAX);

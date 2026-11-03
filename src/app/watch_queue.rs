@@ -1185,6 +1185,8 @@ impl Bridge {
     }
 
     pub(super) fn refresh_watch_queue(&self) {
+        let policy =
+            profile_policy::TitlePolicySnapshot::capture(&profiles::ProfileStore::capture());
         if profile_policy::entry_blocked() {
             return;
         }
@@ -1206,11 +1208,9 @@ impl Bridge {
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|entry| {
-                        profile_policy::allows_title(
-                            &profiles::ProfileStore::capture(),
-                            &entry.type_,
-                            &entry.series_id,
-                        )
+                        policy
+                            .as_ref()
+                            .is_ok_and(|policy| policy.allows(&entry.type_, &entry.series_id))
                     })
                     .collect::<Vec<_>>(),
                 state.progress.clone(),

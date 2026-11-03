@@ -220,8 +220,20 @@ impl IdentityIndex {
         result
     }
 
+    /// Borrow the exact complete proof; callers must compare set contents.
+    /// Empty or incomplete inventories cannot establish title equivalence.
+    pub(super) fn complete_coverage(&self, title: &TitleKey) -> Option<&BTreeSet<usize>> {
+        if self.incomplete.contains(title) {
+            return None;
+        }
+        self.coverage
+            .get(title)
+            .filter(|coverage| !coverage.is_empty())
+    }
+
     /// Only complete one-to-one inventories represent the same saved title.
     /// Overlapping seasons share episode progress but remain separate titles.
+    #[cfg(test)]
     pub fn equivalent_titles(&self, left: &TitleKey, right: &TitleKey) -> bool {
         if self.incomplete.contains(left) || self.incomplete.contains(right) {
             return false;
@@ -287,6 +299,38 @@ mod tests {
 
     fn title(id: &str) -> TitleKey {
         ("series".into(), id.into())
+    }
+
+    #[test]
+    fn complete_coverage_borrows_only_nonempty_complete_proof() {
+        let index = IdentityIndex::new([
+            inventory("complete", vec![video("tt100:1:1", &[])]),
+            inventory("same", vec![video("tt100:1:1", &[])]),
+            inventory("empty", Vec::new()),
+            inventory(
+                "duplicate",
+                vec![video("tt100:1:1", &[]), video("tt100:1:1", &[])],
+            ),
+            TitleInventory {
+                media_type: "movie".into(),
+                series_id: "movie".into(),
+                videos: vec![video("tt100:1:1", &[])],
+            },
+        ]);
+        let proof = index.complete_coverage(&title("complete")).unwrap();
+        assert!(
+            std::ptr::eq(proof, index.coverage.get(&title("complete")).unwrap()),
+            "the accessor must borrow, never duplicate, the coverage set"
+        );
+        assert_eq!(index.complete_coverage(&title("same")), Some(proof));
+        for id in ["empty", "missing", "duplicate"] {
+            assert!(index.complete_coverage(&title(id)).is_none());
+        }
+        assert!(
+            index
+                .complete_coverage(&("movie".into(), "movie".into()))
+                .is_none()
+        );
     }
 
     #[test]

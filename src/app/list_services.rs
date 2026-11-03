@@ -11,6 +11,13 @@ use std::time::Instant;
 pub(super) const DOMAIN: &str = "list_services";
 const MAX_TITLES: usize = 20_000;
 const SERVICE_COUNT: usize = 3;
+type ProjectionBasis = std::collections::BTreeMap<String, nova_sync::Version>;
+
+struct ProjectionPass {
+    basis: ProjectionBasis,
+    connections: [Option<Connection>; SERVICE_COUNT],
+    sources: [Vec<(String, String)>; SERVICE_COUNT],
+}
 #[cfg(test)]
 #[path = "list_services_tests.rs"]
 mod tests;
@@ -204,7 +211,11 @@ impl Bridge {
         let bridge = self.clone();
         thread::spawn(move || {
             let _done = done;
-            match HttpsTransport::new() {
+            match HttpsTransport::with_user_agent(concat!(
+                "Nova/",
+                env!("CARGO_PKG_VERSION"),
+                " list-services"
+            )) {
                 Ok(http) => Worker::new(
                     bridge,
                     Client::new(Arc::new(SessionTransport {
@@ -461,10 +472,11 @@ impl Worker {
                 .list_services()
                 .wake
                 .swap(false, Ordering::AcqRel);
-            let mut projected = true;
+            // Finish local grant initialization before verification or sync can
+            // block on HTTP. Later incoming records belong to another pass.
+            self.project_pending();
             for i in 0..SERVICE_COUNT {
                 if let Err(error) = self.restore(i) {
-                    projected = false;
                     self.failed(i, error);
                 }
                 if i == 2 {
@@ -481,9 +493,6 @@ impl Worker {
                 {
                     self.sync(i, None);
                 }
-            }
-            if projected && let Err(error) = self.acknowledge() {
-                self.failed(0, error);
             }
             if wake {
                 self.publish();
@@ -832,7 +841,6 @@ impl Worker {
             let preferences = self.account_preferences(i, &connection)?;
             self.full[i] = preferences.full;
             self.automatic[i] = preferences.automatic;
-            self.project_grants(i, &connection)?;
             if !self.verified[i] && !self.paused[i] && Instant::now() >= self.next[i] {
                 let generation = self.bridge.list_services().generation[i].load(Ordering::Acquire);
                 let account = self.client.verify(&connection.credentials)?;
@@ -860,47 +868,99 @@ impl Worker {
         }
         Ok(())
     }
-    fn project_grants(&self, i: usize, connection: &Connection) -> Result<(), ApiError> {
-        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
-        let sources = {
-            let store = owner.lock().unwrap();
-            let domain = sync::profile_domain(DOMAIN);
-            if !store.pending_domains().contains(&domain) {
-                return Ok(());
-            }
-            store
-                .records_with_prefix(&domain, "selected:")
-                .iter()
-                .filter_map(|(key, _)| {
-                    serde_json::from_str::<(usize, String, String, String)>(
-                        key.strip_prefix("selected:")?,
-                    )
-                    .ok()
-                })
-                .filter(|(service, account, _, _)| {
-                    *service == i && account == &connection.account.id
-                })
-                .map(|(_, _, type_, id)| (type_, id))
-                .collect::<Vec<_>>()
-        };
-        for (type_, id) in sources {
-            let _ = self.enabled(i, connection, &type_, &id)?;
+    fn capture_pending_projection(&self) -> Result<Option<ProjectionPass>, ApiError> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(ApiError::Rejected);
         }
-        Ok(())
+        let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
+        let store = owner.lock().unwrap();
+        let domain = sync::profile_domain(DOMAIN);
+        if !store.pending_domains().contains(&domain) {
+            return Ok(None);
+        }
+        // Pending state, domain digest, connections and selected keys come
+        // from the same locked records view. No other domain is cloned.
+        let basis = store
+            .domain_digest(&domain)
+            .ok_or(ApiError::InvalidResponse)?;
+        let mut connections: [Option<Connection>; SERVICE_COUNT] = std::array::from_fn(|_| None);
+        for (i, connection) in connections.iter_mut().enumerate() {
+            *connection = stored(&store, &format!("connection:{i}"))?;
+        }
+        let mut sources: [Vec<(String, String)>; SERVICE_COUNT] = Default::default();
+        for (key, _) in store.records_with_prefix(&domain, "selected:") {
+            let Some((i, account, type_, id)) = key
+                .strip_prefix("selected:")
+                .and_then(|raw| serde_json::from_str::<(usize, String, String, String)>(raw).ok())
+            else {
+                continue;
+            };
+            if i < SERVICE_COUNT
+                && connections[i]
+                    .as_ref()
+                    .is_some_and(|connection| connection.account.id == account)
+            {
+                sources[i].push((type_, id));
+            }
+        }
+        Ok(Some(ProjectionPass {
+            basis,
+            connections,
+            sources,
+        }))
     }
-    fn acknowledge(&self) -> Result<(), ApiError> {
+
+    fn project_pending(&mut self) {
+        self.project_pending_with(|_| {});
+    }
+
+    fn project_pending_with(&mut self, mut after_service: impl FnMut(usize)) {
+        let pass = match self.capture_pending_projection() {
+            Ok(Some(pass)) => pass,
+            Ok(None) => return,
+            Err(error) => {
+                self.failed(0, error);
+                return;
+            }
+        };
+        let mut projected = true;
+        for i in 0..SERVICE_COUNT {
+            if let Some(connection) = pass.connections[i].as_ref() {
+                let result = (|| {
+                    if connection.version != 1
+                        || connection.credentials.service != service(i)
+                        || connection.account.id.is_empty()
+                        || connection.epoch.is_empty()
+                    {
+                        return Err(ApiError::InvalidResponse);
+                    }
+                    for (type_, id) in &pass.sources[i] {
+                        let _ = self.enabled(i, connection, type_, id)?;
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    projected = false;
+                    self.failed(i, error);
+                }
+            }
+            after_service(i);
+        }
+        if projected && let Err(error) = self.acknowledge(&pass.basis) {
+            self.failed(0, error);
+        }
+    }
+
+    fn acknowledge(&self, basis: &ProjectionBasis) -> Result<(), ApiError> {
+        if !profiles::is_current(&profiles::capture()) {
+            return Err(ApiError::Rejected);
+        }
         let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
         let mut store = owner.lock().unwrap();
         let domain = sync::profile_domain(DOMAIN);
-        if store.pending_domains().contains(&domain) {
-            let digest = store.digest().get(&domain).cloned();
-            if let Some(basis) = digest {
-                store
-                    .mark_projected(&domain, &basis)
-                    .map_err(|_| ApiError::Rejected)?;
-                store.save().map_err(|_| ApiError::Rejected)?;
-            }
-        }
+        store
+            .mark_projected(&domain, basis)
+            .map_err(|_| ApiError::Rejected)?;
         Ok(())
     }
     fn selection(
@@ -1110,6 +1170,7 @@ impl Worker {
                 continue;
             }
             let remote = matches.first().copied();
+            let targets = progress_targets(&source);
             let (saved, progress) = {
                 let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
                 (
@@ -1117,7 +1178,7 @@ impl Worker {
                         .entries
                         .iter()
                         .any(|e| e.id == source.entry.id && e.type_ == source.entry.type_),
-                    state.progress.clone(),
+                    capture_target_progress(&state.progress, &source.entry.id, &targets),
                 )
             };
             if saved && remote.is_none() {
@@ -1132,15 +1193,6 @@ impl Worker {
                     continue;
                 }
             }
-            let targets: Vec<_> = if source.kind == MediaType::Movie {
-                vec![(source.entry.id.clone(), None)]
-            } else {
-                source
-                    .episodes
-                    .iter()
-                    .map(|(id, e)| (id.clone(), Some(*e)))
-                    .collect()
-            };
             let latest_resume = targets
                 .iter()
                 .filter_map(|(native, episode)| {
@@ -1383,11 +1435,7 @@ impl Worker {
                 if !profiles::is_current(&profiles::capture()) {
                     return Err(ApiError::Rejected);
                 }
-                if patch
-                    .progress
-                    .keys()
-                    .any(|key| state.progress.get(key) != before.get(key))
-                {
+                if !progress_patch_is_current(&state.progress, &before, &patch.progress) {
                     return Err(ApiError::Rejected);
                 }
                 if let Some(edit) = &patch.library
@@ -1784,6 +1832,44 @@ pub(super) fn record_watched_events(
         );
     }
 }
+/// Build native targets before acquiring Shared. Canonical remote numbering
+/// never substitutes for the source's verified native episode identities.
+fn progress_targets(source: &Source) -> Vec<(String, Option<Episode>)> {
+    if source.kind == MediaType::Movie {
+        vec![(source.entry.id.clone(), None)]
+    } else {
+        source
+            .episodes
+            .iter()
+            .map(|(id, episode)| (id.clone(), Some(*episode)))
+            .collect()
+    }
+}
+
+/// Called once per source after network reads, while Shared is held. Missing
+/// rows stay absent because absence is part of the optimistic conflict receipt.
+fn capture_target_progress(
+    progress: &HashMap<String, EpisodeProgress>,
+    series_id: &str,
+    targets: &[(String, Option<Episode>)],
+) -> HashMap<String, EpisodeProgress> {
+    targets
+        .iter()
+        .filter_map(|(native, _)| {
+            let key = progress_map_key(series_id, native);
+            progress.get(&key).cloned().map(|value| (key, value))
+        })
+        .collect()
+}
+
+fn progress_patch_is_current(
+    current: &HashMap<String, EpisodeProgress>,
+    before: &HashMap<String, EpisodeProgress>,
+    patch: &HashMap<String, EpisodeProgress>,
+) -> bool {
+    patch.keys().all(|key| current.get(key) == before.get(key))
+}
+
 fn resume_percent(progress: &EpisodeProgress) -> Option<f64> {
     if progress.watched
         || !progress.position_secs.is_finite()

@@ -1,5 +1,19 @@
 //! Plaintext profile policy. Durable checks are shared by UI and headless jobs.
 use super::*;
+#[cfg(test)]
+thread_local! {
+    static BEFORE_IMPORT_WAIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn with_import_wait_hook<R>(
+    hook: impl FnOnce() + 'static,
+    action: impl FnOnce() -> R,
+) -> R {
+    BEFORE_IMPORT_WAIT.with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
+    let result = action();
+    drop(BEFORE_IMPORT_WAIT.with(|slot| slot.borrow_mut().take()));
+    result
+}
 use std::collections::BTreeMap;
 
 pub(super) const KEY: &str = "profile_policy:v1";
@@ -78,6 +92,117 @@ pub(super) fn load(owner: &profiles::ProfileStore) -> Result<ProfilePolicy, Stri
     value.validate()?;
     Ok(value)
 }
+/// Short-lived, immutable input for one projection. Never use this receipt to
+/// authorize playback, downloads, exports, or another later side effect.
+pub(super) struct TitlePolicySnapshot {
+    allowed: Option<HashMap<String, HashSet<String>>>,
+    addons: Option<HashSet<String>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SNAPSHOT_CAPTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn snapshot_capture_count() -> usize {
+    SNAPSHOT_CAPTURES.with(std::cell::Cell::get)
+}
+
+impl TitlePolicySnapshot {
+    /// Capture the foreground browsing grant once, before scanning rows. The
+    /// entry gate and management grant retain their existing precedence.
+    pub(super) fn capture_browse(owner: &profiles::ProfileStore) -> Result<Self, String> {
+        if entry_blocked() {
+            return Ok(Self {
+                allowed: Some(HashMap::new()),
+                addons: Some(HashSet::new()),
+            });
+        }
+        if management_browsing() {
+            return Ok(Self {
+                allowed: None,
+                addons: None,
+            });
+        }
+        Self::capture(owner)
+    }
+
+    pub(super) fn capture(owner: &profiles::ProfileStore) -> Result<Self, String> {
+        #[cfg(test)]
+        SNAPSHOT_CAPTURES.with(|count| count.set(count.get() + 1));
+        // Scoped writers, sync publication and deletion use the same serial
+        // boundary, so policy and library cannot come from different writes.
+        // Release it before filtering, cache reads or UI publication.
+        let _serial = profiles::WRITE_SERIAL.lock().unwrap();
+        Self::capture_from(
+            owner.is_scoped(),
+            || load(owner),
+            || {
+                owner
+                    .read("library")
+                    .map_err(|error| error.to_string())?
+                    .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+                    .transpose()
+                    .map(Option::unwrap_or_default)
+            },
+        )
+    }
+
+    fn capture_from(
+        scoped: bool,
+        policy: impl FnOnce() -> Result<ProfilePolicy, String>,
+        library: impl FnOnce() -> Result<Vec<LibraryEntry>, String>,
+    ) -> Result<Self, String> {
+        if !scoped {
+            return Ok(Self {
+                allowed: None,
+                addons: None,
+            });
+        }
+        let policy = policy()?;
+        policy.validate()?;
+        if !policy.restricted {
+            return Ok(Self {
+                allowed: None,
+                addons: None,
+            });
+        }
+        let mut live: HashMap<String, HashSet<String>> = HashMap::new();
+        for entry in library()? {
+            live.entry(entry.type_).or_default().insert(entry.id);
+        }
+        let mut allowed: HashMap<String, HashSet<String>> = HashMap::new();
+        for title in policy.allowed_titles {
+            if live
+                .get(&title.media_type)
+                .is_some_and(|ids| ids.contains(&title.title_id))
+            {
+                allowed
+                    .entry(title.media_type)
+                    .or_default()
+                    .insert(title.title_id);
+            }
+        }
+        Ok(Self {
+            allowed: Some(allowed),
+            addons: Some(policy.allowed_addons.into_iter().collect()),
+        })
+    }
+
+    pub(super) fn allows(&self, kind: &str, id: &str) -> bool {
+        self.allowed
+            .as_ref()
+            .is_none_or(|allowed| allowed.get(kind).is_some_and(|ids| ids.contains(id)))
+    }
+
+    pub(super) fn allows_addon(&self, addon: &str) -> bool {
+        self.addons
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(addon))
+    }
+}
+
 pub(super) fn allows_title(
     owner: &profiles::ProfileStore,
     media_type: &str,
@@ -234,6 +359,106 @@ pub(super) fn selection_pin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn projection_fixture() -> (ProfilePolicy, Vec<LibraryEntry>) {
+        let policy = ProfilePolicy {
+            pin: "0012".into(),
+            restricted: true,
+            allowed_titles: vec![
+                AllowedTitle {
+                    media_type: "series".into(),
+                    title_id: "same".into(),
+                },
+                AllowedTitle {
+                    media_type: "movie".into(),
+                    title_id: "removed".into(),
+                },
+            ],
+            allowed_addons: vec!["https://source/exact?config=1".into()],
+            ..Default::default()
+        };
+        let entries = serde_json::from_str(
+            r#"[{"id":"same","type_":"series","name":"Allowed"},{"id":"same","type_":"movie","name":"Collision"}]"#,
+        ).unwrap();
+        (policy, entries)
+    }
+
+    #[test]
+    fn projection_snapshot_matches_live_typed_membership_and_reads_inputs_once() {
+        use std::cell::Cell;
+        let (policy, entries) = projection_fixture();
+        let policy_reads = Cell::new(0);
+        let library_reads = Cell::new(0);
+        let snapshot = TitlePolicySnapshot::capture_from(
+            true,
+            || {
+                policy_reads.set(policy_reads.get() + 1);
+                Ok(policy.clone())
+            },
+            || {
+                library_reads.set(library_reads.get() + 1);
+                Ok(entries.clone())
+            },
+        )
+        .unwrap();
+        for index in 0..10_000 {
+            let kind = if index % 2 == 0 { "series" } else { "movie" };
+            for id in ["same", "removed", "missing"] {
+                assert_eq!(
+                    snapshot.allows(kind, id),
+                    policy.permits_title(
+                        kind,
+                        id,
+                        entries.iter().any(|e| e.type_ == kind && e.id == id),
+                    )
+                );
+            }
+        }
+        assert_eq!((policy_reads.get(), library_reads.get()), (1, 1));
+        assert!(snapshot.allows_addon("https://source/exact?config=1"));
+        assert!(!snapshot.allows_addon("https://source/exact?config=2"));
+    }
+
+    #[test]
+    fn projection_snapshot_errors_deny_and_unrestricted_skips_library() {
+        let (mut policy, _) = projection_fixture();
+        assert!(
+            TitlePolicySnapshot::capture_from(
+                true,
+                || Err("retired/read/parse".into()),
+                || panic!("library read after policy failure")
+            )
+            .is_err()
+        );
+        assert!(
+            TitlePolicySnapshot::capture_from(
+                true,
+                || Ok(policy.clone()),
+                || Err("malformed library".into())
+            )
+            .is_err()
+        );
+        policy.version = 2;
+        assert!(
+            TitlePolicySnapshot::capture_from(true, || Ok(policy), || panic!("invalid policy"))
+                .is_err()
+        );
+        let unrestricted = TitlePolicySnapshot::capture_from(
+            true,
+            || Ok(ProfilePolicy::default()),
+            || panic!("unrestricted library read"),
+        )
+        .unwrap();
+        assert!(unrestricted.allows("movie", "any"));
+        assert!(unrestricted.allows_addon("any"));
+        let legacy = TitlePolicySnapshot::capture_from(
+            false,
+            || panic!("legacy policy read"),
+            || panic!("legacy library read"),
+        )
+        .unwrap();
+        assert!(legacy.allows("movie", "any"));
+    }
+
     #[test]
     fn cold_explicit_owner_enforces_policy_without_runtime_bootstrap() {
         const ROOT: &str = "NOVA_COLD_PROFILE_POLICY_TEST_ROOT";
@@ -295,13 +520,75 @@ mod tests {
         assert_ne!(revision(&owner), before);
         assert!(allows_title(&owner, "series", "same"));
         assert!(!allows_title(&owner, "movie", "same"));
+        let captured = TitlePolicySnapshot::capture(&owner).unwrap();
+        assert!(captured.allows("series", "same"));
+        let other = profiles::ProfileStore::for_profile("other-cold-profile");
+        other.write(KEY, "{").unwrap();
+        other.run(|| {
+            assert!(TitlePolicySnapshot::capture(&profiles::ProfileStore::capture()).is_err());
+        });
+        assert!(captured.allows("series", "same"));
+
         assert!(allows_addon(&owner, "https://source/exact?config=1"));
         assert!(!allows_addon(&owner, "https://source/exact?config=2"));
+        set_entry_blocked(true);
+        assert!(
+            !TitlePolicySnapshot::capture_browse(&owner)
+                .unwrap()
+                .allows("series", "same")
+        );
+        set_entry_blocked(false);
+        *EDITOR.lock().unwrap() = Some((owner.id().into(), policy.clone()));
+        GRANTS.lock().unwrap().insert(
+            owner.id().into(),
+            Grant {
+                profile: profiles::capture(),
+                revision: revision(&owner),
+            },
+        );
+        BROWSING.store(true, Ordering::Release);
+        assert!(
+            TitlePolicySnapshot::capture_browse(&owner)
+                .unwrap()
+                .allows("movie", "unlisted")
+        );
+        // A browsing grant never changes live action authorization.
+        assert!(!allows_title(&owner, "movie", "unlisted"));
+        clear_grants();
+        EDITOR.lock().unwrap().take();
+        assert!(
+            !TitlePolicySnapshot::capture_browse(&owner)
+                .unwrap()
+                .allows("movie", "unlisted")
+        );
         owner.run(|| assert!(restricted()));
+        owner.write("library", "{").unwrap();
+        assert!(TitlePolicySnapshot::capture(&owner).is_err());
         owner.write("library", "[]").unwrap();
+        assert!(
+            !TitlePolicySnapshot::capture(&owner)
+                .unwrap()
+                .allows("series", "same")
+        );
         assert!(!allows_title(&owner, "series", "same"));
         owner.write(KEY, "{").unwrap();
         assert!(!allows_addon(&owner, "https://source/exact?config=1"));
+        assert!(TitlePolicySnapshot::capture(&owner).is_err());
+        owner
+            .write(
+                KEY,
+                &serde_json::to_string(&ProfilePolicy::default()).unwrap(),
+            )
+            .unwrap();
+        let domain = profiles::DELETIONS_DOMAIN;
+        let marker = format!("srec:{}:{domain}{}", domain.len(), owner.id());
+        let retired = nova_sync::Record {
+            value: Some("1".into()),
+            version: nova_sync::Version::new(1, 0, 9, false),
+        };
+        nova_storage::try_set_str(&marker, &serde_json::to_string(&retired).unwrap()).unwrap();
+        assert!(TitlePolicySnapshot::capture(&owner).is_err());
+        assert!(!allows_title(&owner, "series", "same"));
         assert!(!profiles::is_initialized());
         std::fs::write(root.join("complete"), "ok").unwrap();
     }
@@ -833,7 +1120,28 @@ impl Bridge {
             self.persist_outgoing_playback();
             self.flush_playback_preferences(true);
             self.persist_settings();
-            persistence::flush()?;
+            let source = self.sessions.active();
+            let ticket = persistence::close_import_admission(&source);
+            #[cfg(test)]
+            {
+                let hook = BEFORE_IMPORT_WAIT.with(|slot| slot.borrow_mut().take());
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
+            if let Err(error) = persistence::flush() {
+                // Nothing was imported. Only this close ticket may reopen the
+                // exact still-current allocation; later closes own their state.
+                if let Some(ticket) = ticket
+                    && profiles::active_context()
+                        .session
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &source))
+                {
+                    source.reopen_edit_admission(ticket);
+                }
+                return Err(error);
+            }
             self.cancel_pending_playback();
             self.cancel_sleep_timer();
             self.player.close();
@@ -847,6 +1155,7 @@ impl Bridge {
     pub(super) fn profile_import_committed(&self, ids: &[String]) {
         let id = profiles::active_context().id;
         if ids.contains(&id) {
+            self.sessions.active().block_authoritative_edits();
             self.profile_loaded_epoch.store(0, Ordering::Release);
             let required = load(&profiles::ProfileStore::for_profile(&id))
                 .map_or(true, |p| p.require_pin_on_entry);
@@ -894,6 +1203,11 @@ impl Bridge {
         }
     }
     pub(super) fn enforce_profile_content_policy(&self) {
+        // The source is already stopped/masked and its captured finalization is
+        // queued. Do not turn a model rebuild into a synchronous second save.
+        if self.policy_stop_is_gated() {
+            return;
+        }
         let owner = profiles::ProfileStore::capture();
         let denied = self
             .current_playback_identity()
@@ -908,13 +1222,45 @@ impl Bridge {
         }
     }
     pub(super) fn profile_policy_changed(&self) {
+        let _ = self.profile_policy_changed_inner(false);
+    }
+    pub(super) fn profile_policy_changed_after_projection(
+        &self,
+    ) -> Option<playback::PolicyStopCapture> {
+        self.profile_policy_changed_inner(true)
+    }
+    fn profile_policy_changed_inner(&self, ordered: bool) -> Option<playback::PolicyStopCapture> {
+        let owner = profiles::ProfileStore::capture();
+        if let (Some(session), Ok(policy)) = (profiles::capture().session, load(&owner)) {
+            *session.applied_policy.lock().unwrap() = policy;
+        }
+        let mut checkpoint = None;
+        let entry_changed_early = ordered
+            && load(&owner).map_or(true, |policy| {
+                let current = (policy.pin, policy.require_pin_on_entry);
+                let previous = ENTRY_BASIS
+                    .lock()
+                    .unwrap()
+                    .insert(owner.id().into(), current.clone());
+                current.1 && previous.as_ref() != Some(&current)
+            });
+        if ordered
+            && (entry_changed_early
+                || self.playback_policy_checkpoint_required()
+                || !self.playback_policy_source_allowed())
+        {
+            checkpoint = Some(self.capture_and_gate_policy_stop());
+        }
+
         self.cancel_queue_run();
         self.clear_playback_end_menu();
         self.close_profile_management();
         self.cancel_profile_pin();
-        self.cancel_pending_playback();
-        let owner = profiles::ProfileStore::capture();
-        if let Some(media) = self.current_playback_identity()
+        if checkpoint.is_none() {
+            self.cancel_pending_playback();
+        }
+        if !ordered
+            && let Some(media) = self.current_playback_identity()
             && !allows_title(&owner, &media.media_type, &media.title_id)
         {
             self.persist_outgoing_playback();
@@ -926,7 +1272,9 @@ impl Bridge {
             app.set_modal_visible(false);
             app.set_stream_selector_open(false);
         }
-        self.enforce_profile_content_policy();
+        if !ordered {
+            self.enforce_profile_content_policy();
+        }
         self.apply_library_to_ui();
         self.refresh_watch_queue();
         self.refresh_bookmarks();
@@ -940,14 +1288,18 @@ impl Bridge {
         self.refresh_home_showcase();
         self.refresh_home_catalog_rows();
         self.reconcile_release_reminders();
-        let entry_changed = load(&owner).map_or(true, |p| {
-            let current = (p.pin, p.require_pin_on_entry);
-            let previous = ENTRY_BASIS
-                .lock()
-                .unwrap()
-                .insert(owner.id().into(), current.clone());
-            current.1 && previous.as_ref() != Some(&current)
-        });
+        let entry_changed = if ordered {
+            entry_changed_early
+        } else {
+            load(&owner).map_or(true, |p| {
+                let current = (p.pin, p.require_pin_on_entry);
+                let previous = ENTRY_BASIS
+                    .lock()
+                    .unwrap()
+                    .insert(owner.id().into(), current.clone());
+                current.1 && previous.as_ref() != Some(&current)
+            })
+        };
         if entry_changed {
             set_entry_blocked(true);
             if let Some(app) = self.app() {
@@ -956,6 +1308,7 @@ impl Bridge {
                 app.set_more_open(true);
             }
         }
+        checkpoint
     }
 }
 
@@ -1067,6 +1420,8 @@ impl Bridge {
 }
 
 pub(super) fn local_previews(query: &str) -> Vec<MetaPreview> {
+    let context = profiles::capture();
+    let version = progress_projection::revision();
     let owner = profiles::ProfileStore::capture();
     let entries: Vec<LibraryEntry> = owner
         .read("library")
@@ -1074,11 +1429,15 @@ pub(super) fn local_previews(query: &str) -> Vec<MetaPreview> {
         .flatten()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
+    let policy = TitlePolicySnapshot::capture(&owner);
     let needle = query.to_lowercase();
-    entries
+    let previews = entries
         .into_iter()
         .filter(|e| {
-            allows_title(&owner, &e.type_, &e.id) && e.name.to_lowercase().contains(&needle)
+            policy
+                .as_ref()
+                .is_ok_and(|policy| policy.allows(&e.type_, &e.id))
+                && e.name.to_lowercase().contains(&needle)
         })
         .map(|e| MetaPreview {
             id: e.id,
@@ -1090,5 +1449,9 @@ pub(super) fn local_previews(query: &str) -> Vec<MetaPreview> {
             genres: e.genres,
             ..Default::default()
         })
-        .collect()
+        .collect();
+    if !profiles::is_current(&context) || progress_projection::revision() != version {
+        return Vec::new();
+    }
+    previews
 }

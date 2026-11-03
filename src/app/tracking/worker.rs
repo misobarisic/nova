@@ -445,7 +445,11 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         }
     }
     let store = loaded.unwrap();
-    let transport = match HttpsTransport::new() {
+    let transport = match HttpsTransport::with_user_agent(concat!(
+        "Nova/",
+        env!("CARGO_PKG_VERSION"),
+        " anime-tracking"
+    )) {
         Ok(inner) => ActorTransport {
             inner,
             context: profiles::capture(),

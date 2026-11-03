@@ -398,9 +398,16 @@ impl Bridge {
         self.load_current_detail_logo();
         // Backfill the persisted library URL so library reopens (and
         // restarts) can start the image load without a meta fetch.
-        self.persist_backdrop_for(&item_id, &backdrop_url);
+        self.persist_backdrop_for(&modal_type, &item_id, &backdrop_url);
         // Backfill persisted header text for the same reason.
-        self.persist_header_for(&item_id, &header.0, &header.1, &header.2, false);
+        self.persist_header_for(
+            &modal_type,
+            &item_id,
+            &header.0,
+            &header.1,
+            &header.2,
+            false,
+        );
         // Configure the incoming shell before it can render. Metadata must
         // not swap Overview for Episodes after the entrance has begun.
         self.restore_detail_snapshot(&item_id);
@@ -458,7 +465,11 @@ impl Bridge {
                     .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
                     .filter(|item| meta_matches_request(item, "movie", &id));
                 let Some(item) = found else {
-                    next(bridge, id, open_token, urls);
+                    // Rejection is synchronous; unwind before trying another
+                    // user-installed source to avoid an inventory-sized stack.
+                    let _ = profiles::invoke_from_event_loop(move || {
+                        next(bridge, id, open_token, urls);
+                    });
                     return;
                 };
                 bridge.cache_background_meta("movie", &id, &item);
@@ -989,10 +1000,12 @@ impl Bridge {
                                         || (!item.videos.is_empty() && scoped))
                             });
                         let Some(mut item) = found else {
-                            run(
-                                bridge, modal_type, id, refresh, open_token, urls, profile,
-                                revision, scoped,
-                            );
+                            let _ = profiles::invoke_from_event_loop(move || {
+                                run(
+                                    bridge, modal_type, id, refresh, open_token, urls, profile,
+                                    revision, scoped,
+                                );
+                            });
                             return;
                         };
                         if !profiles::is_current(&profile) {
@@ -1255,7 +1268,7 @@ impl Bridge {
         };
         // Backfill persisted text so later library reopens paint instantly.
         // Overwrites save the refreshed text for unfinished shows.
-        self.persist_header_for(id, &header.0, &header.1, &header.2, overwrite);
+        self.persist_header_for(&modal_type, id, &header.0, &header.1, &header.2, overwrite);
         // Feed the header cache too, so prefetches can skip this item and
         // other opens (e.g. Discover reentry with a thin catalog preview)
         // fill gaps synchronously. Overwrites replace the cached header
@@ -1306,7 +1319,7 @@ impl Bridge {
         if let Some(url) = backdrop_to_load {
             // Persist for library reopens, then paint instantly when the
             // pixels are already cached (common on reentry).
-            self.persist_backdrop_for(id, &url);
+            self.persist_backdrop_for(&modal_type, id, &url);
             if refresh_images {
                 // Refresh check (same no-flash contract as the poster).
                 self.refresh_detail_backdrop(url, id.to_string());
@@ -4607,11 +4620,9 @@ mod source_lookup_tests {
         storage::init_at(&root);
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
@@ -4778,11 +4789,9 @@ mod source_lookup_tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4943,11 +4952,9 @@ mod source_lookup_tests {
         i_slint_backend_testing::init_integration_test_with_system_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -5918,11 +5925,9 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         #[cfg(feature = "desktop")]
         let bridge = {
-            let (hi, _) = mpsc::channel();
-            let (lo, _) = mpsc::channel();
             Bridge::new(
                 app.as_weak(),
-                PosterTx { hi, lo },
+                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -6701,11 +6706,9 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -7030,7 +7033,7 @@ mod tests {
         }
         let before = owner.lock().unwrap().digest();
         app.set_stream_selector_open(true);
-        bridge.sync_apply(vec![sync::DOMAIN_LAST_STREAM.into()]);
+        bridge.sync_apply_and_wait(vec![sync::DOMAIN_LAST_STREAM.into()]);
         assert_eq!(owner.lock().unwrap().digest(), before);
         assert!(
             app.get_streams()
@@ -7863,11 +7866,9 @@ mod series_open_tests {
         });
         let app = AppWindow::new().unwrap();
         let player = crate::player::Player::setup(&app);
-        let (hi, _) = mpsc::channel();
-        let (lo, _) = mpsc::channel();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx { hi, lo },
+            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

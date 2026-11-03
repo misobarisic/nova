@@ -10,7 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", test))]
 use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -27,26 +27,6 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG_ZSTD: &[u8] =
 include!(concat!(env!("OUT_DIR"), "/nova_license_catalog_size.rs"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 17] = [
-        "nova",
-        "addons",
-        "nova-providers",
-        "nova-ui",
-        "nova-storage",
-        "nova-config",
-        "nova-download",
-        "nova-torrent",
-        "nova-media",
-        "nova-player",
-        "nova-playback-api",
-        "nova-cast",
-        "nova-cast-media",
-        "nova-remux",
-        "nova-sync",
-        "nova-tracking",
-        "nova-stremio",
-    ];
-
     let mut sources = include_str!(concat!(env!("OUT_DIR"), "/nova_license_sources.tsv"))
         .lines()
         .filter_map(|line| {
@@ -55,10 +35,6 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
             let license = fields.next()?;
             let url = fields.next()?;
             if label.is_empty() {
-                return None;
-            }
-            let package_name = label.split_whitespace().next()?;
-            if WORKSPACE_CRATES.contains(&package_name) {
                 return None;
             }
             let url = if url.starts_with("https://") {
@@ -78,7 +54,7 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         .collect::<Vec<_>>();
 
     sources.sort_by_key(|a| a.label.to_lowercase());
-    sources.dedup_by(|a, b| a.label == b.label && a.url == b.url);
+    sources.dedup_by(|a, b| a.label == b.label && a.license == b.license && a.url == b.url);
     sources
 }
 use nova_config::{
@@ -144,9 +120,11 @@ struct SearchTarget {
     supports_skip: bool,
     next_skip: usize,
     exhausted: bool,
-    /// All pages received from this source, kept in source order so partial
+    /// Sorted identity-set fingerprints belong to this exact addon/catalog query.
+    page_fingerprints: HashSet<String>,
+    /// First-seen rows from this source, kept in source order so partial
     /// fan-out responses can be merged deterministically as they arrive.
-    results: Vec<MetaPreview>,
+    results: Arc<Vec<MetaPreview>>,
 }
 
 /// Search selections use stable source identities rather than browse indices.
@@ -282,6 +260,7 @@ struct Shared {
     watch_queue: watch_queue::State,
     playback_tools: playback_tools::PlaybackToolsState,
     progress_projection: progress_projection::State,
+    calendar: calendar::State,
     library_prefetch_preparing: bool,
     saved_episode_refresh_preparing: bool,
     similar_cache: Arc<Mutex<similar::Cache>>,
@@ -332,6 +311,7 @@ struct Shared {
     /// selected browse catalog without another request.
     search_previews: Vec<MetaPreview>,
     unified_search: unified_search::State,
+    search_projection: catalog::SearchProjectionView,
     search_filters: SearchFilters,
     search_targets: Vec<SearchTarget>,
     search_generation: u64,
@@ -732,37 +712,35 @@ const PROGRESS_MIN_DELTA_SECS: f64 = 5.0;
 
 #[cfg(feature = "desktop")]
 struct PosterJob {
-    /// Exact projected slot identity; Library jobs retain their existing guard.
-    display_key: Option<String>,
-    generation: u64,
-    index: usize,
-    url: String,
-    /// True when the card lives in the Library grid (setter differs).
-    library: bool,
+    key: poster_queue::Key,
+    context: profiles::Context,
+    settings: nova_providers::plugin_settings::SettingsCapability,
+    inventory: nova_providers::OwnedProviderSnapshot,
 }
 
-/// Dual-priority poster intake (desktop only).
-///
-/// The Slint grids report a *fetch window* of visible ±1–2 rows
-/// (`visible_range` / `library_visible_range`). Re-fetches for that window
-/// are near-viewport and latency-sensitive, so they go on `hi`. The initial
-/// full-grid sweeps (every card, eventually) go on `lo`. Workers drain `hi`
-/// first, so a fast scroll never waits behind hundreds of far-away jobs.
+/// Shared bounded desktop intake; Library keeps its separate disk/network lanes.
 #[cfg(feature = "desktop")]
 #[derive(Clone)]
 struct PosterTx {
-    hi: mpsc::Sender<PosterJob>,
-    lo: mpsc::Sender<PosterJob>,
+    queue: Arc<poster_queue::Queue<PosterJob>>,
 }
 
 #[cfg(feature = "desktop")]
 impl PosterTx {
-    fn send_hi(&self, job: PosterJob) {
-        let _ = self.hi.send(job);
+    #[cfg(test)]
+    fn closed() -> Self {
+        let queue = poster_queue::Queue::new(
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(image_settings_revision),
+            1,
+            false,
+        );
+        queue.close();
+        Self { queue }
     }
 
-    fn send_lo(&self, job: PosterJob) {
-        let _ = self.lo.send(job);
+    fn generation_changed(&self) {
+        self.queue.invalidate();
     }
 }
 
@@ -844,6 +822,7 @@ mod onboarding;
 mod page_artwork;
 mod party;
 mod party_source;
+mod perf;
 mod persistence;
 mod playback;
 mod playback_actions;
@@ -853,6 +832,9 @@ mod playback_tools;
 mod player_stats;
 mod plugin_cache;
 mod plugin_settings;
+mod poster_intake;
+#[cfg(feature = "desktop")]
+mod poster_queue;
 mod posters;
 mod previously_watched;
 mod profile_actions;
