@@ -3011,8 +3011,7 @@ impl Bridge {
             app.set_show_library(false);
             app.set_show_settings(false);
         }
-        #[cfg(feature = "desktop")]
-        self.retry_visible_catalog_posters();
+        self.poster_intake.focus(poster_intake::Foreground::Catalog);
         self.refresh_poster_intake();
     }
 
@@ -3027,6 +3026,7 @@ impl Bridge {
             // "see all" subpage.
             app.set_home_view(0);
         }
+        self.poster_intake.focus(poster_intake::Foreground::Home);
         // Keep the same-profile models on screen while the guarded worker
         // joins history/metadata. Route feedback must not wait on cache scans.
         self.request_progress_projection();
@@ -4691,7 +4691,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -4854,7 +4853,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -5299,7 +5297,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

@@ -286,7 +286,6 @@ mod tests {
         let app = AppWindow::new().unwrap();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),

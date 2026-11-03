@@ -48,7 +48,6 @@ fn isolated_impl(name: &str, profile: bool, test: impl FnOnce(AppWindow, Bridge)
     let bridge = {
         Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             downloads,

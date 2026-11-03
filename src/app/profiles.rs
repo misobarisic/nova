@@ -755,8 +755,6 @@ pub(super) fn invoke_account(
 }
 
 pub(super) mod thread {
-    #[cfg(feature = "desktop")]
-    pub use std::thread::available_parallelism;
     pub use std::thread::{JoinHandle, sleep};
     pub fn spawn<F, T>(f: F) -> JoinHandle<T>
     where

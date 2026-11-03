@@ -708,8 +708,6 @@ impl Bridge {
         // Reject in-flight results from the old inventory even when the new
         // configuration leaves no catalog to trigger another request.
         self.catalog_gen.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "desktop")]
-        self.poster_tx.generation_changed();
         self.poster_intake.invalidate();
         if previous.streams != config.streams {
             self.clear_streams();

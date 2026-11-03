@@ -1263,7 +1263,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

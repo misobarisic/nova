@@ -32,7 +32,6 @@ fn restricted_device_actions_require_pin_and_forget_the_management_grant() {
     let player = crate::player::Player::setup(&app);
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),

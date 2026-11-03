@@ -710,40 +710,6 @@ const PROGRESS_SAVE_INTERVAL_SECS: u64 = 30;
 /// Minimum position delta that forces a write even within the interval.
 const PROGRESS_MIN_DELTA_SECS: f64 = 5.0;
 
-#[cfg(feature = "desktop")]
-struct PosterJob {
-    key: poster_queue::Key,
-    context: profiles::Context,
-    settings: nova_providers::plugin_settings::SettingsCapability,
-    inventory: nova_providers::OwnedProviderSnapshot,
-}
-
-/// Shared bounded desktop intake; Library keeps its separate disk/network lanes.
-#[cfg(feature = "desktop")]
-#[derive(Clone)]
-struct PosterTx {
-    queue: Arc<poster_queue::Queue<PosterJob>>,
-}
-
-#[cfg(feature = "desktop")]
-impl PosterTx {
-    #[cfg(test)]
-    fn closed() -> Self {
-        let queue = poster_queue::Queue::new(
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(image_settings_revision),
-            1,
-            false,
-        );
-        queue.close();
-        Self { queue }
-    }
-
-    fn generation_changed(&self) {
-        self.queue.invalidate();
-    }
-}
-
 /// One registration per opening/recipe, including queued and running work.
 /// Queued cancellation removes only its job ID; a running completion cannot
 /// unregister another opening's request.
@@ -833,8 +799,6 @@ mod player_stats;
 mod plugin_cache;
 mod plugin_settings;
 mod poster_intake;
-#[cfg(feature = "desktop")]
-mod poster_queue;
 mod posters;
 mod previously_watched;
 mod profile_actions;

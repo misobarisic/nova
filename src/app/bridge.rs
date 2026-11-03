@@ -24,7 +24,6 @@ pub(super) fn with_global_bridge<R>(f: impl FnOnce(&Bridge) -> R) -> Option<R> {
 impl Bridge {
     pub(super) fn new(
         app: slint::Weak<AppWindow>,
-        #[cfg(feature = "desktop")] poster_tx: PosterTx,
         catalog_gen: Arc<AtomicU64>,
         player: crate::player::Player,
         downloads: DownloadCoordinator,
@@ -40,8 +39,6 @@ impl Bridge {
                 poster_intake: Arc::default(),
                 home_showcase_gen: Arc::new(AtomicU64::new(0)),
                 home_catalog_rows_gen: Arc::new(AtomicU64::new(0)),
-                #[cfg(feature = "desktop")]
-                poster_tx,
                 player,
                 player_stats: Arc::default(),
                 downloads,

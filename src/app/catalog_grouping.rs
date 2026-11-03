@@ -1247,7 +1247,6 @@ mod tests {
         let downloads = DownloadCoordinator::new(root.join("downloads"));
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(7)),
             player,
             downloads,

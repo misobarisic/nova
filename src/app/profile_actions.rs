@@ -1128,8 +1128,6 @@ impl Bridge {
         drop(store);
         self.profile_activation.lock().unwrap().published = Some(profiles::active_context());
         self.catalog_gen.fetch_add(1, Ordering::AcqRel);
-        #[cfg(feature = "desktop")]
-        self.poster_tx.generation_changed();
         self.poster_intake.invalidate();
         self.home_showcase_gen.fetch_add(1, Ordering::AcqRel);
         self.home_catalog_rows_gen.fetch_add(1, Ordering::AcqRel);

@@ -4,9 +4,9 @@ use super::*;
 use nova_media::net::{ImageFetchFailure, ImageFetchOwner};
 use std::time::Instant;
 
-const VISIBLE: usize = 128;
+pub(super) const VISIBLE: usize = 128;
 const BACKGROUND: usize = 256;
-const DELIVERIES: usize = 2;
+const DELIVERIES: usize = nova_media::net::ARTWORK_WORKERS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Surface {
@@ -17,6 +17,13 @@ pub(super) enum Surface {
     HomeCatalog,
     History,
 }
+/// Top-level navigation focus, independent of transport/profile ownership.
+#[derive(Clone, Copy)]
+pub(super) enum Foreground {
+    Home,
+    Catalog,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
     profile: String,
@@ -75,6 +82,28 @@ pub(super) enum Admission {
 }
 
 impl Intake {
+    /// A hidden page must not fill the foreground lane ahead of the new page.
+    /// Keep admitted physical work and background prefetch; returning navigation
+    /// reconstructs discarded visible requests from its current unloaded rows.
+    pub fn focus(&self, foreground: Foreground) {
+        let removed = {
+            let mut state = self.0.lock().unwrap();
+            let mut removed = Vec::new();
+            let high = std::mem::take(&mut state.high);
+            for request in high {
+                let catalog = request.key.surface == Surface::Catalog;
+                if catalog == matches!(foreground, Foreground::Catalog) {
+                    state.high.push_back(request);
+                } else {
+                    removed.push(request);
+                }
+            }
+            state.refresh = true;
+            removed
+        };
+        // Captured owner destructors must never run under the scheduler mutex.
+        drop(removed);
+    }
     fn submit(&self, request: Request) -> Admission {
         let mut state = self.0.lock().unwrap();
         if state.closed {
@@ -193,6 +222,16 @@ struct Delivery {
     key: Key,
     ticket: u64,
 }
+impl Delivery {
+    fn is_live(&self) -> bool {
+        let state = self.intake.0.lock().unwrap();
+        !state.closed
+            && state.active.get(&self.key).is_some_and(|active| {
+                active.ticket == self.ticket && active.live.load(Ordering::Acquire)
+            })
+    }
+}
+
 impl Drop for Delivery {
     fn drop(&mut self) {
         let mut state = self.intake.0.lock().unwrap();
@@ -342,7 +381,7 @@ impl Bridge {
                 },
             )
     }
-    fn intake_matches(&self, request: &Request) -> bool {
+    fn intake_slot_matches(&self, request: &Request) -> bool {
         profiles::is_current(&request.context)
             && !request
                 .context
@@ -351,8 +390,11 @@ impl Bridge {
                 .is_some_and(|session| session.cancelled.load(Ordering::Acquire))
             && self.intake_key_matches(&request.key)
     }
-    // Desktop catalogs use the dedicated poster queue; Home batches admission.
-    #[cfg(not(feature = "desktop"))]
+    fn intake_matches(&self, request: &Request) -> bool {
+        self.intake_slot_matches(request) && request.owner.is_current()
+    }
+
+    // Individual viewport requests enqueue and pump; model installs batch first.
     pub(super) fn enqueue_poster_intake(
         &self,
         surface: Surface,
@@ -365,7 +407,7 @@ impl Bridge {
         admission
     }
 
-    /// Home admits a bounded batch before pumping, rather than validating the
+    /// Model installs admit a bounded batch before pumping, rather than validating the
     /// entire pending queue once for every row in its initial model.
     pub(super) fn queue_poster_intake(
         &self,
@@ -410,6 +452,9 @@ impl Bridge {
             )
         };
         let owner = ImageFetchOwner::new(settings, inventory);
+        if !owner.is_current() {
+            return Admission::Obsolete;
+        }
         let key = Key {
             profile: context.id.clone(),
             epoch: context.epoch,
@@ -492,39 +537,7 @@ impl Bridge {
                 self.dispatch_upcoming_posters();
                 self.dispatch_home_catalog_posters();
             }
-            #[cfg(not(feature = "desktop"))]
-            if !app.get_show_home()
-                && !app.get_show_library()
-                && !app.get_more_open()
-                && !app.get_show_settings()
-                && !app.get_show_about()
-                && !app.get_show_calendar()
-                && !app.get_show_downloads()
-                && !app.get_player_open()
-                && !app.get_modal_visible()
-                && !app.get_profiles_require_selection()
-                && !app.get_discover_search_open()
-            {
-                let model = app.get_catalog();
-                let range = self
-                    .shared
-                    .lock()
-                    .unwrap()
-                    .catalog_page
-                    .poster_retry_range(model.row_count());
-                for index in range {
-                    if model
-                        .row_data(index)
-                        .is_some_and(|row| !row.is_loaded && !row.poster_path.is_empty())
-                    {
-                        if self.enqueue_poster_intake(Surface::Catalog, index, true, String::new())
-                            == Admission::DeferredCapacity
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
+            self.queue_visible_catalog_posters();
         }
         loop {
             let next = {
@@ -595,65 +608,9 @@ impl Bridge {
                         )
                 }),
                 move |result| {
-                    // invoke_account always runs cleanup; publication is checked
-                    // against the captured owner and current exact model separately.
+                    // Cleanup runs even when the originating profile is gone.
                     let _ = profiles::invoke_account(move || {
-                        let current = bridge.intake_matches(&request);
-                        drop(delivery);
-                        if current {
-                            match result {
-                                Err(ImageFetchFailure::Busy) => {
-                                    bridge.poster_intake.submit(request);
-                                    bridge.poster_intake.0.lock().unwrap().busy_revision =
-                                        Some(before_attempt);
-                                    return;
-                                }
-                                Err(ImageFetchFailure::SourceFailure)
-                                    if !request.fallback_attempt
-                                        && !request.key.fallback.is_empty()
-                                        && request.key.fallback != request.key.url =>
-                                {
-                                    let mut request = request;
-                                    request.fallback_attempt = true;
-                                    bridge.poster_intake.submit(request);
-                                }
-                                Ok(pixels) => bridge.publish_intake_poster(&request.key, pixels),
-                                Err(ImageFetchFailure::Cancelled) => {}
-                                Err(_) => {
-                                    {
-                                        let mut state = bridge.poster_intake.0.lock().unwrap();
-                                        if state.failures.len() == VISIBLE + BACKGROUND {
-                                            state.failures.pop_front();
-                                        }
-                                        state
-                                            .failures
-                                            .push_back((request.key.clone(), Instant::now()));
-                                    }
-                                    profiles::with_context(request.context.clone(), || {
-                                        if request.key.surface == Surface::Catalog {
-                                            bridge.recover_catalog_artwork(
-                                                request.key.generation,
-                                                request.key.index,
-                                                &request.key.url,
-                                            );
-                                        } else {
-                                            bridge.recover_missing_artwork(
-                                                &request.key.media_type,
-                                                &request.key.id,
-                                                if request.key.fallback.is_empty() {
-                                                    &request.key.url
-                                                } else {
-                                                    &request.key.fallback
-                                                },
-                                            );
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                        profiles::with_context(profiles::active_context(), || {
-                            bridge.pump_poster_intake()
-                        });
+                        bridge.complete_poster_delivery(request, delivery, before_attempt, result);
                     });
                 },
             );
@@ -670,6 +627,78 @@ impl Bridge {
         }
         self.poster_intake.0.lock().unwrap().pumping = false;
     }
+    /// UI terminal delivery. Registration liveness, exact slot identity and
+    /// captured authority are independent checks, including after a queue delay.
+    fn complete_poster_delivery(
+        &self,
+        request: Request,
+        delivery: Delivery,
+        before_attempt: u64,
+        result: Result<SharedPixelBuffer<Rgba8Pixel>, ImageFetchFailure>,
+    ) {
+        let slot_current = self.intake_slot_matches(&request);
+        let authority_current = request.owner.is_current();
+        let live = delivery.is_live();
+        let current = live && slot_current && authority_current;
+        drop(delivery);
+        // Authority can expire while a job or UI delivery waits. Rediscover the
+        // current viewport with fresh authority; never requeue the obsolete owner.
+        if live && slot_current && !authority_current && request.key.surface == Surface::Catalog {
+            self.poster_intake.0.lock().unwrap().refresh = true;
+        }
+        if current {
+            match result {
+                Err(ImageFetchFailure::Busy) => {
+                    self.poster_intake.submit(request);
+                    self.poster_intake.0.lock().unwrap().busy_revision = Some(before_attempt);
+                    return;
+                }
+                Err(ImageFetchFailure::SourceFailure)
+                    if !request.fallback_attempt
+                        && !request.key.fallback.is_empty()
+                        && request.key.fallback != request.key.url =>
+                {
+                    let mut request = request;
+                    request.fallback_attempt = true;
+                    self.poster_intake.submit(request);
+                }
+                Ok(pixels) => self.publish_intake_poster(&request.key, pixels),
+                Err(ImageFetchFailure::Cancelled) => {}
+                Err(_) => {
+                    {
+                        let mut state = self.poster_intake.0.lock().unwrap();
+                        if state.failures.len() == VISIBLE + BACKGROUND {
+                            state.failures.pop_front();
+                        }
+                        state
+                            .failures
+                            .push_back((request.key.clone(), Instant::now()));
+                    }
+                    profiles::with_context(request.context.clone(), || {
+                        if request.key.surface == Surface::Catalog {
+                            self.recover_catalog_artwork(
+                                request.key.generation,
+                                request.key.index,
+                                &request.key.url,
+                            );
+                        } else {
+                            self.recover_missing_artwork(
+                                &request.key.media_type,
+                                &request.key.id,
+                                if request.key.fallback.is_empty() {
+                                    &request.key.url
+                                } else {
+                                    &request.key.fallback
+                                },
+                            );
+                        }
+                    });
+                }
+            }
+        }
+        profiles::with_context(profiles::active_context(), || self.pump_poster_intake());
+    }
+
     fn publish_intake_poster(&self, key: &Key, pixels: SharedPixelBuffer<Rgba8Pixel>) {
         let Some(app) = self.app() else {
             return;
@@ -731,6 +760,7 @@ mod tests {
     #[cfg(feature = "desktop")]
     #[test]
     fn home_busy_retries_after_unrelated_artwork_releases_capacity_without_scroll() {
+        use nova_media::net::ARTWORK_PENDING_CAPACITY;
         use std::io::{Read, Write};
         const CHILD: &str = "NOVA_HOME_BUSY_INTAKE_CHILD";
         let Some(root) = std::env::var_os(CHILD) else {
@@ -765,14 +795,13 @@ mod tests {
         app.set_profiles_require_selection(false);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
         );
         let owner = RunOwner(bridge.poster_intake.clone());
 
-        // Occupy both REAL media artwork workers, not the app delivery leases.
+        // Occupy every REAL media artwork worker, not the app delivery leases.
         // The listener stays open to detect any unintended target HTTP fetch.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -783,7 +812,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(8);
             let mut streams = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..DELIVERIES {
                 let mut stream = loop {
                     match server_listener.accept() {
                         Ok((stream, _)) => break stream,
@@ -817,7 +846,7 @@ mod tests {
             }
         });
         let finished = Arc::new(AtomicUsize::new(0));
-        for index in 0..2 {
+        for index in 0..DELIVERIES {
             let finished = finished.clone();
             nova_media::net::fetch_image_for_owner_result_controlled(
                 format!("{base}/blocked-{index}.png"),
@@ -830,12 +859,12 @@ mod tests {
                 },
             );
         }
-        for _ in 0..2 {
+        for _ in 0..DELIVERIES {
             observed.recv_timeout(Duration::from_secs(8)).unwrap();
         }
-        // All32 pending slots belong to other consumers. Cancelled jobs still
+        // All pending slots belong to other consumers. Cancelled jobs still
         // occupy a queued slot until a worker pops and terminally completes them.
-        for index in 0..32 {
+        for index in 0..ARTWORK_PENDING_CAPACITY {
             let finished = finished.clone();
             let handle = nova_media::net::fetch_image_for_owner_result_controlled(
                 format!("{base}/cancelled-{index}.png"),
@@ -852,7 +881,7 @@ mod tests {
         assert_eq!(
             finished.load(Ordering::SeqCst),
             0,
-            "both workers remain behind the HTTP barrier"
+            "all artwork workers remain behind the HTTP barrier"
         );
         let target = format!("{base}/target.png");
         decoded_cache_insert(
@@ -947,7 +976,7 @@ mod tests {
                 if saw_busy_tick.get()
                     && loaded
                     && settled
-                    && finished_tick.load(Ordering::SeqCst) == 34
+                    && finished_tick.load(Ordering::SeqCst) == DELIVERIES + ARTWORK_PENDING_CAPACITY
                 {
                     passed_tick.set(true);
                     slint::quit_event_loop().unwrap();
@@ -972,7 +1001,7 @@ mod tests {
         );
         assert_eq!(
             finished.load(Ordering::SeqCst),
-            34,
+            DELIVERIES + ARTWORK_PENDING_CAPACITY,
             "every unrelated request completes once"
         );
         assert!(
@@ -1041,7 +1070,6 @@ mod tests {
         app.set_profiles_require_selection(false);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
@@ -1275,6 +1303,580 @@ mod tests {
         );
         let size = app.get_home_continue().row_data(0).unwrap().poster.size();
         assert_eq!((size.width, size.height), (2, 3));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn catalog_capacity_retries_stationary_viewport_and_discover_return() {
+        const CHILD: &str = "NOVA_SHARED_POSTER_VIEWPORT_CHILD";
+        let Some(root) = std::env::var_os(CHILD) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-poster-viewport-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .args(["--exact", "app::poster_intake::tests::catalog_capacity_retries_stationary_viewport_and_discover_return", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+
+        // Exercise the real shared media executor and terminal Slint deliveries.
+        fn pump_until(app: &AppWindow, bridge: &Bridge, ready: impl Fn() -> bool + 'static) {
+            let started = std::time::Instant::now();
+            let timer = Rc::new(slint::Timer::default());
+            let tick_bridge = bridge.clone();
+            let stop = Rc::downgrade(&timer);
+            let outcome = Rc::new(std::cell::Cell::new(None));
+            let observed = outcome.clone();
+            timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_millis(5),
+                move || {
+                    // The testing backend updates timers before dispatching
+                    // even an already-queued Quit. Post exactly one Quit so
+                    // another pump cannot inherit a duplicate exit request.
+                    if observed.get().is_some() {
+                        return;
+                    }
+                    tick_bridge.poster_intake_tick();
+                    let satisfied = ready();
+                    if satisfied || started.elapsed() > Duration::from_secs(8) {
+                        observed.set(Some(satisfied));
+                        if let Some(timer) = stop.upgrade() {
+                            timer.stop();
+                        }
+                        slint::quit_event_loop().unwrap();
+                    }
+                },
+            );
+            // ComponentHandle::run hides its window after returning, which
+            // queues another last-window Quit in the testing backend. Keep
+            // the same window shown across this fixture's separate pumps.
+            app.show().unwrap();
+            slint::run_event_loop().unwrap();
+            timer.stop();
+            assert_eq!(
+                outcome.get(),
+                Some(true),
+                "event loop must reach its current predicate before the deadline"
+            );
+        }
+        fn blocked_image() -> (
+            String,
+            mpsc::Receiver<()>,
+            mpsc::Sender<()>,
+            std::thread::JoinHandle<()>,
+        ) {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/blocked.png", listener.local_addr().unwrap());
+            let (started, observed) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(8);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "poster worker never connected"
+                            );
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(8)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(8)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                started.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(8)).unwrap();
+                let mut png = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::new_rgba8(2, 3)
+                    .write_to(&mut png, image::ImageFormat::Png)
+                    .unwrap();
+                let body = png.into_inner();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            (url, observed, release, server)
+        }
+        fn install_rows(
+            bridge: &Bridge,
+            app: &AppWindow,
+            generation: u64,
+            blockers: [&str; DELIVERIES],
+        ) -> String {
+            let target = VISIBLE + DELIVERIES;
+            let previews = (0..=target)
+                .map(|index| {
+                    let url = if index < DELIVERIES {
+                        blockers[index].to_owned()
+                    } else {
+                        format!("https://fixture.invalid/{generation}/{index}.png")
+                    };
+                    if index >= DELIVERIES {
+                        decoded_cache_insert(
+                            &image_cache_key(&url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
+                            SharedPixelBuffer::new(2, 3),
+                        );
+                    }
+                    serde_json::from_value::<MetaPreview>(serde_json::json!({
+                    "id": format!("row-{index}"), "type": "movie", "name": format!("Row {index}"),
+                    "poster": url, "novaSourceUrl": "https://fixture.invalid/source"
+                })).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let target_url = previews[target].poster.clone().unwrap();
+            app.set_catalog(
+                Rc::new(VecModel::from(
+                    previews
+                        .iter()
+                        .map(|preview| MediaCard {
+                            id: preview.id.clone().into(),
+                            poster_path: preview.poster.clone().unwrap().into(),
+                            ..Default::default()
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.previews = previews;
+            }
+            target_url
+        }
+        fn settled(bridge: &Bridge) -> bool {
+            let state = bridge.poster_intake.0.lock().unwrap();
+            assert!(state.active.len() <= DELIVERIES);
+            state.active.is_empty() && state.high.is_empty() && state.low.is_empty()
+        }
+        fn fill_while_blocked(bridge: &Bridge) {
+            for index in DELIVERIES..VISIBLE + DELIVERIES {
+                assert_eq!(
+                    bridge.queue_poster_intake(Surface::Catalog, index, true, String::new()),
+                    Admission::Queued
+                );
+            }
+            assert_eq!(bridge.poster_intake.0.lock().unwrap().high.len(), VISIBLE);
+            // Report the viewport once. Capacity release must retry it without
+            // another scroll, including after returning from a hidden Discover.
+            bridge.visible_range(
+                false,
+                (VISIBLE + DELIVERIES) as i32,
+                (VISIBLE + DELIVERIES) as i32,
+            );
+            bridge.refresh_poster_intake();
+            assert!(bridge.poster_intake.0.lock().unwrap().deferred);
+        }
+
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        profiles::initialize().unwrap();
+        set_active_cache_settings(CacheSettings {
+            cache_images: false,
+            ..Default::default()
+        });
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(false);
+        app.set_more_open(false);
+        app.set_profiles_require_selection(false);
+        let generation = Arc::new(AtomicU64::new(1));
+        let bridge = Bridge::new(
+            app.as_weak(),
+            generation.clone(),
+            crate::player::Player::setup(&app),
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let owner = RunOwner(bridge.poster_intake.clone());
+        let target = VISIBLE + DELIVERIES;
+
+        for hidden in [false, true] {
+            // Initial invalidation must not pre-admit the default viewport
+            // while the fixture is establishing the blocked physical leases.
+            app.set_show_home(true);
+            let current = generation.fetch_add(1, Ordering::AcqRel) + 1;
+            bridge.poster_intake.invalidate();
+            let blockers: [_; DELIVERIES] = std::array::from_fn(|_| blocked_image());
+            let urls = std::array::from_fn(|index| blockers[index].0.as_str());
+            install_rows(&bridge, &app, current, urls);
+            for index in 0..DELIVERIES {
+                assert_eq!(
+                    bridge.enqueue_poster_intake(Surface::Catalog, index, true, String::new()),
+                    Admission::Queued
+                );
+            }
+            for (_, observed, _, _) in &blockers {
+                observed.recv_timeout(Duration::from_secs(8)).unwrap();
+            }
+            app.set_show_home(false);
+            fill_while_blocked(&bridge);
+            assert!(!app.get_catalog().row_data(target).unwrap().is_loaded);
+            profiles::with_context(profiles::context_for("foreign-owner"), || {
+                assert_eq!(
+                    bridge.queue_poster_intake(Surface::Catalog, target, true, String::new()),
+                    Admission::Obsolete
+                );
+            });
+            app.set_show_home(hidden);
+            for (_, _, release, _) in &blockers {
+                release.send(()).unwrap();
+            }
+            for (_, _, _, server) in blockers {
+                server.join().unwrap();
+            }
+            let weak = app.as_weak();
+            let observed_bridge = bridge.clone();
+            pump_until(&app, &bridge, move || {
+                settled(&observed_bridge)
+                    && (hidden
+                        || weak
+                            .upgrade()
+                            .unwrap()
+                            .get_catalog()
+                            .row_data(target)
+                            .unwrap()
+                            .is_loaded)
+            });
+            if hidden {
+                assert!(
+                    !app.get_catalog().row_data(target).unwrap().is_loaded,
+                    "capacity release cannot repopulate hidden Discover"
+                );
+                bridge.show_discover_page();
+                let weak = app.as_weak();
+                pump_until(&app, &bridge, move || {
+                    weak.upgrade()
+                        .unwrap()
+                        .get_catalog()
+                        .row_data(target)
+                        .unwrap()
+                        .is_loaded
+                });
+            }
+            assert!(
+                app.get_catalog().row_data(target).unwrap().is_loaded,
+                "current viewport eventually paints without another scroll"
+            );
+        }
+
+        // Running obsolete work cannot paint an identical slot/URL after its
+        // catalog generation changes, and cancellation keeps its physical lease.
+        app.set_show_home(true);
+        let current = generation.fetch_add(1, Ordering::AcqRel) + 1;
+        bridge.poster_intake.invalidate();
+        let (url, observed, release, server) = blocked_image();
+        install_rows(&bridge, &app, current, [url.as_str(); DELIVERIES]);
+        assert_eq!(
+            bridge.enqueue_poster_intake(Surface::Catalog, 0, true, String::new()),
+            Admission::Queued
+        );
+        observed.recv_timeout(Duration::from_secs(8)).unwrap();
+        generation.fetch_add(1, Ordering::AcqRel);
+        bridge.poster_intake.invalidate();
+        assert_eq!(bridge.poster_intake.0.lock().unwrap().active.len(), 1);
+        app.set_show_home(true);
+        release.send(()).unwrap();
+        server.join().unwrap();
+        let observed_bridge = bridge.clone();
+        pump_until(&app, &bridge, move || settled(&observed_bridge));
+        assert!(
+            !app.get_catalog().row_data(0).unwrap().is_loaded,
+            "obsolete running work cannot paint"
+        );
+        drop(owner);
+        assert!(
+            bridge.poster_intake.0.lock().unwrap().closed,
+            "run-local close survives retained Bridge handles"
+        );
+    }
+
+    fn prepare_catalog_delivery(bridge: &Bridge, ticket: u64) -> (Request, Delivery) {
+        let app = bridge.app().unwrap();
+        let url = "https://fixture.invalid/catalog-delivery.png";
+        bridge.shared.lock().unwrap().previews = vec![
+            serde_json::from_value::<MetaPreview>(serde_json::json!({
+                "id":"delivery", "type":"movie", "name":"Delivery", "poster":url,
+                "novaSourceUrl":"https://fixture.invalid/source"
+            }))
+            .unwrap(),
+        ];
+        app.set_catalog(
+            Rc::new(VecModel::from(vec![MediaCard {
+                id: "delivery".into(),
+                poster_path: url.into(),
+                ..Default::default()
+            }]))
+            .into(),
+        );
+        assert_eq!(
+            bridge.queue_poster_intake(Surface::Catalog, 0, true, String::new()),
+            Admission::Queued
+        );
+        let mut state = bridge.poster_intake.0.lock().unwrap();
+        assert!(state.active.is_empty());
+        let request = state.high.pop_front().unwrap();
+        state.refresh = false;
+        state.deferred = false;
+        state.active.insert(
+            request.key.clone(),
+            Active {
+                ticket,
+                live: Arc::new(AtomicBool::new(true)),
+                handle: None,
+            },
+        );
+        let delivery = Delivery {
+            intake: bridge.poster_intake.clone(),
+            key: request.key.clone(),
+            ticket,
+        };
+        (request, delivery)
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn late_delivery_after_invalidation_or_close_never_publishes_or_recovers() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::late_delivery_after_invalidation_or_close_never_publishes_or_recovers"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                app.set_show_home(true); // Keep future Catalog discovery hidden.
+                for mode in 0..3 {
+                    let (request, delivery) = prepare_catalog_delivery(bridge, mode + 1);
+                    assert!(bridge.intake_matches(&request) && delivery.is_live());
+                    if mode == 2 {
+                        bridge.poster_intake.close();
+                    } else {
+                        bridge.poster_intake.invalidate();
+                    }
+                    assert!(
+                        bridge.intake_matches(&request),
+                        "identity and authority stay unchanged: invalidation alone must reject this delivery"
+                    );
+                    assert!(!delivery.is_live());
+                    let result = if mode == 1 {
+                        Err(ImageFetchFailure::SourceFailure)
+                    } else {
+                        Ok(SharedPixelBuffer::new(2, 3))
+                    };
+                    bridge.complete_poster_delivery(request, delivery, 0, result);
+                    assert!(!app.get_catalog().row_data(0).unwrap().is_loaded);
+                    let state = bridge.poster_intake.0.lock().unwrap();
+                    assert!(
+                        state.active.is_empty()
+                            && state.high.is_empty()
+                            && state.low.is_empty()
+                            && state.failures.is_empty()
+                    );
+                    drop(state);
+                    let state = bridge.shared.lock().unwrap();
+                    assert!(
+                        state.artwork_recovery.is_empty()
+                            && state.pending_artwork_recovery.is_empty()
+                    );
+                }
+            },
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn stale_catalog_authority_discards_pixels_and_recaptures_the_current_viewport() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::stale_catalog_authority_discards_pixels_and_recaptures_the_current_viewport"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                app.set_show_home(false);
+                app.set_more_open(false);
+                app.set_profiles_require_selection(false);
+                set_active_cache_settings(CacheSettings {
+                    cache_images: false,
+                    lru_cache_mb: 32,
+                    ..Default::default()
+                });
+                let (request, delivery) = prepare_catalog_delivery(bridge, 1);
+                let old_authority = request.key.authority.clone();
+                let context = profiles::capture();
+                context
+                    .session
+                    .as_ref()
+                    .unwrap()
+                    .providers
+                    .get()
+                    .unwrap()
+                    .with(|| {
+                        nova_providers::plugin_settings::apply_settings_projection(|| {
+                            Ok(r#"{"fixture":{"changed":true}}"#.into())
+                        })
+                        .unwrap();
+                    });
+                assert!(
+                    bridge.intake_slot_matches(&request),
+                    "neither catalog identity, profile nor image recipe changed"
+                );
+                assert!(!request.owner.is_current());
+                decoded_cache_insert(
+                    &image_cache_key(&request.key.url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
+                    SharedPixelBuffer::new(4, 5),
+                );
+                bridge.complete_poster_delivery(
+                    request,
+                    delivery,
+                    0,
+                    Ok(SharedPixelBuffer::new(2, 3)),
+                );
+                assert!(
+                    !app.get_catalog().row_data(0).unwrap().is_loaded,
+                    "old-authority pixels cannot paint"
+                );
+                {
+                    let state = bridge.poster_intake.0.lock().unwrap();
+                    assert_eq!(
+                        state.active.len(),
+                        1,
+                        "current viewport must receive a fresh request without a scroll or external invalidation"
+                    );
+                    assert_ne!(state.active.keys().next().unwrap().authority, old_authority);
+                    assert!(state.failures.is_empty());
+                }
+                // Close before queued UI delivery, then drain the real cached job.
+                bridge.poster_intake.close();
+                let until = Instant::now() + Duration::from_secs(3);
+                while !bridge.poster_intake.0.lock().unwrap().active.is_empty() {
+                    assert!(
+                        Instant::now() < until,
+                        "cancelled fresh request must complete"
+                    );
+                    profiles::invoke_account(|| {
+                        slint::quit_event_loop().unwrap();
+                    })
+                    .unwrap();
+                    slint::run_event_loop().unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!app.get_catalog().row_data(0).unwrap().is_loaded);
+            },
+        );
+    }
+
+    #[test]
+    fn navigation_focus_frees_the_foreground_lane_without_releasing_physical_work() {
+        let intake = Arc::new(Intake::default());
+        let active = request(999, true).key;
+        let live = Arc::new(AtomicBool::new(true));
+        intake.0.lock().unwrap().active.insert(
+            active.clone(),
+            Active {
+                ticket: 1,
+                live: live.clone(),
+                handle: None,
+            },
+        );
+        let delivery = Delivery {
+            intake: intake.clone(),
+            key: active,
+            ticket: 1,
+        };
+        for index in 0..VISIBLE {
+            assert_eq!(intake.submit(request(index, true)), Admission::Queued);
+        }
+        let mut catalog = request(1000, false);
+        catalog.key.surface = Surface::Catalog;
+        assert_eq!(intake.submit(catalog.clone()), Admission::Queued);
+        intake.focus(Foreground::Catalog);
+        assert!(delivery.is_live() && live.load(Ordering::Acquire));
+        {
+            let state = intake.0.lock().unwrap();
+            assert!(state.high.is_empty());
+            assert_eq!(state.low.len(), 1, "background work remains retained");
+            assert_eq!(state.active.len(), 1, "physical lease remains admitted");
+        }
+        catalog.visible = true;
+        assert_eq!(
+            intake.submit(catalog),
+            Admission::Promoted,
+            "new viewport can enter without waiting behind 128 hidden rows"
+        );
+        let mut background = request(1001, false);
+        background.key.surface = Surface::Catalog;
+        intake.submit(background);
+        intake.focus(Foreground::Home);
+        assert!(delivery.is_live());
+        assert_eq!(intake.submit(request(2000, true)), Admission::Queued);
+        let state = intake.0.lock().unwrap();
+        assert_eq!(state.high.front().unwrap().key.surface, Surface::Continue);
+        assert_eq!(state.low.len(), 1);
+        assert_eq!(state.active.len(), 1);
+    }
+
+    #[test]
+    fn full_visible_lane_keeps_background_promotion_retryable() {
+        let intake = Intake::default();
+        intake.submit(request(999, false));
+        for index in 0..VISIBLE {
+            assert_eq!(intake.submit(request(index, true)), Admission::Queued);
+        }
+        assert_eq!(
+            intake.submit(request(999, true)),
+            Admission::DeferredCapacity
+        );
+        assert_eq!(intake.0.lock().unwrap().low.len(), 1);
+        intake.0.lock().unwrap().high.pop_front();
+        assert_eq!(intake.submit(request(999, true)), Admission::Promoted);
+        let state = intake.0.lock().unwrap();
+        assert!(state.low.is_empty() && state.deferred);
+        assert_eq!(state.high.len(), VISIBLE);
+    }
+
+    #[test]
+    fn intake_coalescing_keeps_profile_source_recipe_and_authority_distinct() {
+        let intake = Intake::default();
+        intake.submit(request(1, true));
+        for variant in 0..8 {
+            let mut request = request(1, true);
+            match variant {
+                0 => request.key.profile = "bob".into(),
+                1 => request.key.epoch += 1,
+                2 => request.key.generation += 1,
+                3 => request.key.media_type = "movie".into(),
+                4 => request.key.source = "another source".into(),
+                5 => request.key.projection = "another projection".into(),
+                6 => request.key.recipe = "another recipe".into(),
+                _ => request.key.authority.0 += 1,
+            }
+            assert_eq!(intake.submit(request), Admission::Queued);
+        }
+        assert_eq!(intake.0.lock().unwrap().high.len(), 9);
     }
 
     fn request(index: usize, visible: bool) -> Request {

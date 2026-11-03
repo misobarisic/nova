@@ -17,14 +17,21 @@ mod executor;
 pub use executor::FetchHandle;
 use std::sync::{Arc, LazyLock};
 
-// Fixed all-platform bounds, independent of CPU count. Streams have reserved
-// workers so artwork/catalog saturation cannot consume playback resolver lanes.
+// Bounded native workloads, independent of reported CPU count. Android keeps
+// a smaller artwork budget; both platforms use this same executor. Streams have
+// reserved workers so artwork/catalog saturation cannot consume resolver lanes.
+#[cfg(target_os = "android")]
+pub const ARTWORK_WORKERS: usize = 2;
+#[cfg(not(target_os = "android"))]
+pub const ARTWORK_WORKERS: usize = 4;
+pub const ARTWORK_PENDING_CAPACITY: usize = 32;
 static NETWORK: LazyLock<executor::Executor> =
     LazyLock::new(|| executor::Executor::new("media-net", 4, 64));
 static URGENT: LazyLock<executor::Executor> =
     LazyLock::new(|| executor::Executor::new("media-stream", 2, 16));
-static ARTWORK: LazyLock<executor::Executor> =
-    LazyLock::new(|| executor::Executor::new("media-art", 2, 32));
+static ARTWORK: LazyLock<executor::Executor> = LazyLock::new(|| {
+    executor::Executor::new("media-art", ARTWORK_WORKERS, ARTWORK_PENDING_CAPACITY)
+});
 
 fn network_executor(url: &str) -> &'static executor::Executor {
     if reqwest::Url::parse(url)
@@ -632,6 +639,12 @@ impl ImageFetchOwner {
             nova_providers::OwnedProviderSnapshot::capture(),
         )
     }
+    /// Whether the captured settings authority and image recipe remain valid.
+    /// Call again at UI publication, after any queued delivery delay.
+    pub fn is_current(&self) -> bool {
+        self.settings.is_current() && nova_config::image_settings_revision() == self.revision
+    }
+
     /// Opaque in-process authority identity for scheduler coalescing only.
     pub fn generation(&self) -> (u64, u64, Arc<str>) {
         (self.generation.0, self.revision, self.generation.1.clone())

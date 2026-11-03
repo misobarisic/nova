@@ -30,11 +30,17 @@ pub(super) struct PageState {
 
 impl PageState {
     /// Bound intake retries to the reported viewport or its initial 32-card window.
-    #[cfg(not(feature = "desktop"))]
     pub(super) fn poster_retry_range(&self, row_count: usize) -> std::ops::RangeInclusive<usize> {
-        let first = self.visible_first;
-        let last = self.visible_last.max(first.saturating_add(31));
-        first..=last.min(row_count.saturating_sub(1))
+        let first = self.visible_first.min(row_count.saturating_sub(1));
+        let last = if self.visible_last > first {
+            self.visible_last
+        } else {
+            first.saturating_add(31)
+        };
+        first
+            ..=last
+                .min(row_count.saturating_sub(1))
+                .min(first.saturating_add(poster_intake::VISIBLE - 1))
     }
 
     fn accept(&mut self, key: CatalogGroupingKey, page: &[MetaPreview], append: bool) -> bool {
@@ -576,8 +582,6 @@ impl Bridge {
             } else {
                 let new_gen = self.catalog_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.catalog_gen.store(new_gen, Ordering::Relaxed);
-                #[cfg(feature = "desktop")]
-                self.poster_tx.generation_changed();
                 self.poster_intake.invalidate();
                 new_gen
             };
@@ -674,8 +678,6 @@ impl Bridge {
     fn cancel_catalog_page(&self) {
         // Invalid selections also invalidate any response from the old source.
         self.catalog_gen.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "desktop")]
-        self.poster_tx.generation_changed();
         self.poster_intake.invalidate();
         self.shared.lock().unwrap().loading_more = false;
         if let Some(app) = self.app() {
@@ -922,44 +924,26 @@ impl Bridge {
                     .get_catalog()
                     .row_data(index)
                     .is_some_and(|card| !card.is_loaded)
+                    && !background_saturated
                 {
-                    #[cfg(feature = "desktop")]
-                    if !background_saturated {
-                        let admission = self.queue_catalog_poster(
-                            generation,
+                    background_saturated = matches!(
+                        self.queue_poster_intake(
+                            poster_intake::Surface::Catalog,
                             index,
-                            _url.clone(),
-                            poster_queue::Priority::Background,
-                        );
-                        background_saturated = matches!(
-                            admission,
-                            poster_queue::Admission::DeferredCapacity
-                                | poster_queue::Admission::Closed
-                                | poster_queue::Admission::Obsolete
-                        );
-                    }
-                    #[cfg(not(feature = "desktop"))]
-                    if !background_saturated {
-                        background_saturated = matches!(
-                            self.enqueue_poster_intake(
-                                poster_intake::Surface::Catalog,
-                                index,
-                                false,
-                                String::new()
-                            ),
-                            poster_intake::Admission::DeferredCapacity
-                                | poster_intake::Admission::Closed
-                                | poster_intake::Admission::Obsolete
-                        );
-                    }
+                            false,
+                            String::new(),
+                        ),
+                        poster_intake::Admission::DeferredCapacity
+                            | poster_intake::Admission::Closed
+                            | poster_intake::Admission::Obsolete
+                    );
                 }
             } else {
                 self.recover_catalog_artwork(generation, index, "");
             }
         }
-        #[cfg(feature = "desktop")]
-        self.retry_visible_catalog_posters();
-        #[cfg(not(feature = "desktop"))]
+        // Refresh promotes the current viewport before the first background
+        // request is dispatched, and pumps the admitted batch once.
         self.refresh_poster_intake();
         if fresh && active_cache_settings().prefetch_metadata {
             self.prefetch_background_meta(&projected, generation);
@@ -1073,33 +1057,11 @@ impl Bridge {
                 })
     }
 
-    #[cfg(feature = "desktop")]
-    pub(super) fn catalog_poster_job_matches(&self, key: &poster_queue::Key) -> bool {
-        key.generation == self.catalog_gen.load(Ordering::Acquire)
-            && key.revision == image_settings_revision()
-            && self
-                .shared
-                .lock()
-                .unwrap()
-                .previews
-                .get(key.index)
-                .is_some_and(|preview| {
-                    let source = catalog_source_identity(preview);
-                    source.id == key.id
-                        && source.media_type == key.media_type
-                        && source.addon_url == key.source
-                        && catalog_grouping::display_key(preview) == key.projection
-                        && preview.poster.as_deref() == Some(key.url.as_str())
-                })
-    }
-
-    /// Rejected visible work is rediscovered from the current model, not kept
-    /// as an unbounded list of stale scroll/profile requests.
-    #[cfg(feature = "desktop")]
-    pub(super) fn retry_visible_catalog_posters(&self) {
+    /// Queue only the current visible window. Capacity retries always inspect
+    /// the current model/profile rather than a releasing request's old viewport.
+    pub(super) fn queue_visible_catalog_posters(&self) {
         let Some(app) = self.app() else { return };
-        if self.poster_tx.queue.is_closed()
-            || app.get_show_home()
+        if app.get_show_home()
             || app.get_show_library()
             || app.get_more_open()
             || app.get_show_settings()
@@ -1118,36 +1080,28 @@ impl Bridge {
         if model.row_count() == 0 {
             return;
         }
-        let (generation, first, last) = {
-            let state = self.shared.lock().unwrap();
-            let first = state.catalog_page.visible_first.min(model.row_count() - 1);
-            // Slint deliberately suppresses the initial scroll report. Seed a
-            // bounded first fetch window without waiting for another scroll.
-            let last = if state.catalog_page.visible_last <= first {
-                first.saturating_add(poster_queue::VISIBLE_CAPACITY - 1)
-            } else {
-                state.catalog_page.visible_last
-            }
-            .min(model.row_count() - 1);
-            (self.catalog_gen.load(Ordering::Acquire), first, last)
-        };
-        let center = first + (last - first) / 2;
-        let mut indices = (first..=last).collect::<Vec<_>>();
+        let range = self
+            .shared
+            .lock()
+            .unwrap()
+            .catalog_page
+            .poster_retry_range(model.row_count());
+        let center = range.start() + (range.end() - range.start()) / 2;
+        let mut indices = range.collect::<Vec<_>>();
         indices.sort_by_key(|index| index.abs_diff(center));
-        for (index, row) in indices
+        for (index, _) in indices
             .into_iter()
             .filter_map(|index| model.row_data(index).map(|row| (index, row)))
             .filter(|(_, row)| !row.is_loaded && !row.poster_path.is_empty())
-            .take(poster_queue::VISIBLE_CAPACITY)
         {
             if matches!(
-                self.queue_catalog_poster(
-                    generation,
+                self.queue_poster_intake(
+                    poster_intake::Surface::Catalog,
                     index,
-                    row.poster_path.to_string(),
-                    poster_queue::Priority::Visible
+                    true,
+                    String::new(),
                 ),
-                poster_queue::Admission::DeferredCapacity | poster_queue::Admission::Closed
+                poster_intake::Admission::DeferredCapacity | poster_intake::Admission::Closed
             ) {
                 break;
             }
@@ -5716,7 +5670,6 @@ mod search_publication_bench {
         #[cfg(feature = "desktop")]
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -7131,7 +7084,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(7)),
                 player,
                 downloads,
@@ -7303,7 +7255,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -7580,7 +7531,6 @@ mod tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -8245,7 +8195,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -8617,5 +8566,35 @@ mod tests {
         assert_ne!(cat.label, original_key);
         cat.label = "Popular (popular)".into();
         assert_eq!(catalog_display_label(&cat, true), "Popular (popular)");
+    }
+}
+
+#[cfg(test)]
+mod poster_range_tests {
+    use super::*;
+
+    #[test]
+    fn poster_retry_window_prioritizes_reported_rows_and_bounds_initial_or_stale_ranges() {
+        let initial = PageState::default();
+        assert_eq!(initial.poster_retry_range(320), 0..=31);
+        assert_eq!(initial.poster_retry_range(5), 0..=4);
+        let reported = PageState {
+            visible_first: 0,
+            visible_last: 8,
+            ..Default::default()
+        };
+        assert_eq!(reported.poster_retry_range(320), 0..=8);
+        let stale = PageState {
+            visible_first: 999,
+            visible_last: 999,
+            ..Default::default()
+        };
+        assert_eq!(stale.poster_retry_range(4), 3..=3);
+        let wide = PageState {
+            visible_first: 0,
+            visible_last: 319,
+            ..Default::default()
+        };
+        assert_eq!(wide.poster_retry_range(320), 0..=127);
     }
 }

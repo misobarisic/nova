@@ -304,7 +304,6 @@ mod tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

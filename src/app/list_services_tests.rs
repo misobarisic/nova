@@ -38,7 +38,6 @@ fn projection_fixture(name: &str, body: impl FnOnce(Bridge, [Connection; SERVICE
     #[cfg(feature = "desktop")]
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),
@@ -616,7 +615,6 @@ fn actor_filters_remote_imports_and_exports_by_account_title_and_current_consent
     let player = crate::player::Player::setup(&app);
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),

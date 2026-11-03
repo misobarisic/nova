@@ -142,7 +142,6 @@ fn feature_rules_are_profile_owned_and_keep_device_overrides_across_remote_apply
     let bridge = {
         Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             downloads,

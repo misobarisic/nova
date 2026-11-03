@@ -649,98 +649,6 @@ impl Bridge {
         });
     }
 
-    #[cfg(feature = "desktop")]
-    pub(super) fn queue_catalog_poster(
-        &self,
-        generation: u64,
-        index: usize,
-        url: String,
-        priority: poster_queue::Priority,
-    ) -> poster_queue::Admission {
-        use poster_queue::Admission;
-        if self.poster_tx.queue.is_closed() {
-            return Admission::Closed;
-        }
-        let context = profiles::capture();
-        if !profiles::is_current(&context)
-            || context
-                .session
-                .as_ref()
-                .is_some_and(|session| session.cancelled.load(Ordering::Acquire))
-        {
-            return Admission::Obsolete;
-        }
-        let settings = if profiles::enabled() {
-            let Some(owner) = context
-                .session
-                .as_ref()
-                .and_then(|session| session.providers.get())
-            else {
-                return Admission::Obsolete;
-            };
-            owner.with(nova_providers::plugin_settings::capture_settings_capability)
-        } else {
-            nova_providers::plugin_settings::capture_settings_capability()
-        };
-        let inventory = if profiles::enabled() {
-            let Some(session) = context.session.as_ref() else {
-                return Admission::Obsolete;
-            };
-            let Ok(inventory) = session.provider_inventory() else {
-                return Admission::Obsolete;
-            };
-            inventory
-        } else {
-            nova_providers::OwnedProviderSnapshot::capture()
-        };
-        let revision = image_settings_revision();
-        let (projection, media_type, id, source) = {
-            let state = self.shared.lock().unwrap();
-            let Some(preview) = state
-                .previews
-                .get(index)
-                .filter(|preview| preview.poster.as_deref() == Some(url.as_str()))
-            else {
-                return Admission::Obsolete;
-            };
-            (
-                catalog_grouping::display_key(preview),
-                preview.type_.clone(),
-                preview.id.clone(),
-                preview
-                    .extra
-                    .get("novaSourceUrl")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            )
-        };
-        let authority =
-            nova_media::net::ImageFetchOwner::new(settings.clone(), inventory.clone()).generation();
-        let key = poster_queue::Key {
-            owner: context.id.clone(),
-            epoch: context.epoch,
-            generation,
-            revision,
-            authority,
-            grid: "catalog",
-            media_type,
-            id,
-            source,
-            projection,
-            index,
-            recipe: image_cache_key(&url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
-            url,
-        };
-        let job = PosterJob {
-            key: key.clone(),
-            context,
-            settings,
-            inventory,
-        };
-        self.poster_tx.queue.submit(key, job, priority)
-    }
-
     /// (Re)fetch the poster for one card (scroll-back after unloading, or a
     /// not-yet-loaded row inside the ±2-row preload window). Near-viewport
     /// work goes on the high-priority channel so it jumps ahead of the
@@ -750,29 +658,15 @@ impl Bridge {
             self.dispatch_library_posters();
             return;
         }
-        #[cfg(feature = "desktop")]
-        {
-            let generation = self.catalog_gen.load(Ordering::Relaxed);
-            let _ =
-                self.queue_catalog_poster(generation, index, url, poster_queue::Priority::Visible);
-        }
-        #[cfg(not(feature = "desktop"))]
-        {
-            let current_url = self
-                .shared
-                .lock()
-                .unwrap()
-                .previews
-                .get(index)
-                .is_some_and(|preview| preview.poster.as_deref() == Some(url.as_str()));
-            if current_url {
-                self.enqueue_poster_intake(
-                    poster_intake::Surface::Catalog,
-                    index,
-                    true,
-                    String::new(),
-                );
-            }
+        let current_url = self
+            .shared
+            .lock()
+            .unwrap()
+            .previews
+            .get(index)
+            .is_some_and(|preview| preview.poster.as_deref() == Some(url.as_str()));
+        if current_url {
+            self.enqueue_poster_intake(poster_intake::Surface::Catalog, index, true, String::new());
         }
     }
 
@@ -2289,7 +2183,6 @@ mod discover_artwork_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -2431,7 +2324,6 @@ mod discover_artwork_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -2716,7 +2608,6 @@ mod discover_artwork_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

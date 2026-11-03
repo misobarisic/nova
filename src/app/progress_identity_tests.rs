@@ -106,7 +106,6 @@ fn local_cross_parent_watch_unwatch_resume_and_history_preserve_action_ownership
     let player = crate::player::Player::setup(&app);
     let bridge = Bridge::new(
         app.as_weak(),
-        PosterTx::closed(),
         Arc::new(AtomicU64::new(0)),
         player,
         DownloadCoordinator::new(root.join("downloads")),

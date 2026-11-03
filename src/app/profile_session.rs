@@ -80,8 +80,6 @@ pub(super) struct DeviceRuntime {
     pub poster_intake: Arc<poster_intake::Intake>,
     pub home_showcase_gen: Arc<AtomicU64>,
     pub home_catalog_rows_gen: Arc<AtomicU64>,
-    #[cfg(feature = "desktop")]
-    pub poster_tx: PosterTx,
     pub player: crate::player::Player,
     pub player_stats: Arc<player_stats::Controller>,
     pub downloads: DownloadCoordinator,

@@ -4622,7 +4622,6 @@ mod source_lookup_tests {
         let app = AppWindow::new().unwrap();
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             crate::player::Player::setup(&app),
             DownloadCoordinator::new(root.join("downloads")),
@@ -4791,7 +4790,6 @@ mod source_lookup_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4954,7 +4952,6 @@ mod source_lookup_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -5927,7 +5924,6 @@ mod tests {
         let bridge = {
             Bridge::new(
                 app.as_weak(),
-                PosterTx::closed(),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -6708,7 +6704,6 @@ mod tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -7868,7 +7863,6 @@ mod series_open_tests {
         let player = crate::player::Player::setup(&app);
         let bridge = Bridge::new(
             app.as_weak(),
-            PosterTx::closed(),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
