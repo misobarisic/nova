@@ -466,16 +466,13 @@ impl Bridge {
                 && !app.get_discover_search_open()
             {
                 let model = app.get_catalog();
-                let (first, last) = {
-                    let state = self.shared.lock().unwrap();
-                    let first = state.catalog_page.visible_first;
-                    let last = state
-                        .catalog_page
-                        .visible_last
-                        .max(first.saturating_add(31));
-                    (first, last.min(model.row_count().saturating_sub(1)))
-                };
-                for index in first..=last {
+                let range = self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .catalog_page
+                    .poster_retry_range(model.row_count());
+                for index in range {
                     if model
                         .row_data(index)
                         .is_some_and(|row| !row.is_loaded && !row.poster_path.is_empty())

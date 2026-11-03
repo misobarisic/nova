@@ -29,6 +29,14 @@ pub(super) struct PageState {
 }
 
 impl PageState {
+    /// Bound intake retries to the reported viewport or its initial 32-card window.
+    #[cfg(not(feature = "desktop"))]
+    pub(super) fn poster_retry_range(&self, row_count: usize) -> std::ops::RangeInclusive<usize> {
+        let first = self.visible_first;
+        let last = self.visible_last.max(first.saturating_add(31));
+        first..=last.min(row_count.saturating_sub(1))
+    }
+
     fn accept(&mut self, key: CatalogGroupingKey, page: &[MetaPreview], append: bool) -> bool {
         if !append {
             *self = Self {
