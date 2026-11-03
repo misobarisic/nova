@@ -17,6 +17,81 @@ use url::Url;
 static SESSIONS: AtomicUsize = AtomicUsize::new(0);
 const MAX_BODY: usize = 16 * 1024 * 1024;
 const MAX_RESOURCES: usize = 4096;
+const ORPHAN_LIFETIME: Duration = Duration::from_secs(600);
+const HARD_LIFETIME: Duration = Duration::from_secs(6 * 3600);
+
+type RelayClock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+struct LifecycleState {
+    owned: bool,
+    orphaned_at: Duration,
+    ended: bool,
+}
+
+struct RelayLifecycle {
+    clock: RelayClock,
+    state: Mutex<LifecycleState>,
+}
+
+impl RelayLifecycle {
+    fn new(clock: RelayClock) -> (Arc<Self>, PlaybackRelayLease) {
+        let lifecycle = Arc::new(Self {
+            clock,
+            state: Mutex::new(LifecycleState {
+                owned: true,
+                orphaned_at: Duration::ZERO,
+                ended: false,
+            }),
+        });
+        let lease = PlaybackRelayLease(Arc::new(RelayOwner(lifecycle.clone())));
+        (lifecycle, lease)
+    }
+
+    fn allows_serving(&self, cancelled: bool) -> bool {
+        let now = (self.clock)();
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.ended |= cancelled
+            || now >= HARD_LIFETIME
+            || (!state.owned && now.saturating_sub(state.orphaned_at) >= ORPHAN_LIFETIME);
+        !state.ended
+    }
+
+    fn finish(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .ended = true;
+    }
+}
+
+struct RelayOwner(Arc<RelayLifecycle>);
+impl Drop for RelayOwner {
+    fn drop(&mut self) {
+        let now = (self.0.clock)();
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.owned = false;
+        // Only final owner release starts the orphan deadline. Network activity
+        // cannot keep a resolver-created orphan alive indefinitely.
+        state.orphaned_at = now;
+    }
+}
+
+/// Keeps a resolved provider relay available while its playback or download
+/// owns it, including a paused player. Clones share one final-drop owner.
+/// Cancellation and the six-hour hard limit remain authoritative.
+#[derive(Clone)]
+pub struct PlaybackRelayLease(Arc<RelayOwner>);
+
+impl PlaybackRelayLease {
+    /// A terminal relay must be resolved again; it cannot be revived by traffic.
+    pub fn has_ended(&self) -> bool {
+        !self.0.0.allows_serving(false)
+    }
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -41,6 +116,15 @@ struct Session {
     domains: Vec<String>,
     spec: FlixcloudPlayback,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    lifecycle: Arc<RelayLifecycle>,
+    #[cfg(test)]
+    transport: Option<crate::host::TestTransport>,
+}
+struct ReaderSlot(Arc<AtomicUsize>);
+impl Drop for ReaderSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 struct Slot;
 impl Drop for Slot {
@@ -54,7 +138,7 @@ pub(crate) fn start(
     spec: FlixcloudPlayback,
     domains: Vec<String>,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
-) -> Result<String, ProviderHostError> {
+) -> Result<(String, PlaybackRelayLease), ProviderHostError> {
     let invalid = || ProviderHostError("invalid FlixCloud playback request".into());
     let url = Url::parse(url).map_err(|_| invalid())?;
     if spec.w_payload.is_empty()
@@ -89,6 +173,11 @@ pub(crate) fn start(
         "http://127.0.0.1:{}/{token}/",
         listener.local_addr().map_err(|_| invalid())?.port()
     );
+    let created = Instant::now();
+    let (lifecycle, lease) = RelayLifecycle::new(Arc::new(move || created.elapsed()));
+    let serving = lifecycle.clone();
+    let cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
+        Arc::new(move || !serving.allows_serving(cancelled()));
     let session = Arc::new(Session {
         root: root.clone(),
         resources: Mutex::new(vec![Resource {
@@ -98,38 +187,54 @@ pub(crate) fn start(
         domains,
         spec,
         cancelled,
+        lifecycle,
+        #[cfg(test)]
+        transport: None,
     });
-    std::thread::Builder::new().name("provider-hls".into()).spawn(move || {
-        let _slot = slot;
-        let created = Instant::now();
-        let mut last = Instant::now();
-        let readers = Arc::new(AtomicUsize::new(0));
-        while created.elapsed() < Duration::from_secs(6 * 3600)
-            && last.elapsed() < Duration::from_secs(600) && !(session.cancelled)() {
-            match listener.accept() {
-                Ok((mut socket, peer)) if peer.ip().is_loopback() => {
-                    if readers.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < 4).then_some(n + 1)).is_err() {
-                        let _ = socket.write_all(b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                        continue;
-                    }
-                    last = Instant::now();
-                    let session = session.clone();
-                    let readers = readers.clone();
-                    std::thread::spawn(move || {
-                        let _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
-                        let _ = socket.set_write_timeout(Some(Duration::from_secs(20)));
-                        if session.serve(&mut socket).is_err() {
-                            let _ = socket.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                        }
-                        readers.fetch_sub(1, Ordering::Relaxed);
-                    });
+    std::thread::Builder::new()
+        .name("provider-hls".into())
+        .spawn(move || {
+            let _slot = slot;
+            run_listener(session, listener);
+        })
+        .map_err(|_| invalid())?;
+    Ok((format!("{root}0.m3u8"), lease))
+}
+
+fn run_listener(session: Arc<Session>, listener: TcpListener) {
+    let readers = Arc::new(AtomicUsize::new(0));
+    while !(session.cancelled)() {
+        match listener.accept() {
+            Ok((mut socket, peer)) if peer.ip().is_loopback() => {
+                if readers
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                        (n < 4).then_some(n + 1)
+                    })
+                    .is_err()
+                {
+                    let _ = socket.write_all(
+                        b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::park_timeout(Duration::from_millis(25)),
-                _ => break,
+                let session = session.clone();
+                let reader_slot = ReaderSlot(readers.clone());
+                std::thread::spawn(move || {
+                    let _reader_slot = reader_slot;
+                    let _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
+                    let _ = socket.set_write_timeout(Some(Duration::from_secs(20)));
+                    if session.serve(&mut socket).is_err() {
+                        let _ = socket.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
+                });
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::park_timeout(Duration::from_millis(25))
+            }
+            _ => break,
         }
-    }).map_err(|_| invalid())?;
-    Ok(format!("{root}0.m3u8"))
+    }
+    session.lifecycle.finish();
 }
 
 impl Session {
@@ -186,7 +291,16 @@ impl Session {
             return Err(ProviderHostError("invalid HLS playlist".into()));
         }
         let uri = regex::Regex::new(r#"URI="([^"]+)""#).expect("static regex");
-        let mut output = String::new();
+        const LIMIT: usize = 2 * 1024 * 1024;
+        fn append(output: &mut String, value: &str) -> Result<(), ProviderHostError> {
+            if value.len() > LIMIT - output.len() {
+                return Err(ProviderHostError("playlist too large".into()));
+            }
+            output.push_str(value);
+            Ok(())
+        }
+        // Fixed capacity prevents geometric growth and rejects before copying.
+        let mut output = String::with_capacity(LIMIT);
         let mut variant = false;
         for line in body.lines() {
             let line = line.trim();
@@ -204,13 +318,13 @@ impl Session {
                 let mut end = 0;
                 for capture in uri.captures_iter(line) {
                     let all = capture.get(0).expect("whole match");
-                    output.push_str(&line[end..all.start()]);
-                    output.push_str("URI=\"");
-                    output.push_str(&self.child(parent, &capture[1], kind)?);
-                    output.push('"');
+                    append(&mut output, &line[end..all.start()])?;
+                    append(&mut output, "URI=\"")?;
+                    append(&mut output, &self.child(parent, &capture[1], kind)?)?;
+                    append(&mut output, "\"")?;
                     end = all.end();
                 }
-                output.push_str(&line[end..]);
+                append(&mut output, &line[end..])?;
                 if line.starts_with("#EXT-X-STREAM-INF:") {
                     variant = true;
                 }
@@ -220,13 +334,10 @@ impl Session {
                 } else {
                     Kind::Segment
                 };
-                output.push_str(&self.child(parent, line, kind)?);
+                append(&mut output, &self.child(parent, line, kind)?)?;
                 variant = false;
             }
-            output.push('\n');
-            if output.len() > 2 * 1024 * 1024 {
-                return Err(ProviderHostError("playlist too large".into()));
-            }
+            append(&mut output, "\n")?;
         }
         Ok(output.into_bytes())
     }
@@ -285,15 +396,31 @@ impl Session {
             ("Referer".into(), format!("{origin}/")),
             ("Origin".into(), origin.into()),
         ]);
-        let host = ScopedHttpHost::new(
-            crate::host::session_state(),
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let limit = match resource.kind {
+            Kind::Playlist => 2 * 1024 * 1024,
+            Kind::Segment => MAX_BODY,
+            Kind::Key => 64 * 1024,
+        };
+        // Resource lookup has released its lock. Admission precedes transport
+        // body allocation and stays alive through decoding and downstream writes.
+        let _body_permit = crate::host::PlaybackBodyPermit::acquire(
+            limit,
+            resource.kind == Kind::Playlist,
+            deadline,
+            &*self.cancelled,
+        )?;
+        #[allow(unused_mut)]
+        let mut host = ScopedHttpHost::playback(
             self.domains.clone(),
-            Duration::from_secs(20),
-            MAX_BODY,
-            3,
-            4,
-        )
-        .with_cancellation(self.cancelled.clone());
+            deadline,
+            &_body_permit,
+            self.cancelled.clone(),
+        );
+        #[cfg(test)]
+        {
+            host.test_transport = self.transport.clone();
+        }
         let response = host.get(target.as_str(), &headers)?;
         if response.status != 200 {
             return Err(invalid());
@@ -344,9 +471,25 @@ impl Session {
         } else {
             ("200 OK", String::new(), body.as_slice())
         };
+        let check_delivery = |socket: &TcpStream| -> Result<(), ProviderHostError> {
+            if (self.cancelled)() {
+                return Err(invalid());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(invalid());
+            }
+            socket
+                .set_write_timeout(Some(remaining))
+                .map_err(|_| invalid())
+        };
+        check_delivery(socket)?;
         write!(socket, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\n{extra}Connection: close\r\n\r\n", bytes.len()).map_err(|_| invalid())?;
         if method == "GET" {
-            socket.write_all(bytes).map_err(|_| invalid())?;
+            for chunk in bytes.chunks(64 * 1024) {
+                check_delivery(socket)?;
+                socket.write_all(chunk).map_err(|_| invalid())?;
+            }
         }
         Ok(())
     }
@@ -390,6 +533,305 @@ fn decode_segment(body: &mut Vec<u8>, mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture_session(size: usize, known: bool, gets: Arc<AtomicUsize>) -> Arc<Session> {
+        Arc::new(Session {
+            root: "http://127.0.0.1:1234/fixture/".into(),
+            resources: Mutex::new(vec![Resource {
+                url: Url::parse("https://flixcloud.cc/segment.ts").unwrap(),
+                kind: Kind::Segment,
+            }]),
+            domains: vec!["flixcloud.cc".into()],
+            spec: FlixcloudPlayback {
+                mask: [37; 16],
+                w_payload: "fixture".into(),
+            },
+            cancelled: Arc::new(|| false),
+            lifecycle: RelayLifecycle::new(Arc::new(|| Duration::ZERO)).0,
+            transport: Some(Arc::new(move |_| {
+                gets.fetch_add(1, Ordering::Relaxed);
+                // A wrapped segment exercises the entire decode/range path.
+                (
+                    Box::new(
+                        std::io::Cursor::new(b"\x89PNG\r\n\x1a\n")
+                            .chain(std::io::repeat(71 ^ 37).take((size - 8) as u64)),
+                    ),
+                    known.then_some(size as u64),
+                )
+            })),
+        })
+    }
+
+    fn relay_request(
+        session: Arc<Session>,
+        method: &str,
+        range: Option<&str>,
+    ) -> (Vec<u8>, Duration) {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            session.serve(&mut socket)
+        });
+        let started = Instant::now();
+        write!(
+            client,
+            "{method} /fixture/0 HTTP/1.1\r\nHost: localhost\r\n{}\r\n",
+            range
+                .map(|range| format!("Range: {range}\r\n"))
+                .unwrap_or_default()
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            assert_eq!(client.read(&mut byte).unwrap(), 1);
+            response.push(byte[0]);
+        }
+        let mut first = [0];
+        let count = client.read(&mut first).unwrap();
+        let first_payload = started.elapsed();
+        response.extend_from_slice(&first[..count]);
+        client.read_to_end(&mut response).unwrap();
+        server.join().unwrap().unwrap();
+        (response, first_payload)
+    }
+
+    #[test]
+    fn native_relay_large_wrapped_segments_ranges_and_heads() {
+        for known in [false, true] {
+            let size = 3 * 1024 * 1024;
+            let gets = Arc::new(AtomicUsize::new(0));
+            let session = fixture_session(size, known, gets.clone());
+            let (response, _) = relay_request(session.clone(), "GET", None);
+            let offset = response
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            assert_eq!(response.len() - offset, size - 8);
+            assert!(response[offset..].iter().all(|byte| *byte == 71));
+            let (response, _) = relay_request(session.clone(), "GET", Some("bytes=2-4"));
+            assert!(response.starts_with(b"HTTP/1.1 206"));
+            assert!(response.ends_with(b"GGG"));
+            let (response, _) = relay_request(session, "HEAD", None);
+            assert!(response.ends_with(b"\r\n\r\n"));
+            // MED-12 reuse is deliberately separate: these are three upstream GETs.
+            assert_eq!(gets.load(Ordering::Relaxed), 3);
+        }
+    }
+
+    #[test]
+    fn native_relay_reader_workload_measurements() {
+        for readers in [1, 4, 16] {
+            let gets = Arc::new(AtomicUsize::new(0));
+            let session = fixture_session(3 * 1024 * 1024, false, gets.clone());
+            let barrier = Arc::new(std::sync::Barrier::new(readers));
+            let handles: Vec<_> = (0..readers)
+                .map(|_| {
+                    let session = session.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        let (response, first_payload) = relay_request(session, "GET", None);
+                        let offset = response
+                            .windows(4)
+                            .position(|bytes| bytes == b"\r\n\r\n")
+                            .unwrap()
+                            + 4;
+                        let digest = aws_lc_rs::digest::digest(
+                            &aws_lc_rs::digest::SHA256,
+                            &response[offset..],
+                        );
+                        let hash: String = digest
+                            .as_ref()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect();
+                        assert_eq!(response.len() - offset, 3 * 1024 * 1024 - 8);
+                        (first_payload.as_micros(), hash)
+                    })
+                })
+                .collect();
+            let samples: Vec<_> = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect();
+            assert_eq!(gets.load(Ordering::Relaxed), readers);
+            assert!(samples.iter().all(|sample| sample.1 == samples[0].1));
+            let rss = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .map(|status| {
+                    status
+                        .lines()
+                        .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+            eprintln!(
+                "MED01 fixture=3MiB-PNG readers={readers} GETs={} first_payload_us={:?} decoded_sha256={} rss={rss:?}",
+                gets.load(Ordering::Relaxed),
+                samples.iter().map(|sample| sample.0).collect::<Vec<_>>(),
+                samples[0].1
+            );
+        }
+    }
+
+    #[test]
+    fn relay_lease_clock_boundaries_and_final_owner_drop() {
+        use std::sync::atomic::AtomicU64;
+        let clock = Arc::new(AtomicU64::new(0));
+        let now = clock.clone();
+        let (lifecycle, lease) = RelayLifecycle::new(Arc::new(move || {
+            Duration::from_secs(now.load(Ordering::Acquire))
+        }));
+        for time in [599, 600, 601, 21_599] {
+            clock.store(time, Ordering::Release);
+            assert!(lifecycle.allows_serving(false), "owned at {time}");
+            assert!(!lease.has_ended());
+        }
+        clock.store(21_600, Ordering::Release);
+        assert!(!lifecycle.allows_serving(false));
+        assert!(lease.has_ended());
+        clock.store(21_601, Ordering::Release);
+        assert!(lease.has_ended());
+        // A terminal result cannot be made live by clock/activity recreation.
+        clock.store(1, Ordering::Release);
+        assert!(lease.has_ended());
+
+        clock.store(1000, Ordering::Release);
+        let now = clock.clone();
+        let (lifecycle, lease) = RelayLifecycle::new(Arc::new(move || {
+            Duration::from_secs(now.load(Ordering::Acquire))
+        }));
+        let retained = lease.clone();
+        drop(lease);
+        clock.store(1601, Ordering::Release);
+        assert!(
+            !retained.has_ended(),
+            "a live clone retains one shared owner"
+        );
+        drop(retained);
+        for time in [2200, 2201, 2202] {
+            clock.store(time, Ordering::Release);
+            assert_eq!(lifecycle.allows_serving(false), time < 2201);
+        }
+
+        let (lifecycle, _lease) = RelayLifecycle::new(Arc::new(|| Duration::ZERO));
+        assert!(
+            !lifecycle.allows_serving(true),
+            "cancellation wins over ownership"
+        );
+        assert!(!lifecycle.allows_serving(false), "cancellation is terminal");
+    }
+
+    #[test]
+    fn relay_listener_owned_handoff_orphan_cancellation_and_hard_limit() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        fn fixture(
+            clock: Arc<AtomicU64>,
+            cancel: Arc<AtomicBool>,
+        ) -> (String, PlaybackRelayLease, std::thread::JoinHandle<()>) {
+            SESSIONS.fetch_add(1, Ordering::Relaxed);
+            let slot = Slot;
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let root = format!(
+                "http://127.0.0.1:{}/fixture/",
+                listener.local_addr().unwrap().port()
+            );
+            let (lifecycle, lease) = RelayLifecycle::new(Arc::new(move || {
+                Duration::from_secs(clock.load(Ordering::Acquire))
+            }));
+            let serving = lifecycle.clone();
+            let mut session = fixture_session(4096, true, Arc::new(AtomicUsize::new(0)));
+            let inner = Arc::get_mut(&mut session).unwrap();
+            inner.root = root.clone();
+            inner.lifecycle = lifecycle;
+            inner.cancelled =
+                Arc::new(move || !serving.allows_serving(cancel.load(Ordering::Acquire)));
+            let listener = std::thread::spawn(move || {
+                let _slot = slot;
+                run_listener(session, listener);
+            });
+            (format!("{root}0"), lease, listener)
+        }
+        fn finish(thread: std::thread::JoinHandle<()>) {
+            let started = Instant::now();
+            while !thread.is_finished() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(3),
+                    "listener did not retire"
+                );
+                std::thread::park_timeout(Duration::from_millis(1));
+            }
+            thread.join().unwrap();
+        }
+        let initial = SESSIONS.load(Ordering::Relaxed);
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+        let get = |url: &str| {
+            let response = client.get(url).send().unwrap().error_for_status().unwrap();
+            let bytes = response.bytes().unwrap();
+            assert_eq!(bytes.len(), 4088);
+            assert!(bytes.iter().all(|byte| *byte == 71));
+        };
+        let clock = Arc::new(AtomicU64::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (url, lease, listener) = fixture(clock.clone(), cancel.clone());
+        assert_eq!(SESSIONS.load(Ordering::Relaxed), initial + 1);
+        // A resolver result crosses the worker/UI handoff with ownership, then
+        // remains owned through a paused or blocked transfer at >600s.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handoff = std::thread::spawn(move || {
+            tx.send(crate::ResolvedProviderStream {
+                stream: addons::Stream::default(),
+                relay: Some(lease),
+            })
+            .unwrap_or_else(|_| panic!("handoff receiver disappeared"));
+        });
+        let owned = rx.recv().unwrap();
+        handoff.join().unwrap();
+        for time in [599, 600, 601] {
+            clock.store(time, Ordering::Release);
+            assert!(!owned.relay.as_ref().unwrap().has_ended());
+        }
+        get(&url); // first network activity after a >600s paused/blocked interval
+        drop(owned); // bounded orphan starts at 601, not at last network request
+        clock.store(1200, Ordering::Release);
+        get(&url); // activity at 599s orphan age cannot renew the deadline
+        clock.store(1201, Ordering::Release);
+        finish(listener);
+        assert!(client.get(&url).send().is_err());
+        assert_eq!(SESSIONS.load(Ordering::Relaxed), initial);
+
+        clock.store(0, Ordering::Release);
+        let (url, lease, listener) = fixture(clock.clone(), cancel.clone());
+        get(&url);
+        cancel.store(true, Ordering::Release);
+        finish(listener);
+        assert!(lease.has_ended());
+        assert!(client.get(&url).send().is_err());
+        assert_eq!(SESSIONS.load(Ordering::Relaxed), initial);
+        drop(lease);
+
+        clock.store(0, Ordering::Release);
+        cancel.store(false, Ordering::Release);
+        let (url, lease, listener) = fixture(clock.clone(), cancel);
+        clock.store(21_599, Ordering::Release);
+        get(&url);
+        clock.store(21_600, Ordering::Release);
+        finish(listener);
+        assert!(lease.has_ended());
+        assert!(client.get(&url).send().is_err());
+        assert_eq!(SESSIONS.load(Ordering::Relaxed), initial);
+    }
+
     #[test]
     fn wrapped_and_plain_segments() {
         let mask = [37; 16];
@@ -415,6 +857,8 @@ mod tests {
                 w_payload: "private".into(),
             },
             cancelled: Arc::new(|| false),
+            lifecycle: RelayLifecycle::new(Arc::new(|| Duration::ZERO)).0,
+            transport: None,
         };
         let parent = Url::parse("https://flixcloud.cc/hls/video.m3u8?token=signed").unwrap();
         let result = String::from_utf8(session.playlist(&parent, "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXT-X-MAP:URI=\"init.mp4\"\nsegment.ts\n").unwrap()).unwrap();
@@ -454,7 +898,7 @@ mod tests {
         let package = crate::AddonPackage::parse(&std::fs::read(package).unwrap()).unwrap();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancelled = stop.clone();
-        let local = start(
+        let (local, _lease) = start(
             value["url"].as_str().unwrap(),
             spec,
             package.plugin.permissions.domains.clone(),

@@ -28,13 +28,28 @@ pub struct HttpsTransport {
     client: reqwest::blocking::Client,
 }
 impl HttpsTransport {
+    const DEFAULT_USER_AGENT: &'static str = concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION"),
+        " Stremio sync"
+    );
+
+    /// Standalone consumers identify this leaf crate, rather than the Nova app.
     pub fn new() -> Result<Self, ApiError> {
+        Self::with_user_agent(Self::DEFAULT_USER_AGENT)
+    }
+
+    /// Nova's app layer supplies its own package version and service suffix.
+    pub fn with_user_agent(user_agent: &str) -> Result<Self, ApiError> {
+        let user_agent = reqwest::header::HeaderValue::from_str(user_agent)
+            .map_err(|_| ApiError::InvalidInput)?;
         let builder = reqwest::blocking::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
-            .user_agent("Nova/0.1 Stremio sync");
+            .user_agent(user_agent);
         // cargo-apk2 does not package the platform verifier's Kotlin/JNI runtime.
         #[cfg(target_os = "android")]
         let builder = {
@@ -424,5 +439,36 @@ mod tests {
         Client::new(Verify)
             .library_get(&Secret::new("private"), &["tt1".into()], false, 0)
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod transport_identity_tests {
+    use super::*;
+
+    #[test]
+    fn leaf_and_explicit_app_identity_construct_without_network() {
+        assert_eq!(
+            HttpsTransport::DEFAULT_USER_AGENT,
+            concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION"),
+                " Stremio sync"
+            )
+        );
+        assert!(!HttpsTransport::DEFAULT_USER_AGENT.starts_with("Nova/"));
+        assert!(HttpsTransport::new().is_ok());
+        assert!(HttpsTransport::with_user_agent("Nova/9.8.7 Stremio sync").is_ok());
+    }
+
+    #[test]
+    fn invalid_user_agent_is_a_typed_error() {
+        for value in ["Nova/1\r\nAuthorization: secret", "Nova/1\n", "Nova/1\0"] {
+            assert!(matches!(
+                HttpsTransport::with_user_agent(value),
+                Err(ApiError::InvalidInput)
+            ));
+        }
     }
 }

@@ -4,12 +4,154 @@
 //! hands a continuation to [`fetch_bytes`] / [`fetch_image`] and keeps running;
 //! the platform layer performs the work and invokes the continuation:
 //!
-//! * **Native**: an OS thread + blocking `reqwest`, replicating the addon
+//! * **Native**: bounded workers + blocking `reqwest`, replicating the addon
 //!   crate's retry policy (transient 502/503/504 and connect/timeout errors,
 //!   two retries with 250/500 ms backoff). Artwork uses the shared recipe pipeline.
 //!
-//! Continuations always run on worker threads; the callers wrap their UI
+//! Accepted continuations run on worker threads; admission rejection invokes a
+//! terminal error/None synchronously, after releasing executor locks. Callers wrap UI
 //! updates in `slint::invoke_from_event_loop` themselves.
+
+#[path = "executor.rs"]
+mod executor;
+pub use executor::FetchHandle;
+use std::sync::{Arc, LazyLock};
+
+// Fixed all-platform bounds, independent of CPU count. Streams have reserved
+// workers so artwork/catalog saturation cannot consume playback resolver lanes.
+static NETWORK: LazyLock<executor::Executor> =
+    LazyLock::new(|| executor::Executor::new("media-net", 4, 64));
+static URGENT: LazyLock<executor::Executor> =
+    LazyLock::new(|| executor::Executor::new("media-stream", 2, 16));
+static ARTWORK: LazyLock<executor::Executor> =
+    LazyLock::new(|| executor::Executor::new("media-art", 2, 32));
+
+fn network_executor(url: &str) -> &'static executor::Executor {
+    if reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .map(|mut parts| parts.any(|part| part == "stream"))
+        })
+        .unwrap_or(false)
+    {
+        &URGENT
+    } else {
+        &NETWORK
+    }
+}
+
+fn execution_error(failure: executor::Failure) -> FetchError {
+    let message = match failure {
+        executor::Failure::Busy => "Media request queue is full",
+        executor::Failure::Stopped => "Media request executor stopped",
+        executor::Failure::Unavailable => "Media request workers unavailable",
+        executor::Failure::Cancelled => "Media request cancelled or owner changed",
+        executor::Failure::Panicked => "Media request worker panicked",
+    };
+    #[cfg(target_os = "android")]
+    if failure == executor::Failure::Panicked {
+        let causes = imp::take_recent_panics();
+        return FetchError::new(None, format!("{message}: {}", causes.join(" | ")));
+    }
+    FetchError::new(None, message)
+}
+
+/// Submit owner-scoped JSON work with an additional generation/session check.
+/// Accepted completions run on a worker. Saturation, shutdown or unavailable
+/// workers invoke one terminal error synchronously; callbacks must allow this
+/// reentrancy and must not be called while holding application locks.
+/// Nested metadata lookups remain synchronous on the selected worker.
+pub fn fetch_bytes_with_progress_for_owner_controlled(
+    url: String,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    settings: nova_providers::plugin_settings::SettingsCapability,
+    inventory: nova_providers::OwnedProviderSnapshot,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+    then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+) -> FetchHandle {
+    dispatch_bytes(
+        url,
+        on_progress,
+        settings,
+        inventory,
+        addons::DEFAULT_JSON_BODY_LIMIT,
+        live,
+        then,
+    )
+}
+
+fn dispatch_bytes(
+    url: String,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    settings: nova_providers::plugin_settings::SettingsCapability,
+    inventory: nova_providers::OwnedProviderSnapshot,
+    limit: usize,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+    then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+) -> FetchHandle {
+    let limit = limit.min(addons::MAX_BODY_LIMIT);
+    let generation = settings.with(nova_providers::plugin_settings::settings_generation);
+    let pool = network_executor(&url);
+    let progress_settings = settings.clone();
+    let progress_live = live.clone();
+    let progress = Arc::new(move |bytes| {
+        progress_settings.with(|| {
+            if progress_settings.is_current() && progress_live() {
+                on_progress(bytes);
+            }
+        });
+    });
+    let accepted_settings = settings.clone();
+    let accepted_live = live.clone();
+    let completion_settings = settings.clone();
+    let completion_inventory = inventory.clone();
+    let (job, handle) = executor::Job::new(
+        move || accepted_settings.is_current() && accepted_live(),
+        move || {
+            inventory.with(|| {
+                settings.with(|| {
+                    if !settings.is_current()
+                        || nova_providers::plugin_settings::settings_generation() != generation
+                    {
+                        return Err(FetchError::new(None, "Provider configuration changed"));
+                    }
+                    let result = if let Some(result) =
+                        nova_providers::fetch_builtin_addon_with_progress_for_generation(
+                            &url, progress, generation,
+                        ) {
+                        result.map_err(|error| FetchError::new(None, error.to_string()))
+                    } else {
+                        imp::fetch_blocking(&url, limit)
+                    };
+                    if !settings.is_current() || !live() {
+                        return Err(FetchError::new(None, "Provider configuration changed"));
+                    }
+                    let result =
+                        result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes));
+                    if settings.is_current() && live() {
+                        result
+                    } else {
+                        Err(FetchError::new(None, "Provider configuration changed"))
+                    }
+                })
+            })
+        },
+        move |result| {
+            completion_inventory.with(|| {
+                completion_settings.with(|| {
+                    let result = match result {
+                        Err(failure) => Err(execution_error(failure)),
+                        Ok(result) => result,
+                    };
+                    then(result);
+                })
+            })
+        },
+    );
+    pool.submit(job);
+    handle
+}
 
 #[cfg(feature = "update-check")]
 pub mod updates;
@@ -17,11 +159,19 @@ pub mod updates;
 #[path = "public_directory.rs"]
 pub mod public_directory;
 
+/// Classification used by retry policy; oversize responses are permanent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchErrorKind {
+    Other,
+    TooLarge { limit: usize },
+}
+
 /// Failure of a fetch, with the HTTP status when the server answered.
 #[derive(Debug)]
 pub struct FetchError {
     /// HTTP status code, `None` for transport-level failures.
     pub status: Option<u16>,
+    pub kind: FetchErrorKind,
     pub message: String,
 }
 
@@ -29,8 +179,25 @@ impl FetchError {
     fn new(status: Option<u16>, message: impl Into<String>) -> Self {
         FetchError {
             status,
+            kind: FetchErrorKind::Other,
             message: message.into(),
         }
+    }
+
+    fn too_large(limit: usize) -> Self {
+        Self {
+            status: None,
+            kind: FetchErrorKind::TooLarge { limit },
+            message: format!("response exceeded {limit} byte limit"),
+        }
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    fn retryable(&self) -> bool {
+        self.kind == FetchErrorKind::Other
+            && self
+                .status
+                .is_none_or(|status| addons::TRANSIENT_STATUSES.contains(&status))
     }
 
     /// Human-readable message for the UI status line.
@@ -97,65 +264,52 @@ mod imp {
         inventory: nova_providers::OwnedProviderSnapshot,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
-        let settings_generation =
-            settings.with(nova_providers::plugin_settings::settings_generation);
-        let progress_settings = settings.clone();
-        let on_progress = std::sync::Arc::new(move |bytes| {
-            progress_settings.with(|| {
-                if progress_settings.is_current() {
-                    on_progress(bytes);
-                }
-            });
-        });
-        std::thread::Builder::new()
-            .name(format!("fetch {}", short_url(&url)))
-            .spawn(move || {
-                inventory.with(|| {
-                    settings.with(|| {
-                        if !settings.is_current()
-                            || nova_providers::plugin_settings::settings_generation()
-                                != settings_generation
-                        {
-                            then(Err(FetchError::new(None, "Provider configuration changed")));
-                            return;
-                        }
-                        let result = if let Some(result) =
-                            nova_providers::fetch_builtin_addon_with_progress_for_generation(
-                                &url,
-                                on_progress,
-                                settings_generation,
-                            ) {
-                            result.map_err(|error| FetchError::new(None, error.to_string()))
-                        } else {
-                            get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
-                        };
-                        if !settings.is_current() {
-                            then(Err(FetchError::new(None, "Provider configuration changed")));
-                            return;
-                        }
-                        let result =
-                            result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes));
-                        then(if settings.is_current() {
-                            result
-                        } else {
-                            Err(FetchError::new(None, "Provider configuration changed"))
-                        });
-                    })
-                })
-            })
-            .expect("spawn fetch thread");
+        fetch_bytes_with_progress_for_owner_with_limit(
+            url,
+            on_progress,
+            settings,
+            inventory,
+            addons::DEFAULT_JSON_BODY_LIMIT,
+            then,
+        );
     }
 
-    fn get_blocking(url: &str) -> Result<Vec<u8>, AddonError> {
-        addons::http_get_blocking(url)
+    /// JSON response allowance, clamped to Kit's documented 32 MiB hard ceiling.
+    pub fn fetch_bytes_with_progress_for_owner_with_limit(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        inventory: nova_providers::OwnedProviderSnapshot,
+        limit: usize,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        super::dispatch_bytes(
+            url,
+            on_progress,
+            settings,
+            inventory,
+            limit,
+            std::sync::Arc::new(|| true),
+            then,
+        );
+    }
+
+    pub(super) fn fetch_blocking(url: &str, limit: usize) -> Result<Vec<u8>, FetchError> {
+        get_blocking(url, limit).map_err(|error| to_fetch_error(url, error))
+    }
+
+    fn get_blocking(url: &str, limit: usize) -> Result<Vec<u8>, AddonError> {
+        addons::http_get_blocking_with_limit(url, limit)
     }
 
     pub(super) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
-        get_blocking(url).ok()
+        get_blocking(url, addons::MAX_BODY_LIMIT).ok()
     }
 
     fn to_fetch_error(url: &str, e: AddonError) -> FetchError {
         match e {
+            AddonError::TooLarge { limit } => FetchError::too_large(limit),
+            AddonError::BodyRead(error) => FetchError::new(None, error.to_string()),
             AddonError::Status { status, .. } => {
                 FetchError::new(Some(status), format!("HTTP {status} for {url}"))
             }
@@ -168,10 +322,6 @@ mod imp {
             #[cfg(target_os = "android")]
             _ => FetchError::new(None, "request failed".to_string()),
         }
-    }
-
-    fn short_url(url: &str) -> String {
-        url.chars().take(48).collect()
     }
 }
 
@@ -281,19 +431,6 @@ mod imp {
         Ok(config)
     }
 
-    /// Extract the message from a caught panic payload (`String`, `&str`,
-    /// or anything else) so it can be surfaced in the UI status instead of
-    /// a bare "panicked".
-    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-        if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else if let Some(s) = payload.downcast_ref::<&str>() {
-            s.to_string()
-        } else {
-            "unknown panic payload".to_string()
-        }
-    }
-
     /// Fire a GET on a worker thread with the addon retry policy
     /// (transient 502/503/504 and connect/timeout errors, two retries with
     /// 250/500 ms backoff); `then` receives the body or error. The fetch is
@@ -347,87 +484,50 @@ mod imp {
         inventory: nova_providers::OwnedProviderSnapshot,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
-        let settings_generation =
-            settings.with(nova_providers::plugin_settings::settings_generation);
-        let progress_settings = settings.clone();
-        let on_progress = std::sync::Arc::new(move |bytes| {
-            progress_settings.with(|| {
-                if progress_settings.is_current() {
-                    on_progress(bytes);
-                }
-            });
-        });
-        std::thread::Builder::new()
-            .name(format!("fetch {}", short_url(&url)))
-            .spawn(move || {
-                inventory.with(|| {
-                    settings.with(|| {
-                        if !settings.is_current()
-                            || nova_providers::plugin_settings::settings_generation()
-                                != settings_generation
-                        {
-                            then(Err(FetchError::new(None, "Provider configuration changed")));
-                            return;
-                        }
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let result = if let Some(result) =
-                                nova_providers::fetch_builtin_addon_with_progress_for_generation(
-                                    &url,
-                                    on_progress,
-                                    settings_generation,
-                                ) {
-                                result.map_err(|error| FetchError::new(None, error.to_string()))
-                            } else {
-                                get_with_retries(&url)
-                            };
-                            let result = result
-                                .map(|bytes| nova_providers::enrich_addon_response(&url, bytes));
-                            if settings.is_current() {
-                                result
-                            } else {
-                                Err(FetchError::new(None, "Provider configuration changed"))
-                            }
-                        }));
-                        then(match result {
-                            Ok(r) => r,
-                            Err(payload) => {
-                                let outer = panic_message(payload);
-                                let mut msg = format!("fetch thread panicked: {outer}");
-                                // The payload above is usually just reqwest's
-                                // "event loop thread panicked" (its background
-                                // runtime died); the hook log holds the real
-                                // cause (earlier entries). Skip entries that
-                                // merely repeat the outer message.
-                                let causes: Vec<String> = take_recent_panics()
-                                    .into_iter()
-                                    .filter(|e| !e.contains(&outer))
-                                    .collect();
-                                if !causes.is_empty() {
-                                    msg.push_str(&format!(" [cause: {}]", causes.join(" | ")));
-                                }
-                                Err(FetchError::new(None, msg))
-                            }
-                        })
-                    })
-                })
-            })
-            .expect("spawn fetch thread");
+        fetch_bytes_with_progress_for_owner_with_limit(
+            url,
+            on_progress,
+            settings,
+            inventory,
+            addons::DEFAULT_JSON_BODY_LIMIT,
+            then,
+        );
     }
 
-    pub(super) fn get_with_retries(url: &str) -> Result<Vec<u8>, FetchError> {
+    /// JSON response allowance, clamped to Kit's documented 32 MiB hard ceiling.
+    pub fn fetch_bytes_with_progress_for_owner_with_limit(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        inventory: nova_providers::OwnedProviderSnapshot,
+        limit: usize,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
+        super::dispatch_bytes(
+            url,
+            on_progress,
+            settings,
+            inventory,
+            limit,
+            std::sync::Arc::new(|| true),
+            then,
+        );
+    }
+
+    pub(super) fn fetch_blocking(url: &str, limit: usize) -> Result<Vec<u8>, FetchError> {
+        get_with_retries(url, limit)
+    }
+
+    pub(super) fn get_with_retries(url: &str, limit: usize) -> Result<Vec<u8>, FetchError> {
         if let Some(result) = nova_providers::fetch_builtin_addon(url) {
             return result.map_err(|error| FetchError::new(None, error.to_string()));
         }
         let mut retries = 0usize;
         loop {
-            match get_once(url) {
+            match get_once(url, limit) {
                 Ok(bytes) => return Ok(bytes),
                 Err(e) => {
-                    let transient = match e.status {
-                        Some(status) => addons::TRANSIENT_STATUSES.contains(&status),
-                        // Transport-level failure: retryable.
-                        None => true,
-                    };
+                    let transient = e.retryable();
                     if transient && retries < addons::MAX_RETRIES {
                         retries += 1;
                         std::thread::sleep(Duration::from_millis(250 << (retries - 1)));
@@ -440,10 +540,10 @@ mod imp {
     }
 
     pub(super) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
-        get_with_retries(url).ok()
+        get_with_retries(url, addons::MAX_BODY_LIMIT).ok()
     }
 
-    fn get_once(url: &str) -> Result<Vec<u8>, FetchError> {
+    fn get_once(url: &str, limit: usize) -> Result<Vec<u8>, FetchError> {
         let client = HTTP_CLIENT
             .as_ref()
             .map_err(|e| FetchError::new(None, format!("http client init failed: {e}")))?;
@@ -458,19 +558,17 @@ mod imp {
                 format!("HTTP {status} for {url}"),
             ));
         }
-        resp.bytes()
-            .map(|b| b.to_vec())
-            .map_err(|e| FetchError::new(None, format!("read body failed: {e}")))
-    }
-
-    fn short_url(url: &str) -> String {
-        url.chars().take(48).collect()
+        let length = resp.content_length();
+        addons::read_bounded_body(resp, length, limit).map_err(|error| match error {
+            addons::Error::TooLarge { limit } => FetchError::too_large(limit),
+            error => FetchError::new(None, format!("read body failed: {error}")),
+        })
     }
 }
 
 pub(crate) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
     if let Some(bytes) = nova_providers::provider_asset_bytes(url) {
-        return Some(bytes.to_vec());
+        return (bytes.len() <= addons::MAX_BODY_LIMIT).then(|| bytes.to_vec());
     }
     imp::blocking_image_bytes(url)
 }
@@ -478,7 +576,7 @@ pub(crate) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
 pub use imp::install_panic_hook;
 pub use imp::{
     fetch_bytes, fetch_bytes_with_progress, fetch_bytes_with_progress_for_owner,
-    fetch_bytes_with_progress_for_settings,
+    fetch_bytes_with_progress_for_owner_with_limit, fetch_bytes_with_progress_for_settings,
 };
 
 /// The transport is platform-specific; recipe processing and cache ownership are shared.
@@ -487,24 +585,177 @@ pub fn fetch_image(
     image_use: impl Into<crate::cache::ImageUse>,
     then: impl FnOnce(Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) + Send + 'static,
 ) {
+    fetch_image_controlled(url, image_use, Arc::new(|| true), then);
+}
+
+/// Like byte fetches, a rejected image completes synchronously with None.
+/// The artwork worker performs cache lookup, blocking bytes and decode directly;
+/// it never submits to and waits for its own executor.
+/// Immutable transport authority captured before an artwork job enters a
+/// process-wide scheduler. Re-pumping from another owner's completion must use
+/// this value rather than recapturing that completion's ambient TLS scope.
+#[derive(Clone)]
+pub struct ImageFetchOwner {
+    settings: nova_providers::plugin_settings::SettingsCapability,
+    inventory: nova_providers::OwnedProviderSnapshot,
+    revision: u64,
+    generation: (u64, Arc<str>),
+}
+impl ImageFetchOwner {
+    pub fn new(
+        settings: nova_providers::plugin_settings::SettingsCapability,
+        inventory: nova_providers::OwnedProviderSnapshot,
+    ) -> Self {
+        let inventory_key: Arc<str> = inventory.with(|| {
+            let mut packages: Vec<_> = nova_providers::installed_packages()
+                .iter()
+                .map(|package| format!("{}:{}", package.url(), package.sha256()))
+                .collect();
+            packages.sort_unstable();
+            packages.push(format!("metadata:{}", nova_providers::metadata_revision()));
+            packages.join("\n").into()
+        });
+        let generation = (
+            settings.with(nova_providers::plugin_settings::settings_generation),
+            inventory_key,
+        );
+        Self {
+            settings,
+            inventory,
+            revision: nova_config::image_settings_revision(),
+            generation,
+        }
+    }
+    pub fn capture() -> Self {
+        Self::new(
+            nova_providers::plugin_settings::capture_settings_capability(),
+            nova_providers::OwnedProviderSnapshot::capture(),
+        )
+    }
+    /// Opaque in-process authority identity for scheduler coalescing only.
+    pub fn generation(&self) -> (u64, u64, Arc<str>) {
+        (self.generation.0, self.revision, self.generation.1.clone())
+    }
+}
+
+pub fn fetch_image_controlled(
+    url: String,
+    image_use: impl Into<crate::cache::ImageUse>,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+    then: impl FnOnce(Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) + Send + 'static,
+) -> FetchHandle {
+    fetch_image_for_owner_controlled(url, image_use, ImageFetchOwner::capture(), live, then)
+}
+
+/// Dispatch using scheduler-owned authority; never infer ownership from the
+/// thread that happens to release a previous transport's completion lane.
+pub fn fetch_image_for_owner_controlled(
+    url: String,
+    image_use: impl Into<crate::cache::ImageUse>,
+    owner: ImageFetchOwner,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+    then: impl FnOnce(Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) + Send + 'static,
+) -> FetchHandle {
+    fetch_image_for_owner_result_controlled(url, image_use, owner, live, move |result| {
+        then(result.ok());
+    })
+}
+
+/// Typed terminal result for bounded application artwork intake. Busy is
+/// admission pressure, never evidence that an artwork source is broken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageFetchFailure {
+    Busy,
+    Cancelled,
+    Unavailable,
+    Panicked,
+    SourceFailure,
+}
+
+/// Read before an admission attempt. A consumer with deferred work retries
+/// when this changes, including when unrelated artwork frees a queue slot.
+pub fn artwork_availability_revision() -> u64 {
+    ARTWORK.availability_revision()
+}
+
+pub fn fetch_image_for_owner_result_controlled(
+    url: String,
+    image_use: impl Into<crate::cache::ImageUse>,
+    owner: ImageFetchOwner,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+    then: impl FnOnce(Result<slint::SharedPixelBuffer<slint::Rgba8Pixel>, ImageFetchFailure>)
+    + Send
+    + 'static,
+) -> FetchHandle {
     let image_use = image_use.into();
-    std::thread::Builder::new()
-        .name("image-fetch".into())
-        .spawn(move || {
-            // A failed worker must still release the caller's loading state.
-            let pixels = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::cache::display_pixels(&url, image_use)
-            }))
-            .ok()
-            .flatten();
-            then(pixels);
-        })
-        .expect("spawn image worker");
+    let ImageFetchOwner {
+        settings,
+        inventory,
+        revision,
+        generation: _,
+    } = owner;
+    let accepted_settings = settings.clone();
+    let accepted_live = live.clone();
+    let completion_settings = settings.clone();
+    let completion_inventory = inventory.clone();
+    let (job, handle) = executor::Job::new(
+        move || {
+            accepted_settings.is_current()
+                && accepted_live()
+                && nova_config::image_settings_revision() == revision
+        },
+        move || {
+            inventory.with(|| {
+                settings.with(|| {
+                    let pixels = crate::cache::display_pixels(&url, image_use);
+                    if settings.is_current()
+                        && live()
+                        && nova_config::image_settings_revision() == revision
+                    {
+                        pixels.ok_or(ImageFetchFailure::SourceFailure)
+                    } else {
+                        Err(ImageFetchFailure::Cancelled)
+                    }
+                })
+            })
+        },
+        move |result| {
+            completion_inventory.with(|| {
+                completion_settings.with(|| {
+                    let result = match result {
+                        Ok(result) => result,
+                        Err(executor::Failure::Busy) => Err(ImageFetchFailure::Busy),
+                        Err(executor::Failure::Cancelled) => Err(ImageFetchFailure::Cancelled),
+                        Err(executor::Failure::Stopped | executor::Failure::Unavailable) => {
+                            Err(ImageFetchFailure::Unavailable)
+                        }
+                        Err(executor::Failure::Panicked) => Err(ImageFetchFailure::Panicked),
+                    };
+                    then(result);
+                })
+            })
+        },
+    );
+    ARTWORK.submit(job);
+    handle
 }
 
 /// Metadata service transport runs on the caller's fetch worker. It never
 /// starts a continuation and never accesses app/Slint state.
 struct MetadataTransport;
+
+// Metadata has one process-wide, immutable TLS/proxy/redirect policy. Only
+// request deadlines vary. Keep this separate from origin-bound captions and
+// DNS-pinned provider/public-directory clients, which carry other authority.
+static METADATA_HTTP_CLIENT: std::sync::LazyLock<Result<reqwest::blocking::Client, String>> =
+    std::sync::LazyLock::new(|| {
+        let builder =
+            reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::limited(5));
+        #[cfg(target_os = "android")]
+        let builder = builder.tls_backend_preconfigured(imp::tls_config()?);
+        builder.build().map_err(|error| error.to_string())
+    });
+
 impl nova_providers::AddonMetadataTransport for MetadataTransport {
     fn fetch(
         &self,
@@ -516,18 +767,12 @@ impl nova_providers::AddonMetadataTransport for MetadataTransport {
             return result;
         }
         use std::io::Read;
-        let builder = reqwest::blocking::Client::builder()
-            .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::limited(5));
-        #[cfg(target_os = "android")]
-        let builder = builder.tls_backend_preconfigured(
-            imp::tls_config().map_err(nova_providers::ProviderHostError)?,
-        );
-        let client = builder
-            .build()
-            .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
+        let client = METADATA_HTTP_CLIENT
+            .as_ref()
+            .map_err(|error| nova_providers::ProviderHostError(error.clone()))?;
         let response = client
             .get(url)
+            .timeout(timeout)
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
@@ -558,6 +803,190 @@ pub fn fetch_metadata_bytes(
 ) -> Result<Vec<u8>, nova_providers::ProviderHostError> {
     use nova_providers::AddonMetadataTransport;
     MetadataTransport.fetch(url, timeout, response_limit)
+}
+
+#[cfg(test)]
+mod metadata_client_tests {
+    use super::fetch_metadata_bytes;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+
+    struct Origin {
+        url: String,
+        accepted: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Origin {
+        fn new() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let count = accepted.clone();
+            let cancelled = stop.clone();
+            let worker = std::thread::spawn(move || {
+                let mut connections = Vec::new();
+                while !cancelled.load(Ordering::Acquire) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            count.fetch_add(1, Ordering::AcqRel);
+                            stream.set_nodelay(true).unwrap();
+                            stream
+                                .set_read_timeout(Some(Duration::from_millis(25)))
+                                .unwrap();
+                            let cancelled = cancelled.clone();
+                            connections.push(std::thread::spawn(move || {
+                                let mut request = Vec::new();
+                                while !cancelled.load(Ordering::Acquire) {
+                                    let mut byte = [0];
+                                    match stream.read(&mut byte) {
+                                        Ok(0) => break,
+                                        Ok(_) => request.push(byte[0]),
+                                        Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
+                                        Err(_) => break,
+                                    }
+                                    if !request.ends_with(b"\r\n\r\n") { continue; }
+                                    let request_text = String::from_utf8_lossy(&request);
+                                    let path = request_text.split_whitespace().nth(1).unwrap();
+                                    if path == "/slow" { std::thread::sleep(Duration::from_millis(80)); }
+                                    let response = if path.starts_with("/redirect/") {
+                                        let remaining: usize = path.rsplit('/').next().unwrap().parse().unwrap();
+                                        if remaining > 0 {
+                                            format!("HTTP/1.1 302 Found\r\nLocation: /redirect/{}\r\nContent-Length: 2\r\n\r\nok", remaining - 1)
+                                        } else {
+                                            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".into()
+                                        }
+                                    } else if path == "/large" {
+                                        format!("HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n{}", "x".repeat(1024))
+                                    } else {
+                                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".into()
+                                    };
+                                    if path == "/slow-body" {
+                                        let split = response.find("\r\n\r\n").unwrap() + 4;
+                                        if stream.write_all(&response.as_bytes()[..split]).is_err() { break; }
+                                        std::thread::sleep(Duration::from_millis(80));
+                                        if stream.write_all(&response.as_bytes()[split..]).is_err() { break; }
+                                    } else if stream.write_all(response.as_bytes()).is_err() { break; }
+                                    request.clear();
+                                }
+                            }));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1))
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                }
+                for connection in connections {
+                    connection.join().unwrap();
+                }
+            });
+            Self {
+                url,
+                accepted,
+                stop,
+                worker: Some(worker),
+            }
+        }
+    }
+
+    impl Drop for Origin {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+
+    #[test]
+    fn metadata_shared_client_reuses_keepalive_for_sequential_and_concurrent_fetches() {
+        let origin = Origin::new();
+        for _ in 0..100 {
+            assert_eq!(
+                fetch_metadata_bytes(&origin.url, Duration::from_secs(2), 16).unwrap(),
+                b"ok"
+            );
+        }
+        assert_eq!(origin.accepted.load(Ordering::Acquire), 1);
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let url = format!("{}/slow", origin.url);
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    assert_eq!(
+                        fetch_metadata_bytes(&url, Duration::from_secs(2), 16).unwrap(),
+                        b"ok"
+                    );
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.join().unwrap();
+        }
+        assert!(origin.accepted.load(Ordering::Acquire) <= 8);
+    }
+
+    #[test]
+    fn metadata_shared_client_keeps_twenty_origin_pools_separate() {
+        let origins: Vec<_> = (0..20).map(|_| Origin::new()).collect();
+        for origin in &origins {
+            for _ in 0..5 {
+                assert_eq!(
+                    fetch_metadata_bytes(&origin.url, Duration::from_secs(2), 16).unwrap(),
+                    b"ok"
+                );
+            }
+            assert_eq!(origin.accepted.load(Ordering::Acquire), 1);
+        }
+    }
+
+    #[test]
+    fn metadata_shared_client_keeps_deadlines_byte_limits_and_redirect_limits_per_request() {
+        let origin = Origin::new();
+        let slow = format!("{}/slow", origin.url);
+        assert!(fetch_metadata_bytes(&slow, Duration::from_millis(10), 16).is_err());
+        let slow_body = format!("{}/slow-body", origin.url);
+        assert!(fetch_metadata_bytes(&slow_body, Duration::from_millis(10), 16).is_err());
+        assert_eq!(
+            fetch_metadata_bytes(&slow_body, Duration::from_secs(2), 16).unwrap(),
+            b"ok"
+        );
+        assert_eq!(
+            fetch_metadata_bytes(&slow, Duration::from_secs(2), 16).unwrap(),
+            b"ok"
+        );
+        assert!(fetch_metadata_bytes(&slow, Duration::from_millis(10), 16).is_err());
+        let error =
+            fetch_metadata_bytes(&format!("{}/large", origin.url), Duration::from_secs(2), 16)
+                .unwrap_err();
+        assert!(error.to_string().contains("byte limit"));
+        assert_eq!(
+            fetch_metadata_bytes(
+                &format!("{}/redirect/5", origin.url),
+                Duration::from_secs(2),
+                16
+            )
+            .unwrap(),
+            b"ok"
+        );
+        assert!(
+            fetch_metadata_bytes(
+                &format!("{}/redirect/6", origin.url),
+                Duration::from_secs(2),
+                16
+            )
+            .is_err()
+        );
+    }
 }
 
 /// Fetch a source caption without sharing mpv's global HTTP authority. All
@@ -947,5 +1376,142 @@ mod tests {
         );
         assert!(rx.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
         nova_providers::set_installed_packages(previous_packages);
+    }
+}
+
+#[cfg(test)]
+mod bounded_transport_tests {
+    use super::*;
+
+    #[test]
+    fn oversize_without_status_is_never_retryable() {
+        let error = FetchError::too_large(8 * 1024 * 1024);
+        assert_eq!(
+            error.kind,
+            FetchErrorKind::TooLarge {
+                limit: 8 * 1024 * 1024
+            }
+        );
+        assert_eq!(error.status, None);
+        assert!(!error.retryable());
+        assert!(FetchError::new(None, "timeout").retryable());
+        assert!(FetchError::new(Some(504), "gateway").retryable());
+        assert!(!FetchError::new(Some(404), "missing").retryable());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn oversize_fetch_completes_once() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            socket.read(&mut request).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                addons::DEFAULT_JSON_BODY_LIMIT + 1
+            )
+            .unwrap();
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        fetch_bytes(format!("http://{addr}"), move |result| {
+            tx.send(result).unwrap()
+        });
+        let error = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            FetchErrorKind::TooLarge {
+                limit: addons::DEFAULT_JSON_BODY_LIMIT
+            }
+        );
+        assert!(matches!(rx.recv(), Err(std::sync::mpsc::RecvError)));
+        server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod executor_dispatch_tests {
+    use super::*;
+    use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn controlled_stale_bytes_and_images_complete_once_without_starting_transport() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (tx, rx) = mpsc::channel();
+        fetch_bytes_with_progress_for_owner_controlled(
+            format!(
+                "http://{}/meta/movie/id.json",
+                listener.local_addr().unwrap()
+            ),
+            Arc::new(|_| panic!("stale request must not publish progress")),
+            nova_providers::plugin_settings::capture_settings_capability(),
+            nova_providers::OwnedProviderSnapshot::capture(),
+            Arc::new(|| false),
+            move |result| {
+                tx.send(result).unwrap();
+            },
+        );
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_err());
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        let (tx, rx) = mpsc::channel();
+        fetch_image_controlled(
+            "http://127.0.0.1:1/no-network".into(),
+            crate::cache::ImageUse::DetailPoster,
+            Arc::new(|| false),
+            move |result| {
+                tx.send(result.is_none()).unwrap();
+            },
+        );
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn typed_stale_image_is_cancelled_once_without_transport() {
+        let (tx, rx) = mpsc::channel();
+        fetch_image_for_owner_result_controlled(
+            "http://127.0.0.1:1/no-network".into(),
+            crate::cache::ImageUse::DetailPoster,
+            ImageFetchOwner::capture(),
+            Arc::new(|| false),
+            move |result| {
+                tx.send(result.err()).unwrap();
+            },
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Some(ImageFetchFailure::Cancelled)
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn only_stream_path_components_select_reserved_workers() {
+        assert!(std::ptr::eq(
+            network_executor("nova-provider://fixture/stream/movie/id.json"),
+            &*URGENT
+        ));
+        assert!(std::ptr::eq(
+            network_executor("https://example.test/prefix/stream/movie/id.json?token=secret"),
+            &*URGENT
+        ));
+        assert!(std::ptr::eq(
+            network_executor("https://example.test/catalog/movie/id.json?next=/stream/"),
+            &*NETWORK
+        ));
+        assert!(std::ptr::eq(
+            network_executor("https://stream.example.test/metadata.json"),
+            &*NETWORK
+        ));
     }
 }

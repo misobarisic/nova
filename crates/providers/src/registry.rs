@@ -1397,6 +1397,22 @@ pub fn stable_stream_identity(
     format!("stream-{hex}")
 }
 
+/// A resolved stream and its optional in-memory relay owner. This wrapper is
+/// deliberately separate from the serializable addon stream contract.
+pub struct ResolvedProviderStream {
+    pub stream: addons::Stream,
+    pub relay: Option<crate::PlaybackRelayLease>,
+}
+
+impl From<addons::Stream> for ResolvedProviderStream {
+    fn from(stream: addons::Stream) -> Self {
+        Self {
+            stream,
+            relay: None,
+        }
+    }
+}
+
 /// Resolves a deferred token only inside its registered owner's sandbox. The
 /// caller supplies cancellation tied to the current UI request generation.
 /// A resolver keeps the exact package, settings owner and host state that
@@ -1412,12 +1428,25 @@ impl ResolverCapability {
     pub fn is_current(&self) -> bool {
         self.settings.is_current()
     }
+    /// Compatibility result without a retained relay owner. Long transfers
+    /// should use `resolve_with_lease`; an unowned relay has a fixed 600s grace.
     pub fn resolve(
         &self,
         token: &str,
         timeout: Duration,
         cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<addons::Stream, ProviderResolveError> {
+        self.resolve_with_lease(token, timeout, cancelled)
+            .map(|resolved| resolved.stream)
+    }
+
+    /// Retain the returned relay owner until the actual transfer finishes.
+    pub fn resolve_with_lease(
+        &self,
+        token: &str,
+        timeout: Duration,
+        cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<ResolvedProviderStream, ProviderResolveError> {
         let authority = self.clone();
         let cancelled: Arc<dyn Fn() -> bool + Send + Sync> =
             Arc::new(move || cancelled() || !authority.is_current());
@@ -1462,12 +1491,26 @@ pub fn capture_resolver_capability(
     }
     Ok(capability)
 }
+/// Compatibility result without a retained relay owner. Active players should
+/// use `resolve_provider_stream_with_lease` rather than the orphan grace period.
 pub fn resolve_provider_stream(
     provider_url: &str,
     token: &str,
     timeout: Duration,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
 ) -> Result<addons::Stream, ProviderResolveError> {
+    resolve_provider_stream_with_lease(provider_url, token, timeout, cancelled)
+        .map(|resolved| resolved.stream)
+}
+
+/// Resolve for an active player that keeps the optional relay owner through
+/// paused playback and drops it on replacement, failure, or close.
+pub fn resolve_provider_stream_with_lease(
+    provider_url: &str,
+    token: &str,
+    timeout: Duration,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<ResolvedProviderStream, ProviderResolveError> {
     if cancelled() {
         return Err(ProviderResolveError::cancelled());
     }
@@ -1481,7 +1524,7 @@ fn resolve_owned_provider_stream(
     token: &str,
     timeout: Duration,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
-) -> Result<addons::Stream, ProviderResolveError> {
+) -> Result<ResolvedProviderStream, ProviderResolveError> {
     if token.is_empty() || token.len() > 8192 {
         return Err(ProviderResolveError::generic());
     }
@@ -1512,13 +1555,14 @@ fn resolve_owned_provider_stream(
         return Err(ProviderResolveError::cancelled());
     }
     let mut value = result?;
+    let mut relay = None;
     if let Some(spec) = value.as_object_mut().and_then(|v| v.remove("novaHlsProxy")) {
         let spec = serde_json::from_value(spec).map_err(|_| ProviderResolveError::generic())?;
         let upstream = value
             .get("url")
             .and_then(Value::as_str)
             .ok_or_else(ProviderResolveError::generic)?;
-        let local = crate::hls_proxy::start(
+        let (local, lease) = crate::hls_proxy::start(
             upstream,
             spec,
             definition.plugin.permissions.domains.clone(),
@@ -1527,8 +1571,10 @@ fn resolve_owned_provider_stream(
         .map_err(|_| ProviderResolveError::generic())?;
         value["url"] = json!(local);
         value["novaSensitivePlayback"] = json!(true);
+        relay = Some(lease);
     }
-    serde_json::from_value(value).map_err(|_| ProviderResolveError::generic())
+    let stream = serde_json::from_value(value).map_err(|_| ProviderResolveError::generic())?;
+    Ok(ResolvedProviderStream { stream, relay })
 }
 
 /// The opt-in live test supplies an immutable in-memory credential snapshot;

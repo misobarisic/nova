@@ -1199,6 +1199,7 @@ struct State {
     packet_cache_defaults: Mutex<Option<PacketCacheDefaults>>,
     ram_buffer_progress: Mutex<RamStartupProgress>,
     sleep_deadline: Mutex<sleep_timer::Deadline>,
+    sleep_watchdog: std::sync::OnceLock<std::thread::Thread>,
     #[cfg(not(target_os = "android"))]
     playback_fullscreen: AtomicBool,
     #[cfg(not(target_os = "android"))]
@@ -1221,11 +1222,16 @@ struct State {
     mpv: Mutex<Option<Mpv>>,
     /// Invalidates queued captures when a stream is replaced or closed.
     screenshot_session: AtomicU64,
+    // Always lock mpv before osd_metadata. Lifecycle hooks only bump the epoch.
+    osd_metadata_epoch: AtomicU64,
     #[cfg(target_os = "android")]
     gpu_screenshot: Mutex<Option<gpu_screenshot::Request>>,
     /// Set when mpv could not be initialized / the renderer is not OpenGL.
     mpv_error: Mutex<Option<String>>,
     underlay: Mutex<Option<MpvGlUnderlay>>,
+    // Drop the observer after the render context: its private native client
+    // keeps the core alive until the underlay has been retired.
+    osd_metadata: Mutex<chapters::OsdMetadata>,
     /// Only the ignored native diagnostic may reproduce the old blocking path.
     #[cfg(test)]
     timing_baseline: AtomicBool,
@@ -1344,6 +1350,10 @@ struct State {
 }
 
 impl State {
+    fn invalidate_osd_metadata(&self) {
+        self.osd_metadata_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// Read only the current accepted source. An external track receives
     /// declared facts only through an exact URL + playback-session match.
     fn track_inventory(&self, mpv: &Mpv) -> libmpv2::Result<String> {
@@ -1390,6 +1400,9 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
+        if let Some(worker) = self.sleep_watchdog.get() {
+            worker.unpark();
+        }
         if self.underlay.get_mut().unwrap().is_some() {
             // A backend that misses teardown cannot safely free GL resources
             // here. Keep the core and callback allocation alive as well; mpv
@@ -1552,6 +1565,7 @@ impl Player {
             packet_cache_defaults: Mutex::new(None),
             ram_buffer_progress: Mutex::new(Default::default()),
             sleep_deadline: Mutex::new(Default::default()),
+            sleep_watchdog: std::sync::OnceLock::new(),
             native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
             preference_source: Mutex::new(String::new()),
@@ -1571,10 +1585,12 @@ impl Player {
             audio_processing: Mutex::new(Default::default()),
             mpv: Mutex::new(mpv.ok()),
             screenshot_session: AtomicU64::new(0),
+            osd_metadata_epoch: AtomicU64::new(0),
             #[cfg(target_os = "android")]
             gpu_screenshot: Mutex::new(None),
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
+            osd_metadata: Mutex::new(Default::default()),
             #[cfg(test)]
             timing_baseline: AtomicBool::new(false),
             #[cfg(test)]
@@ -1661,6 +1677,7 @@ impl Player {
                     }
                     match state {
                     RenderingState::RenderingSetup => {
+                        notifier_state.invalidate_osd_metadata();
                         let mpv = notifier_state.mpv.lock().unwrap();
                         let Some(mpv) = mpv.as_ref() else {
                             return; // mpv init failed; play() reports the error
@@ -1853,6 +1870,9 @@ impl Player {
                             if let Ok(mpv) = notifier_state.mpv.lock()
                                 && let Some(mpv) = mpv.as_ref()
                             {
+                                // Same-URL native reloads do not advance the
+                                // screenshot session, but must retire OSD receipts.
+                                notifier_state.invalidate_osd_metadata();
                                 let paused = notifier_state.take_load_pause();
                                 // Set pause once, before loadfile: restoring a
                                 // paused frame must not briefly start playback.
@@ -2012,6 +2032,7 @@ impl Player {
                         notifier_state.timing_mpv_us.store(render_start.elapsed().as_micros() as u64, Ordering::Relaxed);
                     }
                     RenderingState::RenderingTeardown => {
+                        notifier_state.invalidate_osd_metadata();
                         // A queued capture belongs to this surface. Wake the worker
                         // with Unavailable instead of retaining it across recovery.
                         #[cfg(target_os = "android")]
@@ -2242,6 +2263,7 @@ impl Player {
             let mpv = self.state.mpv.lock().unwrap();
             self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());
             self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
+            self.state.invalidate_osd_metadata();
             self.state.started.store(false, Ordering::SeqCst);
         }
         self.state
@@ -3005,6 +3027,7 @@ impl Player {
                 },
             )
             .ok()?;
+            self.state.invalidate_osd_metadata();
             let mut session = self.state.preferences.lock().ok()?;
             if !audio {
                 self.state
@@ -3042,6 +3065,9 @@ impl Player {
 
     /// Reset just one field; all other session choices remain untouched.
     pub fn restore_playback_default(&self, control: i32, settings: &nova_config::CacheSettings) {
+        if control == 0 || control == 1 {
+            self.state.invalidate_osd_metadata();
+        }
         {
             let mpv = self.state.mpv.lock().unwrap();
             let mut session = self.state.preferences.lock().unwrap();
@@ -3361,6 +3387,7 @@ impl Player {
         if raw == session.tracks {
             return false;
         }
+        self.state.invalidate_osd_metadata();
         session.tracks = raw.clone();
         self.state
             .subtitle_sync
@@ -3800,6 +3827,7 @@ impl Player {
             let mpv = self.state.mpv.lock().unwrap();
             self.state.subtitle_sync.lock().unwrap().clear(mpv.as_ref());
             self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
+            self.state.invalidate_osd_metadata();
             self.state.started.store(false, Ordering::SeqCst);
         }
         self.state.external_handoff.store(false, Ordering::SeqCst);
@@ -3979,6 +4007,11 @@ impl Player {
         // ownership first so cache polling cannot invert that lock order.
         let pending_load = self.state.pending.lock().unwrap().is_some();
         let buffer_source = self.state.preference_source.lock().unwrap().clone();
+        // Use the language actually displayed (including translation fallback),
+        // and never acquire the backend-text lock while holding mpv.
+        let chapter_label = app
+            .get_osd_visible()
+            .then(|| nova_ui::backend_text::tr("Chapter"));
         let snapshot = {
             let Ok(mpv) = self.state.mpv.lock() else {
                 return;
@@ -4070,6 +4103,44 @@ impl Player {
                 *self.state.seek_deadline.lock().unwrap() = None;
             }
 
+            let metadata = if !pending_load
+                && let Some(chapter_label) = chapter_label
+                && mpv.get_property::<String>("path").ok().as_deref()
+                    == Some(buffer_source.as_str())
+            {
+                let session = self.state.screenshot_session.load(Ordering::SeqCst);
+                let epoch = self.state.osd_metadata_epoch.load(Ordering::Acquire);
+                let update = self.state.osd_metadata.lock().unwrap().poll(
+                    mpv,
+                    session,
+                    epoch,
+                    dur,
+                    chapter_label,
+                    Instant::now(),
+                );
+                if (update.chapters.is_some() || update.badges.is_some())
+                    && (self.state.screenshot_session.load(Ordering::SeqCst) != session
+                        || self.state.osd_metadata_epoch.load(Ordering::Acquire) != epoch
+                        || mpv.get_property::<String>("path").ok().as_deref()
+                            != Some(buffer_source.as_str()))
+                {
+                    // Native loading can progress while the app mutex is held.
+                    // Reject a mixed-source read and retire its receipt too.
+                    self.state.invalidate_osd_metadata();
+                    chapters::Update {
+                        chapters: None,
+                        badges: None,
+                    }
+                } else {
+                    update
+                }
+            } else {
+                chapters::Update {
+                    chapters: None,
+                    badges: None,
+                }
+            };
+
             Snapshot {
                 pos,
                 #[cfg(target_os = "android")]
@@ -4078,18 +4149,10 @@ impl Player {
                 live_paused,
                 dur,
                 buffered_until,
-                // Hidden controls need no repeated metadata reads. A pending
-                // replacement must never display the previous file's badges.
-                media_badges: (!pending_load
-                    && app.get_osd_visible()
-                    && mpv.get_property::<String>("path").ok().as_deref()
-                        == Some(buffer_source.as_str()))
-                .then(|| media_badges::read(mpv)),
-                chapters: (!pending_load
-                    && app.get_osd_visible()
-                    && mpv.get_property::<String>("path").ok().as_deref()
-                        == Some(buffer_source.as_str()))
-                .then(|| chapters::read(mpv, dur)),
+                // Warm unchanged receipts emit no update or repeated native/JSON
+                // work. Pending/hidden/source guards remain outside the cache.
+                media_badges: metadata.badges,
+                chapters: metadata.chapters,
                 paused,
                 // Mirror volume/mute (cheap reads; keeps UI in sync if changed
                 // via keyboard shortcuts or external controls).
@@ -4452,6 +4515,7 @@ impl Player {
             };
             (next_idx, mode)
         };
+        self.state.invalidate_osd_metadata();
         self.state.decoder_idx.store(next_idx, Ordering::SeqCst);
         // Capture the live position before `hwdec` is touched (it can briefly
         // unset `time-pos`), so a stall-triggered fallback resumes in place.
@@ -4663,6 +4727,7 @@ impl Player {
         *self.state.pending_start.lock().unwrap() = resume_at.map(|p| p.max(0.0));
         // Re-arm the load: the `BeforeRendering` handler picks `pending` up
         // and reloads at the queued start.
+        self.state.invalidate_osd_metadata();
         *self.state.pending.lock().unwrap() = Some(url);
         self.state.started.store(false, Ordering::SeqCst);
         self.state.buffering.store(false, Ordering::SeqCst);

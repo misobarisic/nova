@@ -3,18 +3,19 @@ use libmpv2::Mpv;
 use serde_json::Value;
 
 pub(super) fn read(mpv: &Mpv) -> Vec<slint::SharedString> {
-    let node = |name| {
-        mpv.get_property::<String>(name)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    read_with(|name| mpv.get_property::<String>(name).ok())
+}
+
+fn read_with(mut get: impl FnMut(&str) -> Option<String>) -> Vec<slint::SharedString> {
+    let node = |raw: Option<String>| {
+        raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null)
     };
     labels(
-        &node("video-params"),
-        &mpv.get_property::<String>("video-format")
-            .unwrap_or_default(),
-        &node("current-tracks/audio"),
-        &node("audio-params"),
+        &node(get("video-params")),
+        &get("video-format").unwrap_or_default(),
+        &node(get("current-tracks/audio")),
+        &node(get("audio-params")),
     )
     .into_iter()
     .map(Into::into)
@@ -80,6 +81,38 @@ fn labels(video: &Value, codec: &str, audio: &Value, params: &Value) -> Vec<Stri
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_badge_snapshot_reads_each_property_once_and_tracks_audio_changes() {
+        let mut names = Vec::new();
+        let mut snapshot = |language: &str| {
+            read_with(|name| {
+                names.push(name.to_owned());
+                Some(match name {
+                    "video-params" => r#"{"w":1920,"h":1080}"#.into(),
+                    "video-format" => "h264".into(),
+                    "current-tracks/audio" => json!({"lang":language}).to_string(),
+                    "audio-params" => r#"{"channels":"stereo"}"#.into(),
+                    _ => panic!("unexpected property"),
+                })
+            })
+        };
+        assert_eq!(snapshot("eng"), ["1080p", "H.264", "English 2.0"]);
+        assert_eq!(snapshot("hrv"), ["1080p", "H.264", "Croatian 2.0"]);
+        assert_eq!(
+            names,
+            [
+                "video-params",
+                "video-format",
+                "current-tracks/audio",
+                "audio-params",
+                "video-params",
+                "video-format",
+                "current-tracks/audio",
+                "audio-params"
+            ]
+        );
+    }
 
     #[test]
     fn cropped_and_portrait_video_keep_source_resolution_and_hdr_is_conservative() {

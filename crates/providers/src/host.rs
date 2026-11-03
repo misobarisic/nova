@@ -4,7 +4,7 @@ use std::{
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -18,6 +18,310 @@ use reqwest::{
 };
 
 const MAX_REQUEST_BODY: usize = 256 * 1024;
+
+const MAX_DNS_WORKERS: usize = 4;
+const MAX_DNS_QUEUED: usize = 16;
+const MAX_DNS_ADDRESSES: usize = 16;
+const DNS_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+// A caller may stop waiting for libc DNS, but only the actual resolver worker
+// can release its slot. Admission also bounds queued callers; no unbounded job
+// queue or detached worker is created when all resolver slots are occupied.
+struct DnsPool {
+    active: Mutex<usize>,
+    changed: Condvar,
+    queued: AtomicUsize,
+    #[cfg(test)]
+    peak_active: AtomicUsize,
+    #[cfg(test)]
+    peak_queued: AtomicUsize,
+}
+
+impl DnsPool {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(0),
+            changed: Condvar::new(),
+            queued: AtomicUsize::new(0),
+            #[cfg(test)]
+            peak_active: AtomicUsize::new(0),
+            #[cfg(test)]
+            peak_queued: AtomicUsize::new(0),
+        }
+    }
+
+    fn acquire(
+        &'static self,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<DnsPermit, ProviderHostError> {
+        // Declare the queue token first so the mutex guard unwinds before it.
+        // Its atomic drop also releases a queue position if cancellation panics.
+        let mut queued = None;
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        loop {
+            check_dns_active(deadline, cancelled)?;
+            if *active < MAX_DNS_WORKERS {
+                *active += 1;
+                #[cfg(test)]
+                self.peak_active.fetch_max(*active, Ordering::Relaxed);
+                return Ok(DnsPermit(self));
+            }
+            if queued.is_none() {
+                let count = self
+                    .queued
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                        (count < MAX_DNS_QUEUED).then_some(count + 1)
+                    })
+                    .map_err(|_| {
+                        ProviderHostError("provider DNS admission queue is full".into())
+                    })?
+                    + 1;
+                queued = Some(DnsQueued(self));
+                #[cfg(test)]
+                self.peak_queued.fetch_max(count, Ordering::Relaxed);
+                #[cfg(not(test))]
+                let _ = count;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            active = self
+                .changed
+                .wait_timeout(active, remaining.min(DNS_POLL_INTERVAL))
+                .unwrap_or_else(|error| error.into_inner())
+                .0;
+        }
+    }
+}
+
+struct DnsQueued(&'static DnsPool);
+impl Drop for DnsQueued {
+    fn drop(&mut self) {
+        self.0.queued.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct DnsPermit(&'static DnsPool);
+impl Drop for DnsPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .0
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *active -= 1;
+        self.0.changed.notify_one();
+    }
+}
+
+fn dns_pool() -> &'static DnsPool {
+    static POOL: OnceLock<DnsPool> = OnceLock::new();
+    POOL.get_or_init(DnsPool::new)
+}
+
+fn check_dns_active(
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), ProviderHostError> {
+    if cancelled() {
+        return Err(ProviderHostError("provider operation cancelled".into()));
+    }
+    if Instant::now() >= deadline {
+        return Err(ProviderHostError("provider DNS lookup timed out".into()));
+    }
+    Ok(())
+}
+
+type DnsTask = Box<dyn FnOnce() + Send>;
+
+fn launch_dns_worker(task: DnsTask) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("provider-dns".into())
+        .spawn(task)
+        .map(|_| ())
+}
+
+fn resolve_dns_with(
+    pool: &'static DnsPool,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+    resolve: impl FnOnce() -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+    launch: impl FnOnce(DnsTask) -> std::io::Result<()>,
+) -> Result<Vec<SocketAddr>, ProviderHostError> {
+    let permit = pool.acquire(deadline, cancelled)?;
+    check_dns_active(deadline, cancelled)?;
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    launch(Box::new(move || {
+        let _permit = permit;
+        let _ = send.send(resolve());
+    }))
+    .map_err(|_| ProviderHostError("provider DNS worker unavailable".into()))?;
+    loop {
+        check_dns_active(deadline, cancelled)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match receive.recv_timeout(remaining.min(DNS_POLL_INTERVAL)) {
+            Ok(result) => {
+                // A result racing cancellation/deadline expiry cannot authorize
+                // a subsequent connection, even if the OS lookup succeeded.
+                check_dns_active(deadline, cancelled)?;
+                let addresses =
+                    result.map_err(|_| ProviderHostError("provider DNS lookup failed".into()))?;
+                validate_dns_addresses(&addresses)?;
+                return Ok(addresses);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(ProviderHostError("provider DNS worker unavailable".into()));
+            }
+        }
+    }
+}
+
+fn validate_dns_addresses(addresses: &[SocketAddr]) -> Result<(), ProviderHostError> {
+    if addresses.is_empty()
+        || addresses.len() > MAX_DNS_ADDRESSES
+        || addresses.iter().any(|address| !is_public_ip(address.ip()))
+    {
+        return Err(ProviderHostError(
+            "provider DNS returned invalid or non-public addresses".into(),
+        ));
+    }
+    Ok(())
+}
+
+// Logical controlled-allocation budget, independent of transport/TLS and RSS.
+// A segment is decoded in place. Playlists may overlap input, rewritten output,
+// and parser temporaries; charge four body ceilings plus 256 KiB of headroom.
+const PLAYBACK_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+const PLAYBACK_OVERHEAD_BYTES: usize = 256 * 1024;
+
+struct PlaybackBudget {
+    used: Mutex<usize>,
+    changed: Condvar,
+    limit: usize,
+}
+
+impl PlaybackBudget {
+    fn acquire(
+        &'static self,
+        body_limit: usize,
+        playlist: bool,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PlaybackBodyPermit, ProviderHostError> {
+        if body_limit > 16 * 1024 * 1024 {
+            return Err(ProviderHostError("invalid playback body limit".into()));
+        }
+        let charge = (body_limit + 1) * if playlist { 4 } else { 1 } + PLAYBACK_OVERHEAD_BYTES;
+        if charge > self.limit {
+            return Err(ProviderHostError(
+                "playback body exceeds memory budget".into(),
+            ));
+        }
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
+        loop {
+            if cancelled() {
+                return Err(ProviderHostError("provider operation cancelled".into()));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ProviderHostError(
+                    "playback memory admission timed out".into(),
+                ));
+            }
+            if *used <= self.limit - charge {
+                *used += charge;
+                return Ok(PlaybackBodyPermit {
+                    budget: self,
+                    charge,
+                    body_limit,
+                });
+            }
+            // Cancellation has no notification hook, so bound its observation lag.
+            used = self
+                .changed
+                .wait_timeout(used, remaining.min(Duration::from_millis(25)))
+                .unwrap_or_else(|error| error.into_inner())
+                .0;
+        }
+    }
+}
+
+pub(crate) struct PlaybackBodyPermit {
+    budget: &'static PlaybackBudget,
+    charge: usize,
+    body_limit: usize,
+}
+
+impl PlaybackBodyPermit {
+    pub(crate) fn acquire(
+        body_limit: usize,
+        playlist: bool,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, ProviderHostError> {
+        static BUDGET: OnceLock<PlaybackBudget> = OnceLock::new();
+        BUDGET
+            .get_or_init(|| PlaybackBudget {
+                used: Mutex::new(0),
+                changed: Condvar::new(),
+                limit: PLAYBACK_MEMORY_BYTES,
+            })
+            .acquire(body_limit, playlist, deadline, cancelled)
+    }
+}
+
+impl Drop for PlaybackBodyPermit {
+    fn drop(&mut self) {
+        let mut used = self
+            .budget
+            .used
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *used -= self.charge;
+        self.budget.changed.notify_all();
+    }
+}
+
+/// Allocate once at the sentinel ceiling: unknown lengths cannot trigger Vec
+/// geometric growth. Read at most limit + 1, checking cancellation each chunk.
+fn read_bounded_body(
+    mut reader: impl Read,
+    length: Option<u64>,
+    limit: usize,
+    active: impl Fn() -> Result<(), ProviderHostError>,
+) -> Result<Vec<u8>, ProviderHostError> {
+    active()?;
+    if length.is_some_and(|length| length > limit as u64) {
+        return Err(ProviderHostError(
+            "provider response exceeded its byte limit".into(),
+        ));
+    }
+    let mut body = vec![0; limit + 1];
+    let mut read = 0;
+    loop {
+        active()?;
+        let end = (read + 64 * 1024).min(body.len());
+        let count = match reader.read(&mut body[read..end]) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ProviderHostError("could not read provider response".into())),
+        };
+        read += count;
+        active()?;
+        if read > limit {
+            return Err(ProviderHostError(
+                "provider response exceeded its byte limit".into(),
+            ));
+        }
+        if count == 0 {
+            body.truncate(read);
+            return Ok(body);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -217,6 +521,10 @@ pub trait ProviderHost: Send + Sync {
     fn log(&self, message: &str);
 }
 
+#[cfg(test)]
+pub(crate) type TestTransport =
+    Arc<dyn Fn(&HttpRequest) -> (Box<dyn Read + Send>, Option<u64>) + Send + Sync>;
+
 /// Host-side policy for a provider runtime. Each operation gets a request
 /// budget and the HTTP client revalidates and pins DNS results on every
 /// redirect before sending the next request.
@@ -225,12 +533,15 @@ pub struct ScopedHttpHost {
     domains: Vec<String>,
     deadline: Instant,
     response_bytes: usize,
+    aggregate_response_bytes: usize,
     redirect_limit: usize,
     request_limit: usize,
     requests: AtomicUsize,
     total_response_bytes: AtomicUsize,
     total_request_bytes: AtomicUsize,
     cancellation: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    #[cfg(test)]
+    pub(crate) test_transport: Option<TestTransport>,
 }
 
 impl ScopedHttpHost {
@@ -248,13 +559,46 @@ impl ScopedHttpHost {
             domains,
             deadline: Instant::now() + timeout,
             response_bytes: response_bytes.min(2 * 1024 * 1024),
+            aggregate_response_bytes: response_bytes.min(2 * 1024 * 1024).saturating_mul(4),
             redirect_limit: redirect_limit.min(10),
             request_limit: request_limit.min(64),
             requests: AtomicUsize::new(0),
             total_response_bytes: AtomicUsize::new(0),
             total_request_bytes: AtomicUsize::new(0),
             cancellation: None,
+            #[cfg(test)]
+            test_transport: None,
         }
+    }
+
+    /// Native relay only. Caller must retain the admitted permit through the
+    /// downstream write. Operation response allowance is explicitly four bodies
+    /// (playlist 8 MiB, segment 64 MiB, key 256 KiB), distinct from live memory.
+    pub(crate) fn playback(
+        domains: Vec<String>,
+        deadline: Instant,
+        permit: &PlaybackBodyPermit,
+        cancellation: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        let mut host = Self::new(session_state(), domains, Duration::from_secs(20), 0, 3, 4);
+        host.deadline = deadline;
+        host.response_bytes = permit.body_limit;
+        host.aggregate_response_bytes = permit.body_limit.saturating_mul(4);
+        host.cancellation = Some(cancellation);
+        host
+    }
+
+    fn account_response(&self, bytes: usize) -> Result<(), ProviderHostError> {
+        self.total_response_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                total
+                    .checked_add(bytes)
+                    .filter(|total| *total <= self.aggregate_response_bytes)
+            })
+            .map(|_| ())
+            .map_err(|_| {
+                ProviderHostError("provider exceeded its aggregate response byte limit".into())
+            })
     }
 
     pub fn with_cancellation(mut self, cancellation: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
@@ -308,23 +652,24 @@ impl ScopedHttpHost {
             Some(url::Host::Ipv4(address)) => vec![SocketAddr::new(IpAddr::V4(address), port)],
             Some(url::Host::Ipv6(address)) => vec![SocketAddr::new(IpAddr::V6(address), port)],
             _ => {
-                let (send, receive) = std::sync::mpsc::sync_channel(1);
                 let dns_host = host.clone();
-                std::thread::spawn(move || {
-                    let result = (dns_host.as_str(), port)
-                        .to_socket_addrs()
-                        .map(|addresses| addresses.collect::<Vec<_>>());
-                    let _ = send.send(result);
-                });
-                receive
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                    .map_err(|_| ProviderHostError("provider DNS lookup timed out".into()))?
-                    .map_err(|error| {
-                        ProviderHostError(format!("DNS lookup failed for {host}: {error}"))
-                    })?
+                resolve_dns_with(
+                    dns_pool(),
+                    deadline,
+                    &|| self.cancelled(),
+                    move || {
+                        (dns_host.as_str(), port)
+                            .to_socket_addrs()
+                            .map(|addresses| addresses.take(MAX_DNS_ADDRESSES + 1).collect())
+                    },
+                    launch_dns_worker,
+                )?
             }
         };
-        if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
+        if addresses.is_empty()
+            || addresses.len() > MAX_DNS_ADDRESSES
+            || addresses.iter().any(|address| !is_public_ip(address.ip()))
+        {
             return Err(ProviderHostError(format!(
                 "provider host {host} resolved to a non-public address"
             )));
@@ -363,6 +708,25 @@ impl ProviderHost for ScopedHttpHost {
             return Err(ProviderHostError(
                 "provider exceeded its per-operation request limit".into(),
             ));
+        }
+
+        #[cfg(test)]
+        if let Some(transport) = &self.test_transport {
+            let (reader, length) = transport(input);
+            let body = read_bounded_body(reader, length, self.response_bytes, || {
+                self.check_active()?;
+                if Instant::now() >= deadline {
+                    return Err(ProviderHostError("provider HTTP request timed out".into()));
+                }
+                Ok(())
+            })?;
+            self.account_response(body.len())?;
+            return Ok(HttpResponse {
+                status: 200,
+                final_url: raw_url.into(),
+                content_type: None,
+                body,
+            });
         }
 
         let mut target = Url::parse(raw_url)
@@ -485,44 +849,19 @@ impl ProviderHost for ScopedHttpHost {
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
-            if response
-                .content_length()
-                .is_some_and(|length| length > self.response_bytes as u64)
-            {
-                return Err(ProviderHostError(
-                    "provider response exceeded its byte limit".into(),
-                ));
-            }
-            let mut body = Vec::with_capacity(
-                response
-                    .content_length()
-                    .unwrap_or(0)
-                    .min(self.response_bytes as u64) as usize,
-            );
-            response
-                .by_ref()
-                .take(self.response_bytes as u64 + 1)
-                .read_to_end(&mut body)
-                .map_err(|_| ProviderHostError("could not read provider response".into()))?;
-            if body.len() > self.response_bytes {
-                return Err(ProviderHostError(
-                    "provider response exceeded its byte limit".into(),
-                ));
-            }
+            let length = response.content_length();
+            let body = read_bounded_body(&mut response, length, self.response_bytes, || {
+                self.check_active()?;
+                if Instant::now() >= deadline {
+                    return Err(ProviderHostError("provider HTTP request timed out".into()));
+                }
+                Ok(())
+            })?;
             self.check_active()?;
             if Instant::now() >= deadline {
                 return Err(ProviderHostError("provider HTTP request timed out".into()));
             }
-            if self
-                .total_response_bytes
-                .fetch_add(body.len(), Ordering::Relaxed)
-                .saturating_add(body.len())
-                > self.response_bytes.saturating_mul(4)
-            {
-                return Err(ProviderHostError(
-                    "provider exceeded its aggregate response byte limit".into(),
-                ));
-            }
+            self.account_response(body.len())?;
             return Ok(HttpResponse {
                 status: status.as_u16(),
                 final_url: target.to_string(),
@@ -698,6 +1037,547 @@ pub(crate) fn session_state() -> Arc<MemoryProviderHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_dns_pool() -> &'static DnsPool {
+        Box::leak(Box::new(DnsPool::new()))
+    }
+
+    fn wait_dns_empty(pool: &'static DnsPool) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut active = pool.active.lock().unwrap();
+        while *active != 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "resolver did not return its actual worker permit"
+            );
+            active = pool.changed.wait_timeout(active, remaining).unwrap().0;
+        }
+        assert_eq!(pool.queued.load(Ordering::Relaxed), 0);
+    }
+
+    fn dns_process_status() -> Option<String> {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .map(|status| {
+                status
+                    .lines()
+                    .filter(|line| {
+                        line.starts_with("VmRSS:")
+                            || line.starts_with("VmHWM:")
+                            || line.starts_with("Threads:")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+    }
+
+    #[test]
+    fn dns_timed_out_callers_keep_actual_workers_bounded_and_recover() {
+        let pool = test_dns_pool();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let started = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(std::sync::Barrier::new(100));
+        let before = dns_process_status();
+        let handles: Vec<_> = (0..100)
+            .map(|_| {
+                let gate = gate.clone();
+                let started = started.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let clock = Instant::now();
+                    let result = resolve_dns_with(
+                        pool,
+                        clock + Duration::from_millis(100),
+                        &|| false,
+                        move || {
+                            started.fetch_add(1, Ordering::Relaxed);
+                            let mut released = gate.0.lock().unwrap();
+                            while !*released {
+                                released = gate.1.wait(released).unwrap();
+                            }
+                            Ok(vec!["1.1.1.1:443".parse().unwrap()])
+                        },
+                        launch_dns_worker,
+                    );
+                    (clock.elapsed().as_micros(), result.err().unwrap().0)
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(started.load(Ordering::Relaxed), MAX_DNS_WORKERS);
+        assert_eq!(*pool.active.lock().unwrap(), MAX_DNS_WORKERS);
+        assert_eq!(pool.queued.load(Ordering::Relaxed), 0);
+        assert_eq!(pool.peak_active.load(Ordering::Relaxed), MAX_DNS_WORKERS);
+        assert!(pool.peak_queued.load(Ordering::Relaxed) <= MAX_DNS_QUEUED);
+        let after_timeouts = dns_process_status();
+        // New operations with fresh deadlines still cannot create extra DNS
+        // workers while earlier timed-out operations retain their actual slots.
+        for _ in 0..10 {
+            assert!(
+                resolve_dns_with(
+                    pool,
+                    Instant::now(),
+                    &|| false,
+                    || panic!("must not resolve"),
+                    launch_dns_worker
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(*pool.active.lock().unwrap(), MAX_DNS_WORKERS);
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        wait_dns_empty(pool);
+        assert_eq!(
+            resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+                || Ok(vec!["[2606:4700:4700::1111]:443".parse().unwrap()]),
+                launch_dns_worker
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        wait_dns_empty(pool);
+        eprintln!(
+            "MED06 callers=100 active_after_timeouts=4 peak_active={} peak_queued={} final_active=0 before={before:?} after_timeouts={after_timeouts:?} after_recovery={:?} raw_elapsed_us_errors={results:?}",
+            pool.peak_active.load(Ordering::Relaxed),
+            pool.peak_queued.load(Ordering::Relaxed),
+            dns_process_status()
+        );
+    }
+
+    #[test]
+    fn dns_address_limits_spawn_failures_and_worker_panics_release_slots() {
+        let pool = test_dns_pool();
+        for count in [0, 16, 17] {
+            let result = resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+                move || Ok(vec!["1.1.1.1:443".parse().unwrap(); count]),
+                launch_dns_worker,
+            );
+            assert_eq!(result.is_ok(), count == 16);
+            wait_dns_empty(pool);
+        }
+        for addresses in [
+            vec![
+                "1.1.1.1:443".parse().unwrap(),
+                "[2606:4700:4700::1111]:443".parse().unwrap(),
+            ],
+            vec![
+                "1.1.1.1:443".parse().unwrap(),
+                "127.0.0.1:443".parse().unwrap(),
+            ],
+            vec!["[::1]:443".parse().unwrap()],
+        ] {
+            let public = addresses
+                .iter()
+                .all(|address: &SocketAddr| is_public_ip(address.ip()));
+            assert_eq!(
+                resolve_dns_with(
+                    pool,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| false,
+                    move || Ok(addresses),
+                    launch_dns_worker
+                )
+                .is_ok(),
+                public
+            );
+            wait_dns_empty(pool);
+        }
+        assert!(
+            resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+                || panic!("failed launch cannot execute resolver"),
+                |_| Err(std::io::Error::other("injected spawn failure"))
+            )
+            .err()
+            .unwrap()
+            .0
+            .contains("unavailable")
+        );
+        wait_dns_empty(pool);
+        assert!(
+            resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+                || panic!("injected resolver panic"),
+                launch_dns_worker
+            )
+            .is_err()
+        );
+        wait_dns_empty(pool);
+    }
+
+    #[test]
+    fn dns_cancellation_and_deadline_discard_results_and_queue_positions() {
+        let pool = test_dns_pool();
+        assert!(
+            resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(1),
+                &|| true,
+                || panic!("cancelled call must not resolve"),
+                launch_dns_worker
+            )
+            .err()
+            .unwrap()
+            .0
+            .contains("cancelled")
+        );
+        assert_eq!(*pool.active.lock().unwrap(), 0);
+        let permits: Vec<_> = (0..MAX_DNS_WORKERS)
+            .map(|_| {
+                pool.acquire(Instant::now() + Duration::from_secs(1), &|| false)
+                    .unwrap()
+            })
+            .collect();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = cancelled.clone();
+        let waiter = std::thread::spawn(move || {
+            resolve_dns_with(
+                pool,
+                Instant::now() + Duration::from_secs(2),
+                &|| signal.load(Ordering::Relaxed),
+                || panic!("queued cancellation must not resolve"),
+                launch_dns_worker,
+            )
+        });
+        let until = Instant::now() + Duration::from_secs(1);
+        while pool.queued.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(
+            waiter
+                .join()
+                .unwrap()
+                .err()
+                .unwrap()
+                .0
+                .contains("cancelled")
+        );
+        assert_eq!(pool.queued.load(Ordering::Relaxed), 0);
+        drop(permits);
+        wait_dns_empty(pool);
+        // Cancellation races a successful resolver completion: no stale answer.
+        for deadline_wins in [false, true] {
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let signal = cancelled.clone();
+            let deadline = Instant::now()
+                + if deadline_wins {
+                    Duration::from_millis(5)
+                } else {
+                    Duration::from_secs(1)
+                };
+            let result = resolve_dns_with(
+                pool,
+                deadline,
+                &|| cancelled.load(Ordering::Relaxed),
+                move || {
+                    if deadline_wins {
+                        std::thread::sleep(Duration::from_millis(15));
+                    } else {
+                        signal.store(true, Ordering::Relaxed);
+                    }
+                    Ok(vec!["1.1.1.1:443".parse().unwrap()])
+                },
+                launch_dns_worker,
+            );
+            assert!(result.is_err());
+            if deadline_wins {
+                assert_eq!(*pool.active.lock().unwrap(), 1);
+            }
+            wait_dns_empty(pool);
+        }
+    }
+
+    fn budget(limit: usize) -> &'static PlaybackBudget {
+        Box::leak(Box::new(PlaybackBudget {
+            used: Mutex::new(0),
+            changed: Condvar::new(),
+            limit,
+        }))
+    }
+
+    #[test]
+    fn playback_body_matrix_and_js_cap() {
+        const MIB: usize = 1024 * 1024;
+        for size in [
+            2 * MIB - 1,
+            2 * MIB,
+            2 * MIB + 1,
+            8 * MIB,
+            16 * MIB,
+            16 * MIB + 1,
+        ] {
+            for known in [false, true] {
+                let length = known.then_some(size as u64);
+                let result = read_bounded_body(
+                    std::io::repeat(71).take(size as u64),
+                    length,
+                    16 * MIB,
+                    || Ok(()),
+                );
+                assert_eq!(
+                    result.is_ok(),
+                    size <= 16 * MIB,
+                    "size={size}, known={known}"
+                );
+                if let Ok(body) = result {
+                    assert_eq!(body.len(), size);
+                    assert_eq!(body.capacity(), 16 * MIB + 1);
+                }
+                let ordinary = ScopedHttpHost::new(
+                    MemoryProviderHost::new(),
+                    vec![],
+                    Duration::from_secs(1),
+                    16 * MIB,
+                    0,
+                    64,
+                );
+                assert_eq!(ordinary.response_bytes, 2 * MIB);
+                assert_eq!(ordinary.aggregate_response_bytes, 8 * MIB);
+                assert_eq!(
+                    read_bounded_body(
+                        std::io::repeat(71).take(size as u64),
+                        length,
+                        ordinary.response_bytes,
+                        || Ok(())
+                    )
+                    .is_ok(),
+                    size <= 2 * MIB
+                );
+            }
+        }
+        for (limit, playlist) in [(2 * MIB, true), (16 * MIB, false), (64 * 1024, false)] {
+            let permit = budget(PLAYBACK_MEMORY_BYTES)
+                .acquire(
+                    limit,
+                    playlist,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| false,
+                )
+                .unwrap();
+            let host = ScopedHttpHost::playback(
+                vec![],
+                Instant::now() + Duration::from_secs(1),
+                &permit,
+                Arc::new(|| false),
+            );
+            assert_eq!(host.response_bytes, limit);
+            assert_eq!(host.aggregate_response_bytes, 4 * limit);
+            for _ in 0..4 {
+                host.account_response(limit).unwrap();
+            }
+            assert!(host.account_response(1).is_err());
+            for known in [false, true] {
+                for size in [limit, limit + 1] {
+                    let consumed = Arc::new(AtomicUsize::new(0));
+                    struct Counted {
+                        bytes: Arc<AtomicUsize>,
+                        remaining: usize,
+                    }
+                    impl Read for Counted {
+                        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                            let count = self.remaining.min(out.len());
+                            out[..count].fill(71);
+                            self.remaining -= count;
+                            self.bytes.fetch_add(count, Ordering::Relaxed);
+                            Ok(count)
+                        }
+                    }
+                    let result = read_bounded_body(
+                        Counted {
+                            bytes: consumed.clone(),
+                            remaining: size,
+                        },
+                        known.then_some(size as u64),
+                        limit,
+                        || Ok(()),
+                    );
+                    assert_eq!(result.is_ok(), size <= limit);
+                    assert_eq!(
+                        consumed.load(Ordering::Relaxed),
+                        if known && size > limit { 0 } else { size }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn playback_admission_parallel_readers_and_raii() {
+        for budget_bytes in [32 * 1024 * 1024, PLAYBACK_MEMORY_BYTES] {
+            for readers in [1, 4, 16] {
+                let budget = budget(budget_bytes);
+                let peak = Arc::new(AtomicUsize::new(0));
+                let barrier = Arc::new(std::sync::Barrier::new(readers));
+                let handles: Vec<_> = (0..readers)
+                    .map(|_| {
+                        let peak = peak.clone();
+                        let barrier = barrier.clone();
+                        std::thread::spawn(move || {
+                            barrier.wait();
+                            let permit = budget
+                                .acquire(
+                                    16 * 1024 * 1024,
+                                    false,
+                                    Instant::now() + Duration::from_secs(5),
+                                    &|| false,
+                                )
+                                .unwrap();
+                            peak.fetch_max(*budget.used.lock().unwrap(), Ordering::Relaxed);
+                            std::thread::sleep(Duration::from_millis(5));
+                            drop(permit);
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    handle.join().unwrap();
+                }
+                assert_eq!(*budget.used.lock().unwrap(), 0);
+                assert!(peak.load(Ordering::Relaxed) <= budget.limit);
+                eprintln!(
+                    "MED01 readers={readers} peak_reserved_bytes={} budget={}",
+                    peak.load(Ordering::Relaxed),
+                    budget.limit
+                );
+            }
+        }
+        let budget = budget(PLAYBACK_MEMORY_BYTES);
+        let outcome = std::panic::catch_unwind(|| {
+            let _permit = budget
+                .acquire(
+                    16 * 1024 * 1024,
+                    false,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| false,
+                )
+                .unwrap();
+            panic!("injected request panic");
+        });
+        assert!(outcome.is_err());
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn playback_wait_and_read_cancel_timeout_and_io_failure_release() {
+        let limit = 1024;
+        let budget = budget(limit + 1 + PLAYBACK_OVERHEAD_BYTES);
+        let held = budget
+            .acquire(
+                limit,
+                false,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+            )
+            .unwrap();
+        assert!(
+            budget
+                .acquire(
+                    limit,
+                    false,
+                    Instant::now() + Duration::from_millis(5),
+                    &|| false
+                )
+                .err()
+                .unwrap()
+                .0
+                .contains("timed out")
+        );
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let trigger = cancelled.clone();
+        let waiter = std::thread::spawn(move || {
+            budget
+                .acquire(
+                    limit,
+                    false,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| trigger.load(Ordering::Relaxed),
+                )
+                .err()
+                .unwrap()
+                .0
+        });
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(waiter.join().unwrap().contains("cancelled"));
+        drop(held);
+        for failure in ["cancelled", "timed out", "io"] {
+            let _permit = budget
+                .acquire(
+                    limit,
+                    false,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| false,
+                )
+                .unwrap();
+            let checks = AtomicUsize::new(0);
+            struct Broken;
+            impl Read for Broken {
+                fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    Err(std::io::Error::other("injected"))
+                }
+            }
+            let reader: Box<dyn Read> = if failure == "io" {
+                Box::new(Broken)
+            } else {
+                Box::new(std::io::repeat(0).take(limit as u64))
+            };
+            assert!(
+                read_bounded_body(reader, None, limit, || {
+                    if checks.fetch_add(1, Ordering::Relaxed) >= 2 {
+                        Err(ProviderHostError(failure.into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+            );
+        }
+        {
+            let _permit = budget
+                .acquire(
+                    limit,
+                    false,
+                    Instant::now() + Duration::from_secs(1),
+                    &|| false,
+                )
+                .unwrap();
+            struct SlowRead;
+            impl Read for SlowRead {
+                fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                    std::thread::sleep(Duration::from_millis(5));
+                    output[0] = 0;
+                    Ok(1)
+                }
+            }
+            let deadline = Instant::now() + Duration::from_millis(1);
+            let result = read_bounded_body(SlowRead, None, limit, || {
+                if Instant::now() >= deadline {
+                    Err(ProviderHostError("timed out".into()))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(result.err().unwrap().0.contains("timed out"));
+        }
+        assert_eq!(*budget.used.lock().unwrap(), 0);
+    }
 
     #[test]
     fn soft_request_deadline_is_bounded_by_operation_and_minimum_timeout() {

@@ -6,6 +6,7 @@
 
 pub mod catalog_grouping;
 mod hls_proxy;
+pub use hls_proxy::PlaybackRelayLease;
 mod host;
 mod ids;
 mod matching;
@@ -54,13 +55,14 @@ pub use models::{
     StreamRequest,
 };
 pub use registry::{
-    ANIKOTO_PROVIDER_URL, OwnedProviderSnapshot, ProviderCapabilities, ResolverCapability,
-    SUPERNOVA_PROVIDER_URL, capture_resolver_capability, configure_provider_capabilities,
-    configured_provider_manifest, fetch_builtin_addon, fetch_builtin_addon_with_progress,
-    fetch_builtin_addon_with_progress_for_generation, fetch_builtin_addon_with_timeout,
-    has_installed_provider, installed_packages, mark_known_provider_ids, private_provider_id,
-    provider_asset_bytes, provider_capabilities, provider_owns_id, provider_settings_schema,
-    provider_uses_stream_preferences, resolve_provider_stream, set_installed_packages,
+    ANIKOTO_PROVIDER_URL, OwnedProviderSnapshot, ProviderCapabilities, ResolvedProviderStream,
+    ResolverCapability, SUPERNOVA_PROVIDER_URL, capture_resolver_capability,
+    configure_provider_capabilities, configured_provider_manifest, fetch_builtin_addon,
+    fetch_builtin_addon_with_progress, fetch_builtin_addon_with_progress_for_generation,
+    fetch_builtin_addon_with_timeout, has_installed_provider, installed_packages,
+    mark_known_provider_ids, private_provider_id, provider_asset_bytes, provider_capabilities,
+    provider_owns_id, provider_settings_schema, provider_uses_stream_preferences,
+    resolve_provider_stream, resolve_provider_stream_with_lease, set_installed_packages,
     stable_stream_identity, stream_lookup_url, supports_capability_config,
     supports_contextual_streams, supports_provider_configuration,
 };
