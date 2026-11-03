@@ -653,7 +653,13 @@ impl Bridge {
     /// not-yet-loaded row inside the ±2-row preload window). Near-viewport
     /// work goes on the high-priority channel so it jumps ahead of the
     /// background full-grid sweep.
-    pub(super) fn fetch_card_poster(&self, library: bool, index: usize, url: String) {
+    pub(super) fn fetch_card_poster(
+        &self,
+        batch: &poster_intake::Batch,
+        library: bool,
+        index: usize,
+        url: String,
+    ) {
         if library {
             self.dispatch_library_posters();
             return;
@@ -666,7 +672,13 @@ impl Bridge {
             .get(index)
             .is_some_and(|preview| preview.poster.as_deref() == Some(url.as_str()));
         if current_url {
-            self.enqueue_poster_intake(poster_intake::Surface::Catalog, index, true, String::new());
+            self.queue_poster_batch(
+                batch,
+                poster_intake::Surface::Catalog,
+                index,
+                true,
+                String::new(),
+            );
         }
     }
 
@@ -1483,8 +1495,9 @@ impl Bridge {
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
     /// Guard both series and URL: the next episode can occupy the same slot.
     pub(super) fn dispatch_continue_posters(&self) {
-        self.dispatch_episode_home_posters(false);
-        self.dispatch_episode_home_posters(true);
+        let batch = poster_intake::Batch::default();
+        self.dispatch_episode_home_posters(false, &batch);
+        self.dispatch_episode_home_posters(true, &batch);
         self.pump_poster_intake();
     }
 
@@ -1521,7 +1534,7 @@ impl Bridge {
         }
     }
 
-    fn dispatch_episode_home_posters(&self, new: bool) {
+    fn dispatch_episode_home_posters(&self, new: bool, batch: &poster_intake::Batch) {
         let Some(app) = self.app() else {
             return;
         };
@@ -1557,7 +1570,8 @@ impl Bridge {
                 .collect::<Vec<_>>()
         };
         for (index, fallback) in requests {
-            if self.queue_poster_intake(
+            if self.queue_poster_batch(
+                batch,
                 if new {
                     poster_intake::Surface::New
                 } else {
@@ -1599,9 +1613,15 @@ impl Bridge {
                 })
                 .collect::<Vec<_>>()
         };
+        let batch = poster_intake::Batch::default();
         for (index, fallback) in requests {
-            if self.queue_poster_intake(poster_intake::Surface::Upcoming, index, true, fallback)
-                == poster_intake::Admission::DeferredCapacity
+            if self.queue_poster_batch(
+                &batch,
+                poster_intake::Surface::Upcoming,
+                index,
+                true,
+                fallback,
+            ) == poster_intake::Admission::DeferredCapacity
             {
                 break;
             }
@@ -1616,6 +1636,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        let batch = poster_intake::Batch::default();
         'models: for (surface, model) in [
             (
                 poster_intake::Surface::HomeCatalog,
@@ -1629,7 +1650,7 @@ impl Bridge {
             for (index, card) in model.iter().enumerate().filter(|(_, card)| !card.is_loaded) {
                 if card.poster_url.is_empty() {
                     self.recover_missing_artwork(&card.media_type, &card.id, "");
-                } else if self.queue_poster_intake(surface, index, true, String::new())
+                } else if self.queue_poster_batch(&batch, surface, index, true, String::new())
                     == poster_intake::Admission::DeferredCapacity
                 {
                     break 'models;

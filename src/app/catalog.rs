@@ -480,9 +480,11 @@ impl Bridge {
                 }
             }
         } else if !searching {
+            let batch = poster_intake::Batch::default();
             for (i, url) in fetch {
-                self.fetch_card_poster(library, i, url);
+                self.fetch_card_poster(&batch, library, i, url);
             }
+            self.pump_poster_intake();
         }
         // Unloaded images were just dropped — trim on throttled scroll
         // jumps only (the Slint side already gates frequency).
@@ -918,6 +920,7 @@ impl Bridge {
                 .invoke_remap_catalog_anchor(viewport.index as i32, mapped as i32);
         }
         let mut background_saturated = false;
+        let poster_batch = poster_intake::Batch::default();
         for (index, preview) in projected.iter().enumerate() {
             if let Some(_url) = preview.poster.as_ref().filter(|url| !url.trim().is_empty()) {
                 if app
@@ -927,7 +930,8 @@ impl Bridge {
                     && !background_saturated
                 {
                     background_saturated = matches!(
-                        self.queue_poster_intake(
+                        self.queue_poster_batch(
+                            &poster_batch,
                             poster_intake::Surface::Catalog,
                             index,
                             false,
@@ -1089,13 +1093,15 @@ impl Bridge {
         let center = range.start() + (range.end() - range.start()) / 2;
         let mut indices = range.collect::<Vec<_>>();
         indices.sort_by_key(|index| index.abs_diff(center));
+        let batch = poster_intake::Batch::default();
         for (index, _) in indices
             .into_iter()
             .filter_map(|index| model.row_data(index).map(|row| (index, row)))
             .filter(|(_, row)| !row.is_loaded && !row.poster_path.is_empty())
         {
             if matches!(
-                self.queue_poster_intake(
+                self.queue_poster_batch(
+                    &batch,
                     poster_intake::Surface::Catalog,
                     index,
                     true,

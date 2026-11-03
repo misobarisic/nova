@@ -40,6 +40,19 @@ struct Key {
     recipe: String,
     authority: (u64, u64, Arc<str>),
 }
+/// One synchronous UI admission batch. Authority is built only after a valid
+/// row is found; cloning the captured snapshot does not rebuild manifest JSON.
+#[derive(Default)]
+pub(super) struct Batch(std::cell::OnceCell<Option<OwnedBatch>>);
+
+struct OwnedBatch {
+    context: profiles::Context,
+    owner: ImageFetchOwner,
+}
+
+#[cfg(test)]
+static OWNER_CAPTURES: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Clone)]
 struct Request {
     key: Key,
@@ -394,7 +407,9 @@ impl Bridge {
         self.intake_slot_matches(request) && request.owner.is_current()
     }
 
-    // Individual viewport requests enqueue and pump; model installs batch first.
+    // Test fixtures can exercise individual admissions. Controllers retain
+    // one lazy batch for a complete synchronous model/viewport dispatch.
+    #[cfg(test)]
     pub(super) fn enqueue_poster_intake(
         &self,
         surface: Surface,
@@ -407,8 +422,7 @@ impl Bridge {
         admission
     }
 
-    /// Model installs admit a bounded batch before pumping, rather than validating the
-    /// entire pending queue once for every row in its initial model.
+    #[cfg(test)]
     pub(super) fn queue_poster_intake(
         &self,
         surface: Surface,
@@ -416,6 +430,45 @@ impl Bridge {
         visible: bool,
         fallback: String,
     ) -> Admission {
+        self.queue_poster_batch(&Batch::default(), surface, index, visible, fallback)
+    }
+
+    fn capture_poster_batch(&self, context: &profiles::Context) -> Option<OwnedBatch> {
+        let _timing = perf::Timer::new("poster.owner_capture");
+        #[cfg(test)]
+        OWNER_CAPTURES.fetch_add(1, Ordering::Relaxed);
+        let (settings, inventory) = if profiles::enabled() {
+            let session = context.session.as_ref()?;
+            let owner = session.providers.get()?;
+            let settings = owner.with(nova_providers::plugin_settings::capture_settings_capability);
+            let inventory = session.provider_inventory().ok()?;
+            (settings, inventory)
+        } else {
+            (
+                nova_providers::plugin_settings::capture_settings_capability(),
+                nova_providers::OwnedProviderSnapshot::capture(),
+            )
+        };
+        let owner = ImageFetchOwner::new(settings, inventory);
+        owner.is_current().then(|| OwnedBatch {
+            context: context.clone(),
+            owner,
+        })
+    }
+
+    /// Capture source authority once per dispatch, after empty/stale slots are
+    /// rejected. A batch is local to the caller and never survives navigation.
+    pub(super) fn queue_poster_batch(
+        &self,
+        batch: &Batch,
+        surface: Surface,
+        index: usize,
+        visible: bool,
+        fallback: String,
+    ) -> Admission {
+        if self.poster_intake.0.lock().unwrap().closed {
+            return Admission::Closed;
+        }
         let context = profiles::capture();
         if !profiles::is_current(&context)
             || context
@@ -433,28 +486,18 @@ impl Bridge {
         if url.is_empty() {
             return Admission::Obsolete;
         }
-        let (settings, inventory) = if profiles::enabled() {
-            let Some(session) = context.session.as_ref() else {
-                return Admission::Obsolete;
-            };
-            let Some(owner) = session.providers.get() else {
-                return Admission::Obsolete;
-            };
-            let settings = owner.with(nova_providers::plugin_settings::capture_settings_capability);
-            let Ok(inventory) = session.provider_inventory() else {
-                return Admission::Obsolete;
-            };
-            (settings, inventory)
-        } else {
-            (
-                nova_providers::plugin_settings::capture_settings_capability(),
-                nova_providers::OwnedProviderSnapshot::capture(),
-            )
+        let Some(captured) = batch.0.get_or_init(|| self.capture_poster_batch(&context)) else {
+            return Admission::Obsolete;
         };
-        let owner = ImageFetchOwner::new(settings, inventory);
-        if !owner.is_current() {
+        if captured.context.id != context.id
+            || captured.context.epoch != context.epoch
+            || !profiles::is_current(&captured.context)
+            || !captured.owner.is_current()
+        {
             return Admission::Obsolete;
         }
+        let context = captured.context.clone();
+        let owner = captured.owner.clone();
         let key = Key {
             profile: context.id.clone(),
             epoch: context.epoch,
@@ -1185,6 +1228,7 @@ mod tests {
             }]))
             .into(),
         );
+        OWNER_CAPTURES.store(0, Ordering::Relaxed);
         bridge.dispatch_continue_posters();
         bridge.dispatch_upcoming_posters();
         bridge.dispatch_home_catalog_posters();
@@ -1239,6 +1283,11 @@ mod tests {
                     tick_bridge.dispatch_continue_posters();
                     tick_bridge.dispatch_upcoming_posters();
                     tick_bridge.dispatch_home_catalog_posters();
+                    assert_eq!(
+                        OWNER_CAPTURES.load(Ordering::Relaxed),
+                        if revised { 6 } else { 3 },
+                        "one lazy authority snapshot per active dispatch batch; settled/loaded redispatches capture none"
+                    );
                     let counts = tick_counts.lock().unwrap();
                     assert_eq!(counts.len(), 7);
                     assert!(
@@ -1785,6 +1834,115 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!app.get_catalog().row_data(0).unwrap().is_loaded);
+            },
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn image_authority_batches_are_lazy_and_cannot_cross_recipe_or_profile_changes() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::image_authority_batches_are_lazy_and_cannot_cross_recipe_or_profile_changes"
+            ),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                app.set_show_home(false);
+                app.set_profiles_require_selection(false);
+                bridge.shared.lock().unwrap().previews = (0..2)
+                    .map(|index| {
+                        serde_json::from_value::<MetaPreview>(serde_json::json!({
+                            "id":format!("batch-{index}"), "type":"movie", "name":"Batch",
+                            "poster":format!("https://fixture.invalid/batch-{index}.png")
+                        }))
+                        .unwrap()
+                    })
+                    .collect();
+                app.set_catalog(
+                    Rc::new(VecModel::from(
+                        (0..2)
+                            .map(|index| MediaCard {
+                                id: format!("batch-{index}").into(),
+                                poster_path: format!("https://fixture.invalid/batch-{index}.png")
+                                    .into(),
+                                ..Default::default()
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                );
+                OWNER_CAPTURES.store(0, Ordering::Relaxed);
+                let batch = Batch::default();
+                assert_eq!(
+                    bridge.queue_poster_batch(&batch, Surface::Catalog, 99, true, String::new()),
+                    Admission::Obsolete
+                );
+                assert_eq!(
+                    OWNER_CAPTURES.load(Ordering::Relaxed),
+                    0,
+                    "invalid rows cannot read/hash addon inventory"
+                );
+                for index in 0..2 {
+                    assert_eq!(
+                        bridge.queue_poster_batch(
+                            &batch,
+                            Surface::Catalog,
+                            index,
+                            true,
+                            String::new()
+                        ),
+                        Admission::Queued
+                    );
+                }
+                assert_eq!(
+                    OWNER_CAPTURES.load(Ordering::Relaxed),
+                    1,
+                    "multiple admitted rows share one captured inventory"
+                );
+                profiles::with_context(profiles::context_for("foreign-owner"), || {
+                    assert_eq!(
+                        bridge.queue_poster_batch(&batch, Surface::Catalog, 0, true, String::new()),
+                        Admission::Obsolete
+                    );
+                });
+                let mut settings = active_cache_settings();
+                settings.enabled = !settings.enabled;
+                set_active_cache_settings(settings);
+                assert_eq!(
+                    bridge.queue_poster_batch(&batch, Surface::Catalog, 0, true, String::new()),
+                    Admission::Obsolete,
+                    "expired batch authority must not be silently recaptured"
+                );
+                assert_eq!(OWNER_CAPTURES.load(Ordering::Relaxed), 1);
+                let fresh = Batch::default();
+                assert_eq!(
+                    bridge.queue_poster_batch(&fresh, Surface::Catalog, 0, true, String::new()),
+                    Admission::Queued
+                );
+                assert_eq!(
+                    OWNER_CAPTURES.load(Ordering::Relaxed),
+                    2,
+                    "a later dispatch captures fresh recipe authority"
+                );
+                bridge.poster_intake.close();
+                assert_eq!(
+                    bridge.queue_poster_batch(
+                        &Batch::default(),
+                        Surface::Catalog,
+                        0,
+                        true,
+                        String::new()
+                    ),
+                    Admission::Closed
+                );
+                assert_eq!(
+                    OWNER_CAPTURES.load(Ordering::Relaxed),
+                    2,
+                    "shutdown rejects before source inventory work"
+                );
             },
         );
     }
