@@ -2320,6 +2320,8 @@ impl Bridge {
                     subtitles,
                 });
                 if let Some(app) = self.app() {
+                    // Show where "Resume" would land instead of a generic note.
+                    app.set_resume_source_position(history_pos.unwrap_or(0.0) as f32);
                     app.set_resume_prompt_visible(true);
                 }
                 return true;

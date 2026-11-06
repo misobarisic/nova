@@ -2,9 +2,10 @@
 # First-launch onboarding also uses the source strings directly.
 #
 # Every user-facing string in crates/ui/*.slint is written in English inside
-# `@tr("…")`, so this catalog is deliberately empty: no msgid needs a translation,
-# and a missing entry makes Slint fall back to the source text (which *is* the
-# English string). The header is still required — slint-build refuses to compile
+# `@tr("…")`, so a missing entry makes Slint fall back to the source text (which
+# *is* the English string). Entries below exist only where they matter: plural
+# forms, and strings kept explicit for English wording. It is not required to be
+# complete. The catalog is still required — slint-build refuses to compile
 # when `translations/` holds no catalog, and this one is what registers "en" as a
 # bundled language so `slint::select_bundled_translation("en")` (the English
 # entry of Settings → Display) succeeds instead of erroring.
@@ -1351,6 +1352,24 @@ msgstr "Source changed — choose another source"
 
 msgid "Open an episode and use this source for smart downloads"
 msgstr "Open an episode and use this source for smart downloads"
+
+msgid "Offline settings could not be saved — try again"
+msgstr "Offline settings could not be saved — try again"
+
+msgid "Cancel download?"
+msgstr "Cancel download?"
+
+msgid "The partially downloaded data will be deleted from this device."
+msgstr "The partially downloaded data will be deleted from this device."
+
+msgid "Keep downloading"
+msgstr "Keep downloading"
+
+msgid "Confirm delete"
+msgstr "Confirm delete"
+
+msgid "Confirm: remove rule and delete unneeded files"
+msgstr "Confirm: remove rule and delete unneeded files"
 
 msgid "Use this source for smart downloads"
 msgstr "Use this source for smart downloads"

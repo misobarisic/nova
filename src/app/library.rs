@@ -488,6 +488,8 @@ impl Bridge {
             .collect();
         if let Some(app) = self.app() {
             app.set_library(Rc::new(VecModel::from(cards)).into());
+            app.set_library_notice(SharedString::default());
+            self.publish_library_total(&app);
         }
         self.dispatch_library_posters();
     }
@@ -586,18 +588,43 @@ impl Bridge {
             (e.id.clone(), ids)
         };
         if episode_ids.is_empty() {
+            // No cached episode list means nothing can be marked; say so
+            // instead of leaving the menu action looking broken.
+            if entry.type_ != "movie" && target {
+                self.set_library_notice(
+                    "Episode details for this title haven't loaded yet — open it once, then try again.",
+                );
+            }
             return;
         }
         let Some(_reservation) = persistence::reserve(1) else {
             return;
         };
+        self.set_library_notice("");
         {
             let mut state = self.shared.lock().unwrap();
             for id in &episode_ids {
                 Self::set_episode_watched_locked(&mut state.progress, &series_id, id, target);
             }
         }
+        // Same cleanup as episode/season marks so a whole-series mark
+        // doesn't leave watched downloads behind.
+        if target {
+            self.auto_delete_watched_downloads(&series_id, &episode_ids);
+        }
         self.persist_and_refresh_progress();
+    }
+
+    fn set_library_notice(&self, notice: &str) {
+        if let Some(app) = self.app() {
+            app.set_library_notice(text::tr(notice).into());
+        }
+    }
+
+    /// Saved-title count before filter/search, for the header.
+    fn publish_library_total(&self, app: &AppWindow) {
+        let total = self.shared.lock().unwrap().entries.len();
+        app.set_library_total(total as i32);
     }
 
     /// Main thread: library card context-menu status action. `index` is
@@ -1426,7 +1453,11 @@ impl Bridge {
             cats.iter()
                 .position(|c| c == &filter)
                 .map(|i| (i + BUILTIN_FILTERS.len()) as i32)
-                .unwrap_or(-1)
+                .unwrap_or_else(|| {
+                    // The category no longer resolves to a pill: drop the stale filter.
+                    app.set_library_filter_category(SharedString::default());
+                    -1
+                })
         };
         app.set_library_category_index(idx);
     }
@@ -2139,6 +2170,7 @@ impl Bridge {
             })
             .collect::<Vec<_>>();
         app.set_library(Rc::new(VecModel::from(rows)).into());
+        self.publish_library_total(&app);
         self.dispatch_library_posters();
     }
 }

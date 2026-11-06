@@ -157,7 +157,16 @@ fn removing_a_download_keeps_back_in_more() {
             .set_downloads_page_groups(Default::default());
     });
     idle();
+    // Cancelling deletes partial data, so the row button opens a confirmation
+    // whose destructive button carries the same label.
     click(&app, "Cancel download");
+    idle();
+    assert_ne!(app.get_downloads_page_groups().row_count(), 0);
+    let confirm = ElementHandle::find_by_accessible_label(&app, "Cancel download")
+        .last()
+        .expect("confirmation's Cancel download button");
+    click_element(&app, confirm);
+    idle();
     assert_eq!(app.get_downloads_page_groups().row_count(), 0);
     back(&app);
     assert!(!app.get_show_downloads());

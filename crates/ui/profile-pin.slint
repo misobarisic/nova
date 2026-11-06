@@ -57,7 +57,10 @@ export component ProfilePinGate inherits Rectangle {
             keypad := VerticalLayout { width: 100%; spacing: 14px;
             Text { text: @tr("Enter PIN"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 38px : 28px; horizontal-alignment: center; }
             Text { text: @tr("Unlock on this device"); font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_secondary; horizontal-alignment: center; }
-            Text { text: MoreBridge.pin_input; color: Theme.current.text_bright; font-size: 30px; min-height: 40px; horizontal-alignment: center; }
+            // Masked: one bullet per entered digit, never the PIN itself.
+            HorizontalLayout { alignment: center; spacing: 6px; min-height: 40px;
+                for _d in MoreBridge.pin_length: Text { text: "\u{2022}"; color: Theme.current.text_bright; font-size: 30px; vertical-alignment: center; }
+            }
             Text { text: MoreBridge.pin_error; font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_destructive; wrap: word-wrap; }
             for row in 4: HorizontalLayout {
                 width: keypad.width; spacing: 12px;

@@ -74,15 +74,15 @@ i-slint-compiler = { path = "vendor/i-slint-compiler" }
 librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e38562e7e373bc58bbbb20b68e58c71fef" }
 
 [workspace.dependencies]
-nova-sync = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
-nova-playback-api = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
+nova-sync = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
+nova-playback-api = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
 # Shared kit crates; local development aliases opt into the sibling checkout.
-nova-cache = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
-nova-image = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
-addons = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13", default-features = false }
-nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
-nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
-nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "c4b181c0c58a17bbdd23b543a142b20d3f5aea13" }
+nova-cache = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
+nova-image = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
+addons = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a", default-features = false }
+nova-download = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
+nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
+nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "c7853085e6c9c570d72b4803f18ceb01e8cbe16a" }
 
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default

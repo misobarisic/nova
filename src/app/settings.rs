@@ -84,6 +84,8 @@ impl Bridge {
 /// Installation-local presentation only: never a CacheSettings/sync/profile field.
 pub(super) const SETTINGS_VIEW_KEY: &str = "ui:settings_view";
 static SETTINGS_ADVANCED: AtomicBool = AtomicBool::new(true);
+/// Set while a debounced settings autosave has not yet run.
+static SETTINGS_SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsView {
@@ -374,6 +376,7 @@ impl Bridge {
         let schedule = move || {
             let b = b.clone();
             let context = profiles::capture();
+            SETTINGS_SAVE_PENDING.store(true, Ordering::Release);
             timer.start(
                 slint::TimerMode::SingleShot,
                 Duration::from_millis(600),
@@ -731,7 +734,12 @@ impl Bridge {
                         return;
                     }
                     if let Some(app) = b.app() {
-                        let text = format_disk_usage(bytes, files).into();
+                        // The torrent cache is one tree whose file count is not scanned.
+                        let text = if torrent {
+                            nova_download::format_bytes(bytes).into()
+                        } else {
+                            format_disk_usage(bytes, files).into()
+                        };
                         if torrent && torrent_cache_dir() == path {
                             app.set_torrent_disk_usage(text);
                         } else if !torrent && poster_cache_dir() == path {
@@ -1414,9 +1422,18 @@ impl Bridge {
 
     /// Persist current memory, never stale controls captured by a timer.
     pub(super) fn persist_settings(&self) {
+        SETTINGS_SAVE_PENDING.store(false, Ordering::Release);
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         write_settings(&settings);
         self.persist_torrent_edits(&active_torrent_settings());
+    }
+
+    /// The 600 ms autosave debounce would otherwise drop an edit made just
+    /// before the event loop exits (desktop close, Android teardown).
+    pub(super) fn flush_pending_settings(&self) {
+        if SETTINGS_SAVE_PENDING.swap(false, Ordering::AcqRel) {
+            self.persist_settings();
+        }
     }
 
     pub(super) fn save_settings(&self) {
@@ -1725,6 +1742,97 @@ mod tests {
                         .unwrap(),
                     &serde_json::to_string(&nova_config::Language::English).unwrap()
                 );
+            },
+        );
+    }
+
+    /// Pre-fix behaviour: player pickers fired the field-less `save_settings`
+    /// callback, which keeps a protected raw synced value.
+    #[test]
+    fn field_less_save_keeps_future_episode_start_record() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::field_less_save_keeps_future_episode_start_record"
+            ),
+            |fixture| {
+                use super::*;
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let id = profiles::create("Future player").unwrap();
+                let owner = profiles::ProfileStore::for_profile(&id);
+                let mut raw = serde_json::to_value(CacheSettings::default()).unwrap();
+                raw["episode_start_behavior"] = "future-start".into();
+                owner.write("settings", &raw.to_string()).unwrap();
+                bridge.switch_profile(&id);
+                bridge.wait_profile_activation();
+                let app = bridge.app().unwrap();
+                let _schedule = bridge.wire_settings_autosave();
+                app.set_episode_start_index(1);
+                app.invoke_save_settings();
+                bridge.persist_settings();
+                let saved: serde_json::Value =
+                    serde_json::from_str(&owner.read("settings").unwrap().unwrap()).unwrap();
+                // This is why the Slint pickers must report their field.
+                assert_eq!(saved["episode_start_behavior"], "future-start");
+            },
+        );
+    }
+
+    #[test]
+    fn explicit_player_choice_replaces_future_episode_start_record() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(
+                module_path!(),
+                "::explicit_player_choice_replaces_future_episode_start_record"
+            ),
+            |fixture| {
+                use super::*;
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let id = profiles::create("Future player").unwrap();
+                let owner = profiles::ProfileStore::for_profile(&id);
+                let mut raw = serde_json::to_value(CacheSettings::default()).unwrap();
+                raw["episode_start_behavior"] = "future-start".into();
+                owner.write("settings", &raw.to_string()).unwrap();
+                bridge.switch_profile(&id);
+                bridge.wait_profile_activation();
+                let app = bridge.app().unwrap();
+                let _schedule = bridge.wire_settings_autosave();
+                app.set_episode_start_index(1);
+                app.invoke_settings_edited("episode_start_behavior".into());
+                bridge.persist_settings();
+                let saved: serde_json::Value =
+                    serde_json::from_str(&owner.read("settings").unwrap().unwrap()).unwrap();
+                assert_ne!(saved["episode_start_behavior"], "future-start");
+            },
+        );
+    }
+
+    #[test]
+    fn pending_autosave_is_flushed_on_shutdown() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(module_path!(), "::pending_autosave_is_flushed_on_shutdown"),
+            |fixture| {
+                use super::*;
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let owner = profiles::ProfileStore::capture();
+                let app = bridge.app().unwrap();
+                let _schedule = bridge.wire_settings_autosave();
+                app.set_torrent_max_mb(4096.0);
+                app.invoke_save_settings();
+                // The 600 ms debounce has not fired yet.
+                let stored = |owner: &profiles::ProfileStore| {
+                    owner
+                        .read(TORRENT_SETTINGS_KEY)
+                        .unwrap()
+                        .and_then(|raw| serde_json::from_str::<TorrentSettings>(&raw).ok())
+                        .map(|t| t.max_mb)
+                };
+                assert_ne!(stored(&owner), Some(4096));
+                bridge.flush_pending_settings();
+                assert_eq!(stored(&owner), Some(4096));
             },
         );
     }

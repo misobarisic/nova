@@ -84,6 +84,14 @@ impl Bridge {
         // P2P, sync configuration and offline-download policy already have
         // independent local stores; they cannot be switched into account sync.
         let local = [
+            // Device-local like the sync rows below: kept out of CacheSettings.
+            (
+                "interface_mode",
+                serde_json::to_value(nova_config::InterfaceMode::from_index(
+                    app.get_interface_mode_index(),
+                ))
+                .unwrap_or(Value::Null),
+            ),
             ("torrent_enabled", Value::Bool(app.get_torrent_enabled())),
             (
                 "torrent_dir",
@@ -211,5 +219,30 @@ impl Bridge {
         self.settings_to_ui();
         self.refresh_setting_sync();
         self.apply_stream_filter();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interface_mode_has_a_sync_info_row() {
+        crate::app::profile_actions_tests::isolated(
+            concat!(module_path!(), "::interface_mode_has_a_sync_info_row"),
+            |fixture| {
+                fixture.stop_actors();
+                let bridge = &fixture.bridge;
+                let app = bridge.app().unwrap();
+                app.set_interface_mode_index(2);
+                bridge.refresh_setting_sync();
+                let rows = app.global::<crate::SettingsSync>().get_rows();
+                let row = rows
+                    .iter()
+                    .find(|row| row.key == "interface_mode")
+                    .expect("interface_mode row");
+                assert_eq!(row.local_value.as_str(), "TV");
+            },
+        );
     }
 }

@@ -13,7 +13,7 @@ fn calendar_day_at<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> i64 {
     days_from_civil(i64::from(date.year()), date.month(), date.day())
 }
 
-fn calendar_today_days() -> i64 {
+pub(super) fn calendar_today_days() -> i64 {
     calendar_day_at(chrono::Local::now())
 }
 

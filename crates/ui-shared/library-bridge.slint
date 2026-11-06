@@ -18,6 +18,9 @@ export global LibraryBridge {
     in-out property <bool> list_view;
     in-out property <bool> search_open;
     in-out property <string> library_empty_hint;
+    // Saved-title count before filter/search, and a transient notice for card actions that cannot run.
+    in-out property <int> library_total: 0;
+    in-out property <string> library_notice;
     in-out property <int> kb_zone;
     in-out property <int> kb_nav;
     in-out property <int> kb_f;

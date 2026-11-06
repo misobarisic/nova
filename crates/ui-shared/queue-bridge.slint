@@ -18,6 +18,8 @@ export global QueueBridge {
     in-out property <bool> autoplay;
     in-out property <bool> run_active;
     in-out property <string> current_key;
+    // Entry Continue would start (cursor-aware, skips watched items).
+    in-out property <string> next_key;
     in-out property <string> phase;
     in-out property <string> sync_status;
     in-out property <string> focused_key;

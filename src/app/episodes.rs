@@ -532,7 +532,7 @@ pub(crate) fn episode_badge(v: &Video) -> String {
         (Some(s), Some(n)) => format!("S{s} E{n}"),
         (None, Some(n)) => format!("E{n}"),
         (Some(s), None) => format!("S{s}"),
-        (None, None) => "EP".to_string(),
+        (None, None) => text::tr("EP").to_string(),
     }
 }
 /// Identifier for an episode without a usable title (e.g. "S1 E3").

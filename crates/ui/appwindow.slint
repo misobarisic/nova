@@ -409,6 +409,7 @@ export component AppWindow inherits Window {
         decode_label <=> root.decode_label;
         decoder_selected <=> root.decoder_selected;
         sub_label <=> root.sub_track_label;
+        sub_off <=> root.sub_off;
         audio_label <=> root.audio_track_label;
         volume <=> root.volume;
         muted <=> root.muted;
@@ -455,6 +456,8 @@ export component AppWindow inherits Window {
         list_view <=> root.library_list_view;
         search_open <=> root.library_search_open;
         library_empty_hint <=> root.library_empty_hint;
+        library_total <=> root.library_total;
+        library_notice <=> root.library_notice;
         kb_zone <=> root.library_kb_zone;
         kb_nav <=> root.library_kb_nav;
         kb_f <=> root.library_kb_f;
@@ -1214,6 +1217,8 @@ export component AppWindow inherits Window {
     in-out property <int> progress_override_index;
     callback progress_scope_changed(int);
     in-out property <int> detail_library_activity_action: 0;
+    in-out property <int> library_total: 0;
+    in-out property <string> library_notice;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
@@ -2064,6 +2069,8 @@ export component AppWindow inherits Window {
     // Current subtitle / audio selection summaries for the player settings
     // panel's root rows (e.g. the selected language, or "Off"/"None").
     in-out property <string> sub_track_label: "";
+    // Subtitles explicitly off (mpv sid=no); the label is empty then.
+    in-out property <bool> sub_off: false;
     in-out property <string> audio_track_label: "";
     in-out property <float> volume: 100.0;
     in-out property <bool> muted: false;
@@ -2242,7 +2249,6 @@ export component AppWindow inherits Window {
     callback home_row_catalog_removed(int);
     callback home_row_catalog_action(int, int);
     callback home_catalog_card_picked(int);
-    callback category_renamed(int, string);
     callback toggle_entry_category(string);
     callback library_filter_picked(string);
     callback library_view_changed();
@@ -3054,7 +3060,7 @@ export component AppWindow inherits Window {
         owner-key: root.player_title + "\n" + root.player_episode_title;
         button-font-size: root.default-font-size;
         heading: root.resume_source_changed ? @tr("Check resume position") : @tr("Resume playback?");
-        message: root.resume_source_changed ? (!root.resume_source_can_resume ? @tr("This source cannot resume at your previous position. Start over, or cancel to choose another source.") : @tr("This source may use a different cut. Resume at {}, or start over.", root.format_time(root.resume_source_position))) : @tr("This episode has saved playback history.");
+        message: root.resume_source_changed ? (!root.resume_source_can_resume ? @tr("This source cannot resume at your previous position. Start over, or cancel to choose another source.") : @tr("This source may use a different cut. Resume at {}, or start over.", root.format_time(root.resume_source_position))) : (root.resume_source_position > 0 ? @tr("Resume from {}?", root.format_time(root.resume_source_position)) : @tr("This episode has saved playback history."));
         source-changed: root.resume_source_changed;
         can-resume: !root.resume_source_changed || root.resume_source_can_resume;
         focus-index <=> root.resume_focus;

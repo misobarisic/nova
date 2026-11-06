@@ -137,6 +137,14 @@ export component SmartDownloads inherits Rectangle {
                     border-radius:10px;background:Theme.current.control;
                     private property <bool> active_row:InterfaceStyle.tv && root.selected_row==index;
                     changed active_row=>{if self.active_row {root.selected_action=0;}}
+                    // Destructive removal needs a second press; leaving the button disarms it.
+                    private property <bool> confirm_remove;
+                    private property <int> watched_action:root.selected_action;
+                    private property <int> watched_row:root.selected_row;
+                    private property <bool> watched_opened:root.opened;
+                    changed watched_action=>{self.confirm_remove=false;}
+                    changed watched_row=>{self.confirm_remove=false;}
+                    changed watched_opened=>{self.confirm_remove=false;}
                     height: card.preferred-height + 24px;
                     card := VerticalLayout {x:12px;y:12px;width:parent.width - 24px;height:self.preferred-height;spacing:8px;
                         Text {text:row.title;font-size:InterfaceStyle.tv ? 23px : 18px;color:Theme.current.text_primary;wrap:word-wrap;}
@@ -152,7 +160,7 @@ export component SmartDownloads inherits Rectangle {
                         OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.include_specials ? @tr("Specials included") : @tr("Specials excluded");highlighted:root.selected_row==index && root.selected_action==5;selected:row.include_specials;picked=>{OfflineBridge.action(row.id,6);}}
                         OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:row.cleanup ? @tr("Remove unneeded automatic files") : @tr("Keep watched automatic files");highlighted:root.selected_row==index && root.selected_action==6;selected:row.cleanup;picked=>{OfflineBridge.action(row.id,7);}}
                         OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule, keep files");highlighted:root.selected_row==index && root.selected_action==7;picked=>{OfflineBridge.action(row.id,5);}}
-                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:@tr("Remove rule and unneeded files");highlighted:root.selected_row==index && root.selected_action==8;picked=>{OfflineBridge.action(row.id,8);}}
+                        OfflineButton {enabled:root.opened;reveal(y,h)=>{root.reveal(y,h);}label:rule_card.confirm_remove ? @tr("Confirm: remove rule and delete unneeded files") : @tr("Remove rule and unneeded files");destructive:true;highlighted:root.selected_row==index && root.selected_action==8;picked=>{if rule_card.confirm_remove {rule_card.confirm_remove=false;OfflineBridge.action(row.id,8);} else {rule_card.confirm_remove=true;}}}
                     }
                 }
                 Rectangle {height:24px;}

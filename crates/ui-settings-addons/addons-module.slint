@@ -16,11 +16,16 @@ export component SettingsAddonsModule inherits Window {
     width: SettingsContent.slot_width; height: SettingsContent.slot_height;
     private property <length> measured_min: body_layout.min-height;
     private property <length> measured_preferred: body_layout.preferred-height;
+    private property <int> kb_ar_now: SettingsContent.kb_ar;
+    private property <int> kb_ac_now: SettingsContent.kb_ac;
     private property <bool> browse_keyboard: SettingsBridge.kb_zone == 19 && SettingsBridge.kb_active;
     private property <int> browser_row_count: SettingsBridge.addon_browser_rows.length;
     changed browser_row_count => {
         SettingsBridge.addon_browser_control = Math.min(SettingsBridge.addon_browser_control, 6 + root.browser_row_count);
     }
+    // Moving the keyboard selection elsewhere cancels a pending remove confirmation.
+    changed kb_ar_now => { SettingsContent.addon_remove_armed = ""; }
+    changed kb_ac_now => { SettingsContent.addon_remove_armed = ""; }
     changed measured_min => { root.publish_size(); }
     changed measured_preferred => { root.publish_size(); }
     init => { root.publish_size(); }
@@ -371,6 +376,9 @@ export component SettingsAddonsModule inherits Window {
                                 kb_focused_row: SettingsBridge.kb_zone == 2 && SettingsContent.kb_ar == i;
                                 kb_active: SettingsBridge.kb_active;
                                 kb_col: SettingsContent.kb_ac;
+                                remove_armed: SettingsContent.addon_remove_armed == row.url;
+                                arm_remove => { SettingsContent.addon_remove_armed = row.url; }
+                                disarm_remove => { SettingsContent.addon_remove_armed = ""; }
                                 toggled(on) => {
                                     // Row rebuilds must not destroy the only Back route.
                                     SettingsContent.focus_shell();
@@ -384,7 +392,7 @@ export component SettingsAddonsModule inherits Window {
                                 configure => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 1; SettingsBridge.addon_configure(row.config_url); }
                                 copy_link => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 2; SettingsBridge.addon_copy_link(row.url); }
                                 refresh => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 3; SettingsBridge.addon_refresh(i); }
-                                remove => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 4; SettingsBridge.addon_remove(i); }
+                                remove => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 4; SettingsContent.addon_remove_armed = ""; SettingsBridge.addon_remove(i); }
                                 move_up => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ac = 5; SettingsBridge.addon_move_up(i); SettingsContent.kb_ar = Math.max(0, i - 1); }
                                 move_down => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ac = 6; SettingsBridge.addon_move_down(i); SettingsContent.kb_ar = Math.min(SettingsBridge.addon_rows.length - 1, i + 1); }
                             }

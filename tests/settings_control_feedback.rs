@@ -122,7 +122,7 @@ mod tv_controls {
         export component NumericReadoutProbe inherits Window {
             width: 400px; height: 100px; default-font-family: "Roboto";
             in-out property <float> value: 512;
-            in-out property <string> suffix: " MB";
+            in-out property <string> suffix: " MiB";
             out property <length> text_width: measure.preferred-width;
             measure := Text { text: Math.round(root.value) + root.suffix; font-size: 20px; visible: false; }
         }
@@ -186,7 +186,7 @@ mod tv_controls {
             for _ in 0..10 {
                 i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
             }
-            let label = format!("{value:.0} MB");
+            let label = format!("{value:.0} MiB");
             let readout =
                 i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "ValueBox")
                     .find(|container| {

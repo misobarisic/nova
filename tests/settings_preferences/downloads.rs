@@ -147,6 +147,27 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                                     .single_click(slint::platform::PointerEventButton::Left)
                                     .await;
                             }
+                            // Deleting a file is destructive: the first tap only
+                            // asks, the same button then reads "Confirm delete".
+                            fail(
+                                &failures4,
+                                removed4.borrow().is_empty(),
+                                "the first Delete tap must only ask for confirmation",
+                            );
+                            if let Some(app) = app4.upgrade()
+                                && let Some(confirm) =
+                                    ElementHandle::find_by_accessible_label(&app, "Confirm delete")
+                                        .find(|e| {
+                                            e.accessible_role()
+                                                == Some(
+                                                    i_slint_backend_testing::AccessibleRole::Button,
+                                                )
+                                        })
+                            {
+                                confirm
+                                    .single_click(slint::platform::PointerEventButton::Left)
+                                    .await;
+                            }
                             fail(
                                 &failures4,
                                 removed4.borrow().len() == 1 && removed4.borrow()[0] == "d1",

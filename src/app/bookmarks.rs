@@ -229,6 +229,41 @@ fn sort_groups(groups: &mut [Group], sort: i32) {
     });
 }
 
+/// Orders labels like "S1 E2" before "S1 E10": digit runs compare by value,
+/// everything else by character, so season/episode numbers sort numerically
+/// without the identity carrying them separately.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, _) => return std::cmp::Ordering::Less,
+            (_, None) => return std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut n = String::new();
+                    while let Some(c) = it.next_if(|c| c.is_ascii_digit()) {
+                        n.push(c);
+                    }
+                    n.trim_start_matches('0').to_owned()
+                };
+                let (na, nb) = (take(&mut a), take(&mut b));
+                let ord = na.len().cmp(&nb.len()).then_with(|| na.cmp(&nb));
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(&y);
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
+}
+
 impl Bridge {
     pub(super) fn setup_bookmarks(&self) {
         let Some(app) = self.app() else { return };
@@ -321,8 +356,7 @@ impl Bridge {
         if let Some(group) = selected_group {
             global.set_title_caption(group.title.clone().into());
             group.scenes.sort_by(|a, b| {
-                a.1.episode
-                    .cmp(&b.1.episode)
+                natural_cmp(&a.1.episode, &b.1.episode)
                     .then_with(|| a.2.position.total_cmp(&b.2.position))
                     .then_with(|| a.0.cmp(&b.0))
             });
@@ -596,6 +630,14 @@ impl Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_cmp_orders_episode_numbers_numerically() {
+        let mut labels = vec!["S1 E10", "S1 E2", "S2 E1", "S1 E1"];
+        labels.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(labels, ["S1 E1", "S1 E2", "S1 E10", "S2 E1"]);
+    }
+
     fn identity(kind: &str, title: &str, episode: &str) -> nova_playback_api::MediaIdentity {
         nova_playback_api::MediaIdentity {
             media_type: kind.into(),

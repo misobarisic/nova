@@ -92,10 +92,10 @@ export component SettingsImageCacheModule inherits Window {
                             changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_save(); } }
                         if SettingsBridge.cache_format_index == 2: cache_avif_quality := CacheQualityControl { value <=> SettingsBridge.cache_avif_quality; disk-enabled: SettingsBridge.cache_images; compression-enabled: SettingsBridge.cache_enabled; busy: SettingsBridge.cache_busy;
                             focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 3;
-                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_save(); } }
+                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_setting("avif_quality"); } }
                         if SettingsBridge.cache_format_index == 3: cache_jxl_quality := CacheQualityControl { value <=> SettingsBridge.cache_jxl_quality; disk-enabled: SettingsBridge.cache_images; compression-enabled: SettingsBridge.cache_enabled; busy: SettingsBridge.cache_busy;
                             focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 5 && SettingsContent.kb_hr == 3;
-                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_save(); } }
+                            changed(v) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 3; SettingsContent.schedule_setting("jxl_quality"); } }
                     }
                 }
                 if !SettingsBridge.cache_enabled || !SettingsBridge.cache_images: Text { text: @tr("Enable disk caching and compression to adjust format and quality."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }

@@ -102,7 +102,10 @@ fn addon_actions_keep_back_routed_after_the_focused_row_is_removed() {
     idle();
     click(&app, "Copy link");
     assert_eq!(copies.get(), 1);
+    // Removal syncs to every device, so the first press only arms it.
     click(&app, "Remove");
+    assert_eq!(app.get_addon_rows().row_count(), 1);
+    click(&app, "Confirm remove");
     assert_eq!(app.get_addon_rows().row_count(), 0);
     back(&app);
     assert!(!app.get_settings_detail_open());

@@ -151,7 +151,7 @@ export component WatchQueuePage inherits Rectangle {
                     for row[index] in QueueBridge.rows: Rectangle {
                         height: row_body.preferred-height;
                         border-radius: Theme.card_corner_radius;
-                        background: index == 0 ? Theme.current.selection_wash : Theme.current.card;
+                        background: row.id == QueueBridge.next_key ? Theme.current.selection_wash : Theme.current.card;
                         border-width: 1px; border-color: Theme.current.border_overlay;
                         private property <bool> selected: root.selected == index && SettingsStyle.keyboard-mode;
                         changed selected => { if self.selected && root.active { root.reveal(self.y, self.height); } }
@@ -168,7 +168,7 @@ export component WatchQueuePage inherits Rectangle {
                                 }
                                 VerticalLayout {
                                     spacing: 5px; alignment: center; min-width: 0px;
-                                    Text { text: row.id == QueueBridge.current_key ? @tr("CURRENT") : index == 0 ? @tr("UP NEXT") : @tr("#{}", index + 1); font-size: 11px; font-weight: 700; letter-spacing: 1px; color: index == 0 ? Theme.current.accent_vivid : Theme.current.text_secondary; }
+                                    Text { text: row.id == QueueBridge.current_key ? @tr("CURRENT") : row.id == QueueBridge.next_key ? @tr("UP NEXT") : @tr("#{}", index + 1); font-size: 11px; font-weight: 700; letter-spacing: 1px; color: row.id == QueueBridge.next_key ? Theme.current.accent_vivid : Theme.current.text_secondary; }
                                     Text { text: row.title; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; max-lines: 2; overflow: elide; min-width: 0px; }
                                     Text { text: row.context; font-size: 13px; color: Theme.current.text_secondary; wrap: word-wrap; max-lines: 2; overflow: elide; min-width: 0px; }
                                     if row.watched: Text { text: @tr("Watched"); font-size: 12px; color: Theme.current.accent_vivid; }

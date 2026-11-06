@@ -787,7 +787,7 @@ impl Bridge {
         if let Ok(mut device) = read_device() {
             edit(&mut device);
             if let Err(error) = save_device(&device) {
-                tracing::warn!(%error,"offline settings not saved");
+                self.offline_save_failed(&error);
             }
         }
         self.refresh_smart_offline();
@@ -825,11 +825,37 @@ impl Bridge {
                 },
             );
         }
-        if let Ok(raw) = serde_json::to_string(&policies) {
-            let _ = owner.persist_snapshot(KEY, &raw, false);
+        if !self.persist_policies(&owner, &policies) {
+            return;
         }
         trigger();
         self.refresh_smart_offline();
+    }
+    /// Surfaces a failed policy save; callers must not touch downloads afterwards
+    /// because the rule on disk would no longer match what they did.
+    fn offline_save_failed(&self, error: &dyn std::fmt::Display) {
+        tracing::warn!(%error, "offline settings not saved");
+        if let Some(app) = self.app() {
+            app.global::<nova_ui_shared::OfflineBridge>()
+                .set_notice(text::tr("Offline settings could not be saved — try again").into());
+        }
+    }
+    /// Persists the rule set, reporting failures to the user.
+    fn persist_policies(
+        &self,
+        owner: &profiles::ProfileStore,
+        policies: &BTreeMap<String, Policy>,
+    ) -> bool {
+        let Ok(raw) = serde_json::to_string(policies) else {
+            return false;
+        };
+        match owner.persist_snapshot(KEY, &raw, false) {
+            Ok(()) => true,
+            Err(error) => {
+                self.offline_save_failed(&error);
+                false
+            }
+        }
     }
     fn offline_action(&self, key: &str, action: i32) {
         let owner = profiles::ProfileStore::capture();
@@ -849,6 +875,7 @@ impl Bridge {
             .playback
             .as_ref()
             .and_then(|p| p.intro_download.as_ref().map(|j| j.id.clone()));
+        let mut removed: Option<bool> = None;
         match action {
             0 => policy.enabled = !policy.enabled,
             1 => policy.keep_count = (policy.keep_count + 1).min(10),
@@ -890,37 +917,37 @@ impl Bridge {
                         serde_json::from_str::<(Owner, String)>(k)
                             .is_ok_and(|(o, _)| o.profile != owner.id() || o.policy != key)
                     });
-                    let _ = save_device(&device);
+                    if let Err(error) = save_device(&device) {
+                        self.offline_save_failed(&error);
+                    }
                 }
             }
             5 => {
                 policies.remove(key);
-                self.downloads.keep_removed_policy(
-                    &Owner {
-                        profile: owner.id().into(),
-                        policy: key.into(),
-                    },
-                    true,
-                    playing.as_deref(),
-                );
+                removed = Some(true);
             }
             6 => policy.include_specials = !policy.include_specials,
             7 => policy.cleanup_watched = !policy.cleanup_watched,
             8 => {
                 policies.remove(key);
-                self.downloads.keep_removed_policy(
-                    &Owner {
-                        profile: owner.id().into(),
-                        policy: key.into(),
-                    },
-                    false,
-                    playing.as_deref(),
-                );
+                removed = Some(false);
             }
             _ => return,
         }
-        if let Ok(raw) = serde_json::to_string(&policies) {
-            let _ = owner.persist_snapshot(KEY, &raw, false);
+        // Save the rule first: detaching or deleting files for a rule that is
+        // still on disk would let smart downloads re-create them.
+        if !self.persist_policies(&owner, &policies) {
+            return;
+        }
+        if let Some(keep) = removed {
+            self.downloads.keep_removed_policy(
+                &Owner {
+                    profile: owner.id().into(),
+                    policy: key.into(),
+                },
+                keep,
+                playing.as_deref(),
+            );
         }
         trigger();
         self.refresh_smart_offline();
@@ -948,8 +975,8 @@ impl Bridge {
         };
         policy.preference = Some(StreamPreference::from_row(row));
         policy.source_owner = row.owner_url.clone();
-        if let Ok(raw) = serde_json::to_string(&policies) {
-            let _ = owner.persist_snapshot(KEY, &raw, false);
+        if !self.persist_policies(&owner, &policies) {
+            return;
         }
         trigger();
         self.refresh_smart_offline();

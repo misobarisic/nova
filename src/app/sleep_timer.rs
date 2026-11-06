@@ -319,7 +319,12 @@ impl Bridge {
             4 => A::ExtendSleepTimer,
             _ => return,
         };
-        let _ = self.dispatch_playback_action(action);
+        // Surface refusals (e.g. no playing item) instead of silently ignoring the click.
+        if let Err(message) = self.dispatch_playback_action(action)
+            && let Some(app) = self.app()
+        {
+            app.set_sleep_timer_notice(text::tr(&message).into());
+        }
     }
 }
 

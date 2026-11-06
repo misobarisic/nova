@@ -550,14 +550,22 @@ impl Bridge {
                         return;
                     }
                     if let Some(app) = bridge.app() {
-                        app.set_stats_notice(
-                            text::tr(if result.is_ok() {
-                                "Diagnostics copied."
-                            } else {
-                                "Could not copy diagnostics."
-                            })
-                            .into(),
-                        );
+                        let notice: slint::SharedString = text::tr(if result.is_ok() {
+                            "Diagnostics copied."
+                        } else {
+                            "Could not copy diagnostics."
+                        })
+                        .into();
+                        app.set_stats_notice(notice.clone());
+                        // A transient confirmation: clear it unless something newer replaced it.
+                        let weak = app.as_weak();
+                        slint::Timer::single_shot(std::time::Duration::from_secs(4), move || {
+                            if let Some(app) = weak.upgrade()
+                                && app.get_stats_notice() == notice
+                            {
+                                app.set_stats_notice("".into());
+                            }
+                        });
                     }
                 });
             });

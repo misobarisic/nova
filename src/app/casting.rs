@@ -569,8 +569,12 @@ impl Bridge {
         if ui.get_connecting() {
             // Revoking the generation also invalidates preparation, pause handshakes and late replies.
             self.cast_disconnect();
+            ui.set_status(text::tr("Connection cancelled").into());
+        } else {
+            // Cancelling only discovery must not claim the (possibly live) cast
+            // connection was cancelled.
+            ui.set_status(text::tr("Search cancelled").into());
         }
-        ui.set_status(text::tr("Connection cancelled").into());
     }
     pub(super) fn cast_shutdown(&self) {
         let mut state = self.shared.lock().unwrap();

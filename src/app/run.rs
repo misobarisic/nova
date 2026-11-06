@@ -1023,8 +1023,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         extra.push(DEFAULT_ADDON.to_string());
     }
 
-    app.set_empty_hint(SharedString::from("Loading configured add-ons…"));
-    app.set_searchable_hint(SharedString::from("Search"));
+    app.set_empty_hint(SharedString::from(text::tr("Loading configured add-ons…")));
+    app.set_searchable_hint(SharedString::from(text::tr("Search")));
     app.set_searchable(true);
     app.set_desktop_decoder_available(cfg!(any(target_os = "windows", target_os = "linux")));
     app.set_hw_plus_available(!cfg!(target_os = "windows"));
@@ -1710,6 +1710,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     crate::web_log("nova: startup complete, entering event loop");
     drop(startup_timer);
     let result = app.run();
+    bridge.flush_pending_settings();
     bridge.close_profile_activations();
     bridge.poster_intake.close();
     #[cfg(all(target_os = "android", not(feature = "desktop")))]

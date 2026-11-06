@@ -67,10 +67,25 @@ impl LocalState {
 
 type CheckResult = Result<Option<(Release, Option<String>)>, transport::Error>;
 
+/// Idle About status: a cached release only proves "up to date" once a check
+/// succeeded this session (3 available, 2 up to date, 0 neutral).
+fn idle_status(available: bool, has_release: bool, verified: bool) -> i32 {
+    if available {
+        3
+    } else if has_release && verified {
+        2
+    } else {
+        0
+    }
+}
+
 struct Controller {
     app: slint::Weak<AppWindow>,
     state: RefCell<LocalState>,
     checking: Cell<bool>,
+    /// A check succeeded this session; a cached release alone must not
+    /// claim "up to date".
+    verified: Cell<bool>,
     pending: RefCell<Option<(std::sync::mpsc::Receiver<CheckResult>, bool)>>,
 }
 
@@ -100,13 +115,11 @@ impl Controller {
                 .into(),
         );
         if !self.checking.get() {
-            app.set_update_status(if available {
-                3
-            } else if state.release.is_some() {
-                2
-            } else {
-                0
-            });
+            app.set_update_status(idle_status(
+                available,
+                state.release.is_some(),
+                self.verified.get(),
+            ));
         }
     }
 
@@ -211,6 +224,7 @@ impl Controller {
                 state.next_check = now.saturating_add(DAY);
                 state.retry_at = 0;
                 drop(state);
+                self.verified.set(true);
                 self.publish();
                 self.notice(now, manual);
             }
@@ -238,6 +252,7 @@ pub(super) fn install(app: &AppWindow) -> slint::Timer {
         app: app.as_weak(),
         state: RefCell::new(state),
         checking: Cell::new(false),
+        verified: Cell::new(false),
         pending: RefCell::new(None),
     });
     app.set_update_checks_enabled(true);
@@ -348,5 +363,17 @@ mod tests {
         state.retry_at = 200;
         assert!(!state.due(100, true, true));
         assert!(state.due(200, true, true));
+    }
+}
+
+#[cfg(test)]
+mod idle_status_tests {
+    use super::idle_status;
+
+    #[test]
+    fn cached_release_is_not_up_to_date_before_a_check_this_session() {
+        assert_eq!(idle_status(false, true, false), 0);
+        assert_eq!(idle_status(false, true, true), 2);
+        assert_eq!(idle_status(true, true, false), 3);
     }
 }

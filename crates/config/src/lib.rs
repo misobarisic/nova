@@ -380,7 +380,7 @@ pub struct TorrentSettings {
     /// forgotten + deleted least-recently-used first once this is exceeded.
     #[serde(default = "default_torrent_max_mb")]
     pub max_mb: u64,
-    /// Download rate limit in KB/s (0 = unlimited).
+    /// Download rate limit in KiB/s (0 = unlimited).
     #[serde(default)]
     pub down_limit_kbps: u32,
     /// Stream using bounded RAM only, with no torrent payload, metadata or

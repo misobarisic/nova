@@ -2341,8 +2341,17 @@ impl Bridge {
         );
         if room.ended {
             self.player.set_paused(true);
+            let reason = room.error.clone();
             self.party_leave();
-            app.set_party_status(text::tr("The watch party has ended.").into());
+            // party_leave clears the status/error, and the status text only renders
+            // inside the active party panels; the error card still shows while inactive,
+            // so surface the real reason (kicked, host gone) there.
+            let message = reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| text::tr(reason).to_string())
+                .unwrap_or_else(|| text::tr("The watch party has ended.").to_string());
+            app.set_party_error(message.into());
         }
         if app.get_party_page_open() {
             app.recover_back_focus();

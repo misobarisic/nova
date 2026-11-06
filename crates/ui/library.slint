@@ -50,6 +50,8 @@ export component LibraryPage {
     }
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> library_filter_category: "";
+    in-out property <int> library_total: 0;
+    in-out property <string> library_notice;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
     in-out property <[string]> category_names: [];
     // Display text for `category_names` (same order/length): the automatic
@@ -894,7 +896,9 @@ export component LibraryPage {
                                     wrap: word-wrap;
                                 }
                                 Text {
-                                    text: @tr("({n} item)" | "({n} items)" % root.library.length);
+                                    // Show the saved total so an active filter or search doesn't read as a
+                                    // shrunken library; "x of y" only when they differ.
+                                    text: root.library.length == root.library_total || root.library_total == 0 ? @tr("({n} item)" | "({n} items)" % root.library.length) : @tr("({} of {n} item)" | "({} of {n} items)" % root.library_total, root.library.length);
                                     font-size: InterfaceStyle.tv ? 18px : 13px;
                                     color: Theme.current.text_hint;
                                     vertical-alignment: center;
@@ -902,6 +906,12 @@ export component LibraryPage {
                                 Rectangle { horizontal-stretch: 1; min-width: 0px; }
 
                             }
+                        }
+                        if root.library_notice != "": Text {
+                            text: root.library_notice;
+                            font-size: InterfaceStyle.tv ? 18px : 13px;
+                            color: Theme.current.text_hint;
+                            wrap: word-wrap;
                         }
                         library_controls := Rectangle {
                             height: library_search_reveal.height + library_filter_and_sort.height;

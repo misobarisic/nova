@@ -59,7 +59,7 @@ component DownloadEpisodeRow inherits Rectangle {
     }
 
     callback action(string, int);
-    callback delete-requested(string, string);
+    callback delete-requested(string, string, bool);
     // Compact cards give titles and transfer details their own line. A side
     // action used to leave only a few characters and overflow its fixed width.
     private property <bool> stacked: root.width < 480px;
@@ -121,10 +121,8 @@ component DownloadEpisodeRow inherits Rectangle {
         width: InterfaceStyle.tv ? 56px : 44px;
         label: "×"; trash: root.episode.action_kind == 4; destructive: root.episode.action_kind == 4;
         accessible-label: root.episode.action_kind == 4 ? @tr("Delete downloaded file") : @tr("Cancel download");
-        picked => {
-            if root.episode.action_kind == 4 { root.delete-requested(root.episode.id, root.episode.title); }
-            else { root.action(root.episode.id, 1); }
-        }
+        // Cancelling also deletes partial data, so it asks like deleting a finished file.
+        picked => { root.delete-requested(root.episode.id, root.episode.title, root.episode.action_kind != 4); }
     }
 }
 component DownloadSeriesCard inherits Rectangle {
@@ -151,7 +149,7 @@ component DownloadSeriesCard inherits Rectangle {
     callback reveal(length, length);
     callback toggled(string);
     callback action(string,int);
-    callback delete-requested(string, string);
+    callback delete-requested(string, string, bool);
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
     background: Theme.current.artwork_canvas; clip: true;
     // Only the chevron animates; rows and card height switch immediately.
@@ -173,11 +171,12 @@ component DownloadSeriesCard inherits Rectangle {
     }
     episodes_body := VerticalLayout {
         y: 86px; width: 100%; height: self.preferred-height; spacing: 0px;
-        for episode[index] in (root.group.collapsed ? [] : root.group.episodes): DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.page-error(y,h,d); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title) => { root.delete-requested(id,title); } }
+        for episode[index] in (root.group.collapsed ? [] : root.group.episodes): DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.page-error(y,h,d); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.delete-requested(id,title,partial); } }
     }
 }
 component DownloadDeleteDialog inherits Rectangle {
     in property <string> title;
+    in property <bool> partial;
     in property <bool> cancel-selected;
     in property <length> safe-top; in property <length> safe-bottom;
     in property <length> safe-left; in property <length> safe-right;
@@ -207,11 +206,11 @@ component DownloadDeleteDialog inherits Rectangle {
             x: Math.max(0px, (dialog_scroll.visible-width - self.width) / 2);
             width: Math.min(720px, dialog_scroll.visible-width);
             padding: 18px; spacing: 16px; alignment: start;
-            Text { vertical-stretch: 0; text: @tr("Delete downloaded file?"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 28px : 24px; font-weight: 700; wrap: word-wrap; }
+            Text { vertical-stretch: 0; text: root.partial ? @tr("Cancel download?") : @tr("Delete downloaded file?"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 28px : 24px; font-weight: 700; wrap: word-wrap; }
             Text { vertical-stretch: 0; text: root.title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 22px : 16px; wrap: word-wrap; }
-            Text { vertical-stretch: 0; text: @tr("This file will be deleted from this device."); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
-            cancel_action := DownloadButton { label: @tr("Cancel"); tv-focused: root.cancel-selected; picked => { root.finished(false); } }
-            delete_action := DownloadButton { label: @tr("Delete file"); destructive: true; tv-focused: !root.cancel-selected; picked => { root.finished(true); } }
+            Text { vertical-stretch: 0; text: root.partial ? @tr("The partially downloaded data will be deleted from this device.") : @tr("This file will be deleted from this device."); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
+            cancel_action := DownloadButton { label: root.partial ? @tr("Keep downloading") : @tr("Cancel"); tv-focused: root.cancel-selected; picked => { root.finished(false); } }
+            delete_action := DownloadButton { label: root.partial ? @tr("Cancel download") : @tr("Delete file"); destructive: true; tv-focused: !root.cancel-selected; picked => { root.finished(true); } }
         }
     }
 }
@@ -225,15 +224,16 @@ export component DownloadsPage inherits Rectangle {
     private property <string> delete-id;
     private property <string> delete-title;
     private property <bool> delete-cancel-selected: true;
-    function request-delete(id: string, title: string) {
-        root.delete-id = id; root.delete-title = title; root.delete-cancel-selected = true;
+    private property <bool> delete-partial;
+    function request-delete(id: string, title: string, partial: bool) {
+        root.delete-id = id; root.delete-title = title; root.delete-partial = partial; root.delete-cancel-selected = true;
         page_scope.focus();
     }
     function finish-delete(confirmed: bool) {
         let id = root.delete-id;
         root.delete-id = ""; root.delete-title = "";
         page_scope.focus();
-        if confirmed && id != "" { root.action(id, 3); }
+        if confirmed && id != "" { root.action(id, root.delete-partial ? 1 : 3); }
     }
     changed active => { if !root.active { root.delete-id = ""; root.delete-title = ""; } }
 
@@ -332,12 +332,12 @@ export component DownloadsPage inherits Rectangle {
             if root.tv-episode < 0 { root.group_toggled(root.groups[root.tv-group].id); }
             else {
                 let episode = root.groups[root.tv-group].episodes[root.tv-episode];
-                if root.tv-action == 1 && episode.action_kind == 4 { root.request-delete(episode.id, episode.title); }
+                if root.tv-action == 1 { root.request-delete(episode.id, episode.title, episode.action_kind != 4); }
                 else { root.action(episode.id, root.tv-action); }
             }
         } else {
             let episode = root.transfers[root.tv-episode];
-            if root.tv-action == 1 && episode.action_kind == 4 { root.request-delete(episode.id, episode.title); }
+            if root.tv-action == 1 { root.request-delete(episode.id, episode.title, episode.action_kind != 4); }
             else { root.action(episode.id, root.tv-action); }
         }
     }
@@ -467,12 +467,12 @@ export component DownloadsPage inherits Rectangle {
                 color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
             }
             for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
-                DownloadSeriesCard { tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 3 && root.tv-group == row * root.columns; tv-episode: root.tv-episode; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } delete-requested(id,title) => { root.request-delete(id,title); } }
-                if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } delete-requested(id,title) => { root.request-delete(id,title); } }
+                DownloadSeriesCard { tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 3 && root.tv-group == row * root.columns; tv-episode: root.tv-episode; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
+                if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
                 if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
             }
             if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
-            for transfer[index] in root.transfers: DownloadEpisodeRow { tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 4 && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title) => { root.request-delete(id,title); } }
+            for transfer[index] in root.transfers: DownloadEpisodeRow { tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 4 && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
         }
     }
     download_header := PageHeader {
@@ -542,7 +542,7 @@ export component DownloadsPage inherits Rectangle {
     }
     if root.delete-id != "": DownloadDeleteDialog {
         x: root.content_x; width: root.width - self.x; height: root.height;
-        title: root.delete-title; cancel-selected: root.delete-cancel-selected;
+        title: root.delete-title; partial: root.delete-partial; cancel-selected: root.delete-cancel-selected;
         safe-top: root.safe-top; safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
         finished(confirmed) => { root.finish-delete(confirmed); }
     }

@@ -1537,7 +1537,7 @@ export component DetailPage {
             ];
             picked(a) => {
                 if (a == 0) {
-                    root.season_watch_action(root.menu_idx, 0);
+                    root.season_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
                 } else if (a == 3) {
                     root.season_watch_action(root.menu_idx, 3);
                 } else if (a == 2) {

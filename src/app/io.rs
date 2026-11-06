@@ -133,39 +133,18 @@ pub(crate) fn write_json(key: &str, value: &(impl Serialize + ?Sized)) {
     }
 }
 /// Human-readable disk usage for the Settings page, e.g.
-/// `"128.4 MB · 1,203 files"`. Pure (cross-platform for tests).
+/// `"128 MiB · 1,203 files"`. Pure (cross-platform for tests).
 pub(crate) fn format_disk_usage(bytes: u64, files: usize) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes as f64;
-    let size = if b >= GB {
-        format!("{:.1} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    };
-    format!("{size} · {}", text::files_label(files))
+    format!(
+        "{} · {}",
+        nova_download::format_bytes(bytes),
+        text::files_label(files)
+    )
 }
 /// Human-readable transfer rate for the player status line, e.g.
-/// `"1.2 MB"` for 1_258_291 bytes/second.
+/// `"1.2 MiB"` for 1_258_291 bytes/second (callers append `/s`).
 pub(crate) fn format_rate(bytes_per_sec: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes_per_sec as f64;
-    if b >= GB {
-        format!("{:.1} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.0} KB", b / KB)
-    } else {
-        format!("{bytes_per_sec} B")
-    }
+    nova_download::format_bytes(bytes_per_sec)
 }
 /// Write `contents` to `path` via a temp file + rename, so a crash mid-write
 /// never leaves a truncated file behind.

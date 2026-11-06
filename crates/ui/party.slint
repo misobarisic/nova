@@ -41,6 +41,15 @@ export component PartyPage inherits Rectangle {
     background: Theme.current.artwork_canvas;
     property <int> tv-index: -1;
     private property <bool> wide: !InterfaceStyle.tv && root.width - root.safe-left - root.safe-right >= 900px;
+    // Inline two-step confirmation for destructive host actions: the first press arms
+    // the button, the second performs it. Moving focus or waiting disarms it again.
+    private property <bool> confirm-end: false;
+    private property <string> confirm-remove: "";
+    confirm_timeout := Timer {
+        interval: 5s;
+        running: root.confirm-end || root.confirm-remove != "";
+        triggered => { root.confirm-end = false; root.confirm-remove = ""; }
+    }
     private property <bool> party-active: PartyBridge.active;
     private property <bool> party-busy: PartyBridge.busy;
     changed party-active => { if InterfaceStyle.tv { root.tv-index = -1; party_scope.focus(); } }
@@ -57,6 +66,7 @@ export component PartyPage inherits Rectangle {
     // own keys first. Mounted controls claim focus from tv-index, so rebuilding
     // a conditional section never leaves references to a destroyed element.
     function tv_move(direction: int) {
+        root.confirm-end = false; root.confirm-remove = "";
         SettingsStyle.keyboard-mode = true;
         if direction > 0 {
             if root.tv-index >= 16 && root.tv-index < 16 + PartyBridge.participants.length && PartyBridge.active && PartyBridge.is_host {
@@ -117,7 +127,9 @@ export component PartyPage inherits Rectangle {
                 if !e.repeat { root.back(); } accept
             } else if InterfaceStyle.tv && root.tv-index >= 17 && (e.text == Key.Return || e.text == " ") {
                 let index = root.tv-index - 17;
-                if !e.repeat && PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy && index < PartyBridge.participants.length && PartyBridge.participants[index].can_remove { PartyBridge.remove_member(PartyBridge.participants[index].id); } accept
+                if !e.repeat && PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy && index < PartyBridge.participants.length && PartyBridge.participants[index].can_remove {
+                    if root.confirm-remove == PartyBridge.participants[index].id { root.confirm-remove = ""; PartyBridge.remove_member(PartyBridge.participants[index].id); } else { root.confirm-remove = PartyBridge.participants[index].id; }
+                } accept
             } else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) { root.tv_move(e.text == Key.UpArrow ? -1 : 1); accept } else { reject }
         }
     room_scroll := ScrollView {
@@ -280,7 +292,7 @@ export component PartyPage inherits Rectangle {
                                 Text { font-size: 14px; text: member.name; color: Theme.current.text_bright; font-weight: 600; overflow: elide; min-width: 0px; }
                                 Text { font-size: 13px; text: member.is_host ? @tr("Host") : member.status; color: member.ready ? Theme.current.accent_soft : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
                             }
-                            if PartyBridge.is_host && member.can_remove: PillButton { focused: InterfaceStyle.tv && root.tv-index == index + 17; changed focused => { if self.focused { root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Remove"); compact: true; destructive: true; vertical-stretch: 0; enabled: !PartyBridge.busy; clicked => { PartyBridge.remove_member(member.id); } }
+                            if PartyBridge.is_host && member.can_remove: PillButton { focused: InterfaceStyle.tv && root.tv-index == index + 17; changed focused => { if self.focused { root.tv_reveal(self.absolute-position.y, self.height); } } label: root.confirm-remove == member.id ? @tr("Confirm remove") : @tr("Remove"); compact: true; destructive: true; vertical-stretch: 0; enabled: !PartyBridge.busy; clicked => { if root.confirm-remove == member.id { root.confirm-remove = ""; PartyBridge.remove_member(member.id); } else { root.confirm-remove = member.id; } } }
                         }
                     }
                     if PartyBridge.is_host: HorizontalLayout { spacing: 10px;
@@ -350,7 +362,7 @@ export component PartyPage inherits Rectangle {
                     width: Math.min(240px, room_scroll.visible-width); horizontal-stretch: 0;
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 15;
                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? @tr("End party") : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } PartyBridge.leave(); } }                }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? (root.confirm-end ? @tr("Confirm end party") : @tr("End party")) : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } if PartyBridge.is_host && !root.confirm-end { root.confirm-end = true; } else { root.confirm-end = false; PartyBridge.leave(); } } }                }
             }
         }
     }

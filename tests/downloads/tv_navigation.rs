@@ -102,6 +102,11 @@ fn downloads_arrows_reach_filters_sort_series_episode_actions_and_transfers() {
     key(&app, Key::Return);
     key(&app, Key::RightArrow);
     key(&app, Key::Return);
+    // Cancelling deletes partial data, so it opens a confirmation that starts on
+    // "Keep downloading"; nothing is cancelled until the destructive choice is made.
+    assert_eq!(&*actions.borrow(), &[("episode-0".into(), 0)]);
+    key(&app, Key::RightArrow);
+    key(&app, Key::Return);
     assert_eq!(
         &*actions.borrow(),
         &[("episode-0".into(), 0), ("episode-0".into(), 1)]
@@ -123,6 +128,10 @@ fn downloads_arrows_reach_filters_sort_series_episode_actions_and_transfers() {
     assert_eq!(actions.borrow().last(), Some(&("episode-11".into(), 0)));
     key(&app, Key::DownArrow);
     key(&app, Key::Return);
+    assert_eq!(actions.borrow().last(), Some(&("transfer".into(), 0)));
+    key(&app, Key::RightArrow);
+    key(&app, Key::Return);
+    // The transfer's cancel also asks first; confirm with the destructive choice.
     assert_eq!(actions.borrow().last(), Some(&("transfer".into(), 0)));
     key(&app, Key::RightArrow);
     key(&app, Key::Return);

@@ -300,7 +300,7 @@ export component DetailEpisodesModule inherits Window {
                                 Menu {
                                     MenuItem {
                                         title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
-                                        activated => { DetailBridge.season_watch_action(i, 0); }
+                                        activated => { DetailBridge.season_watch_action(i, s.watched ? 2 : 1); }
                                     }
                                     MenuItem { title: @tr("Download season"); activated => { DetailBridge.season_download_menu = i; } }
                                     for action in DetailBridge.progress_include_specials ? [s.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress")] : []: MenuItem {

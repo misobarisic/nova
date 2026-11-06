@@ -236,6 +236,7 @@ pub fn tr(english: &str) -> &str {
         "Connected. Choose something to watch." => "Povezano. Odaberite što želite gledati.",
         "Connecting to receiver…" => "Povezivanje s prijamnikom…",
         "Connection cancelled" => "Povezivanje je otkazano",
+        "Search cancelled" => "Pretraživanje je otkazano",
         "Could not confirm receiver stopped. Local playback remains paused. Retry Stop casting." => {
             "Nije potvrđeno zaustavljanje prijamnika. Lokalna reprodukcija ostaje pauzirana. Ponovite Zaustavi emitiranje."
         }
@@ -485,6 +486,9 @@ pub fn tr(english: &str) -> &str {
         "Open an episode and use this source for smart downloads" => {
             "Otvorite epizodu i odaberite ovaj izvor za pametna preuzimanja"
         }
+        "Offline settings could not be saved — try again" => {
+            "Izvanmrežne postavke nisu spremljene — pokušajte ponovno"
+        }
         "Use this source for smart downloads" => "Koristi ovaj izvor za pametna preuzimanja",
         "Automatic storage" => "Automatska pohrana",
         "Reserved" => "Rezervirano",
@@ -707,6 +711,10 @@ pub fn tr(english: &str) -> &str {
             "Red gledanja je pun. Uklonite stavku prije dodavanja nove."
         }
         "Chapter" => "Poglavlje",
+        "EP" => "Ep.",
+        "Cannot play this stream (mpv could not start playback)." => {
+            "Ovaj zapis nije moguće reproducirati (mpv nije mogao pokrenuti reprodukciju)."
+        }
         "Open in browser" => "Otvori u pregledniku",
         "Could not open this link in your browser." => {
             "Poveznicu nije moguće otvoriti u pregledniku."
@@ -965,6 +973,8 @@ pub fn tr(english: &str) -> &str {
         "invalid party command" => "Nevaljana naredba za zajedničko gledanje.",
         "choose party media first" => "Najprije odaberite sadržaj za zajedničko gledanje.",
         "party has ended" => "Zajedničko gledanje je završilo.",
+        "host disconnected; party ended" => "Domaćin se odspojio; zajedničko gledanje je završilo.",
+        "party membership revoked" => "Domaćin vas je uklonio iz zajedničkog gledanja.",
         "Only the host controls the shared timeline." => {
             "Samo domaćin upravlja zajedničkom reprodukcijom."
         }
@@ -1137,6 +1147,7 @@ pub fn tr(english: &str) -> &str {
         "High (80%)" => "Visoka (80%)",
         "Very high (95%)" => "Vrlo visoka (95%)",
         "Automatic" => "Automatski",
+        "Standard" => "Standardno",
         "Unlimited" => "Neograničeno",
         "Image disk-cache limit" => "Ograničenje slikovne predmemorije na disku",
         "Not received yet" => "Još nije primljeno",
@@ -1621,6 +1632,10 @@ pub fn tr(english: &str) -> &str {
             "Svi dodaci su onemogućeni — omogućite neki u Postavkama → Dodaci."
         }
         "Loading configured add-ons…" => "Učitavanje konfiguriranih dodataka…",
+        "Search" => "Pretraga",
+        "Episode details for this title haven't loaded yet — open it once, then try again." => {
+            "Pojedinosti o epizodama za ovaj naslov još nisu učitane — otvorite ga jednom pa pokušajte ponovno."
+        }
         // ---- Playback / P2P --------------------------------------------
         "P2P streaming is disabled in Settings → P2P." => {
             "P2P prijenos je onemogućen u Postavkama → P2P."
@@ -1672,6 +1687,15 @@ pub fn tr(english: &str) -> &str {
         "Dropped" => "Odbačeno",
         // ---- Air-date labels -------------------------------------------
         other => other,
+    }
+}
+
+/// Fallback name for a media track that carries no language or title.
+pub fn track_label(id: i32) -> String {
+    if croatian() {
+        format!("Zapis {id}")
+    } else {
+        format!("Track {id}")
     }
 }
 
@@ -2652,6 +2676,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "interface_mode" => match value.as_str() {
+            Some("standard") => tr("Standard").into(),
+            Some("tv") => tr("TV").into(),
+            _ => tr("Automatic").into(),
+        },
         "casting_remux_buffer" => {
             serde_json::from_value::<nova_config::CastingRemuxBuffer>(value.clone())
                 .map(|budget| format!("{} MiB", budget.mib()))
@@ -2694,7 +2723,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some("large") => tr("Large").into(),
             _ => tr("Medium").into(),
         },
-        "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
+        "lru_cache_mb" | "torrent_max_mb" => format!("{number} MiB"),
         "torrent_ram_buffer_mb" => format!("{number} MiB"),
         "detail_poster_max_side"
         | "detail_backdrop_max_side"
@@ -2819,7 +2848,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         "image_disk_cache_limit_mb" if value.is_null() => tr("Unlimited").into(),
         "image_disk_cache_limit_mb" => format!("{number} MiB"),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
-        "torrent_down_limit" => format!("{number} KB/s"),
+        "torrent_down_limit" => format!("{number} KiB/s"),
         "home_catalog_sources"
         | "home_row_sources"
         | "home_rows"
@@ -3397,7 +3426,7 @@ mod tests {
             );
             assert_eq!(
                 setting_sync_value("torrent_max_mb", &serde_json::json!(20480.0)),
-                "20480 MB"
+                "20480 MiB"
             );
             assert_eq!(
                 setting_sync_value("episode_start_behavior", &serde_json::json!("StartOver")),

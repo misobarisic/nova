@@ -221,7 +221,7 @@ export component SettingsPlayerModule inherits Window {
                         disabled_index: SettingsBridge.is_android ? -1 : 1;
                         current_index: SettingsBridge.player_backend_index;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 0 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 0; SettingsBridge.player_backend_index = SettingsBridge.is_android ? i : 0; SettingsContent.schedule_save(); }
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 0; SettingsBridge.player_backend_index = SettingsBridge.is_android ? i : 0; SettingsContent.schedule_setting("player_external"); }
                     }
                 }
             }
@@ -238,7 +238,7 @@ export component SettingsPlayerModule inherits Window {
                         labels: [@tr("Start over"), @tr("Resume"), @tr("Ask")];
                         current_index: SettingsBridge.episode_start_index;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 1 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 1; SettingsBridge.episode_start_index = i; SettingsContent.schedule_save(); }
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 1; SettingsBridge.episode_start_index = i; SettingsContent.schedule_setting("episode_start_behavior"); }
                     }
                 }
             }
@@ -255,7 +255,7 @@ export component SettingsPlayerModule inherits Window {
                         labels: [@tr("System default"), "VLC", "mpv"];
                         current_index: SettingsBridge.desktop_external_app_index;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.desktop_external_app_index = i; SettingsContent.schedule_save(); }
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.desktop_external_app_index = i; SettingsContent.schedule_setting("desktop_external_app"); }
                     }
                 }
 
@@ -271,7 +271,7 @@ export component SettingsPlayerModule inherits Window {
                             labels: ["HW+", "HW", "SW"];
                             current_index: SettingsBridge.android_hwdec_index;
                             focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
-                            picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.android_hwdec_index = i; SettingsContent.schedule_save(); }
+                            picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.android_hwdec_index = i; SettingsContent.schedule_setting("android_hwdec"); }
                         }
                     }
                 }
@@ -283,7 +283,7 @@ export component SettingsPlayerModule inherits Window {
                         labels: [@tr("Stay paused"), @tr("Auto continue")];
                         current_index: SettingsBridge.android_auto_continue ? 1 : 0;
                         focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 3 && SettingsBridge.kb_active;
-                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 3; SettingsBridge.android_auto_continue = i == 1; SettingsContent.schedule_save(); }
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 3; SettingsBridge.android_auto_continue = i == 1; SettingsContent.schedule_setting("android_auto_continue"); }
                     }
                 }
 
@@ -338,7 +338,7 @@ export component SettingsPlayerModule inherits Window {
                                 SettingsBridge.kb_zone = 9;
                                 SettingsContent.kb_pr = 2;
                                 SettingsBridge.desktop_hwdec_index = i;
-                                SettingsContent.schedule_save();
+                                SettingsContent.schedule_setting("desktop_hwdec");
                             }
                         }
                     }
@@ -456,11 +456,11 @@ export component SettingsPlayerModule inherits Window {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 9;
                                 SettingsContent.kb_pr = SettingsContent.kb_player_speed_row();
-                                SettingsContent.schedule_save();
+                                SettingsContent.schedule_setting("playback_speed");
                             }
                             stepped(d) => {
                                 SettingsBridge.playback_speed_stepped(d);
-                                SettingsContent.schedule_save();
+                                SettingsContent.schedule_setting("playback_speed");
                             }
                         }
                     }
@@ -536,11 +536,11 @@ export component SettingsPlayerModule inherits Window {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 9;
                                 SettingsContent.kb_pr = SettingsContent.kb_player_speed_row();
-                                SettingsContent.schedule_save();
+                                SettingsContent.schedule_setting("playback_speed");
                             }
                             stepped(d) => {
                                 SettingsBridge.playback_speed_stepped(d);
-                                SettingsContent.schedule_save();
+                                SettingsContent.schedule_setting("playback_speed");
                             }
                         }
                     }

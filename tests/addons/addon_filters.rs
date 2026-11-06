@@ -214,7 +214,17 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
                 <= viewport_position.y + viewport.size().height + 0.5,
             "the whole Remove target must be reachable after the Cinemeta description wraps"
         );
+        // Removal syncs to every device, so the first press only arms it.
         settings::click(&app, &remove).await;
+        settle().await;
+        assert!(
+            removed.borrow().is_empty(),
+            "the first Remove press must only arm removal"
+        );
+        let confirm = ElementHandle::find_by_accessible_label(&app, "Confirm remove")
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+            .expect("armed removal shows a Confirm remove button");
+        settings::click(&app, &confirm).await;
         settle().await;
         assert_eq!(&*removed.borrow(), &["https://metadata.example"]);
         app.set_addon_search_text("missing".into());

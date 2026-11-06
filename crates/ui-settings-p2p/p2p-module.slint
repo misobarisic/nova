@@ -221,6 +221,8 @@ export component SettingsP2pModule inherits Window {
                                     width: 100%;
                                     minimum: 512;
                                     maximum: 32768;
+                                    step: 512;
+                                    enabled: !SettingsBridge.torrent_no_cache;
                                     value: SettingsBridge.torrent_max_mb;
                                     focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 2 && SettingsBridge.kb_active;
                                     changed(v) => {
@@ -279,6 +281,8 @@ export component SettingsP2pModule inherits Window {
                                     width: 100%;
                                     minimum: 512;
                                     maximum: 32768;
+                                    step: 512;
+                                    enabled: !SettingsBridge.torrent_no_cache;
                                     value: SettingsBridge.torrent_max_mb;
                                     focused: SettingsBridge.kb_zone == 7 && SettingsContent.kb_tr == 2 && SettingsBridge.kb_active;
                                     changed(v) => {

@@ -1,4 +1,4 @@
-import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
+import { SettingsBridge, SettingsContent, SettingsStyle, Theme, InterfaceStyle } from "@NovaUiShared";
 
 import { PillButton, Segmented, ToggleSwitch, AddonIconButton, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
 
@@ -274,16 +274,31 @@ export component SettingsThemeModule inherits Window {
                         }
                     }
                 } }
-                HorizontalLayout {
-                    alignment: start;
-                    PillButton {
-                        label: @tr("Restore theme defaults");
-                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 10 && SettingsBridge.kb_active;
-                        clicked => {
-                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
-                            SettingsBridge.kb_zone = 17;
-                            SettingsContent.kb_theme = 10;
-                            SettingsContent.restore_theme_defaults();
+                VerticalLayout {
+                    spacing: 8px;
+                    if SettingsContent.theme_restore_confirm: Text {
+                        text: @tr("Restore the default theme? This also changes it on your paired devices.");
+                        color: Theme.current.text_settings;
+                        font-size: InterfaceStyle.tv ? 18px : 14px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 8px;
+                        PillButton {
+                            label: SettingsContent.theme_restore_confirm ? @tr("Restore defaults") : @tr("Restore theme defaults");
+                            destructive: SettingsContent.theme_restore_confirm;
+                            focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 10 && SettingsBridge.kb_active;
+                            clicked => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 17;
+                                SettingsContent.kb_theme = 10;
+                                SettingsContent.restore_theme_defaults();
+                            }
+                        }
+                        if SettingsContent.theme_restore_confirm: PillButton {
+                            label: @tr("Cancel");
+                            clicked => { SettingsContent.theme_restore_confirm = false; }
                         }
                     }
                 }

@@ -382,6 +382,14 @@ mod playback_tests {
     }
 
     #[test]
+    fn unknown_duration_is_never_watched_or_near_end() {
+        // Live/unknown streams publish duration 0; they must not complete.
+        assert!(!is_watched_position(5.0, 0.0));
+        assert!(!is_watched_position(0.9, 0.0));
+        assert!(resumable_position(120.0, 0.0, false));
+    }
+
+    #[test]
     fn resume_step_lands_disarms_and_only_seeks_when_missed() {
         // No frames yet / unknown duration / already handled: nothing to do.
         assert_eq!(resume_step(120.0, 0.0, 0.0, true, false), ResumeStep::Idle);
@@ -1447,14 +1455,14 @@ mod settings_tests {
     fn disk_usage_formatting() {
         assert_eq!(format_disk_usage(0, 0), "0 B · 0 files");
         assert_eq!(format_disk_usage(512, 1), "512 B · 1 file");
-        assert_eq!(format_disk_usage(2048, 2), "2.0 KB · 2 files");
+        assert_eq!(format_disk_usage(2048, 2), "2.0 KiB · 2 files");
         assert_eq!(
             format_disk_usage(5 * 1024 * 1024, 1203),
-            "5.0 MB · 1,203 files"
+            "5.0 MiB · 1,203 files"
         );
         assert_eq!(
             format_disk_usage(3 * 1024 * 1024 * 1024, 7),
-            "3.0 GB · 7 files"
+            "3.0 GiB · 7 files"
         );
         assert_eq!(grouped_count(0), "0");
         assert_eq!(grouped_count(999), "999");

@@ -244,6 +244,12 @@ msgstr[0] "({n} stavka)"
 msgstr[1] "({n} stavke)"
 msgstr[2] "({n} stavki)"
 
+msgid "({} of {n} item)"
+msgid_plural "({} of {n} items)"
+msgstr[0] "({} od {n} stavke)"
+msgstr[1] "({} od {n} stavke)"
+msgstr[2] "({} od {n} stavki)"
+
 msgid "Addon"
 msgstr "Dodatak"
 
@@ -1513,9 +1519,6 @@ msgstr "Nastavi gledati Uskoro odjeljci početne stranice istaknuti katalozi Dod
 
 msgid "Convert existing disk entries when accessed, using the current compression settings."
 msgstr "Pretvori postojeće slike pri pristupu prema trenutačnim postavkama kompresije."
-
-msgid "Convert existing images"
-msgstr "Pretvori postojeće slike"
 
 msgid "Create Add category Remove tags"
 msgstr "Stvori Dodaj kategoriju Ukloni oznake"
@@ -2802,6 +2805,14 @@ msgstr "Pozovite prijatelje"
 #: party.slint
 msgid "Copy invite"
 msgstr "Kopirajte pozivnicu"
+
+#: party.slint
+msgid "Confirm remove"
+msgstr "Potvrdite uklanjanje"
+
+#: party.slint
+msgid "Confirm end party"
+msgstr "Potvrdite završetak zajedničkog gledanja"
 
 #: party.slint
 msgid "End party"
@@ -4944,6 +4955,9 @@ msgstr "Izvor je promijenjen — odaberite drugi izvor"
 msgid "Open an episode and use this source for smart downloads"
 msgstr "Otvorite epizodu i odaberite ovaj izvor za pametna preuzimanja"
 
+msgid "Offline settings could not be saved — try again"
+msgstr "Izvanmrežne postavke nisu spremljene — pokušajte ponovno"
+
 msgid "Use this source for smart downloads"
 msgstr "Koristi ovaj izvor za pametna preuzimanja"
 
@@ -5280,6 +5294,21 @@ msgstr "Izbrisati preuzetu datoteku?"
 msgid "This file will be deleted from this device."
 msgstr "Ova će datoteka biti izbrisana s ovog uređaja."
 
+msgid "Cancel download?"
+msgstr "Otkazati preuzimanje?"
+
+msgid "The partially downloaded data will be deleted from this device."
+msgstr "Djelomično preuzeti podaci bit će izbrisani s ovog uređaja."
+
+msgid "Keep downloading"
+msgstr "Nastavi preuzimanje"
+
+msgid "Confirm delete"
+msgstr "Potvrdi brisanje"
+
+msgid "Confirm: remove rule and delete unneeded files"
+msgstr "Potvrdi: ukloni pravilo i izbriši nepotrebne datoteke"
+
 msgid "Delete file"
 msgstr "Izbriši datoteku"
 
@@ -5611,6 +5640,12 @@ msgstr "Provjeri položaj nastavka"
 msgid "This source may use a different cut. Resume at {}, or start over."
 msgstr "Ovaj izvor možda koristi drukčiju verziju. Nastavite na {} ili počnite ispočetka."
 
+msgid "Default ({})"
+msgstr "Zadano ({})"
+
+msgid "Resume from {}?"
+msgstr "Nastaviti od {}?"
+
 msgid "Spoiler protection"
 msgstr "Zaštita od spojlera"
 
@@ -5804,9 +5839,6 @@ msgstr "Pretvori JPEG bez gubitaka"
 msgid "Preserve original JPEG data when no resize is needed. Other images and resized JPEGs use the selected quality."
 msgstr "Sačuvaj izvorne JPEG podatke kada promjena veličine nije potrebna. Ostale slike i JPEG slike promijenjene veličine koriste odabranu kvalitetu."
 
-msgid "Search movies, shows…"
-msgstr "Pretraži filmove, serije…"
-
 msgid "Change status"
 msgstr "Promijeni status"
 
@@ -5818,3 +5850,36 @@ msgstr "Označi kao dovršeno"
 
 msgid "Mark as new episodes"
 msgstr "Označi kao nove epizode"
+
+msgid "{n} episode"
+msgid_plural "{n} episodes"
+msgstr[0] "{n} epizoda"
+msgstr[1] "{n} epizode"
+msgstr[2] "{n} epizoda"
+
+msgid "Resolutions"
+msgstr "Razlučivosti"
+
+msgid "Change"
+msgstr "Promijenite"
+
+msgid "Add to library"
+msgstr "Dodajte u biblioteku"
+
+msgid "Download failed"
+msgstr "Preuzimanje nije uspjelo"
+
+msgid "Add bookmark"
+msgstr "Dodajte oznaku"
+
+msgid "Try another source"
+msgstr "Pokušajte s drugim izvorom"
+
+msgid "Brightness"
+msgstr "Svjetlina"
+
+msgid "Restore the default theme? This also changes it on your paired devices."
+msgstr "Vratiti zadanu temu? To će je promijeniti i na vašim uparenim uređajima."
+
+msgid "Restore defaults"
+msgstr "Vrati zadano"

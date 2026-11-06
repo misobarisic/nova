@@ -25,8 +25,9 @@ export global PlayerOsdBridge {
         if i == 9 && !remote && !self.sleep_timer_end_available { return; }
         if i >= 10 && i <= 12 && !(remote ? RemoteBridge.sleep_timer_episodes_available : self.sleep_timer_episodes_available) { return; }
         if i == 13 && !(remote ? RemoteBridge.sleep_timer_duration : self.sleep_timer_duration) { return; }
-        if i == 6 { self.sleep_custom_minutes = Math.max(1, self.sleep_custom_minutes - 1); }
-        else if i == 7 { self.sleep_custom_minutes = Math.min(240, self.sleep_custom_minutes + 1); }
+        // Step by 5 (snapping to multiples of 5, but 1 stays reachable at the bottom): 1-240 by ones is too slow to dial in.
+        if i == 6 { self.sleep_custom_minutes = Math.max(1, Math.ceil(self.sleep_custom_minutes / 5) * 5 - 5); }
+        else if i == 7 { self.sleep_custom_minutes = Math.min(240, Math.floor(self.sleep_custom_minutes / 5) * 5 + 5); }
         else if i == 10 { self.sleep_custom_episodes = Math.max(1, self.sleep_custom_episodes - 1); }
         else if i == 11 { self.sleep_custom_episodes = Math.min(10, self.sleep_custom_episodes + 1); }
         else {
@@ -86,6 +87,7 @@ export global PlayerOsdBridge {
     in-out property <string> decode_label;
     in-out property <int> decoder_selected;
     in-out property <string> sub_label;
+    in-out property <bool> sub_off;
     in-out property <string> audio_label;
     in-out property <float> volume;
     in-out property <bool> muted;

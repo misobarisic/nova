@@ -624,6 +624,21 @@ mod relative_seek_tests {
     }
 }
 
+/// Duration shown to the UI. Unknown (live) streams report 0 and must stay 0:
+/// a 1 s floor would mark the title watched and clamp seeks to 0-1 s.
+fn published_duration(dur: f64) -> f32 {
+    if dur.is_finite() && dur > 0.0 {
+        dur as f32
+    } else {
+        0.0
+    }
+}
+
+/// mpv `sid=no` (encoded -1) means subtitles were explicitly turned off.
+fn subtitle_is_off(sid: Option<i32>) -> bool {
+    sid == Some(-1)
+}
+
 pub fn format_time(seconds: f64) -> String {
     let total_seconds = seconds.max(0.0) as u64;
     let hours = total_seconds / 3600;
@@ -2419,7 +2434,7 @@ impl Player {
         app.set_is_paused(true);
         app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
         app.set_player_status_is_error(false);
-        app.set_player_status(slint::SharedString::from("Loading stream…"));
+        app.set_player_status(nova_ui::backend_text::tr("Loading stream…").into());
         // Android: show the decoder that was just armed right away, so the
         // badge is populated before the first frame and never reads "unknown"
         // after an orientation change. `tick` corrects it to the decoder mpv
@@ -3574,7 +3589,7 @@ impl Player {
                 // The popup renders `lang — title`; avoid a leading dash by
                 // shifting a lone title into the label slot.
                 if lang.is_empty() && title.is_empty() {
-                    lang = format!("Track {id}");
+                    lang = nova_ui::backend_text::track_label(id);
                 } else if lang.is_empty() {
                     std::mem::swap(&mut lang, &mut title);
                 }
@@ -3615,6 +3630,7 @@ impl Player {
             }
         }
         let sub_label = Self::track_selection_label(&sub_rows);
+        let sub_off = subtitle_is_off(sid);
         let audio_label = Self::track_selection_label(&audio_rows);
         app.set_audio_tracks(Rc::new(VecModel::from(audio_rows)).into());
         let secondary = if matches!(
@@ -3638,6 +3654,7 @@ impl Player {
         app.set_secondary_sub_tracks(Rc::new(VecModel::from(secondary_rows)).into());
         app.set_sub_tracks(Rc::new(VecModel::from(sub_rows)).into());
         app.set_sub_track_label(sub_label);
+        app.set_sub_off(sub_off);
         app.set_audio_track_label(audio_label);
     }
 
@@ -3886,6 +3903,7 @@ impl Player {
             app.set_decode_label(slint::SharedString::default());
             app.set_decoder_selected(-1);
             app.set_sub_track_label(slint::SharedString::default());
+            app.set_sub_off(false);
             app.set_audio_track_label(slint::SharedString::default());
             // Playback fullscreen belongs to this overlay on every platform.
             // Returning to the catalog also restores Android safe-area insets.
@@ -4293,7 +4311,9 @@ impl Player {
             if !snapshot.diverged {
                 app.set_position(snapshot.pos as f32);
             }
-            app.set_duration(snapshot.dur.max(1.0) as f32);
+            // Unknown (live) duration stays 0: consumers treat 0 as "no bound"; a 1 s
+            // floor would mark the title watched and clamp seeks to 0-1 s.
+            app.set_duration(published_duration(snapshot.dur));
             app.set_buffered_until(snapshot.buffered_until);
             // OSD visibility is owned solely by the auto-hide countdown in
             // `run.rs` (Android keeps paused controls visible; desktop can
@@ -4356,9 +4376,12 @@ impl Player {
                 self.abandon_failed_start_pause();
                 app.set_is_paused(true);
                 app.set_player_status_is_error(true);
-                app.set_player_status(slint::SharedString::from(
-                    "Cannot play this stream (mpv could not start playback).",
-                ));
+                app.set_player_status(
+                    nova_ui::backend_text::tr(
+                        "Cannot play this stream (mpv could not start playback).",
+                    )
+                    .into(),
+                );
             }
         }
 
@@ -4766,6 +4789,21 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unknown_duration_is_published_as_zero() {
+        assert_eq!(super::published_duration(0.0), 0.0);
+        assert_eq!(super::published_duration(-1.0), 0.0);
+        assert_eq!(super::published_duration(f64::NAN), 0.0);
+        assert_eq!(super::published_duration(120.5), 120.5);
+    }
+
+    #[test]
+    fn explicit_sid_no_is_off_but_auto_is_not() {
+        assert!(super::subtitle_is_off(Some(-1)));
+        assert!(!super::subtitle_is_off(Some(2)));
+        assert!(!super::subtitle_is_off(None));
+    }
+
     use super::*;
 
     #[test]

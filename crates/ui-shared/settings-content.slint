@@ -40,6 +40,8 @@ export global SettingsContent {
     in-out property <bool> dl_revealed: true;
     in-out property <bool> input_focused: false;
     in-out property <int> kb_ac: 0;
+    // URL of the addon whose Remove is armed (first press done, awaiting confirm).
+    in-out property <string> addon_remove_armed: "";
     in-out property <int> kb_actl: 0;
     in-out property <int> kb_anr: 0;
     in-out property <int> kb_ar: 0;
@@ -48,6 +50,8 @@ export global SettingsContent {
     in-out property <int> kb_cr: 0;
     in-out property <int> kb_dl: 0;
     in-out property <int> kb_dlr: 0;
+    // Row id awaiting a second press to confirm deleting its downloaded file.
+    in-out property <string> dl_remove_confirm: "";
     in-out property <int> kb_dr: 5;
     in-out property <int> kb_edit: 0;
     in-out property <int> kb_home: 0;
@@ -61,6 +65,8 @@ export global SettingsContent {
     in-out property <int> stream_filter_priority_column;
     in-out property <int> stream_filter_sort_column;
     in-out property <int> kb_theme: 0;
+    // Inline two-step confirm: resetting changes synced fields on paired devices.
+    in-out property <bool> theme_restore_confirm: false;
     in-out property <int> kb_tr: 0;
     in-out property <bool> player_language_input_focused: false;
     in-out property <string> sync_remove_prompt_id: "";
@@ -73,9 +79,9 @@ export global SettingsContent {
     out property <bool> narrow: SettingsContent.detail_width < 680px;
     out property <int> radius_preset_index: SettingsBridge.card_corner_radius == 0 ? 0 : SettingsBridge.card_corner_radius == 4 ? 1 : SettingsBridge.card_corner_radius == 10 ? 2 : SettingsBridge.card_corner_radius == 16 ? 3 : SettingsBridge.card_corner_radius == 24 ? 4 : -1;
     out property <int> spacing_preset_index: SettingsBridge.card_spacing == 0 ? 0 : SettingsBridge.card_spacing == 4 ? 1 : SettingsBridge.card_spacing == 8 ? 2 : SettingsBridge.card_spacing == 16 ? 3 : SettingsBridge.card_spacing == 32 ? 4 : -1;
-    out property <string> torrent_rate_label: SettingsBridge.torrent_down_limit <= 0 ? @tr("Unlimited") : Math.round(SettingsBridge.torrent_down_limit) + " KB/s";
+    out property <string> torrent_rate_label: SettingsBridge.torrent_down_limit <= 0 ? @tr("Unlimited") : Math.round(SettingsBridge.torrent_down_limit) + " KiB/s";
     out property <string> torrent_ram_label: Math.round(SettingsBridge.torrent_ram_buffer_mb) + " MiB";
-    out property <string> torrent_size_label: Math.round(SettingsBridge.torrent_max_mb) + " MB";
+    out property <string> torrent_size_label: SettingsBridge.torrent_max_mb >= 1024 ? Math.round(SettingsBridge.torrent_max_mb / 102.4) / 10 + " GiB" : Math.round(SettingsBridge.torrent_max_mb) + " MiB";
     pure callback kb_player_audio_language_row() -> int;
     pure callback kb_player_speed_row() -> int;
     pure callback kb_player_subtitle_language_row() -> int;
@@ -159,6 +165,7 @@ export global SettingsContent {
         SettingsContent.kb_cr = 0;
         SettingsContent.kb_dl = 0;
         SettingsContent.kb_dlr = 0;
+        SettingsContent.dl_remove_confirm = "";
         SettingsContent.kb_dr = 5;
         SettingsContent.kb_edit = 0;
         SettingsContent.kb_home = 0;
@@ -172,6 +179,7 @@ export global SettingsContent {
         SettingsContent.stream_filter_priority_column = 0;
         SettingsContent.stream_filter_sort_column = 0;
         SettingsContent.kb_theme = 0;
+        SettingsContent.theme_restore_confirm = false;
         SettingsContent.kb_tr = 0;
         SettingsContent.player_language_input_focused = false;
         SettingsContent.sync_remove_prompt_id = "";

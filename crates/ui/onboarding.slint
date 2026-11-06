@@ -278,7 +278,7 @@ export component Onboarding inherits Rectangle {
                         }
                     }
                     if root.step > 0: Text { text: @tr("You can change this any time in Settings."); wrap: word-wrap; color: Theme.current.text_muted; horizontal-alignment: center; }
-                    if root.error != "": Text { text: root.error; wrap: word-wrap; color: Theme.current.text_error; }
+                    if root.step == 0 && root.error != "": Text { text: root.error; wrap: word-wrap; color: Theme.current.text_error; }
                 }
             }
             Rectangle { height: 1px; background: Theme.current.border_subtle; }

@@ -913,7 +913,7 @@ export component DiscoverPage {
     property <[MediaCard]> display_catalog: root.search_mode ? (root.search_results_open ? root.search_results : []) : root.catalog;
     property <bool> display_can_load_more: root.search_mode ? root.search_results_open && root.search_can_load_more : root.can_load_more && !root.pagination_paused;
     property <bool> display_loading_more: root.search_mode ? root.search_results_open && root.search_loading_more : root.loading_more;
-    property <bool> display_loading: root.search_results_open && root.search_loading;
+    property <bool> display_loading: root.search_mode ? root.search_results_open && root.search_loading : root.loading_more && root.catalog.length == 0;
     property <string> display_empty_hint: root.search_mode ? root.search_empty_hint : root.empty_hint;
 
     // Compact layout for narrow (portrait) windows.

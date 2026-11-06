@@ -792,6 +792,9 @@ impl Bridge {
     /// to the merged "All addons" view.
     pub(super) fn toggle_addon(&self, idx: usize) {
         if !self.require_profile_management() {
+            // The row switch already flipped optimistically; republish the
+            // true state so a refused toggle does not look applied.
+            self.apply_addon_rows();
             return;
         }
         let reset_chosen = {

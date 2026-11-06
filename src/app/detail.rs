@@ -1709,10 +1709,9 @@ impl Bridge {
 
         let days = iso_days(iso)?;
 
-        // Current date as days since epoch.
-        // the web build reads the browser clock via js_sys instead.)
-        let now_secs = now_secs();
-        let today = (now_secs / 86400) as i64;
+        // Relative labels follow the device's civil day (as the Calendar
+        // does); release-availability checks keep the UTC `today_days`.
+        let today = calendar::calendar_today_days();
 
         let diff = today - days;
 

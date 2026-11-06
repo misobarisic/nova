@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "addons"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "percent-encoding",
  "reqwest",
@@ -2246,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "ferri-pdf-rav1d"
 version = "1.1.2"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "assert_matches",
  "atomig",
@@ -5831,7 +5831,7 @@ dependencies = [
 [[package]]
 name = "nova-cache"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "image",
  "libc",
@@ -5887,7 +5887,7 @@ dependencies = [
 [[package]]
 name = "nova-download"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "aws-lc-rs",
  "httpdate",
@@ -5904,7 +5904,7 @@ dependencies = [
 [[package]]
 name = "nova-image"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "avif-parse",
  "ferri-pdf-rav1d",
@@ -5964,7 +5964,7 @@ dependencies = [
 [[package]]
 name = "nova-playback-api"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "serde",
 ]
@@ -6027,7 +6027,7 @@ dependencies = [
 [[package]]
 name = "nova-storage"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "redb",
  "serde",
@@ -6054,7 +6054,7 @@ dependencies = [
 [[package]]
 name = "nova-sync"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6124,7 +6124,7 @@ dependencies = [
 [[package]]
 name = "nova-ui-base"
 version = "0.1.0"
-source = "git+https://github.com/misobarisic/nova-kit?rev=c4b181c0c58a17bbdd23b543a142b20d3f5aea13#c4b181c0c58a17bbdd23b543a142b20d3f5aea13"
+source = "git+https://github.com/misobarisic/nova-kit?rev=c7853085e6c9c570d72b4803f18ceb01e8cbe16a#c7853085e6c9c570d72b4803f18ceb01e8cbe16a"
 
 [[package]]
 name = "nova-ui-calendar"

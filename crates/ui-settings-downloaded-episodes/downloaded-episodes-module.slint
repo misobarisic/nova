@@ -70,13 +70,17 @@ export component SettingsDownloadedEpisodesModule inherits Window {
                             row-desc: dl.subtitle + (dl.details == "" ? "" : "\n" + dl.details);
 
                             PillButton {
-                                label: @tr("Delete"); destructive: true;
+                                label: SettingsContent.dl_remove_confirm == dl.id ? @tr("Confirm delete") : @tr("Delete"); destructive: true;
                                 focused: SettingsBridge.kb_zone == 13 && SettingsContent.kb_dlr == i && SettingsBridge.kb_active;
                                 clicked => {
                                     SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                     SettingsBridge.kb_zone = 13;
                                     SettingsContent.kb_dlr = i;
-                                    SettingsBridge.download_list_remove(dl.id);
+                                    // Second press confirms; the file cannot be recovered.
+                                    if SettingsContent.dl_remove_confirm == dl.id {
+                                        SettingsContent.dl_remove_confirm = "";
+                                        SettingsBridge.download_list_remove(dl.id);
+                                    } else { SettingsContent.dl_remove_confirm = dl.id; }
                                 }
                             }
                         }

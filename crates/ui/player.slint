@@ -169,6 +169,8 @@ component TrackMenu inherits Rectangle {
     in property <bool> kb_active: false;
     in property <int> row_icon: 0;   // icon for every track row
     in property <bool> with_off_row: false;
+    // True when mpv's sid is `no`: no row carries `selected`, so Off needs its own flag.
+    in property <bool> off_selected: false;
     in property <string> secondary_label;
     in property <length> max_w: 340px;
     in property <length> max_h: InterfaceStyle.tv ? 440px : 320px;
@@ -223,6 +225,7 @@ component TrackMenu inherits Rectangle {
             if with_off_row: MenuRow {
                 reveal(y, h) => { root.reveal_row(y, h); }
                 label: @tr("Off");
+                selected: root.off_selected;
                 focused: root.kb_active && root.focused_idx == 2;
                 activate => { pick(-1); }
             }
@@ -376,6 +379,7 @@ component SettingsMenu inherits Rectangle {
     callback seek_scene_bookmark(string);
     pure callback format_time(float) -> string;
     in property <string> sub_label: "";
+    in property <bool> sub_off: false;
     in property <string> audio_label: "";
     in property <bool> audio_preference_saved: false;
     in property <bool> subtitle_preference_saved: false;
@@ -577,7 +581,7 @@ component SettingsMenu inherits Rectangle {
                             icon_kind: 2; submenu: true;
                             icon: @image-url("../../assets/icons/player/captions.svg");
                             label: @tr("Subtitles");
-                            value: root.sub_label;
+                            value: root.sub_off ? @tr("Off") : root.sub_label;
                             focused: root.focused_idx == 0;
                             activate => { root.page = 2; }
                         }
@@ -615,7 +619,9 @@ component SettingsMenu inherits Rectangle {
                             icon_kind: 3; submenu: true;
                             icon: @image-url("../../assets/icons/player/skip-forward.svg");
                             label: @tr("Intro skipping");
-                            value: root.intro_skip_override_index < 0 ? @tr("Use global default")
+                            value: root.intro_skip_override_index < 0
+                                ? @tr("Default ({})", SettingsBridge.intro_skip_mode_index == 0 ? @tr("Off")
+                                    : SettingsBridge.intro_skip_mode_index == 1 ? @tr("Show skip prompt") : @tr("Auto skip"))
                                 : root.intro_skip_override_index == 0 ? @tr("Off")
                                 : root.intro_skip_override_index == 1 ? @tr("Show skip prompt") : @tr("Auto skip");
                             focused: root.focused_idx == (root.decoder_available ? 4 : 3);
@@ -922,6 +928,7 @@ component SettingsMenu inherits Rectangle {
                             reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2;
                             label: @tr("Off");
+                            selected: root.sub_off;
                             focused: root.focused_idx == 3;
                             activate => { root.pick_sub(-1); }
                         }
@@ -1256,6 +1263,7 @@ export component PlayerOverlay {
     }
     // Current-selection summaries shown on the settings panel's root rows.
     in-out property <string> sub_label: "";
+    in-out property <bool> sub_off: false;
     in-out property <string> audio_label: "";
     in property <bool> audio_preference_saved: false;
     in property <bool> subtitle_preference_saved: false;
@@ -3372,6 +3380,7 @@ export component PlayerOverlay {
                             max_h: Math.max(0px, parent.absolute-position.y - root.absolute-position.y - root.safe-top - 24px);
                             row_icon: 2;
                             with_off_row: true;
+                            off_selected: root.sub_off;
                             tracks: root.sub_tracks;
                             subtitle_addon_status: root.subtitle_addon_status;
                             secondary_label: root.secondary_sub_track_label;
@@ -3679,6 +3688,7 @@ export component PlayerOverlay {
                 if root.tv_can_seek() { root.seek_chapter(position); root.open_popup = 0; }
             }
             sub_label: root.sub_label;
+            sub_off: root.sub_off;
             audio_label: root.audio_label;
             audio_preference_saved: root.audio_preference_saved;
             subtitle_preference_saved: root.subtitle_preference_saved;

@@ -22,6 +22,39 @@ impl Drop for ArtworkWorker {
     }
 }
 
+/// First entry Continue would start: from the saved cursor, skipping watched
+/// or profile-blocked items. The panel highlights the same entry as "UP NEXT".
+fn next_pending_entry(
+    saved: &SavedQueue,
+    progress: &HashMap<String, EpisodeProgress>,
+) -> Option<Entry> {
+    let cursor = &saved.cursor;
+    if cursor.phase == model::Phase::Finished {
+        return None;
+    }
+    let start = cursor
+        .item_key
+        .as_ref()
+        .and_then(|key| saved.entries.iter().position(|e| e.key() == *key))
+        .unwrap_or(0);
+    let profiles = profiles::ProfileStore::capture();
+    saved
+        .entries
+        .iter()
+        .skip(start)
+        .find(|entry| {
+            if !profile_policy::allows_title(&profiles, &entry.type_, &entry.series_id) {
+                return false;
+            }
+            let progress = progress.get(&progress_map_key(&entry.series_id, &entry.episode_id));
+            !progress.is_some_and(|p| p.watched)
+                || (cursor.phase == model::Phase::InProgress
+                    && cursor.item_key.as_ref() == Some(&entry.key())
+                    && progress.is_some_and(|p| p.position_secs > 0.0))
+        })
+        .cloned()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub(super) struct Entry {
     pub(super) type_: String,
@@ -472,33 +505,7 @@ impl Bridge {
             } else if let Some(key) = key {
                 saved.entries.iter().find(|e| e.key() == key).cloned()
             } else {
-                let cursor = &saved.cursor;
-                let start = cursor
-                    .item_key
-                    .as_ref()
-                    .and_then(|key| saved.entries.iter().position(|e| e.key() == *key))
-                    .unwrap_or(0);
-                saved
-                    .entries
-                    .iter()
-                    .skip(start)
-                    .find(|entry| {
-                        if !profile_policy::allows_title(
-                            &profiles::ProfileStore::capture(),
-                            &entry.type_,
-                            &entry.series_id,
-                        ) {
-                            return false;
-                        }
-                        let progress = state
-                            .progress
-                            .get(&progress_map_key(&entry.series_id, &entry.episode_id));
-                        !progress.is_some_and(|p| p.watched)
-                            || (cursor.phase == model::Phase::InProgress
-                                && cursor.item_key.as_ref() == Some(&entry.key())
-                                && progress.is_some_and(|p| p.position_secs > 0.0))
-                    })
-                    .cloned()
+                next_pending_entry(saved, &state.progress)
             }
         };
         let Some(entry) = selected else {
@@ -1225,6 +1232,12 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             queue.set_autoplay(state.watch_queue.saved.autoplay);
             queue.set_run_active(state.watch_queue.run.is_some());
+            queue.set_next_key(
+                next_pending_entry(&state.watch_queue.saved, &state.progress)
+                    .map(|entry| entry.key())
+                    .unwrap_or_default()
+                    .into(),
+            );
             queue.set_current_key(
                 state
                     .watch_queue
@@ -1652,6 +1665,33 @@ mod tests {
             extra: Default::default(),
         }
     }
+    #[test]
+    fn up_next_is_first_unwatched_entry_not_row_zero() {
+        // The panel used to label row 0 "UP NEXT" even though Continue skips
+        // watched items; both now come from `next_pending_entry`.
+        let first = entry("show", "e1");
+        let second = entry("show", "e2");
+        let saved = SavedQueue {
+            version: 2,
+            entries: vec![first.clone(), second.clone()],
+            order: vec![],
+            cursor: Default::default(),
+            autoplay: false,
+            extra: Default::default(),
+        };
+        let mut progress = HashMap::new();
+        progress.insert(
+            progress_map_key("show", "e1"),
+            EpisodeProgress {
+                watched: true,
+                ..Default::default()
+            },
+        );
+        let next = next_pending_entry(&saved, &progress).expect("pending entry");
+        assert_eq!(next.key(), second.key());
+        assert_ne!(next.key(), saved.entries[0].key());
+    }
+
     #[test]
     fn queue_roundtrip_deduplicates_exact_typed_identity() {
         let first = entry("a", "e1");

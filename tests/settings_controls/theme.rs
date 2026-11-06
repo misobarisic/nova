@@ -256,6 +256,10 @@ fn theme_search_toggle_resize_and_android_back() {
     settle(&app);
     assert!(!app.get_transparent_navbar());
     key(&app, slint::platform::Key::DownArrow.into());
+    // Restoring defaults resets synced settings on every device, so the first
+    // Return only asks; the second one confirms.
+    key(&app, slint::platform::Key::Return.into());
+    assert!(!app.get_transparent_navbar());
     key(&app, slint::platform::Key::Return.into());
     assert!(app.get_transparent_navbar());
     assert!(app.global::<nova::Theme>().get_transparent_navbar());
