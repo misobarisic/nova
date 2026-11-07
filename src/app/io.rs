@@ -146,14 +146,13 @@ pub(crate) fn format_disk_usage(bytes: u64, files: usize) -> String {
 pub(crate) fn format_rate(bytes_per_sec: u64) -> String {
     nova_download::format_bytes(bytes_per_sec)
 }
-/// Write `contents` to `path` via a temp file + rename, so a crash mid-write
-/// never leaves a truncated file behind.
+/// Write `contents` to `path` via a unique temp file + rename, flushing the
+/// file and its directory, so a crash mid-write never leaves a truncated file
+/// behind and concurrent writers never share a staging file.
 #[allow(dead_code)]
 #[cfg(feature = "desktop")]
 pub(crate) fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, contents)?;
-    fs::rename(&tmp, path)
+    nova_storage::fs::atomic_write(path, contents.as_bytes())
 }
 /// FNV-1a 64-bit; used only to derive stable, filesystem-safe cache file
 /// names (manifests, poster originals) from their URLs.
@@ -222,5 +221,63 @@ mod cache_policy_tests {
         ] {
             assert!(!metadata_cache_key(key), "{key}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod atomic_write_tests {
+    use super::atomic_write;
+    use std::{fs, path::PathBuf};
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("nova-atomic-write-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn a_neighbouring_tmp_file_is_not_consumed_as_the_staging_file() {
+        let directory = scratch("foreign");
+        let target = directory.join("episodes.json");
+        // Another writer's (or a crashed one's) file at the old fixed name.
+        let foreign = directory.join("episodes.tmp");
+        fs::write(&foreign, "foreign").unwrap();
+        atomic_write(&target, "new").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&foreign).unwrap(), "foreign");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn concurrent_writers_to_one_path_all_succeed_with_a_complete_result() {
+        let directory = scratch("concurrent");
+        let target = std::sync::Arc::new(directory.join("shared.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|writer| {
+                let (target, barrier) = (target.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for round in 0..40 {
+                        atomic_write(&target, &format!("{writer}-{round};").repeat(2048)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let text = fs::read_to_string(&*target).unwrap();
+        let unit = text.split(';').next().unwrap().to_owned() + ";";
+        assert_eq!(text, unit.repeat(2048));
+        let leftovers: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().contains("tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let _ = fs::remove_dir_all(directory);
     }
 }
