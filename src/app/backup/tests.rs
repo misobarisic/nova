@@ -742,3 +742,68 @@ fn recovery_deletion_requires_the_exact_reviewed_inventory() {
     delete_reviewed_recovery(&reviewed).unwrap();
     assert!(recovery_inventory().unwrap().is_empty());
 }
+
+/// `test-fixtures/legacy-v1.nova-backup` was written by the encoder that lived in
+/// this app before the container moved into Kit `nova-backup`. It must keep
+/// restoring exactly the same payloads, packages and checksum.
+#[test]
+fn archives_written_before_the_kit_extraction_restore_unchanged() {
+    const FIXTURE: &[u8] = include_bytes!("test-fixtures/legacy-v1.nova-backup");
+    const PACKAGE: &[u8] = include_bytes!("../test-fixtures/anikoto.zip");
+    const HASH: &str = "1461bb4cd06a3c9805f30e810afe4fa4ae15798e0dc8d167ce0fa4ef87844d19";
+    let digest = "a7ecfbb2535081e0d977bb092ef96f9b4baa950795f63aaca05bddea3afa11c9";
+    assert_eq!(archive::digest(FIXTURE), digest);
+    let decoded = archive::decode(FIXTURE).unwrap();
+    assert_eq!(decoded.checksum, digest);
+    assert_eq!(decoded.manifest.format, "nova-backup");
+    assert_eq!(decoded.manifest.version, 1);
+    assert_eq!(decoded.manifest.created_at, 1_700_000_000);
+    assert_eq!(decoded.manifest.app_version, "0.0.62");
+    assert_eq!(decoded.manifest.archive_id, "legacy-fixture");
+    assert_eq!(decoded.manifest.profiles.len(), 1);
+    assert_eq!(decoded.manifest.profiles[0].name, "Default");
+    let components = &decoded.manifest.profiles[0].components;
+    assert_eq!(
+        components
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["policy", "integrations", "packages", "future"]
+    );
+    // A component written by a newer app is verified but left undecoded.
+    assert_eq!(decoded.unsupported, ["future"]);
+    let records = |name: &str| {
+        decoded.payloads[&("p1".to_string(), name.to_string())]
+            .records
+            .clone()
+    };
+    assert_eq!(decoded.payloads.len(), 3);
+    assert_eq!(
+        records("policy"),
+        BTreeMap::from([(
+            "profile_policy:v1\0value".to_string(),
+            json!({"allowed_addons":[],"allowed_titles":[],"future":true,"pin":"0012","require_pin_on_entry":true,"restricted":true,"version":1}),
+        )])
+    );
+    assert_eq!(
+        records("integrations"),
+        BTreeMap::from([(
+            "@stremio\0connection".to_string(),
+            json!({"auth_key":"plain-token","email":"name@example.test"}),
+        )])
+    );
+    assert_eq!(
+        records("packages"),
+        BTreeMap::from([(
+            "package_files\0anikoto".to_string(),
+            json!({"id":"anikoto","sha256":HASH,"version":"1.0.0"}),
+        )])
+    );
+    assert_eq!(decoded.packages.len(), 1);
+    assert_eq!(decoded.packages[HASH], PACKAGE);
+    assert_eq!(decoded.manifest.packages.len(), 1);
+    assert_eq!(
+        decoded.manifest.packages[0].path,
+        format!("packages/{HASH}.zip")
+    );
+}
