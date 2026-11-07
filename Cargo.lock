@@ -5789,6 +5789,7 @@ dependencies = [
  "iroh",
  "jni 0.21.1",
  "ndk-context",
+ "nova-backup",
  "nova-cast",
  "nova-cast-media",
  "nova-config",
@@ -5826,6 +5827,18 @@ dependencies = [
  "windows",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "nova-backup"
+version = "0.1.0"
+source = "git+https://github.com/misobarisic/nova-kit?rev=3ee7415f3f9ec298f635fbc03d8c4405554a1006#3ee7415f3f9ec298f635fbc03d8c4405554a1006"
+dependencies = [
+ "nova-storage",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip",
 ]
 
 [[package]]
@@ -6009,6 +6022,7 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
  "nova-config",
+ "nova-storage",
  "percent-encoding",
  "quick-xml 0.42.0",
  "regex",
@@ -6042,6 +6056,7 @@ dependencies = [
  "redb",
  "serde",
  "serde_json",
+ "zip",
  "zstd",
 ]
 

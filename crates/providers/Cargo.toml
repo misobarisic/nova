@@ -6,7 +6,7 @@ license.workspace = true
 description = "Normalized media providers and the installed JavaScript package runtime"
 
 [dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
+nova-storage = { workspace = true, features = ["zip"] }
 semver = "1"
 addons = { workspace = true, default-features = false }
 nova-config = { path = "../config" }
@@ -30,3 +30,6 @@ rquickjs = { version = "0.14.0", default-features = false, features = ["std", "b
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
 webpki-roots = "1"
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }

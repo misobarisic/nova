@@ -1,8 +1,9 @@
 //! Bounded, manifest-driven ZIP loading. Packages remain immutable during worker calls.
 use crate::{PluginManifest, ProviderHostError};
+use nova_storage::zip::{self as bounded, Limits, PathRule, Policy};
 use std::{
     collections::{BTreeMap, HashSet},
-    io::{Cursor, Read},
+    io::Cursor,
     sync::Arc,
 };
 
@@ -22,13 +23,20 @@ pub struct AddonPackage {
 fn invalid(message: &str) -> ProviderHostError {
     ProviderHostError(message.into())
 }
-fn safe_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains(['\\', '\0', ':'])
-        && !path.starts_with('/')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
+fn archive_error(error: bounded::Error) -> ProviderHostError {
+    use bounded::Error::*;
+    invalid(match error {
+        Archive(_) => "invalid ZIP package",
+        TruncatedDirectory => "truncated ZIP directory",
+        TooManyEntries => "package exceeds entry limit",
+        DuplicateEntry => "duplicate ZIP entry",
+        UnsafePath | NotRegular | Directory => "unsafe or duplicate ZIP entry",
+        Encrypted => "unreadable or encrypted ZIP entry",
+        EntryTooLarge => "package entry too large",
+        ExpandedTooLarge => "package exceeds expanded size limit",
+        SizeMismatch => "ZIP entry size mismatch",
+        Missing | Io(_) => "invalid ZIP entry data",
+    })
 }
 fn validate_script_syntax(source: &str) -> Result<(), ProviderHostError> {
     let runtime =
@@ -74,73 +82,32 @@ impl AddonPackage {
         if bytes.len() > MAX_ARCHIVE_BYTES {
             return Err(invalid("package exceeds archive size limit"));
         }
-        let mut zip =
-            zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| invalid("invalid ZIP package"))?;
-        // zip's name index collapses duplicate central-directory entries. Count
-        // the original records before trusting that index or the entry limit.
-        let mut offset = usize::try_from(zip.central_directory_start())
-            .map_err(|_| invalid("invalid ZIP directory"))?;
-        let mut records = 0usize;
-        while bytes.get(offset..offset.saturating_add(4)) == Some(b"PK\x01\x02".as_slice()) {
-            let header = bytes
-                .get(offset..offset.saturating_add(46))
-                .ok_or_else(|| invalid("truncated ZIP directory"))?;
-            let length = |i| usize::from(u16::from_le_bytes([header[i], header[i + 1]]));
-            offset = offset
-                .checked_add(46 + length(28) + length(30) + length(32))
-                .ok_or_else(|| invalid("ZIP directory overflow"))?;
-            if offset > bytes.len() {
-                return Err(invalid("truncated ZIP directory"));
-            }
-            records += 1;
-            if records > MAX_ENTRIES {
-                return Err(invalid("package exceeds entry limit"));
-            }
-        }
-        if records != zip.len() {
-            return Err(invalid("duplicate ZIP entry"));
-        }
-        if zip.len() > MAX_ENTRIES {
-            return Err(invalid("package exceeds entry limit"));
-        }
+        // zip's name index collapses duplicate central-directory entries; the
+        // bounded reader counts the original records before trusting it.
+        let mut zip = bounded::Archive::open(
+            Cursor::new(bytes),
+            Limits {
+                max_entries: MAX_ENTRIES,
+                max_entry_bytes: MAX_EXPANDED_BYTES as u64,
+                max_expanded_bytes: MAX_EXPANDED_BYTES as u64,
+            },
+            Policy {
+                paths: PathRule::Strict,
+                directories: true,
+                regular_files_only: false,
+            },
+        )
+        .map_err(archive_error)?;
         let mut files = BTreeMap::new();
-        let mut names = HashSet::new();
-        let mut expanded = 0usize;
-        for index in 0..zip.len() {
-            let mut file = zip
-                .by_index(index)
-                .map_err(|_| invalid("unreadable or encrypted ZIP entry"))?;
-            let name = file.name().to_owned();
-            let path = name.strip_suffix('/').unwrap_or(&name);
-            if !safe_path(path)
-                || !names.insert(name.clone())
-                || file.encrypted()
-                || file
-                    .unix_mode()
-                    .is_some_and(|mode| mode & 0o170000 == 0o120000)
-            {
-                return Err(invalid("unsafe or duplicate ZIP entry"));
-            }
-            let size =
-                usize::try_from(file.size()).map_err(|_| invalid("package entry too large"))?;
-            expanded = expanded
-                .checked_add(size)
-                .ok_or_else(|| invalid("package size overflow"))?;
-            if expanded > MAX_EXPANDED_BYTES {
-                return Err(invalid("package exceeds expanded size limit"));
-            }
-            if file.is_dir() {
+        for index in 0..zip.entries().len() {
+            let entry = zip.entries()[index].clone();
+            if entry.is_dir {
                 continue;
             }
-            let mut data = Vec::new();
-            file.by_ref()
-                .take((MAX_EXPANDED_BYTES + 1) as u64)
-                .read_to_end(&mut data)
-                .map_err(|_| invalid("invalid ZIP entry data"))?;
-            if data.len() != size {
-                return Err(invalid("ZIP entry size mismatch"));
-            }
-            files.insert(name, data);
+            let data = zip
+                .read(index, MAX_EXPANDED_BYTES as u64)
+                .map_err(archive_error)?;
+            files.insert(entry.name, data);
         }
         if !files.contains_key("manifest.json") {
             let roots: HashSet<_> = files
@@ -207,7 +174,10 @@ impl AddonPackage {
         ]);
         let mut source = String::new();
         for path in scripts {
-            if !safe_path(&path) || !path.ends_with(".js") || !declared.insert(path.clone()) {
+            if !bounded::strict_path(&path)
+                || !path.ends_with(".js")
+                || !declared.insert(path.clone())
+            {
                 return Err(invalid("invalid script declaration"));
             }
             let script =
@@ -220,7 +190,7 @@ impl AddonPackage {
         }
         let mut assets = BTreeMap::new();
         for path in &plugin.assets {
-            if !safe_path(path) || !declared.insert(path.clone()) {
+            if !bounded::strict_path(path) || !declared.insert(path.clone()) {
                 return Err(invalid("invalid asset declaration"));
             }
             assets.insert(path.clone(), Arc::from(get(path)?.as_slice()));

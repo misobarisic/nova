@@ -148,6 +148,54 @@ fn corrupt_missing_unsupported_and_duplicate_archive_entries_are_distinct() {
 }
 
 #[test]
+fn duplicate_zip_entries_hidden_by_the_name_index_are_rejected() {
+    use std::io::{Cursor, Write};
+    let policy = payload(&[(
+        "profile_policy:v1\0value",
+        json!({"version":1,"pin":"","restricted":false,"require_pin_on_entry":false,"allowed_titles":[],"allowed_addons":[]}),
+    )]);
+    let payloads = BTreeMap::from([(("p1".into(), "policy".into()), policy)]);
+    let valid = archive::encode(manifest(), &payloads).unwrap();
+    assert!(archive::decode(&valid).is_ok());
+    let mut zip = zip::ZipArchive::new(Cursor::new(&valid)).unwrap();
+    let mut read = |name: &str| {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut zip.by_name(name).unwrap(), &mut bytes).unwrap();
+        bytes
+    };
+    let manifest_json = read("manifest.json");
+    let component = read("profiles/p1/policy.json");
+    // A decoy first, then the real component under a same-length name that is
+    // patched to collide. The zip crate's index keeps one entry per name, so a
+    // decoder trusting it verifies the real bytes and never sees the decoy.
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    writer
+        .start_file("profiles/p1/polixy.json", options)
+        .unwrap();
+    writer
+        .write_all(br#"{"version":1,"records":{"decoy":1}}"#)
+        .unwrap();
+    writer
+        .start_file("profiles/p1/policy.json", options)
+        .unwrap();
+    writer.write_all(&component).unwrap();
+    writer.start_file("manifest.json", options).unwrap();
+    writer.write_all(&manifest_json).unwrap();
+    let mut forged = writer.finish().unwrap().into_inner();
+    let (from, to) = (b"polixy.json", b"policy.json");
+    for i in 0..forged.len() - from.len() {
+        if &forged[i..i + from.len()] == from {
+            forged[i..i + to.len()].copy_from_slice(to);
+        }
+    }
+    assert!(
+        archive::decode(&forged).is_err(),
+        "an archive with two entries named profiles/p1/policy.json must be rejected"
+    );
+}
+
+#[test]
 fn library_typed_matching_and_default_merge_counts_do_not_use_raw_ids() {
     let local = payload(&[(
         "library\0[\"movie\",\"same\"]",

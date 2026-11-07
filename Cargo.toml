@@ -142,6 +142,7 @@ nova-ui = { path = "crates/ui", default-features = false }
 nova-ui-shared = { path = "crates/ui-shared" }
 nova-ui-base = { workspace = true }
 nova-storage = { workspace = true }
+nova-backup = { workspace = true }
 nova-config = { path = "crates/config" }
 nova-media = { path = "crates/media" }
 nova-download = { workspace = true }
