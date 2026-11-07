@@ -765,7 +765,10 @@ impl ProviderHost for ScopedHttpHost {
                 .timeout(remaining)
                 .resolve_to_addrs(&host, &addresses);
             #[cfg(target_os = "android")]
-            let builder = builder.tls_backend_preconfigured(android_tls_config()?);
+            let builder = builder.tls_backend_preconfigured(
+                nova_net::tls::client_config()
+                    .map_err(|error| ProviderHostError(format!("TLS versions: {error}")))?,
+            );
             let client = builder.build().map_err(|error| {
                 ProviderHostError(format!("could not create provider HTTP client: {error}"))
             })?;
@@ -924,55 +927,7 @@ pub(crate) fn domain_matches(host: &str, allowed: &str) -> bool {
     !allowed.is_empty() && (host == allowed || host.ends_with(&format!(".{allowed}")))
 }
 
-pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !ip.is_private()
-                && !ip.is_loopback()
-                && !ip.is_link_local()
-                && !ip.is_broadcast()
-                && !ip.is_unspecified()
-                && !ip.is_multicast()
-                && a != 0
-                && !(a == 100 && (64..=127).contains(&b))
-                && !(a == 192 && b == 0 && c == 0)
-                && !(a == 192 && b == 0 && c == 2)
-                && !(a == 198 && (b == 18 || b == 19))
-                && !(a == 198 && b == 51 && c == 100)
-                && !(a == 203 && b == 0 && c == 113)
-                && a < 224
-        }
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return is_public_ip(IpAddr::V4(mapped));
-            }
-            let segments = ip.segments();
-            (0x2000..=0x3fff).contains(&segments[0])
-                && !ip.is_loopback()
-                && !ip.is_unspecified()
-                && !ip.is_multicast()
-                && !ip.is_unique_local()
-                && !ip.is_unicast_link_local()
-                && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
-                && !(segments[0] == 0x2001 && segments[1] <= 0x01ff)
-                && segments[0] != 0x2002
-                && !(segments[0] == 0x3fff && segments[1] <= 0x0fff)
-        }
-    }
-}
-
-#[cfg(target_os = "android")]
-fn android_tls_config() -> Result<rustls::ClientConfig, ProviderHostError> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|error| ProviderHostError(format!("TLS versions: {error}")))
-    .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
-}
+pub(crate) use nova_net::is_public_ip;
 
 #[derive(Default)]
 pub struct MemoryProviderHost {
@@ -1707,6 +1662,16 @@ mod tests {
         }
         assert!(is_public_ip("1.1.1.1".parse().unwrap()));
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn public_address_policy_excludes_the_6to4_relay_range_like_the_6to4_prefix() {
+        for address in ["192.88.99.0", "192.88.99.1", "192.88.99.255", "2002::1"] {
+            assert!(!is_public_ip(address.parse().unwrap()), "{address}");
+        }
+        for address in ["192.88.98.255", "192.88.100.0"] {
+            assert!(is_public_ip(address.parse().unwrap()), "{address}");
+        }
     }
 
     #[test]

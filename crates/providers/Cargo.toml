@@ -6,6 +6,7 @@ license.workspace = true
 description = "Normalized media providers and the installed JavaScript package runtime"
 
 [dependencies]
+nova-net = { workspace = true }
 nova-storage = { workspace = true, features = ["zip"] }
 semver = "1"
 addons = { workspace = true, default-features = false }
@@ -28,8 +29,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["blocking"
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { version = "0.14.0", default-features = false, features = ["std", "bindgen"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
-webpki-roots = "1"
+nova-net = { workspace = true, features = ["rustls"] }
 
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
