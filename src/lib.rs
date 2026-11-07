@@ -65,27 +65,38 @@ fn android_main(app: slint::android::AndroidApp) {
     // Activity pause outside visible PiP also pauses playback; returning from
     // the background follows the device-local auto-continue preference.
     slint::android::init_with_event_listener(app, |event| {
+        use crate::app::lifecycle::{self, Event};
         use slint::android::android_activity::{MainEvent, PollEvent};
-        if let PollEvent::Main(main) = event {
-            match main {
-                MainEvent::Pause => {
-                    nova_sync::set_foreground(false);
-                    // PiP pauses the activity while its native video surface
-                    // remains visible. Only a real background/lock pauses mpv.
-                    if !crate::player::picture_in_picture_keeps_playing() {
-                        crate::app::remote_playback::playback_foreground(false);
-                        crate::player::note_android_pause();
-                        crate::app::note_android_pause_checkpoint();
-                    }
-                }
-                MainEvent::Resume { .. } => {
-                    nova_sync::set_foreground(true);
-                    crate::app::remote_playback::playback_foreground(true);
-                    crate::app::note_cache_maintenance_resume();
-                    crate::player::note_android_resume()
-                }
-                _ => {}
+        let PollEvent::Main(main) = event else {
+            return;
+        };
+        let event = match main {
+            MainEvent::Pause => Event::Pause,
+            MainEvent::Resume { .. } => Event::Resume,
+            MainEvent::Stop => Event::Stop,
+            MainEvent::SaveState { .. } => Event::SaveState,
+            _ => return,
+        };
+        let plan = lifecycle::plan(event);
+        if let Some(foreground) = plan.sync_foreground {
+            nova_sync::set_foreground(foreground);
+        }
+        if plan.pause_playback {
+            // PiP pauses the activity while its native video surface
+            // remains visible. Only a real background/lock pauses mpv.
+            if !crate::player::picture_in_picture_keeps_playing() {
+                crate::app::remote_playback::playback_foreground(false);
+                crate::player::note_android_pause();
+                crate::app::note_android_pause_checkpoint();
             }
+        }
+        if plan.resume_playback {
+            crate::app::remote_playback::playback_foreground(true);
+            crate::app::note_cache_maintenance_resume();
+            crate::player::note_android_resume()
+        }
+        if plan.flush {
+            lifecycle::flush();
         }
     })
     .unwrap();

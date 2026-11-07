@@ -780,6 +780,8 @@ mod home_catalog_fetch;
 mod intro_skip;
 mod last_stream;
 mod library;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod lifecycle;
 #[cfg(all(feature = "desktop", any(target_os = "linux", target_os = "windows")))]
 mod media_controls;
 mod media_identity;
