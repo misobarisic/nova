@@ -111,7 +111,7 @@ pub fn rewrite_cache_dir_to_format(dir: &Path, settings: &CacheSettings) -> usiz
 
 pub mod gc {
     pub use nova_cache::gc::{
-        BATCH_INTERVAL, Backend, ROUTINE_INTERVAL_SECS, Report, Worker, cleanup_due, wake,
+        BATCH_INTERVAL, Backend, Marker, ROUTINE_INTERVAL_SECS, Report, Worker, cleanup_due, wake,
     };
     use std::{io, path::PathBuf, sync::Arc};
 

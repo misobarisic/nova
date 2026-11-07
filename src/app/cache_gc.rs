@@ -3,28 +3,14 @@ use super::*;
 use nova_media::cache::gc::{self, Backend, Report, Worker};
 use std::{io, path::Path};
 
-#[derive(Serialize, Deserialize)]
-struct Marker {
-    directory: PathBuf,
-    completed: u64,
-}
-
+// These are disposable local scheduling hints, not authoritative data. A
+// missing, corrupt or moved-cache marker simply makes cleanup due.
 pub(super) fn last_cleanup(key: &str, directory: &Path) -> io::Result<Option<u64>> {
-    let raw = storage::try_get_str(key).map_err(io::Error::other)?;
-    // These are disposable local scheduling hints, not authoritative data.
-    // A missing, corrupt or moved-cache marker simply makes cleanup due.
-    Ok(raw
-        .and_then(|raw| serde_json::from_str::<Marker>(&raw).ok())
-        .filter(|marker| marker.directory == directory)
-        .map(|marker| marker.completed))
+    gc::Marker::new(key).load(directory)
 }
 
 pub(super) fn save_cleanup(key: &str, directory: &Path, completed: u64) -> io::Result<()> {
-    let marker = Marker {
-        directory: directory.to_owned(),
-        completed,
-    };
-    storage::try_set_str(key, &serde_json::to_string(&marker)?).map_err(io::Error::other)
+    gc::Marker::new(key).save(directory, completed)
 }
 
 struct ImageBackend(Bridge);
