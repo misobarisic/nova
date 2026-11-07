@@ -354,8 +354,7 @@ export struct TrackingMappingRow { source_row: int, label: string, target_episod
 
 export struct TrackingSetupRow { title:string, season:string, coverage:string, source_range:string, target_range:string, reason:string, history:string }
 
-export struct SettingSyncInfo {
-    can_override: bool, key: string, status: int, local_value: string, shared_value: string, has_shared: bool, shared_supported: bool }
+export { SettingSyncInfo } from "@NovaUiBase/sync-types.slint";
 
 export struct CalendarDay { cell: CalCell, preview: string, weekday: string }
 export struct CalendarRelease { key: string, artwork_identity: string, title: string, subtitle: string, date: string, group: string, poster: image, is_loaded: bool }
