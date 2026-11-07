@@ -27,15 +27,7 @@ pub(crate) fn client() -> Result<Client> {
     // talks cleartext UPnP. Match Nova's explicit bundled-root HTTP transport.
     #[cfg(target_os = "android")]
     let builder = {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|_| error(CastErrorKind::Network))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let config = nova_net::tls::client_config().map_err(|_| error(CastErrorKind::Network))?;
         builder.tls_backend_preconfigured(config)
     };
     builder

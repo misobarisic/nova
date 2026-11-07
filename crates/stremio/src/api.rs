@@ -53,16 +53,9 @@ impl HttpsTransport {
         // cargo-apk2 does not package the platform verifier's Kotlin/JNI runtime.
         #[cfg(target_os = "android")]
         let builder = {
-            let mut roots = rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-                rustls::crypto::aws_lc_rs::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .map_err(|_| ApiError::Offline)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-            builder.tls_backend_preconfigured(tls)
+            builder.tls_backend_preconfigured(
+                nova_net::tls::client_config().map_err(|_| ApiError::Offline)?,
+            )
         };
         Ok(Self {
             client: builder.build().map_err(|_| ApiError::Offline)?,

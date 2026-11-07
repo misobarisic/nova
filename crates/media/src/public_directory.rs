@@ -87,18 +87,12 @@ fn redirect_target(current: &Url, location: &str) -> Result<Url, FetchError> {
 }
 
 fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, FetchError> {
-    let mut body = Vec::new();
-    reader
-        .take(limit as u64 + 1)
-        .read_to_end(&mut body)
-        .map_err(|error| FetchError::new(None, error.to_string()))?;
-    if body.len() > limit {
-        return Err(FetchError::new(
-            None,
-            "directory response exceeded its byte limit",
-        ));
-    }
-    Ok(body)
+    nova_net::read_capped(reader, limit as u64).map_err(|error| match error {
+        nova_net::ReadError::TooLarge => {
+            FetchError::new(None, "directory response exceeded its byte limit")
+        }
+        nova_net::ReadError::Io(error) => FetchError::new(None, error.to_string()),
+    })
 }
 
 fn validate_addresses(addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, FetchError> {

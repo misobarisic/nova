@@ -1,5 +1,4 @@
 //! Small, bounded GitHub request independent of addon enrichment and retries.
-use std::io::Read;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ENDPOINT: &str = "https://api.github.com/repos/misobarisic/nova/releases/latest";
@@ -83,20 +82,13 @@ pub fn fetch_latest(etag: Option<&str>, version: &str) -> Result<Response, Error
         .and_then(|v| v.to_str().ok())
         .filter(|v| v.len() <= 512)
         .map(str::to_owned);
-    let mut body = Vec::new();
-    response
-        .take(LIMIT + 1)
-        .read_to_end(&mut body)
-        .map_err(|e| Error {
-            message: e.to_string(),
-            retry_at: None,
-        })?;
-    if body.len() as u64 > LIMIT {
-        return Err(Error {
-            message: "release response exceeds byte limit".into(),
-            retry_at: None,
-        });
-    }
+    let body = nova_net::read_capped(response, LIMIT).map_err(|e| Error {
+        message: match e {
+            nova_net::ReadError::TooLarge => "release response exceeds byte limit".into(),
+            nova_net::ReadError::Io(e) => e.to_string(),
+        },
+        retry_at: None,
+    })?;
     Ok(Response::Release { body, etag })
 }
 

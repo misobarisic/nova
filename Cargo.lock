@@ -5862,6 +5862,7 @@ version = "0.1.0"
 dependencies = [
  "if-addrs",
  "mdns-sd",
+ "nova-net",
  "oxicast",
  "reqwest",
  "roxmltree",
@@ -5870,7 +5871,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
- "webpki-roots",
 ]
 
 [[package]]
@@ -5878,14 +5878,13 @@ name = "nova-cast-media"
 version = "0.1.0"
 dependencies = [
  "nova-cast",
+ "nova-net",
  "nova-remux",
  "rand 0.9.5",
  "reqwest",
- "rustls",
  "tempfile",
  "tracing",
  "url",
- "webpki-roots",
 ]
 
 [[package]]
@@ -5935,12 +5934,11 @@ dependencies = [
 name = "nova-list-services"
 version = "0.1.0"
 dependencies = [
+ "nova-net",
  "reqwest",
- "rustls",
  "serde",
  "serde_json",
  "url",
- "webpki-roots",
  "zeroize",
 ]
 
@@ -5953,12 +5951,11 @@ dependencies = [
  "nova-cache",
  "nova-config",
  "nova-image",
+ "nova-net",
  "nova-providers",
  "reqwest",
- "rustls",
  "serde_json",
  "slint",
- "webpki-roots",
  "zip",
 ]
 
@@ -6066,12 +6063,11 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "flate2",
+ "nova-net",
  "reqwest",
- "rustls",
  "serde",
  "serde_json",
  "url",
- "webpki-roots",
  "zeroize",
 ]
 
@@ -6113,13 +6109,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "getrandom 0.3.4",
+ "nova-net",
  "nova-storage",
  "reqwest",
- "rustls",
  "serde",
  "serde_json",
  "url",
- "webpki-roots",
  "zeroize",
 ]
 

@@ -425,17 +425,8 @@ mod imp {
 
     /// rustls client config with bundled Mozilla roots (no platform
     /// verifier, no JNI, no system trust store — pure Rust).
-    pub(super) fn tls_config() -> Result<rustls::ClientConfig, String> {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| format!("tls versions: {e}"))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        Ok(config)
+    pub(super) fn tls_config() -> Result<nova_net::tls::ClientConfig, String> {
+        nova_net::tls::client_config().map_err(|e| format!("tls versions: {e}"))
     }
 
     /// Fire a GET on a worker thread with the addon retry policy
@@ -779,7 +770,6 @@ impl nova_providers::AddonMetadataTransport for MetadataTransport {
         if let Some(result) = nova_providers::fetch_builtin_addon_with_timeout(url, timeout) {
             return result;
         }
-        use std::io::Read;
         let client = METADATA_HTTP_CLIENT
             .as_ref()
             .map_err(|error| nova_providers::ProviderHostError(error.clone()))?;
@@ -789,17 +779,12 @@ impl nova_providers::AddonMetadataTransport for MetadataTransport {
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
-        let mut body = Vec::new();
-        response
-            .take(response_limit as u64 + 1)
-            .read_to_end(&mut body)
-            .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
-        if body.len() > response_limit {
-            return Err(nova_providers::ProviderHostError(
-                "metadata response exceeded its byte limit".into(),
-            ));
-        }
-        Ok(body)
+        nova_net::read_capped(response, response_limit as u64).map_err(|e| {
+            nova_providers::ProviderHostError(match e {
+                nova_net::ReadError::TooLarge => "metadata response exceeded its byte limit".into(),
+                nova_net::ReadError::Io(e) => e.to_string(),
+            })
+        })
     }
 }
 
@@ -1013,7 +998,6 @@ pub fn fetch_source_subtitle_bytes(
     response_limit: usize,
 ) -> Result<Vec<u8>, String> {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue, LOCATION};
-    use std::io::Read;
     let parse = |value: &str| {
         reqwest::Url::parse(value)
             .ok()
@@ -1082,15 +1066,10 @@ pub fn fetch_source_subtitle_bytes(
         let response = response
             .error_for_status()
             .map_err(|_| "subtitle HTTP error")?;
-        let mut body = Vec::new();
-        response
-            .take(response_limit as u64 + 1)
-            .read_to_end(&mut body)
-            .map_err(|_| "subtitle response failed")?;
-        if body.len() > response_limit {
-            return Err("subtitle response exceeded its byte limit".into());
-        }
-        return Ok(body);
+        return nova_net::read_capped(response, response_limit as u64).map_err(|e| match e {
+            nova_net::ReadError::TooLarge => "subtitle response exceeded its byte limit".into(),
+            nova_net::ReadError::Io(_) => "subtitle response failed".into(),
+        });
     }
     unreachable!()
 }

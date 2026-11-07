@@ -76,16 +76,9 @@ impl HttpSource {
         // Match nova-media/download: verified Mozilla roots, no platform verifier.
         #[cfg(target_os = "android")]
         let builder = {
-            let mut roots = rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-                rustls::crypto::aws_lc_rs::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .map_err(|_| MediaError::Network)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-            builder.tls_backend_preconfigured(tls)
+            builder.tls_backend_preconfigured(
+                nova_net::tls::client_config().map_err(|_| MediaError::Network)?,
+            )
         };
         let client = builder.build().map_err(|_| MediaError::Network)?;
         Ok(Self {

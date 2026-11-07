@@ -14,5 +14,4 @@ rand = "0.9"
 tempfile = "3"
 
 [target.'cfg(target_os = "android")'.dependencies]
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
-webpki-roots = "1"
+nova-net = { workspace = true, features = ["rustls"] }
