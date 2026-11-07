@@ -38,7 +38,12 @@ pub(crate) fn plan(event: Event) -> Plan {
             resume_playback: true,
             ..Plan::default()
         },
-        Event::Stop | Event::SaveState => Plan::default(),
+        // The process can be killed after Stop or SaveState without Destroy;
+        // persist the debounced settings save and the playback position first.
+        Event::Stop | Event::SaveState => Plan {
+            flush: true,
+            ..Plan::default()
+        },
     }
 }
 
@@ -78,5 +83,24 @@ mod tests {
                 ..Plan::default()
             }
         );
+    }
+
+    #[test]
+    fn stop_and_save_state_flush_pending_state() {
+        // The process can be killed after Stop or SaveState without Destroy.
+        for event in [Event::Stop, Event::SaveState] {
+            let plan = plan(event);
+            assert!(plan.flush, "{event:?} must persist pending state");
+            assert_eq!(plan.sync_foreground, None);
+            assert!(!plan.pause_playback && !plan.resume_playback);
+        }
+    }
+
+    #[test]
+    fn pause_and_resume_do_not_flush_through_the_lifecycle_barrier() {
+        // Pause persists through the playback checkpoint, which already waits
+        // for the writer; Resume has nothing to persist.
+        assert!(!plan(Event::Pause).flush);
+        assert!(!plan(Event::Resume).flush);
     }
 }
