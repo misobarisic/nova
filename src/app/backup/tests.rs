@@ -375,7 +375,8 @@ fn failed_staged_commit_cannot_escape_through_a_later_save() {
     let mut staged = live.clone();
     staged.set("profile:p:library", "imported", Some("{}".into()), 0, 1);
     staged.queue_extra("receipt", Some("import".into()));
-    let result = publish_staged(&mut live, staged, |_| Err("disk full".into()));
+    let result: Result<(), String> =
+        nova_sync::publish(&mut live, staged, |_| Err("disk full".into()));
     assert!(result.is_err());
     assert_eq!(live.digest(), before);
     assert!(live.record("profile:p:library", "imported").is_none());

@@ -796,8 +796,7 @@ pub(super) fn persist_settings_patch<T: Serialize + serde::de::DeserializeOwned 
                 )?;
             }
             staged.queue_extra(&owner.key(key), Some(raw));
-            staged.save()?;
-            *live = staged;
+            nova_sync::publish(&mut live, staged, |staged| staged.save())?;
             let refresh = semantic
                 .as_ref()
                 .and_then(|semantic| unified_search::commit_snapshot_change(owner, semantic));
@@ -906,8 +905,7 @@ pub(super) fn persist_package_state(
             &profiles::storage_key(addon_packages::KEY),
             Some(package_raw),
         );
-        candidate.save()?;
-        *store = candidate;
+        nova_sync::publish(&mut store, candidate, |candidate| candidate.save())?;
         drop(store);
         if changed && !applying() {
             nova_sync::request_local_sync();
@@ -1866,18 +1864,22 @@ fn tombstone_deleted_profile_domain(
     let _serial = profiles::WRITE_SERIAL.lock().unwrap();
     let revision_owner = profiles::ProfileStore::capture();
     let _revision = revision_owner.writing();
-    let mut staged = store.clone();
-    let mut changed = false;
-    for (key, _) in staged.records(domain) {
-        changed |= staged.set(domain, &key, None, 0, device);
-    }
-    if let Some(basis) = staged.domain_digest(domain) {
-        staged.mark_projected(domain, &basis)?;
-    } else {
-        staged.save()?;
-    }
-    *store = staged;
-    Ok(changed)
+    nova_sync::stage_with(
+        store,
+        |staged| {
+            let mut changed = false;
+            for (key, _) in staged.records(domain) {
+                changed |= staged.set(domain, &key, None, 0, device);
+            }
+            if let Some(basis) = staged.domain_digest(domain) {
+                staged.mark_projected(domain, &basis)?;
+            } else {
+                staged.save()?;
+            }
+            Ok(changed)
+        },
+        |_| Ok(()),
+    )
 }
 
 /// Rebuild an inactive profile durably without changing UI state or process-wide
@@ -2764,9 +2766,11 @@ impl Bridge {
             if let (Ok(owner), Some(basis)) = (nova_sync::local_store(), basis) {
                 let acknowledged = (|| -> nova_sync::Result<()> {
                     let mut live = owner.lock().unwrap();
-                    let mut staged = live.clone();
-                    staged.mark_projected(&profile_domain(&domain), &basis)?;
-                    *live = staged;
+                    nova_sync::stage_with(
+                        &mut live,
+                        |staged| staged.mark_projected(&profile_domain(&domain), &basis),
+                        |_| Ok(()),
+                    )?;
                     if domain == DOMAIN_VIEWING_ACTIVITY
                         && live.domain_digest(&profile_domain(&domain)).as_ref() == Some(&basis)
                     {
@@ -4540,8 +4544,7 @@ impl ProjectionWork {
                 }
             }
             if changed {
-                staged.save()?;
-                *live = staged;
+                nova_sync::publish(&mut live, staged, |staged| staged.save())?;
                 for row in &written_rows {
                     let (key, _) = row.snapshot.as_ref().unwrap();
                     if let Some(semantic) = row.semantic.as_ref()
@@ -5311,16 +5314,20 @@ impl Bridge {
                         retry.push(row.domain.clone());
                         return Ok(());
                     }
-                    let mut staged = live.clone();
                     let basis = if row.retired {
                         live.domain_digest(&row.domain).unwrap_or_default()
                     } else {
                         row.basis.clone()
                     };
-                    staged
-                        .mark_projected(&row.domain, &basis)
-                        .map_err(|error| error.to_string())?;
-                    *live = staged;
+                    nova_sync::stage_with(
+                        &mut live,
+                        |staged| {
+                            staged
+                                .mark_projected(&row.domain, &basis)
+                                .map_err(|error| error.to_string())
+                        },
+                        |_| Ok(()),
+                    )?;
                     if row.base == DOMAIN_VIEWING_ACTIVITY
                         && live.domain_digest(&row.domain).as_ref() == Some(&row.basis)
                     {

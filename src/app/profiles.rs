@@ -703,8 +703,9 @@ pub(super) fn delete(id: &str) -> Result<(), String> {
     }
     // Keep the owner and write serializer locked until durable publication.
     // A failed proposal must not leak through a later unrelated Store save.
-    staged.save().map_err(|e| e.to_string())?;
-    *store = staged;
+    nova_sync::publish(&mut store, staged, |staged| {
+        staged.save().map_err(|e| e.to_string())
+    })?;
     RUNTIME.write().unwrap().retired.insert(id.into());
     drop(store);
     drop(revision);

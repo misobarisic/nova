@@ -101,8 +101,9 @@ fn mirror_families(
         false,
     )
     .map_err(|e| e.to_string())?;
-    staged.save().map_err(|e| e.to_string())?;
-    *live = staged;
+    nova_sync::publish(&mut live, staged, |staged| {
+        staged.save().map_err(|e| e.to_string())
+    })?;
     *expected = Some(raw.into());
     drop(revision);
     drop(_serial);

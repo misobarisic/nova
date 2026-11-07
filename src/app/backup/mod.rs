@@ -664,15 +664,10 @@ fn apply(preview: &Preview) -> Result<Vec<String>, String> {
                 .chain(records.clone())
                 .collect::<Vec<_>>()
         } else {
-            let baseline = staged
-                .records(domain)
-                .into_iter()
-                .collect::<BTreeMap<_, _>>();
-            staged.queue_extra(
-                &format!("sync:baseline:{domain}"),
-                Some(serde_json::to_string(&baseline).map_err(|e| e.to_string())?),
-            );
-            records.clone()
+            // A restore, not an edit: records the backup omits are deleted.
+            nova_sync::replace_domain(&mut staged, device, domain, records)
+                .map_err(|e| e.to_string())?;
+            continue;
         };
         nova_sync::prepare_snapshot(&mut staged, device, domain, &selected, None, false, false)
             .map_err(|e| e.to_string())?;
@@ -769,23 +764,13 @@ fn apply(preview: &Preview) -> Result<Vec<String>, String> {
     }
     // On failure the tentative clone is discarded. An unrelated later save
     // cannot leak any failed import into the live mutation owner.
-    publish_staged(&mut live, staged, |staged| {
+    nova_sync::publish(&mut live, staged, |staged| {
         staged.save().map_err(|e| e.to_string())
     })?;
     drop(_serial);
     drop(live);
     nova_sync::request_local_sync();
     Ok(domains)
-}
-
-fn publish_staged(
-    live: &mut nova_sync::Store,
-    mut staged: nova_sync::Store,
-    commit: impl FnOnce(&mut nova_sync::Store) -> Result<(), String>,
-) -> Result<(), String> {
-    commit(&mut staged)?;
-    *live = staged;
-    Ok(())
 }
 
 fn recovery_inventory() -> Result<Vec<(String, String)>, String> {
