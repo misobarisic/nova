@@ -190,3 +190,23 @@ export global SettingsContent {
         SettingsContent.tracking_reset_confirm = false;
     }
 }
+
+// Settings search for nova-kit's SettingsRow: which row is the search target and
+// how its reveal is requested. Hosts that have no search keep the kit's disabled
+// default.
+export global SettingsHighlight {
+    out property <bool> enabled: true;
+    out property <bool> pending: SettingsContent.search_target_pending;
+    pure public function is-target(key: string) -> bool {
+        return key != ""
+            && SettingsContent.search_target_key == key
+            && SettingsContent.search_target_section == SettingsBridge.sel
+            && SettingsBridge.sub_open;
+    }
+    public function reveal(y: length, height: length) {
+        if (SettingsContent.search_target_pending && SettingsContent.content_min_height > 0px) {
+            SettingsContent.search_target_pending = false;
+            SettingsContent.reveal_detail_control(y, height);
+        }
+    }
+}
