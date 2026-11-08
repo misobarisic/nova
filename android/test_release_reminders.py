@@ -37,7 +37,12 @@ class ReleaseReminders(unittest.TestCase):
         # The Application context itself lives in nova-android, whose own tests
         # pin `APP_CONTEXT.get()?` and `getApplicationContext`.
         self.assertIn("with_app_context", adapter)
-        self.assertIn("nova_android::context::{app_class, initialize_foreground_context, with_app_context}", adapter)
+        # rustfmt may wrap the import list, so compare it without whitespace.
+        compact = "".join(adapter.split())
+        self.assertIn(
+            "nova_android::context::{app_class,initialize_foreground_context,with_app_context",
+            compact,
+        )
         self.assertIn("nova_android::context::retain_app_context(env, context)", adapter)
         self.assertIn("initialize_foreground_context(app.vm_as_ptr(), app.activity_as_ptr())", entry)
         # Service and notification delivery keep using Application, while both
