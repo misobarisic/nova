@@ -337,6 +337,7 @@ pub(crate) fn initialize_headless_context(
     let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
     nova_config::set_android_files_dir(PathBuf::from(path));
     crate::storage::init_at(&nova_config::app_data_dir());
+    super::profiles::install_record_policy();
     super::addon_packages::configure_blob_store();
 
     retain_app_context(env, context).map_err(|error| error.to_string())?;

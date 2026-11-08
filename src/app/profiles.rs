@@ -1,13 +1,12 @@
 //! Account profile identities, local selection and captured asynchronous ownership.
+use nova_sync::profiles::directory::{self, Directory, Host};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
+pub(super) use directory::{DELETIONS_DOMAIN, DOMAIN, Profile, valid_id};
 pub(super) const DEFAULT_ID: &str = "default";
-pub(super) const DOMAIN: &str = "profiles";
-pub(super) const DELETIONS_DOMAIN: &str = "profile_deletions";
-const DEVICE_KEY: &str = "profiles:device:v1";
+const DEVICE_KEY: &str = directory::DEVICE_KEY;
 fn default_true() -> bool {
     true
 }
@@ -28,11 +27,6 @@ impl Default for DevicePreferences {
             open_last_profile_on_startup: true,
         }
     }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct Profile {
-    pub id: String,
-    pub name: String,
 }
 #[derive(Clone)]
 pub(super) struct Context {
@@ -64,8 +58,6 @@ struct Runtime {
     enabled: bool,
     context: Context,
     device: DevicePreferences,
-    retired: HashSet<String>,
-    cleaned: HashSet<String>,
 }
 static RUNTIME: LazyLock<RwLock<Runtime>> = LazyLock::new(|| {
     RwLock::new(Runtime {
@@ -76,8 +68,6 @@ static RUNTIME: LazyLock<RwLock<Runtime>> = LazyLock::new(|| {
             session: None,
         },
         device: DevicePreferences::default(),
-        retired: HashSet::new(),
-        cleaned: HashSet::new(),
     })
 });
 // Deletion and scoped writes share this lock: an already running writer either
@@ -203,13 +193,6 @@ pub(super) fn is_initialized() -> bool {
 pub(super) fn enabled() -> bool {
     RUNTIME.read().unwrap().enabled
 }
-pub(super) fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-}
 pub(super) fn storage_key_for(id: &str, key: &str) -> String {
     format!("profile:{id}:{key}")
 }
@@ -263,150 +246,99 @@ pub(super) fn scoped_key(key: &str) -> bool {
     SCOPED_EXACT_KEYS.contains(&key) || SCOPED_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
 }
 pub(super) fn writable(id: &str) -> bool {
-    !RUNTIME.read().unwrap().retired.contains(id)
+    !DIRECTORY.is_retired(id)
 }
-pub(super) fn list() -> Result<Vec<Profile>, String> {
-    let owner = nova_sync::local_store().map_err(|e| e.to_string())?;
-    let store = owner.lock().unwrap();
-    let deleted: HashSet<String> = store
-        .records(DELETIONS_DOMAIN)
-        .into_iter()
-        .map(|(id, _)| id)
-        .filter(|id| valid_id(id))
-        .collect();
-    RUNTIME
-        .write()
-        .unwrap()
-        .retired
-        .extend(deleted.iter().cloned());
-    let mut profiles = Vec::new();
-    for (id, raw) in store.records(DOMAIN) {
-        if !valid_id(&id)
-            || store
-                .record(DELETIONS_DOMAIN, &id)
-                .is_some_and(|r| r.value.is_some())
-        {
-            continue;
-        }
-        #[derive(Deserialize)]
-        struct Name {
-            name: String,
-        }
-        let value: Name = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-        profiles.push(Profile {
-            id,
-            name: value.name,
-        });
-    }
-    profiles.sort_by(|a, b| a.id.cmp(&b.id));
-    drop(store);
-    cleanup_deleted_data(deleted)?;
-    #[cfg(target_os = "android")]
-    super::release_reminders::update_android_schedule(&profiles);
-    Ok(profiles)
+
+/// What Nova adds to the shared directory's sequences: the per-profile write
+/// serializer and owner revision, notifications, plugin settings and the cache
+/// directory.
+struct NovaDirectory;
+
+/// Held while a profile's records and data change. Dropped in field order: the
+/// owner revision first, then the write serializer.
+struct WriteGuard {
+    _revision: OwnerWrite,
+    _serial: std::sync::MutexGuard<'static, ()>,
 }
-fn cleanup_deleted_data(ids: HashSet<String>) -> Result<(), String> {
-    for id in ids {
-        super::release_reminders::cancel_profile_notifications(&id);
-        nova_providers::plugin_settings::revoke_owner(
-            &ProfileStore::for_profile(&id).domain("plugin_settings"),
-        );
-        // A stale peer may deliver live children after the deletion marker.
-        // Retombstone these under the record owner's lock before considering
-        // local cleanup complete; the membership marker alone hides values.
-        let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
-        let device = nova_sync::local_device().map_err(|error| error.to_string())?;
-        let mut store = owner.lock().unwrap();
-        // Tracking recovery may write durable storage while holding this
+
+impl Host for NovaDirectory {
+    type Guard = WriteGuard;
+
+    fn begin_write(&self, id: &str) -> WriteGuard {
+        // Tracking recovery may write durable storage while holding the record
         // owner. Keep the same lock order for deletion and cleanup.
-        let _serial = WRITE_SERIAL.lock().unwrap();
-        let revision_owner = ProfileStore::for_profile(&id);
-        let _revision = revision_owner.writing();
-        let prefix = format!("profile:{id}:");
-        let mut changed = false;
-        for domain in store.domains() {
-            if domain.starts_with(&prefix) {
-                for (key, _) in store.records(&domain) {
-                    changed |= store.set(&domain, &key, None, 0, device);
-                }
-            }
+        let serial = WRITE_SERIAL.lock().unwrap();
+        let revision = ProfileStore::for_profile(id).writing();
+        WriteGuard {
+            _revision: revision,
+            _serial: serial,
         }
-        if changed {
-            store.save().map_err(|error| error.to_string())?;
-        }
-        drop(store);
-        if changed {
-            nova_sync::request_local_sync();
-        }
-        if RUNTIME.read().unwrap().cleaned.contains(&id) {
-            continue;
-        }
-        let mut edits = Vec::new();
-        for prefix in [
-            format!("profile:{id}:"),
-            format!("sync:baseline:profile:{id}:"),
-        ] {
-            for (key, _) in nova_storage::try_scan_prefix(&prefix).map_err(|e| e.to_string())? {
-                edits.push((key, None));
-            }
-        }
-        nova_storage::try_write_batch(&edits).map_err(|e| e.to_string())?;
-        match std::fs::remove_dir_all(cache_dir(&id)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        RUNTIME.write().unwrap().cleaned.insert(id);
     }
-    Ok(())
+    fn retiring(&self, id: &str) {
+        super::release_reminders::cancel_profile_notifications(id);
+        revoke_plugin_settings(id);
+    }
+    fn remove_local_data(&self, id: &str) -> Result<(), String> {
+        match std::fs::remove_dir_all(cache_dir(id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    fn deleted(&self, id: &str) {
+        revoke_plugin_settings(id);
+        let _ = std::fs::remove_dir_all(cache_dir(id));
+    }
+    #[cfg(target_os = "android")]
+    fn listed(&self, profiles: &[Profile]) {
+        super::release_reminders::update_android_schedule(profiles);
+    }
+    #[cfg(test)]
+    fn checkpoint(&self, stage: directory::Stage) -> Result<(), String> {
+        deletion_checkpoint(match stage {
+            directory::Stage::AfterTombstone => DeleteFailure::AfterTombstone,
+            directory::Stage::BeforeScan => DeleteFailure::BeforeScan,
+        })
+    }
 }
-fn validated_name(name: &str) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
-        return Err("Enter a profile name of up to 64 characters.".into());
+
+fn revoke_plugin_settings(id: &str) {
+    nova_providers::plugin_settings::revoke_owner(
+        &ProfileStore::for_profile(id).domain("plugin_settings"),
+    );
+}
+
+static DIRECTORY: LazyLock<Directory<NovaDirectory>> =
+    LazyLock::new(|| Directory::new(NovaDirectory, DEFAULT_ID));
+
+/// Judges profile directory records from this device, disk and peers alike.
+struct DirectoryPolicy;
+impl nova_sync::RecordPolicy for DirectoryPolicy {
+    fn validate(&self, domain: &str, key: &str, record: &nova_sync::Record) -> bool {
+        directory::validate_record(domain, key, record)
     }
-    Ok(name.into())
+}
+static POLICY: LazyLock<Arc<dyn nova_sync::RecordPolicy>> =
+    LazyLock::new(|| Arc::new(DirectoryPolicy));
+
+/// Install the record policy before the first access to the sync record owner:
+/// right after storage opens in the app and in every headless job. The call is
+/// idempotent; a record owner that was already loaded without it keeps the
+/// generic policy, which is reported rather than fatal.
+pub(super) fn install_record_policy() {
+    if let Err(error) = nova_sync::configure_record_policy(POLICY.clone()) {
+        eprintln!("nova: profile record policy not installed: {error:#}");
+    }
+}
+
+pub(super) fn list() -> Result<Vec<Profile>, String> {
+    DIRECTORY.list()
 }
 fn write_profile(id: &str, name: &str) -> Result<(), String> {
-    let owner = nova_sync::local_store().map_err(|e| e.to_string())?;
-    let device = nova_sync::local_device().map_err(|e| e.to_string())?;
-    let mut store = owner.lock().unwrap();
-    if store
-        .record(DELETIONS_DOMAIN, id)
-        .is_some_and(|r| r.value.is_some())
-    {
-        return Err("This profile was deleted.".into());
-    }
-    store.set(
-        DOMAIN,
-        id,
-        Some(serde_json::json!({"name":name}).to_string()),
-        0,
-        device,
-    );
-    store.save().map_err(|e| e.to_string())?;
-    drop(store);
-    nova_sync::request_local_sync();
-    Ok(())
+    DIRECTORY.write(id, name)
 }
 fn seed_default_in_store(store: &mut nova_sync::Store, device: u64) -> bool {
-    if store.record(DOMAIN, DEFAULT_ID).is_some()
-        || store
-            .record(DELETIONS_DOMAIN, DEFAULT_ID)
-            .is_some_and(|record| record.value.is_some())
-    {
-        return false;
-    }
-    // Default is migration scaffolding, never an explicit rename. A device
-    // joining later must not replace another device's user-chosen name.
-    store.apply(
-        DOMAIN,
-        DEFAULT_ID,
-        nova_sync::Record {
-            value: Some(serde_json::json!({"name":"Default"}).to_string()),
-            version: nova_sync::Version::new(0, 0, device, false),
-        },
-    )
+    DIRECTORY.seed_default(store, device)
 }
 fn seed_default_profile() -> Result<bool, String> {
     let owner = nova_sync::local_store().map_err(|error| error.to_string())?;
@@ -618,19 +550,13 @@ pub(super) fn set_open_last_profile_on_startup(enabled: bool) -> Result<(), Stri
     Ok(())
 }
 pub(super) fn create(name: &str) -> Result<String, String> {
-    let name = validated_name(name)?;
-    let device = nova_sync::local_device().map_err(|e| e.to_string())?;
-    let sequence =
-        nova_storage::try_allocate_local_sequence("profiles", 1).map_err(|e| e.to_string())?;
-    let id = format!("p{device:x}_{sequence:x}");
-    write_profile(&id, &name)?;
-    Ok(id)
+    DIRECTORY.create(name).map(|profile| profile.id)
 }
 pub(super) fn rename(id: &str, name: &str) -> Result<(), String> {
     if !list()?.iter().any(|p| p.id == id) {
         return Err("This profile is unavailable.".into());
     }
-    write_profile(id, &validated_name(name)?)
+    write_profile(id, &directory::validated_name(name)?)
 }
 // Failure injection stays local to the isolated test's calling thread.
 #[cfg(test)]
@@ -670,52 +596,7 @@ pub(super) fn delete(id: &str) -> Result<(), String> {
     if !profiles.iter().any(|p| p.id == id) {
         return Err("This profile is unavailable.".into());
     }
-    let owner = nova_sync::local_store().map_err(|e| e.to_string())?;
-    let device = nova_sync::local_device().map_err(|e| e.to_string())?;
-    let mut store = owner.lock().unwrap();
-    let _serial = WRITE_SERIAL.lock().unwrap();
-    let revision_owner = ProfileStore::for_profile(id);
-    let revision = revision_owner.writing();
-    let mut staged = store.clone();
-    let prefix = format!("profile:{id}:");
-    for domain in staged.domains() {
-        if domain.starts_with(&prefix) {
-            for (key, _) in staged.records(&domain) {
-                staged.set(&domain, &key, None, 0, device);
-                #[cfg(test)]
-                deletion_checkpoint(DeleteFailure::AfterTombstone)?;
-            }
-        }
-    }
-    staged.set(DELETIONS_DOMAIN, id, Some("1".into()), 0, device);
-    staged.set(DOMAIN, id, None, 0, device);
-    #[cfg(test)]
-    deletion_checkpoint(DeleteFailure::BeforeScan)?;
-    for prefix in [prefix, format!("sync:baseline:profile:{id}:")] {
-        // Durable scans cannot see newly queued credentials or baselines. Clear
-        // those on the proposal too, without disturbing other owners' extras.
-        for key in staged.queued_extra_keys_with_prefix(&prefix) {
-            staged.queue_extra(&key, None);
-        }
-        for (key, _) in nova_storage::try_scan_prefix(&prefix).map_err(|e| e.to_string())? {
-            staged.queue_extra(&key, None);
-        }
-    }
-    // Keep the owner and write serializer locked until durable publication.
-    // A failed proposal must not leak through a later unrelated Store save.
-    nova_sync::publish(&mut store, staged, |staged| {
-        staged.save().map_err(|e| e.to_string())
-    })?;
-    RUNTIME.write().unwrap().retired.insert(id.into());
-    drop(store);
-    drop(revision);
-    drop(_serial);
-    nova_providers::plugin_settings::revoke_owner(
-        &ProfileStore::for_profile(id).domain("plugin_settings"),
-    );
-    let _ = std::fs::remove_dir_all(cache_dir(id));
-    nova_sync::request_local_sync();
-    Ok(())
+    DIRECTORY.retire(id)
 }
 pub(super) fn cache_dir(id: &str) -> std::path::PathBuf {
     nova_config::app_cache_dir().join("profiles").join(id)
@@ -829,6 +710,40 @@ mod tests {
         assert!(joining.apply(DOMAIN, DEFAULT_ID, explicit));
         assert_eq!(joining.records(DOMAIN), named.records(DOMAIN));
         assert!(!seed_default_in_store(&mut joining, 2));
+    }
+    #[test]
+    fn directory_policy_keeps_every_row_nova_has_written_and_refuses_malformed_ones() {
+        use nova_sync::RecordPolicy;
+        let live = |value: &str| nova_sync::Record {
+            value: Some(value.into()),
+            version: nova_sync::Version::new(1, 0, 1, false),
+        };
+        let tombstone = nova_sync::Record {
+            value: None,
+            version: nova_sync::Version::new(1, 0, 1, true),
+        };
+        let policy = DirectoryPolicy;
+        // Exactly the encodings `write_profile`, the default seed and `delete` emit.
+        let created = serde_json::json!({"name": "Mina"}).to_string();
+        assert!(policy.validate(DOMAIN, DEFAULT_ID, &live(r#"{"name":"Default"}"#)));
+        assert!(policy.validate(DOMAIN, "p1a2b_3", &live(&created)));
+        assert!(policy.validate(DOMAIN, "p1a2b_3", &tombstone));
+        assert!(policy.validate(DELETIONS_DOMAIN, "p1a2b_3", &live("1")));
+        // A newer peer may add fields.
+        assert!(policy.validate(DOMAIN, "p1a2b_3", &live(r#"{"name":"Mina","tone":1}"#)));
+        // Malformed rows from a peer or a damaged disk are refused.
+        assert!(!policy.validate(DOMAIN, "a:b", &live(&created)));
+        assert!(!policy.validate(DOMAIN, "p1a2b_3", &live(r#"{"name":""}"#)));
+        assert!(!policy.validate(DOMAIN, "p1a2b_3", &live("not json")));
+        assert!(!policy.validate(
+            DOMAIN,
+            "p1a2b_3",
+            &live(&format!(r#"{{"name":"{}"}}"#, "x".repeat(65)))
+        ));
+        assert!(!policy.validate(DELETIONS_DOMAIN, "p1a2b_3", &live("0")));
+        assert!(!policy.validate(DELETIONS_DOMAIN, "p1a2b_3", &tombstone));
+        // Other domains are not the directory's business.
+        assert!(policy.validate("profile:default:library", "anything", &live("x")));
     }
     #[test]
     fn startup_selection_is_opt_out_and_preserves_an_explicit_choice() {
