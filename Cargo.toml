@@ -85,6 +85,7 @@ nova-ui-base = { git = "https://github.com/misobarisic/nova-kit", rev = "096ec5e
 nova-storage = { git = "https://github.com/misobarisic/nova-kit", rev = "096ec5e6c4cf2c30303a01eed42ca2debc165f56" }
 nova-net = { git = "https://github.com/misobarisic/nova-kit", rev = "096ec5e6c4cf2c30303a01eed42ca2debc165f56" }
 nova-backup = { git = "https://github.com/misobarisic/nova-kit", rev = "096ec5e6c4cf2c30303a01eed42ca2debc165f56" }
+nova-android = { git = "https://github.com/misobarisic/nova-kit", rev = "096ec5e6c4cf2c30303a01eed42ca2debc165f56" }
 
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
@@ -195,6 +196,8 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "w
 # load Java classes via the Context class loader).
 jni = "0.21"
 ndk-context = "0.1"
+# JNI context, class lookup and the download service state machine shared with Reader.
+nova-android = { workspace = true, features = ["jni"] }
 # QR decoding for the camera scan pipeline (android_qr.rs) and, on desktop, the
 # QR round-trip test below. `default-features = false` drops the optional
 # `image` crate; we decode the camera's luma plane through the greyscale
@@ -206,6 +209,8 @@ semver = "1"
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
+# Renders the download service's Java source for tests/android_java.rs.
+nova-android = { workspace = true }
 skrifa = "=0.44.0"
 # Headless UI tests (drag-scroll regression): drives the real AppWindow
 # through synthetic pointer events, no display needed.

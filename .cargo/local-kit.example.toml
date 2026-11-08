@@ -18,3 +18,4 @@ nova-sync = { path = "../nova-kit/crates/sync" }
 nova-playback-api = { path = "../nova-kit/crates/playback-api" }
 nova-net = { path = "../nova-kit/crates/net" }
 nova-backup = { path = "../nova-kit/crates/backup" }
+nova-android = { path = "../nova-kit/crates/android" }

@@ -18,36 +18,31 @@
 //! foreground or headless bootstrap) and calls a static method.
 #![cfg(target_os = "android")]
 
-use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use jni::JavaVM;
-use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-use jni::sys::jobject;
+use jni::objects::{GlobalRef, JObject, JValue};
+use nova_android::context::JniDriver;
+use nova_android::service::DownloadService;
+
+// The Application context, class lookup and exception handling are shared with
+// Nova Reader through nova-android.
+pub(crate) use nova_android::context::{
+    app_class, initialize_foreground_context, with_app_context,
+};
 
 const SERVICE_CLASS: &str = "dev.misob.nova.NovaBackgroundService";
 const AUTH_CLASS: &str = "dev.misob.nova.NovaAuthService";
 const JOB_CLASS: &str = "dev.misob.nova.NovaSyncJobService";
 
-/// How often the notification text is refreshed while a download runs. The
-/// tick fires every 250 ms; re-issuing JNI twice a second is plenty.
-const NOTIFICATION_REFRESH: Duration = Duration::from_secs(1);
-
-/// Whether the download foreground service is currently requested.
-static DOWNLOAD_SERVICE_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// Last notification text and when it was pushed, for throttling.
-static LAST_NOTIFICATION: Mutex<Option<(String, Instant)>> = Mutex::new(None);
-/// Cached global ref to the service class (loaded once through the app class
-/// loader; avoids a loader round-trip on every notification refresh).
-static SERVICE_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
+/// Start/update/stop state of the download foreground service.
+static DOWNLOAD_SERVICE: DownloadService<JniDriver> =
+    DownloadService::new(JniDriver::new(SERVICE_CLASS));
 static AUTH_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// Cached global ref to the sync-job class.
 static JOB_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 static JOB_CANCEL: AtomicBool = AtomicBool::new(false);
-static APP_CONTEXT: OnceLock<(JavaVM, GlobalRef)> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeCancelSync(
@@ -65,148 +60,12 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativePrepareSync(
     JOB_CANCEL.store(false, Ordering::Release);
 }
 
-/// Retain only the Application, so background work never depends on an
-/// Activity surviving rotation or being initialized by `ndk-context`.
-fn retain_app_context(env: &mut jni::JNIEnv, context: &JObject) -> jni::errors::Result<()> {
-    if APP_CONTEXT.get().is_none() {
-        let app = env
-            .call_method(
-                context,
-                "getApplicationContext",
-                "()Landroid/content/Context;",
-                &[],
-            )?
-            .l()?;
-        let global = env.new_global_ref(app)?;
-        let vm = env.get_java_vm()?;
-        let _ = APP_CONTEXT.set((vm, global));
-    }
-    Ok(())
-}
-
-/// Called before foreground app startup; jobs initialize the same adapter from
-/// their own Context. Neither path requires a previously launched Activity.
-pub(crate) fn initialize_foreground_context(
-    vm: *mut std::ffi::c_void,
-    activity: *mut std::ffi::c_void,
-) {
-    // SAFETY: AndroidApp owns these JNI references throughout android_main.
-    let result = (|| -> jni::errors::Result<()> {
-        let vm = unsafe { JavaVM::from_raw(vm.cast()) }?;
-        let mut env = vm.attach_current_thread()?;
-        let activity = unsafe { JObject::from_raw(activity.cast()) };
-        retain_app_context(&mut env, &activity)
-    })();
-    if let Err(error) = result {
-        eprintln!("nova: unable to initialize Android context: {error}");
-    }
-}
-
-/// Run `f` with the retained Application Context. Returns `None` before either
-/// foreground or headless bootstrap, without calling ndk-context's panicking
-/// accessor. Foreground UI actions resolve a live Activity separately in Java.
-pub(crate) fn with_app_context<R>(
-    f: impl FnOnce(&mut jni::JNIEnv, jobject) -> jni::errors::Result<R>,
-) -> Option<R> {
-    let (vm, context) = APP_CONTEXT.get()?;
-    let mut guard = vm.attach_current_thread().ok()?;
-    f(&mut guard, context.as_obj().as_raw()).ok()
-}
-
-/// Resolve an app class through the Context's class loader (the reliable way to
-/// find app-dex classes from a native thread), caching the global ref.
-/// Shared with the camera scanner (`android_qr.rs`).
-pub(crate) fn app_class<'local>(
-    env: &mut jni::JNIEnv<'local>,
-    context: &JObject<'local>,
-    dotted: &str,
-    cache: &'static OnceLock<GlobalRef>,
-) -> jni::errors::Result<JClass<'local>> {
-    if let Some(global) = cache.get() {
-        // Alias the cached global ref; `JClass`'s Drop is a no-op for local
-        // views, so the cache keeps ownership.
-        return Ok(unsafe { JClass::from_raw(global.as_obj().as_raw()) });
-    }
-    let loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
-        .l()?;
-    let name = env.new_string(dotted)?;
-    let class = env
-        .call_method(
-            &loader,
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&name)],
-        )?
-        .l()?;
-    let global = env.new_global_ref(&class)?;
-    let _ = cache.set(global);
-    Ok(class.into())
-}
-
 /// Start, update, or stop the download foreground service. `busy` is whether
 /// any download is queued or transferring; `title`/`text` label the ongoing
 /// notification. Cheap to call every tick: the JNI/notification work is
 /// throttled to state changes and one refresh per second.
 pub(crate) fn set_download_service(busy: bool, title: &str, text: &str) {
-    let was_active = DOWNLOAD_SERVICE_ACTIVE.swap(busy, Ordering::AcqRel);
-    let changed = was_active != busy;
-    if !busy {
-        if !changed {
-            return;
-        }
-        with_app_context(|env, raw| {
-            let context = unsafe { JObject::from_raw(raw) };
-            let class = app_class(env, &context, SERVICE_CLASS, &SERVICE_CLASS_REF)?;
-            env.call_static_method(
-                &class,
-                "stop",
-                "(Landroid/content/Context;)V",
-                &[JValue::Object(&context)],
-            )?;
-            Ok(())
-        });
-        return;
-    }
-
-    // Active: throttle text updates, but always act on the rising edge.
-    let body = format!("{title}\n{text}");
-    {
-        let mut last = LAST_NOTIFICATION.lock().unwrap();
-        if !changed
-            && last.as_ref().is_some_and(|(previous, at)| {
-                previous == &body && at.elapsed() < NOTIFICATION_REFRESH
-            })
-        {
-            return;
-        }
-        *last = Some((body.clone(), Instant::now()));
-    }
-    with_app_context(|env, raw| {
-        let context = unsafe { JObject::from_raw(raw) };
-        let class = app_class(env, &context, SERVICE_CLASS, &SERVICE_CLASS_REF)?;
-        if !was_active {
-            env.call_static_method(
-                &class,
-                "start",
-                "(Landroid/content/Context;)V",
-                &[JValue::Object(&context)],
-            )?;
-        }
-        let title = env.new_string(title)?;
-        let text = env.new_string(text)?;
-        env.call_static_method(
-            &class,
-            "update",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
-            &[
-                JValue::Object(&context),
-                JValue::Object(&title),
-                JValue::Object(&text),
-            ],
-        )?;
-        Ok(())
-    });
+    DOWNLOAD_SERVICE.set(busy, title, text);
 }
 
 /// Wait for foreground promotion before opening the browser. The tracker actor
@@ -323,23 +182,12 @@ pub(crate) fn initialize_headless_context(
     env: &mut jni::JNIEnv,
     context: &JObject,
 ) -> Result<(), String> {
-    let files = env
-        .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
-        .map_err(|e| e.to_string())?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let path = env
-        .call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| e.to_string())?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let jpath = unsafe { JString::from_raw(path.into_raw()) };
-    let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
-    nova_config::set_android_files_dir(PathBuf::from(path));
+    let path = nova_android::context::files_dir(env, context)?;
+    nova_config::set_android_files_dir(path);
     crate::storage::init_at(&nova_config::app_data_dir());
     super::profiles::install_record_policy();
     super::addon_packages::configure_blob_store();
 
-    retain_app_context(env, context).map_err(|error| error.to_string())?;
+    nova_android::context::retain_app_context(env, context).map_err(|error| error.to_string())?;
     Ok(())
 }

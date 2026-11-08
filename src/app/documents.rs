@@ -155,23 +155,18 @@ mod android {
     use super::*;
     use jni::objects::{GlobalRef, JByteArray, JObject, JString, JValue};
     use jni::sys::{jint, jlong};
-    use std::sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    };
+    use nova_android::slot::Slot;
+    use std::sync::OnceLock;
     static CLASS: OnceLock<GlobalRef> = OnceLock::new();
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    static PENDING: Mutex<Option<(u64, Completion)>> = Mutex::new(None);
+    static PENDING: Slot<Completion> = Slot::new();
     pub(super) fn launch(name: &str, mime: &str, bytes: Option<Vec<u8>>, done: Completion) {
-        let request = NEXT.fetch_add(1, Ordering::Relaxed);
-        let mut pending = PENDING.lock().unwrap();
-        if pending.is_some() {
-            drop(pending);
-            done(Err("A document picker is already open".into()));
-            return;
-        }
-        *pending = Some((request, done));
-        drop(pending);
+        let request = match PENDING.begin(done) {
+            Ok(request) => request,
+            Err(done) => {
+                done(Err("A document picker is already open".into()));
+                return;
+            }
+        };
         let launched = crate::app::android_bg::with_app_context(|env, raw| {
             let context = unsafe { JObject::from_raw(raw) };
             let class = crate::app::android_bg::app_class(
@@ -207,14 +202,7 @@ mod android {
         }
     }
     fn complete(request: u64, result: Result<Option<Vec<u8>>, String>) {
-        let callback = {
-            let mut slot = PENDING.lock().unwrap();
-            if slot.as_ref().is_none_or(|(id, _)| *id != request) {
-                return;
-            }
-            slot.take().map(|(_, done)| done)
-        };
-        if let Some(done) = callback {
+        if let Some(done) = PENDING.complete(request) {
             std::thread::spawn(move || done(result));
         }
     }

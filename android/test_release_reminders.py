@@ -34,9 +34,11 @@ class ReleaseReminders(unittest.TestCase):
         adapter = (ROOT / "src/app/android_bg.rs").read_text()
         entry = (ROOT / "src/lib.rs").read_text()
         self.assertNotIn("ndk_context::android_context()", adapter)
-        self.assertIn("let (vm, context) = APP_CONTEXT.get()?;", adapter)
-        self.assertIn('"getApplicationContext"', adapter)
-        self.assertIn("retain_app_context(env, context)", adapter)
+        # The Application context itself lives in nova-android, whose own tests
+        # pin `APP_CONTEXT.get()?` and `getApplicationContext`.
+        self.assertIn("with_app_context", adapter)
+        self.assertIn("nova_android::context::{app_class, initialize_foreground_context, with_app_context}", adapter)
+        self.assertIn("nova_android::context::retain_app_context(env, context)", adapter)
         self.assertIn("initialize_foreground_context(app.vm_as_ptr(), app.activity_as_ptr())", entry)
         # Service and notification delivery keep using Application, while both
         # permission entry points resolve the resumed Activity independently.
