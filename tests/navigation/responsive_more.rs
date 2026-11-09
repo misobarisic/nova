@@ -80,9 +80,19 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
         }
     }
-    ElementHandle::find_by_accessible_label(app, label)
-        .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
-        .unwrap_or_else(|| panic!("missing button {label}"))
+    // The inactive More index stays mounted behind its subpages and lists
+    // Settings sections while a search is active; prefer the live control.
+    // Its header Back precedes the subpage's own Back in the element tree.
+    let mut matches = ElementHandle::find_by_accessible_label(app, label).filter(|item| {
+        item.accessible_role() == Some(AccessibleRole::Button)
+            && item.accessible_enabled() != Some(false)
+    });
+    let found = if label == "Back" {
+        matches.last()
+    } else {
+        matches.next()
+    };
+    found.unwrap_or_else(|| panic!("missing button {label}"))
 }
 
 fn open_more(app: &nova::AppWindow) {
@@ -224,7 +234,9 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     key(&app, slint::platform::Key::Back);
     assert!(app.get_more_open() && !app.get_show_settings());
-    click(&app, button(&app, "Settings"));
+    // Narrow More lists Settings as group rows that open the overview scoped
+    // to that group; searching widens it to every section again.
+    click(&app, button(&app, "Experience"));
     assert!(app.get_show_settings());
     assert_no_bar(&app);
     assert!(!app.global::<nova::SettingsBridge>().get_standalone_sync());
@@ -250,13 +262,17 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(!app.get_show_settings());
     key(&app, slint::platform::Key::Back);
     assert!(app.get_show_home());
+    // The query is shared with the More index, which would otherwise keep
+    // filtering its rows to the Display match.
+    app.set_settings_search_query("".into());
 
     open_more(&app);
     // A fresh keyboard choice starts at Calendar; child returns retain it.
     app.set_more_choice(0);
     app.set_more_focus_zone(1);
-    // Keyboard selection belongs to the More page.
-    for _ in 0..10 {
+    // Keyboard selection belongs to the More page: Calendar, Downloads, five
+    // watching/together rows, Sync, Profiles, three Settings groups, About.
+    for _ in 0..12 {
         key(&app, slint::platform::Key::DownArrow);
     }
     key(&app, slint::platform::Key::Return);
@@ -309,42 +325,58 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         0,
         "desktop More is a sidebar destination without a header Back arrow"
     );
+    // 700px is wide but below the two-pane breakpoint: the rail owns Calendar
+    // and Downloads, and the index lists seven tools, three Settings group
+    // rows and About.
+    assert!(!app.get_more_two_pane());
     assert_eq!(
-        ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        9,
+        ElementHandle::find_by_element_type_name(&app, "IndexRow").count(),
+        11,
         "wide More includes journal, queue and bookmarks alongside the existing destinations"
     );
-    let calendar_y = button(&app, "Calendar").absolute_position().y;
-    let downloads_y = button(&app, "Downloads").absolute_position().y;
-    let more_y = button(&app, "More").absolute_position().y;
-    let settings_y = button(&app, "Settings").absolute_position().y;
-    let about_y = button(&app, "About").absolute_position().y;
+    // Measure without the reveal scroll so rows below the fold compare in
+    // one coordinate space.
+    let row_y = |label: &str| {
+        ElementHandle::find_by_accessible_label(&app, label)
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap_or_else(|| panic!("missing button {label}"))
+            .absolute_position()
+            .y
+    };
+    let calendar_y = row_y("Calendar");
+    let downloads_y = row_y("Downloads");
+    let more_y = row_y("More");
+    let experience_y = row_y("Experience");
+    let services_y = row_y("Library and services");
+    let storage_y = row_y("Storage and network");
+    let about_y = row_y("About");
     assert!(calendar_y < downloads_y && downloads_y < more_y);
-    assert!(settings_y < about_y);
-    let devices_y = button(&app, "Devices").absolute_position().y;
-    let party_y = button(&app, "Watch party").absolute_position().y;
-    let profiles_y = button(&app, "Profiles").absolute_position().y;
-    let sync_y = button(&app, "Sync").absolute_position().y;
-    let journal_y = button(&app, "Stats").absolute_position().y;
-    let queue_y = button(&app, "Watch queue").absolute_position().y;
-    let bookmarks_y = button(&app, "Bookmarks").absolute_position().y;
+    assert!(experience_y < services_y && services_y < storage_y && storage_y < about_y);
+    let devices_y = row_y("Devices");
+    let party_y = row_y("Watch party");
+    let profiles_y = row_y("Profiles");
+    let sync_y = row_y("Sync");
+    let journal_y = row_y("Stats");
+    let queue_y = row_y("Watch queue");
+    let bookmarks_y = row_y("Bookmarks");
     assert!(
-        profiles_y < sync_y
-            && sync_y < devices_y
-            && devices_y < party_y
-            && party_y < journal_y
-            && journal_y < queue_y
-            && queue_y < bookmarks_y
-            && bookmarks_y < settings_y
-            && settings_y < about_y
+        queue_y < bookmarks_y
+            && bookmarks_y < journal_y
+            && journal_y < party_y
+            && party_y < devices_y
+            && devices_y < sync_y
+            && sync_y < profiles_y
+            && profiles_y < experience_y
     );
+    // Keyboard order follows the visual order: Watch party, Devices, Sync,
+    // Profiles, then the Settings group rows (choices 20-22).
     app.set_more_focus_zone(1);
     app.set_more_choice(5);
-    for choice in [8, 9, 10, 6, 7] {
+    for choice in [4, 3, 2, 20, 21] {
         key(&app, slint::platform::Key::DownArrow);
         assert_eq!(app.get_more_choice(), choice);
     }
-    for choice in [6, 10, 9, 8, 5] {
+    for choice in [20, 2, 3, 4, 5] {
         key(&app, slint::platform::Key::UpArrow);
         assert_eq!(app.get_more_choice(), choice);
     }
@@ -353,10 +385,10 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     key(&app, slint::platform::Key::Back);
     assert!(app.get_more_open() && !app.get_profiles_open());
     assert_eq!(backgrounds.get(), 0);
-    for label in ["Settings", "About", "Devices", "Watch party"] {
+    for label in ["Experience", "About", "Devices", "Watch party"] {
         assert_ne!(button(&app, label).accessible_enabled(), Some(false));
     }
-    click(&app, button(&app, "Settings"));
+    click(&app, button(&app, "Experience"));
     assert!(app.get_show_settings());
     assert!(!app.get_more_open());
     click(
@@ -369,7 +401,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         app.get_more_open(),
         "Settings rail More opens the full page"
     );
-    click(&app, button(&app, "Settings"));
+    click(&app, button(&app, "Experience"));
     assert!(app.get_show_settings() && !app.get_more_open());
     assert_eq!(
         ElementHandle::find_by_accessible_label(&app, "Back").count(),

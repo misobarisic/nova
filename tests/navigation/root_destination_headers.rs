@@ -36,6 +36,16 @@ fn root_headings_align_with_discover_without_nested_header_padding() {
         for section in [3, 4, 5] {
             app.invoke_navigate_section(section);
             idle();
+            // The two-pane More index is a column without a page heading.
+            if section == 3 && app.get_more_two_pane() {
+                assert!(
+                    ElementHandle::find_by_element_id(&app, "PageHeader::title_text")
+                        .next()
+                        .is_none(),
+                    "two-pane More at {width} has no page heading"
+                );
+                continue;
+            }
             let title = element(&app, "PageHeader::title_text");
             let p = title.absolute_position();
             assert!(

@@ -176,8 +176,10 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
     }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
+        // Narrow More lists Settings as group rows; "Experience" opens the
+        // Settings overview scoped to that group.
         for (label, component) in [
-            ("Settings", "SettingsPage"),
+            ("Experience", "SettingsPage"),
             ("Sync", "SettingsPage"),
             ("About", "AboutPage"),
             ("Calendar", "CalendarPage"),
@@ -249,16 +251,16 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let p = page(&app, component);
             assert!(p.absolute_position().x.abs() < 0.1 && p.computed_opacity() > 0.99);
             assert_shared_back(&app);
-            if label == "Settings" {
+            if label == "Experience" {
                 let catalogs = slint::select_bundled_translation("en").is_ok();
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
-                assert_settings_header_spacing(&app, "Settings", "Make Nova yours", "English");
+                assert_settings_header_spacing(&app, "Experience", "Make Nova yours", "English");
                 if catalogs {
                     let _ = slint::select_bundled_translation("hr");
                     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
                     assert_settings_header_spacing(
                         &app,
-                        "Postavke",
+                        "Iskustvo",
                         "Prilagodi Novu sebi",
                         "Croatian",
                     );
@@ -812,7 +814,7 @@ fn pending_return_blocks_scroll_and_editor_input() {
     app.show().unwrap();
     let _ = page(&app, "MorePage").size();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-    tap(&app, button(&app, "Settings"));
+    tap(&app, button(&app, "Experience"));
     for _ in 0..35 {
         let _ = page(&app, "SettingsPage").absolute_position();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));

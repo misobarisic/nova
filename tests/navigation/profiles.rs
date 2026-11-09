@@ -575,12 +575,24 @@ fn profile_picker_animates_entry_return_and_motion_disable() {
                 app.get_profiles_require_selection(),
                 app.get_more_open()
             );
+            // Wide pointer layouts keep the index column and mount Profiles in
+            // the pane beside it; the page slides 48px in from that origin.
+            let origin = origin
+                + if app.get_more_two_pane() {
+                    landing.size().width
+                } else {
+                    0.0
+                };
             button(&app, "Profiles").mock_single_click(slint::platform::PointerEventButton::Left);
             let page = ElementHandle::find_by_element_type_name(&app, "ProfilesPage")
                 .next()
                 .unwrap();
             if enabled && transitions {
-                assert!(page.absolute_position().x > width as f32 * 0.8);
+                assert!(
+                    page.absolute_position().x > origin + 40.0,
+                    "profile entry at {width}px starts offset from the pane: {:?}, origin {origin}",
+                    page.absolute_position()
+                );
                 assert!(page.computed_opacity() < 0.1);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
                 assert!(page.computed_opacity() > 0.1 && page.computed_opacity() < 0.99);
