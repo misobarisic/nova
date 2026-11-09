@@ -277,16 +277,24 @@ component TrackMenu inherits Rectangle {
 // the panel is available on every platform. Long row lists scroll.
 component SettingsMenu inherits Rectangle {
     in property <bool> reveal_direct_subtitle_tool: false;
+    // Opened from the footer speed button: a compact speed-only popup with
+    // no back navigation into the Playback root.
+    in property <bool> direct: false;
     // Entrance: the card grows from the button it is anchored to (or from
     // its centre on narrow layouts) while the backdrop fades in.
-    private property <float> open_progress: 0;
+    // A subtitle tool opened from the subtitles popup replaces that popup in
+    // place: the card is shown at once and only its page slides in, so no
+    // frame passes with neither panel painted.
+    private property <float> open_progress: root.reveal_direct_subtitle_tool ? 1 : 0;
     animate open_progress { duration: root.page_motion ? Anim.player_slide : 0ms; easing: ease-out; }
     open_timer := Timer {
         interval: 1ms; running: false;
         triggered => { self.stop(); root.open_progress = 1; }
     }
     init => {
-        if root.page_motion { open_timer.start(); } else { root.open_progress = 1; }
+        if !root.reveal_direct_subtitle_tool {
+            if root.page_motion { open_timer.start(); } else { root.open_progress = 1; }
+        }
         if root.reveal_direct_subtitle_tool && root.page_motion {
             root.page_direction = 1;
             root.previous_page = root.page;
@@ -469,7 +477,7 @@ component SettingsMenu inherits Rectangle {
     }
 
     card := Rectangle {
-        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 560px : (root.anchored ? 400px : 380px),
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 560px : root.direct ? 320px : (root.anchored ? 400px : 380px),
             root.width - root.safe_left - root.safe_right - 32px));
         private property <length> content_height: card_col.preferred-height;
         private property <length> animated_height: self.content_height;
@@ -480,13 +488,13 @@ component SettingsMenu inherits Rectangle {
         // Bypass an in-flight resize immediately when motion is disabled.
         height: root.page_motion ? self.animated_height : card_col.preferred-height;
         x: root.anchored
-            ? Math.clamp(root.anchor_x - self.width, 16px + root.safe_left,
+            ? Math.clamp(root.direct ? root.anchor_x - self.width / 2 : root.anchor_x - self.width, 16px + root.safe_left,
                 Math.max(16px + root.safe_left, root.width - root.safe_right - 16px - self.width))
             : root.safe_left + (root.width - root.safe_left - root.safe_right - self.width) / 2;
         y: root.anchored ? Math.max(root.top_inset, root.anchor_y - 24px - self.height)
             : root.top_inset + Math.max(0px, (root.height - root.top_inset - 16px - self.height) / 2);
         background: Theme.current.player_menu;
-        border-radius: 16px;
+        border-radius: root.direct ? 14px : 16px;
         border-width: 1px;
         border-color: Theme.current.player_menu_border;
         drop-shadow-blur: 24px;
@@ -509,20 +517,20 @@ component SettingsMenu inherits Rectangle {
             width: parent.width;
             height: parent.height;
             opacity: root.page_motion ? root.page_progress : 1;
-            padding: 16px;
-            spacing: 12px;
+            padding: root.direct ? 12px : 16px;
+            spacing: root.direct ? 8px : 12px;
             alignment: start;
 
             // ---- Header: title + back (submenu) / close ----
             settings_header := Rectangle {
-                height: Math.max(InterfaceStyle.tv ? 56px : 44px, settings_title.preferred-height);
+                height: Math.max(root.direct ? (InterfaceStyle.tv ? 44px : 32px) : (InterfaceStyle.tv ? 56px : 44px), settings_title.preferred-height);
 
                 HorizontalLayout {
                     padding-left: 4px;
                     padding-right: 0px;
                     spacing: 6px;
 
-                    if root.page != 0: Rectangle {
+                    if root.page != 0 && !root.direct: Rectangle {
                         width: InterfaceStyle.tv ? 56px : 40px;
                         height: InterfaceStyle.tv ? 56px : 40px;
                         border-radius: 20px;
@@ -545,8 +553,8 @@ component SettingsMenu inherits Rectangle {
 
                     settings_title := Text {
                         text: root.page_title();
-                        color: Theme.current.text_bright;
-                        font-size: 18px;
+                        color: root.direct ? Theme.current.text_player_secondary : Theme.current.text_bright;
+                        font-size: root.direct ? (InterfaceStyle.tv ? 18px : 13px) : 18px;
                         font-weight: 600;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -563,7 +571,8 @@ component SettingsMenu inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    Rectangle {
+                    // The compact speed popup dismisses on an outside tap.
+                    if !root.direct: Rectangle {
                         width: InterfaceStyle.tv ? 56px : 40px;
                         height: InterfaceStyle.tv ? 56px : 40px;
                         border-radius: 20px;
@@ -592,7 +601,7 @@ component SettingsMenu inherits Rectangle {
             settings_scroll := Flickable {
                 width: 100%;
                 vertical-stretch: 0;
-                height: Math.max(0px, Math.min(pages_col.preferred-height, root.card_limit - settings_header.height - 57px));
+                height: Math.max(0px, Math.min(pages_col.preferred-height, root.card_limit - settings_header.height - (root.direct ? 41px : 57px)));
                 interactive: !SliderGesture.active;
                 mouse-drag-pan-enabled: !SliderGesture.hovered;
 
@@ -1624,6 +1633,7 @@ export component PlayerOverlay {
 
     // Back out of the settings panel: one page at a time, then close.
     function settings_back() {
+        if root.speed_direct { root.open_popup = 0; return; }
         if (root.settings_page == 5 || root.settings_page == 8) && root.subtitle_tools_origin != 0 {
             let origin = root.subtitle_tools_origin;
             let focused = root.settings_page == 5 ? 0 : 1;
@@ -1820,13 +1830,15 @@ export component PlayerOverlay {
             }
         } else if (root.kb_idx == 7) {
             // Gear: settings panel (subtitles/audio + Android/Windows/Linux decoder).
+            root.speed_direct = false;
+            root.subtitle_tools_origin = 0;
             root.settings_page = 0;
             root.open_popup = 4;
             root.settings_opened();
             root.tracks_popup_opened(0);
             root.osd_mouse_moved();
         } else if root.kb_idx == 13 && !PartyBridge.busy {
-            root.settings_page = 4; root.open_popup = 4; root.osd_mouse_moved();
+            root.open_speed_popup();
         } else if (root.kb_idx == 8 && !root.is_android) {
             root.toggle_fullscreen();
         }
@@ -1952,6 +1964,22 @@ export component PlayerOverlay {
 
     // Internal: which popup is open (0=none, 1=audio, 2=subs, 4=settings).
     private property <int> open_popup: 0;
+    // Playback opened from the footer speed button rather than the gear.
+    private property <bool> speed_direct: false;
+    private property <length> speed_anchor_x: 0px;
+    private property <length> speed_anchor_y: 0px;
+    // The subtitles button's right edge and top: subtitle tools opened from
+    // its popup (appearance, second subtitles) grow from it, not the gear.
+    private property <length> sub_anchor_x: 0px;
+    private property <length> sub_anchor_y: 0px;
+    function open_speed_popup() {
+        if root.open_popup == 4 && root.speed_direct { root.open_popup = 0; return; }
+        root.speed_direct = true;
+        root.subtitle_tools_origin = 0;
+        root.settings_page = 4;
+        root.open_popup = 4;
+        root.osd_mouse_moved();
+    }
 
     // Android: touch input and the decoder section in the settings panel.
     in property <bool> is_android: false;
@@ -2098,6 +2126,7 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
+        if root.open_popup != 4 { root.speed_direct = false; }
         root.focus_shell();
         // Popup teardown can destroy a pressed/hovered slider without running
         // its release handler. Reopening starts with a fresh scroll gesture.
@@ -3395,8 +3424,13 @@ export component PlayerOverlay {
                             base: Theme.current.player_control;
                             border-width: self.focused ? 2px : 1px;
                             border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
-                            active: root.open_popup == 2;
+                            active: root.open_popup == 2 || (root.open_popup == 4 && root.subtitle_tools_origin == 2);
                             focused: root.kb_active && root.kb_idx == 5 && root.open_popup == 0;
+                            property <length> anchor_right: self.absolute-position.x - root.absolute-position.x + self.width;
+                            property <length> anchor_top: self.absolute-position.y - root.absolute-position.y;
+                            init => { root.sub_anchor_x = self.anchor_right; root.sub_anchor_y = self.anchor_top; }
+                            changed anchor_right => { root.sub_anchor_x = self.anchor_right; }
+                            changed anchor_top => { root.sub_anchor_y = self.anchor_top; }
                             clicked => {
                                 if (!root.guard_osd_control()) { return; }
                                 root.kb_active = false;
@@ -3497,10 +3531,17 @@ export component PlayerOverlay {
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
                         focused: root.kb_active && root.kb_idx == 13 && root.open_popup == 0;
                         accessible-role: button; accessible-label: @tr("Playback speed") + ": " + PlaybackSpeed.label(PartyBridge.active ? PartyBridge.target_speed : root.playback_speed);
+                        active: root.open_popup == 4 && root.speed_direct;
+                        // The popup grows from this button, so publish its centre.
+                        property <length> anchor_cx: self.absolute-position.x - root.absolute-position.x + self.width / 2;
+                        property <length> anchor_top: self.absolute-position.y - root.absolute-position.y;
+                        init => { root.speed_anchor_x = self.anchor_cx; root.speed_anchor_y = self.anchor_top; }
+                        changed anchor_cx => { root.speed_anchor_x = self.anchor_cx; }
+                        changed anchor_top => { root.speed_anchor_y = self.anchor_top; }
                         clicked => {
                             if !root.guard_osd_control() || PartyBridge.busy { return; }
                             root.kb_active = false; root.kb_idx = 13;
-                            root.settings_page = 4; root.open_popup = 4;
+                            root.open_speed_popup();
                         }
                         Text { text: PartyBridge.active ? PlaybackSpeed.label(PartyBridge.target_speed) : Math.mod(Math.round(root.playback_speed * 100), 100) == 0 ? Math.round(root.playback_speed) + "×" : PlaybackSpeed.label(root.playback_speed); font-size: 12px; color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -3536,15 +3577,17 @@ export component PlayerOverlay {
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
-                        active: root.open_popup == 4;
+                        active: root.open_popup == 4 && !root.speed_direct && root.subtitle_tools_origin != 2;
                         focused: root.kb_active && root.kb_idx == 7 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
                             root.kb_active = false;
                             root.kb_idx = 7;
-                            if (root.open_popup == 4) {
+                            if (root.open_popup == 4 && !root.speed_direct && root.subtitle_tools_origin != 2) {
                                 root.open_popup = 0;
                             } else {
+                                root.speed_direct = false;
+                                root.subtitle_tools_origin = 0;
                                 root.settings_page = 0;
                                 root.open_popup = 4;
                                 // Refresh the shown decoder state
@@ -3695,9 +3738,14 @@ export component PlayerOverlay {
         // layouts the track pickers live here instead of the control row.
         if root.playback_started && root.open_popup == 4: SettingsMenu {
             reveal_direct_subtitle_tool: root.subtitle_tools_origin == 2;
+            direct: root.speed_direct;
             narrow: root.narrow;
-            anchor_x: settings_gear.absolute-position.x - root.absolute-position.x + settings_gear.width;
-            anchor_y: settings_gear.absolute-position.y - root.absolute-position.y;
+            anchor_x: root.speed_direct ? root.speed_anchor_x
+                : root.subtitle_tools_origin == 2 ? root.sub_anchor_x
+                : settings_gear.absolute-position.x - root.absolute-position.x + settings_gear.width;
+            anchor_y: root.speed_direct ? root.speed_anchor_y
+                : root.subtitle_tools_origin == 2 ? root.sub_anchor_y
+                : settings_gear.absolute-position.y - root.absolute-position.y;
             safe_top: root.safe-top; safe_left: root.safe-left; safe_right: root.safe-right;
             page <=> root.settings_page;
             back_requested => { root.settings_back(); }
