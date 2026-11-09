@@ -338,23 +338,59 @@ export component AboutPage inherits Rectangle {
                         // distributing it between their text and controls.
                         width: 100%; height: self.preferred-height;
                         alignment: start; spacing: 16px;
-                    SectionHeader { label: @tr("App information"); }
-                    SettingsCard { VerticalLayout { padding: 16px; spacing: 16px;
+                    // Identity card: a mark, the name, a version chip and what the app is.
+                    Rectangle {
+                        width: 100%; height: about_hero.preferred-height;
+                        background: Theme.current.card; border-radius: Theme.card_corner_radius;
+                        border-width: 1px; border-color: Theme.current.border_soft;
+                        about_hero := VerticalLayout {
+                            padding: 28px; padding-left: 20px; padding-right: 20px; spacing: 10px; alignment: center;
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 72px; height: 72px; border-radius: 20px;
+                                    background: Theme.current.accent;
+                                    drop-shadow-offset-y: 6px; drop-shadow-blur: 18px; drop-shadow-color: Theme.current.accent.transparentize(0.65);
+                                    Path {
+                                        x: 20px; y: 20px; width: 32px; height: 32px;
+                                        viewbox-width: 24; viewbox-height: 24; fill: Theme.current.on_accent;
+                                        commands: "M8 5v14l11-7z";
+                                        accessible-role: none;
+                                    }
+                                    accessible-role: none;
+                                }
+                            }
+                            Text {
+                                text: @tr("Nova"); horizontal-alignment: center;
+                                font-size: InterfaceStyle.tv ? 30px : 24px; font-weight: 700; color: Theme.current.text_bright;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    height: 26px; width: app_version_label.preferred-width + 24px;
+                                    border-radius: 13px; background: Theme.current.control_hover;
+                                    app_version_label := Text {
+                                        x: 12px; width: parent.width - 24px; height: 100%;
+                                        text: @tr("Version") + " " + root.app_version;
+                                        accessible-id: "about-version";
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        font-size: InterfaceStyle.tv ? 18px : 13px;
+                                        color: Theme.current.text_secondary;
+                                    }
+                                }
+                            }
                             Text {
                                 width: 100%;
                                 text: @tr("Nova is a media catalog and player application.");
+                                horizontal-alignment: center;
                                 font-size: InterfaceStyle.tv ? 20px : 14px;
                                 color: Theme.current.text_settings;
                                 wrap: word-wrap;
                             }
-
-                            app_version_label := Text {
-                                text: @tr("Version") + " " + root.app_version;
-                                accessible-id: "about-version";
-                                font-size: InterfaceStyle.tv ? 20px : 14px;
-                                color: Theme.current.text_secondary;
-                                wrap: word-wrap;
-                            }
+                        }
+                    }
+                    SectionHeader { label: @tr("Data sources"); }
+                    SettingsCard { VerticalLayout { padding: 16px; spacing: 12px;
                             Image {
                                 source: @image-url("../../assets/tmdb-logo.svg");
                                 width: 112px; height: 16px; image-fit: contain;
@@ -364,6 +400,16 @@ export component AboutPage inherits Rectangle {
                                 text: @tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
                                 color: Theme.current.text_secondary;
                                 font-size: InterfaceStyle.tv ? 18px : 12px;
+                                wrap: word-wrap;
+                            }
+                        } }
+                    SectionHeader { label: @tr("Open source"); }
+                    SettingsCard { VerticalLayout { padding: 16px; spacing: 16px;
+                            Text {
+                                width: 100%;
+                                text: @tr("Built on open-source Rust crates and components. Browse their sources and license texts.");
+                                font-size: InterfaceStyle.tv ? 20px : 14px;
+                                color: Theme.current.text_settings;
                                 wrap: word-wrap;
                             }
                             about_licenses_button := PillButton {
