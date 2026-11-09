@@ -22,6 +22,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_restore_playback_default => invoke_player_bridge_restore_playback_default(arg0),
             on_osd_opacity_changed => invoke_player_bridge_osd_opacity_changed(arg0),
             on_subtitle_clearance_changed => invoke_player_bridge_subtitle_clearance_changed(arg0, arg1),
+            on_offer_clearance_changed => invoke_player_bridge_offer_clearance_changed(arg0),
             on_toggle_pause => invoke_player_bridge_toggle_pause(),
             on_seek_relative => invoke_player_bridge_seek_relative(arg0),
             on_volume_step => invoke_player_bridge_volume_step(arg0),

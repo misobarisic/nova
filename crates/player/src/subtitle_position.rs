@@ -3,12 +3,15 @@ use libmpv2::Mpv;
 
 // Keep the clearance measurement and render/restore paths ready, but leave
 // subtitles at their chosen position while the player controls are visible.
+// The next-episode and skip offers still lift them (see `offer`).
 pub(super) const OSD_LIFT_ENABLED: bool = false;
 
 #[derive(Default)]
 pub(super) struct SubtitlePosition {
     clearance: f64,
     opacity: f64,
+    // The offers' clearance: always applied in full while an offer shows.
+    offer: f64,
     base: Option<f64>,
     applied: Option<f64>,
 }
@@ -76,6 +79,10 @@ impl SubtitlePosition {
         self.applied = Some(base);
     }
 
+    pub(super) fn set_offer_clearance(&mut self, clearance: f32) {
+        self.offer = unit(clearance as f64);
+    }
+
     pub(super) fn set_clearance(&mut self, clearance: f32, opacity: f32) {
         self.clearance = unit(clearance as f64);
         self.opacity = unit(opacity as f64);
@@ -101,7 +108,12 @@ impl SubtitlePosition {
         } else {
             0.0
         };
-        let desired = position(self.base.unwrap_or(current), clearance, self.opacity);
+        let base = self.base.unwrap_or(current);
+        let mut desired = position(base, clearance, self.opacity);
+        if self.offer > 0.0 {
+            // Lower sub-pos values sit higher; keep whichever lift is larger.
+            desired = desired.min(position(base, effective_clearance(mpv, self.offer), 1.0));
+        }
         if (desired - current).abs() > 0.001 {
             mpv.set_property("sub-pos", desired)?;
             // Retain the value accepted by mpv (older builds may round).

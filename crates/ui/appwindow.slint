@@ -344,6 +344,7 @@ export component AppWindow inherits Window {
         root.osd_opacity_changed(v);
     }
     public function player_bridge_subtitle_clearance_changed(fraction: float, opacity: float) { root.subtitle_clearance_changed(fraction, opacity); }
+    public function player_bridge_offer_clearance_changed(fraction: float) { root.offer_clearance_changed(fraction); }
     public function player_bridge_toggle_pause() { root.toggle_pause(); }
     public function player_bridge_seek_relative(v: float) { root.seek_relative(v); }
     public function player_bridge_seek(v: float) { root.seek(v); }
@@ -2127,6 +2128,8 @@ export component AppWindow inherits Window {
     in-out property <bool> player_status_is_error;
 
     callback subtitle_clearance_changed(float, float);
+    // The next-episode / skip offers' share of the window height (0 when none).
+    callback offer_clearance_changed(float);
     callback toggle_pause();
     callback seek_relative(float);
     callback seek(float);

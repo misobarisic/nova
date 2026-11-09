@@ -3764,6 +3764,19 @@ impl Player {
         }
     }
 
+    /// UI thread: keep subtitles above the next-episode and skip offers. This
+    /// applies even while the controls themselves leave subtitles in place.
+    pub fn set_offer_clearance(&self, fraction: f32) {
+        self.state
+            .subtitle_position
+            .lock()
+            .unwrap()
+            .set_offer_clearance(fraction);
+        if let Some(app) = self.state.app.upgrade() {
+            app.window().request_redraw();
+        }
+    }
+
     /// Run the ordinary authorized close callback during a source/episode
     /// handoff without briefly restoring the desktop catalog window. Cleanup
     /// and callback authority stay unchanged; even a panic releases this scope.

@@ -1405,6 +1405,9 @@ export component PlayerOverlay {
     // Live OSD scrim opacity (0 = fully hidden), for display frame-rate matching.
     callback osd_opacity_changed(float);
     callback subtitle_clearance_changed(float, float);
+    // Only the next-episode and skip offers: subtitles move above them even
+    // though the controls themselves leave subtitles where the user put them.
+    callback offer_clearance_changed(float);
     callback header_geometry_changed(length);
     callback tracks_popup_opened(int);
     pure callback format_time(float) -> string;
@@ -2095,6 +2098,11 @@ export component PlayerOverlay {
         root.publish_subtitle_clearance();
     }
     changed subtitle_clearance_opacity => { root.publish_subtitle_clearance(); }
+    private property <float> offer_clearance_fraction: root.playback_started && root.height > 0px
+        && (root.next_episode_shown || root.skip_segment_shown)
+        ? Math.clamp(Math.max(root.next_episode_shown ? root.next_episode_clearance : 0px,
+            root.skip_segment_shown ? root.skip_segment_clearance : 0px) / root.height, 0, 1) : 0;
+    changed offer_clearance_fraction => { root.offer_clearance_changed(root.offer_clearance_fraction); }
     // Watch-party controls retain the safe top lane after captions move down.
     private property <length> header_bottom: root.safe-top + 56px;
     private property <length> content_left: root.safe-left + (root.narrow ? 16px : 24px);

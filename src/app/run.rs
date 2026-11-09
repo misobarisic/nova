@@ -1451,6 +1451,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_subtitle_clearance_changed(move |fraction, opacity| {
         p.set_subtitle_clearance(fraction, opacity)
     });
+    let p = player.clone();
+    app.on_offer_clearance_changed(move |fraction| p.set_offer_clearance(fraction));
 
     bridge.install_casting();
 
