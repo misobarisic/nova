@@ -1681,7 +1681,7 @@ export component PlayerOverlay {
     function tv_control_available(index: int) -> bool {
         if index == 16 { return root.footer_next_enabled; }
         if index == 15 { return CastBridge.available; }
-        if index == 17 { return true; }
+        if index == 17 { return root.footer_picture_visible; }
         if index == 1 { return root.timeline_control_allowed; }
         if index == 3 || index == 4 { return root.tv_can_seek(); }
         if index == 5 || index == 6 { return !root.narrow; }
@@ -1829,22 +1829,29 @@ export component PlayerOverlay {
     // Neighbour control in the strip, skipping buttons absent on this
     // layout: the volume control (2) is gone on Android (volume pinned to
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
+    // Picture (17) sits right of Next episode (16), before the subtitle
+    // button (5) or, on narrow layouts, before speed/screenshot (next lane)
+    // or the gear (plain lane). It hides on the narrowest desktop windows.
+    function kb_before_picture() -> int {
+        if root.next_episode_button_available { return root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
+        return root.narrow ? (root.is_android ? 4 : 2) : 4;
+    }
+    function kb_after_picture() -> int {
+        if root.next_episode_button_available { return !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9; }
+        return !root.narrow ? 5 : 7;
+    }
     function kb_prev() -> int {
         if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, -1); }
-        // Picture (17) sits right of Next episode (16) and left of the
-        // subtitle button (5), or of speed/screenshot on narrow layouts.
-        if root.kb_idx == 17 { return root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
-        if root.kb_idx == 5 { return 17; }
-        if root.narrow && root.kb_idx == 13 { return 17; }
-        if root.narrow && root.kb_idx == 9 && !root.footer_speed_visible { return 17; }
+        if root.kb_idx == 17 { return root.kb_before_picture(); }
         // With the new utility present, follow its actual left-to-right lane.
         if root.next_episode_button_available {
             if root.kb_idx == 16 { return root.is_android ? 4 : 2; }
-            if root.kb_idx == 9 { return root.footer_speed_visible ? 13 : !root.narrow ? 6 : 17; }
+            if root.kb_idx == 9 { return root.footer_speed_visible ? 13 : !root.narrow ? 6 : root.footer_picture_visible ? 17 : root.kb_before_picture(); }
             if root.kb_idx == 7 { return 9; }
             if root.kb_idx == 8 { return 7; }
             if root.kb_idx == 10 { return root.is_android ? 7 : 8; }
-            if root.kb_idx == 13 { return !root.narrow ? 6 : 17; }
+            if root.kb_idx == 13 { return !root.narrow ? 6 : root.footer_picture_visible ? 17 : root.kb_before_picture(); }
+            if root.kb_idx == 5 { return root.footer_picture_visible ? 17 : root.kb_before_picture(); }
             if root.kb_idx == 2 { return root.narrow ? 1 : 4; }
             if root.kb_idx == 3 { return 1; }
         }
@@ -1860,23 +1867,24 @@ export component PlayerOverlay {
             return 1;
         }
         if (root.narrow && (raw == 5 || raw == 6)) {
-            return 17;
+            return root.footer_picture_visible ? 17 : root.is_android ? 4 : 2;
         }
+        if raw == 4 && root.kb_idx == 5 && root.footer_picture_visible { return 17; }
         return raw;
     }
 
     function kb_next() -> int {
         if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, 1); }
-        if root.kb_idx == 17 { return !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9; }
+        if root.kb_idx == 17 { return root.kb_after_picture(); }
         if root.next_episode_button_available {
             if root.kb_idx == 1 { return root.narrow && !root.is_android ? 2 : 3; }
             if root.kb_idx == 2 || (root.kb_idx == 4 && root.is_android) {
-                return root.footer_next_enabled ? 16 : 17;
+                return root.footer_next_enabled ? 16 : root.footer_picture_visible ? 17 : root.kb_after_picture();
             }
             if root.kb_idx == 4 { return 2; }
             if root.kb_idx == 6 { return root.footer_speed_visible ? 13 : 9; }
             if root.kb_idx == 13 { return 9; }
-            if root.kb_idx == 16 { return 17; }
+            if root.kb_idx == 16 { return root.footer_picture_visible ? 17 : root.kb_after_picture(); }
             if root.kb_idx == 9 { return 7; }
             if root.kb_idx == 7 { return root.is_android ? (root.next_episode_shown || root.skip_segment_shown ? 10 : 7) : 8; }
             if root.kb_idx == 8 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 8; }
@@ -1892,10 +1900,10 @@ export component PlayerOverlay {
         if (root.is_android && raw == 2) {
             return 3;
         }
-        // Volume/time lead into Picture on every layout.
-        if raw == 5 || (root.narrow && (raw == 6 || (!root.is_android && raw == 3))) {
-            return 17;
+        if (root.narrow && (raw == 5 || raw == 6 || (!root.is_android && raw == 3))) {
+            return root.footer_picture_visible ? 17 : 7;
         }
+        if raw == 5 && root.footer_picture_visible { return 17; }
         return raw;
     }
 
@@ -2183,6 +2191,7 @@ export component PlayerOverlay {
         }
         if root.kb_idx == 16 && !root.footer_next_enabled { root.kb_idx = 7; }
         if root.kb_idx == 13 && !root.footer_speed_visible { root.kb_idx = 7; }
+        if root.kb_idx == 17 && !root.footer_picture_visible { root.kb_idx = 7; }
         if root.kb_idx > root.kb_control_max() && root.kb_idx != 17 { root.kb_idx = 1; }
         if root.is_android && root.kb_idx == 8 { root.kb_idx = 7; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6
@@ -2199,6 +2208,7 @@ export component PlayerOverlay {
     changed next_episode_shown => { root.kb_clamp_focus(); }
     changed footer_next_enabled => { root.kb_clamp_focus(); }
     changed footer_speed_visible => { root.kb_clamp_focus(); }
+    changed footer_picture_visible => { root.kb_clamp_focus(); if !root.footer_picture_visible && root.picture_direct { root.open_popup = 0; } }
     changed playback_started => {
         if !root.playback_started { root.tv_cancel_seek(); root.pointer_scrubbing = false; root.open_popup = 0; root.kb_idx = 0; root.flash_show = false; }
         else { root.kb_idx = 1; }
@@ -2283,9 +2293,12 @@ export component PlayerOverlay {
     private property <length> rail_height: InterfaceStyle.tv ? 104px : root.mobile_landscape ? 54px : 102px;
     // At the smallest desktop portrait width, speed remains in Playback's
     // menu rather than squeezing seven touch targets past the safe viewport.
-    // The Picture button takes the slot Next episode used to leave free.
     private property <bool> footer_speed_visible: !InterfaceStyle.tv && !(root.narrow && !root.is_android
-        && root.width - root.content_left - root.content_right < (root.next_episode_button_available ? 340px : 292px));
+        && root.next_episode_button_available && root.width - root.content_left - root.content_right < 292px);
+    // Picture needs one more 40px slot (2px narrow spacing): below that width
+    // it stays in the Playback menu, leaving the existing row unchanged.
+    private property <bool> footer_picture_visible: !(root.narrow && !root.is_android
+        && root.width - root.content_left - root.content_right < (root.next_episode_button_available ? 334px : 292px));
     private property <length> utility_width: (root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px)
         + (root.next_episode_button_available ? 48px : 0px) + 48px;
     private property <length> caption_height: show_heading.height + episode_heading.height
@@ -3598,7 +3611,7 @@ export component PlayerOverlay {
                     }
                     // Picture (scaling, aspect, zoom, rotation): a compact popup
                     // that grows from this button; the same page is in Playback.
-                    picture_button := IconBtn {
+                    if root.footer_picture_visible: picture_button := IconBtn {
                         accessible-role: button;
                         accessible-label: @tr("Picture") + ": " + root.picture_scale_text();
                         base: Theme.current.player_control;
