@@ -1043,6 +1043,13 @@ cache_settings_type! {
     pub intro_skip_mode: IntroSkipMode,
     #[serde(default)]
     pub intro_skip_confidence: IntroSkipConfidence,
+    /// Default Picture scaling for the built-in player: 0 fit, 1 fill (crop),
+    /// 2 stretch, 3 original size. A title's Picture choice overrides it.
+    #[serde(default)]
+    pub picture_scale: u8,
+    /// Default aspect-ratio override index (0 = from the video).
+    #[serde(default)]
+    pub picture_aspect: u8,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -1220,6 +1227,8 @@ impl Default for CacheSettings {
             android_auto_rotate: true,
             intro_skip_mode: IntroSkipMode::Prompt,
             intro_skip_confidence: IntroSkipConfidence::default(),
+            picture_scale: 0,
+            picture_aspect: 0,
             prefetch_next_episode_streams: true,
             show_chapters: true,
             keep_controls_visible_while_paused: default_keep_controls_visible_while_paused(),

@@ -18,6 +18,7 @@ SVGs from [lucide-icons/lucide at `c29c276f16590cf017126671535ad8c792be64d8`](ht
 | Saved-scene note save / clear / cancel | `check.svg` / `eraser.svg` / `x.svg` |
 | Subtitle menu appearance shortcut | `sliders-horizontal.svg` |
 | Chapters | `list-video.svg` |
+| Picture (scaling, aspect, zoom, rotation) | `ratio.svg` |
 | Try another stream | `refresh-cw.svg` |
 | Sleep timer | `moon-star.svg` |
 

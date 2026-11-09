@@ -61,6 +61,7 @@ pub use source_subtitles::{SourceSubtitle, SourceSubtitleFile, SourceSubtitleReq
 mod addon_subtitles;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod desktop_decoder;
+mod picture;
 mod subtitle_position;
 mod subtitle_sync;
 pub use addon_subtitles::OnlineSubtitle;
@@ -1224,6 +1225,8 @@ struct State {
     #[cfg(not(target_os = "android"))]
     transition_window_held: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
+    /// Picture-menu geometry, re-applied before every load.
+    picture: Mutex<picture::Picture>,
     native_subtitle_defaults: NativeSubtitleDefaults,
     preferences: Mutex<PreferenceSession>,
     secondary_subtitles: Mutex<TrackChoice>,
@@ -1583,6 +1586,7 @@ impl Player {
             sleep_watchdog: std::sync::OnceLock::new(),
             native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
+            picture: Mutex::new(picture::Picture::default()),
             preference_source: Mutex::new(String::new()),
             preferences: Mutex::new(PreferenceSession {
                 preferences: SessionPreferences::from_settings(
@@ -1901,6 +1905,7 @@ impl Player {
                                         apply_preference_options(mpv, &session.preferences, &notifier_state.native_subtitle_defaults);
                                     }
                                     notifier_state.audio_processing.lock().unwrap().reset();
+                                    notifier_state.picture.lock().unwrap().apply(mpv);
                                     apply_torrent_packet_cache(mpv,
                                         notifier_state.ram_torrent_source.lock().unwrap().as_deref() == Some(url.as_str()),
                                         &mut notifier_state.packet_cache_defaults.lock().unwrap())?;
@@ -3766,6 +3771,22 @@ impl Player {
 
     /// UI thread: keep subtitles above the next-episode and skip offers. This
     /// applies even while the controls themselves leave subtitles in place.
+    /// Apply the Picture menu: scaling (0 fit, 1 fill, 2 stretch, 3 original
+    /// size), aspect override index, zoom factor and quarter turns. Kept for
+    /// later loads, which may run on a new mpv instance.
+    pub fn set_picture(&self, scale: i32, aspect: i32, zoom: f32, rotate: i32) {
+        let picture = picture::Picture::new(scale, aspect, zoom, rotate);
+        *self.state.picture.lock().unwrap() = picture;
+        if let Ok(mpv) = self.state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            picture.apply(mpv);
+        }
+        if let Some(app) = self.state.app.upgrade() {
+            app.window().request_redraw();
+        }
+    }
+
     pub fn set_offer_clearance(&self, fraction: f32) {
         self.state
             .subtitle_position

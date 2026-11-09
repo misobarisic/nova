@@ -151,6 +151,9 @@ export global SettingsBridge {
     callback subtitle_style_changed(int, float);
     in-out property <int> intro_skip_mode_index: 1;
     in-out property <int> intro_skip_confidence_index: 2;
+    // Settings → Player → Picture default (see CacheSettings::picture_*).
+    in-out property <int> picture_scale_index: 0;
+    in-out property <int> picture_aspect_index: 0;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> android_pip_enabled: true;
     in-out property <bool> android_auto_rotate: true;

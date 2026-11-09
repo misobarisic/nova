@@ -443,6 +443,10 @@ impl Bridge {
                 b.capture_settings();
                 let settings = b.shared.lock().unwrap().cache_settings.clone();
                 notify_setting_choice(&field, &settings);
+                if field == "picture_scale" || field == "picture_aspect" {
+                    // A playing title without its own Picture choice follows the new default.
+                    b.refresh_picture(false);
+                }
                 callback_schedule();
             });
         }
@@ -570,6 +574,9 @@ impl Bridge {
                 .set_android_auto_rotate(settings.android_auto_rotate);
             app.set_intro_skip_mode_index(settings.intro_skip_mode.index());
             app.set_intro_skip_confidence_index(settings.intro_skip_confidence.index());
+            let bridge = app.global::<crate::SettingsBridge>();
+            bridge.set_picture_scale_index(i32::from(settings.picture_scale));
+            bridge.set_picture_aspect_index(i32::from(settings.picture_aspect));
             app.set_prefetch_next_episode_streams(settings.prefetch_next_episode_streams);
             app.set_show_chapters(settings.show_chapters);
             app.set_keep_controls_visible_while_paused(settings.keep_controls_visible_while_paused);
@@ -886,6 +893,14 @@ impl Bridge {
                     app.get_intro_skip_confidence_index(),
                 )
                 .unwrap_or_default(),
+                picture_scale: app
+                    .global::<crate::SettingsBridge>()
+                    .get_picture_scale_index()
+                    .clamp(0, 3) as u8,
+                picture_aspect: app
+                    .global::<crate::SettingsBridge>()
+                    .get_picture_aspect_index()
+                    .clamp(0, 6) as u8,
                 prefetch_next_episode_streams: app.get_prefetch_next_episode_streams(),
                 show_chapters: app.get_show_chapters(),
                 keep_controls_visible_while_paused: app.get_keep_controls_visible_while_paused(),

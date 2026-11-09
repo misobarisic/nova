@@ -275,6 +275,64 @@ component TrackMenu inherits Rectangle {
 // track pickers. On narrow layouts the track pickers live here to save
 // control-row space; on wide layouts they duplicate the quick buttons so
 // the panel is available on every platform. Long row lists scroll.
+// Picture menu row with a live value and − / + steps (zoom, rotation).
+// Left/Right on the keyboard step the focused row; the buttons do the same
+// for pointer and touch.
+component PictureStepRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> focused: false;
+    in property <bool> can_down: true;
+    in property <bool> can_up: true;
+    in property <string> down_label;
+    in property <string> up_label;
+    callback stepped(int);
+    callback reveal(length, length);
+    changed focused => { if root.focused { reveal_timer.start(); } }
+    reveal_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); if root.focused { root.reveal(root.absolute-position.y, root.height); } }
+    }
+    height: InterfaceStyle.tv ? 72px : 60px;
+    border-radius: 10px;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 8px; spacing: 8px;
+        VerticalLayout {
+            alignment: center; spacing: 4px; horizontal-stretch: 1;
+            Text { text: root.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : 14px; font-weight: 600; overflow: elide; }
+            Text { text: root.value; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide; }
+        }
+        for step[i] in [-1, 1]: VerticalLayout {
+          alignment: center;
+          Rectangle {
+            property <bool> allowed: step < 0 ? root.can_down : root.can_up;
+            width: InterfaceStyle.tv ? 48px : 36px; height: self.width;
+            border-radius: self.width / 2;
+            background: step_touch.has-hover && self.allowed ? Theme.current.control_hover : Theme.current.control;
+            opacity: self.allowed ? 1 : 0.4;
+            animate background { duration: Anim.control_state; }
+            accessible-role: button;
+            accessible-label: step < 0 ? root.down_label : root.up_label;
+            accessible-enabled: self.allowed;
+            accessible-action-default => { if self.allowed { root.stepped(step); } }
+            Text {
+                text: step < 0 ? "−" : "+";
+                color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 18px; font-weight: 600;
+                horizontal-alignment: center; vertical-alignment: center;
+                width: 100%; height: 100%;
+            }
+            step_touch := TouchArea {
+                enabled: parent.allowed;
+                mouse-cursor: pointer;
+                clicked => { root.stepped(step); }
+            }
+          }
+        }
+    }
+}
+
 component SettingsMenu inherits Rectangle {
     in property <bool> reveal_direct_subtitle_tool: false;
     // Opened from the footer speed button: a compact speed-only popup with
@@ -317,7 +375,8 @@ component SettingsMenu inherits Rectangle {
         ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
     // Current submenu: 0 = root, 1 = hardware decoding (Android/Windows/Linux), 2 =
     // subtitles, 3 = audio, 4 = playback speed, 5 = subtitle appearance,
-    // 6 = intro skipping, 7 = chapters, 8 = second subtitles, 9 = bookmarks.
+    // 6 = intro skipping, 7 = chapters, 8 = second subtitles, 9 = bookmarks,
+    // 10 = sleep timer, 11 = night listening, 12 = picture.
     // Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
@@ -445,6 +504,17 @@ component SettingsMenu inherits Rectangle {
     width: 100%;
     height: 100%;
 
+    function picture_scale_label(i: int) -> string {
+        return i == 1 ? @tr("Fill screen (crop)") : i == 2 ? @tr("Stretch") : i == 3 ? @tr("Original size") : @tr("Fit to screen");
+    }
+    function picture_summary() -> string {
+        let aspect = PlayerOsdBridge.picture_aspect;
+        return root.picture_scale_label(PlayerOsdBridge.picture_scale)
+            + (aspect == 0 ? "" : " · " + root.picture_aspects[aspect])
+            + (PlayerOsdBridge.picture_zoom == 1.0 ? "" : " · " + Math.round(PlayerOsdBridge.picture_zoom * 100) + "%")
+            + (PlayerOsdBridge.picture_rotate == 0 ? "" : " · " + PlayerOsdBridge.picture_rotate * 90 + "°");
+    }
+    property <[string]> picture_aspects: [@tr("From video"), "16:9", "4:3", "21:9", "2.39:1", "1.85:1", "1:1"];
     function page_title() -> string {
         if (root.page == 1) {
             return @tr("Hardware decoding");
@@ -465,6 +535,7 @@ component SettingsMenu inherits Rectangle {
         if root.page == 9 { return @tr("Scene bookmarks"); }
         if root.page == 10 { return @tr("Sleep timer"); }
         if root.page == 11 { return @tr("Night listening and dialogue"); }
+        if root.page == 12 { return @tr("Picture"); }
         return @tr("Playback");
     }
 
@@ -706,10 +777,18 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.page = 11; }
                         }
                         MenuRow {
+                            label: @tr("Picture"); submenu: true;
+                            value: root.picture_summary();
+                            icon: @image-url("../../assets/icons/player/ratio.svg");
+                            focused: root.focused_idx == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
+                            reveal(y,h) => { root.reveal_row(y,h); }
+                            activate => { root.page = 12; }
+                        }
+                        MenuRow {
                             label: @tr("Stats for nerds");
                             value: @tr("This device");
                             icon: @image-url("../../assets/icons/menus/about.svg");
-                            focused: root.focused_idx == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0);
+                            focused: root.focused_idx == (root.decoder_available ? 10 : 9) + (root.player_chapters.length > 0 ? 1 : 0);
                             reveal(y,h) => { root.reveal_row(y,h); }
                             activate => { root.stats_requested(); }
                         }
@@ -748,6 +827,55 @@ component SettingsMenu inherits Rectangle {
                             text: SettingsBridge.audio_processing_status;
                             wrap: word-wrap; color: Theme.current.text_player_secondary;
                             font-size: InterfaceStyle.tv ? 20px : 13px;
+                        }
+                    }
+
+                    if root.page == 12: VerticalLayout {
+                        width: 100%;
+                        spacing: 4px;
+                        MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Use default picture");
+                            value: PlayerOsdBridge.picture_saved ? @tr("Changes are kept for this series or movie")
+                                : @tr("Default from Settings → Player");
+                            enabled: PlayerOsdBridge.picture_saved || !PlayerOsdBridge.picture_default;
+                            focused: root.focused_idx == 0;
+                            activate => { PlayerOsdBridge.picture_set(0, 0); }
+                        }
+                        Text { text: @tr("Scaling"); color: Theme.current.text_player_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; font-weight: 600; }
+                        for mode[i] in 4: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: root.picture_scale_label(mode);
+                            selected: PlayerOsdBridge.picture_scale == mode;
+                            focused: root.focused_idx == 1 + mode;
+                            activate => { PlayerOsdBridge.picture_set(1, mode); }
+                        }
+                        Text { text: @tr("Aspect ratio"); color: Theme.current.text_player_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; font-weight: 600; }
+                        for ratio[i] in root.picture_aspects: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: ratio;
+                            selected: PlayerOsdBridge.picture_aspect == i;
+                            focused: root.focused_idx == 5 + i;
+                            activate => { PlayerOsdBridge.picture_set(2, i); }
+                        }
+                        Text { text: @tr("Zoom and rotation"); color: Theme.current.text_player_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; font-weight: 600; }
+                        PictureStepRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Zoom");
+                            value: Math.round(PlayerOsdBridge.picture_zoom * 100) + "%";
+                            down_label: @tr("Zoom out"); up_label: @tr("Zoom in");
+                            can_down: PlayerOsdBridge.picture_zoom > 0.5;
+                            can_up: PlayerOsdBridge.picture_zoom < 3.0;
+                            focused: root.focused_idx == 12;
+                            stepped(d) => { PlayerOsdBridge.picture_set(3, d); }
+                        }
+                        PictureStepRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
+                            label: @tr("Rotation");
+                            value: PlayerOsdBridge.picture_rotate * 90 + "°";
+                            down_label: @tr("Rotate left"); up_label: @tr("Rotate right");
+                            focused: root.focused_idx == 13;
+                            stepped(d) => { PlayerOsdBridge.picture_set(4, d); }
                         }
                     }
 
@@ -1553,6 +1681,7 @@ export component PlayerOverlay {
     function tv_control_available(index: int) -> bool {
         if index == 16 { return root.footer_next_enabled; }
         if index == 15 { return CastBridge.available; }
+        if index == 17 { return true; }
         if index == 1 { return root.timeline_control_allowed; }
         if index == 3 || index == 4 { return root.tv_can_seek(); }
         if index == 5 || index == 6 { return !root.narrow; }
@@ -1562,11 +1691,12 @@ export component PlayerOverlay {
         return index == 11 && (root.next_episode_shown || root.skip_segment_shown);
     }
     function tv_neighbour(index: int, direction: int) -> int {
+        if index == 17 { return direction > 0 ? 5 : root.next_episode_button_available ? 16 : 4; }
+        if index == 5 && direction < 0 { return 17; }
         if root.next_episode_button_available {
             if index == 4 && direction > 0 { return 16; }
-            if index == 5 && direction < 0 { return 16; }
-            if index == 16 { return direction > 0 ? 5 : 4; }
-        }
+            if index == 16 { return direction > 0 ? 17 : 4; }
+        } else if index == 4 && direction > 0 { return 17; }
         return Math.clamp(index + direction, 1, 15);
     }
     function tv_control_neighbour(index: int, direction: int) -> int {
@@ -1608,7 +1738,7 @@ export component PlayerOverlay {
         if (root.open_popup == 4) {
             if (root.settings_page == 0) {
                 // Subtitles, audio, [decoder on Android/Windows/Linux], playback speed.
-                return (root.decoder_available ? 10 : 9) + (root.player_chapters.length > 0 ? 1 : 0);
+                return (root.decoder_available ? 11 : 10) + (root.player_chapters.length > 0 ? 1 : 0);
             }
             if (root.settings_page == 1) {
                 return 3;
@@ -1626,6 +1756,7 @@ export component PlayerOverlay {
             if root.settings_page == 9 { return root.scene_bookmarks.length * 4 + 2; }
             if root.settings_page == 10 { return 15; }
             if root.settings_page == 11 { return 3; }
+            if root.settings_page == 12 { return 14; }
             if (root.settings_page == 4) {
                 // Reset row + playback-rate slider.
                 return 2;
@@ -1636,7 +1767,7 @@ export component PlayerOverlay {
 
     // Back out of the settings panel: one page at a time, then close.
     function settings_back() {
-        if root.speed_direct { root.open_popup = 0; return; }
+        if root.speed_direct || root.picture_direct { root.open_popup = 0; return; }
         if (root.settings_page == 5 || root.settings_page == 8) && root.subtitle_tools_origin != 0 {
             let origin = root.subtitle_tools_origin;
             let focused = root.settings_page == 5 ? 0 : 1;
@@ -1653,10 +1784,12 @@ export component PlayerOverlay {
         } else if (root.settings_page != 0) {
             let return_to_timer = root.settings_page == 10;
             let return_to_listening = root.settings_page == 11;
+            let return_to_picture = root.settings_page == 12;
             root.subtitle_tools_origin = 0;
             root.settings_page = 0;
             // Return to the invoking row, including its scroll position.
-            root.kb_menu = return_to_listening ? (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0)
+            root.kb_menu = return_to_picture ? (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0)
+                : return_to_listening ? (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0)
                 : return_to_timer ? (root.decoder_available ? 7 : 6) + (root.player_chapters.length > 0 ? 1 : 0) : 0;
         } else {
             root.open_popup = 0;
@@ -1698,15 +1831,20 @@ export component PlayerOverlay {
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
         if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, -1); }
+        // Picture (17) sits right of Next episode (16) and left of the
+        // subtitle button (5), or of speed/screenshot on narrow layouts.
+        if root.kb_idx == 17 { return root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
+        if root.kb_idx == 5 { return 17; }
+        if root.narrow && root.kb_idx == 13 { return 17; }
+        if root.narrow && root.kb_idx == 9 && !root.footer_speed_visible { return 17; }
         // With the new utility present, follow its actual left-to-right lane.
         if root.next_episode_button_available {
             if root.kb_idx == 16 { return root.is_android ? 4 : 2; }
-            if root.kb_idx == 9 { return root.footer_speed_visible ? 13 : !root.narrow ? 6 : root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
+            if root.kb_idx == 9 { return root.footer_speed_visible ? 13 : !root.narrow ? 6 : 17; }
             if root.kb_idx == 7 { return 9; }
             if root.kb_idx == 8 { return 7; }
             if root.kb_idx == 10 { return root.is_android ? 7 : 8; }
-            if root.kb_idx == 13 { return !root.narrow ? 6 : root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
-            if root.kb_idx == 5 { return root.footer_next_enabled ? 16 : root.is_android ? 4 : 2; }
+            if root.kb_idx == 13 { return !root.narrow ? 6 : 17; }
             if root.kb_idx == 2 { return root.narrow ? 1 : 4; }
             if root.kb_idx == 3 { return 1; }
         }
@@ -1722,22 +1860,23 @@ export component PlayerOverlay {
             return 1;
         }
         if (root.narrow && (raw == 5 || raw == 6)) {
-            return root.is_android ? 4 : 2;
+            return 17;
         }
         return raw;
     }
 
     function kb_next() -> int {
         if InterfaceStyle.tv && root.next_episode_button_available { return root.tv_control_neighbour(root.kb_idx, 1); }
+        if root.kb_idx == 17 { return !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9; }
         if root.next_episode_button_available {
             if root.kb_idx == 1 { return root.narrow && !root.is_android ? 2 : 3; }
             if root.kb_idx == 2 || (root.kb_idx == 4 && root.is_android) {
-                return root.footer_next_enabled ? 16 : !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9;
+                return root.footer_next_enabled ? 16 : 17;
             }
             if root.kb_idx == 4 { return 2; }
             if root.kb_idx == 6 { return root.footer_speed_visible ? 13 : 9; }
             if root.kb_idx == 13 { return 9; }
-            if root.kb_idx == 16 { return !root.narrow ? 5 : root.footer_speed_visible ? 13 : 9; }
+            if root.kb_idx == 16 { return 17; }
             if root.kb_idx == 9 { return 7; }
             if root.kb_idx == 7 { return root.is_android ? (root.next_episode_shown || root.skip_segment_shown ? 10 : 7) : 8; }
             if root.kb_idx == 8 { return root.next_episode_shown || root.skip_segment_shown ? 10 : 8; }
@@ -1753,8 +1892,9 @@ export component PlayerOverlay {
         if (root.is_android && raw == 2) {
             return 3;
         }
-        if (root.narrow && (raw == 5 || raw == 6 || (!root.is_android && raw == 3))) {
-            return 7;
+        // Volume/time lead into Picture on every layout.
+        if raw == 5 || (root.narrow && (raw == 6 || (!root.is_android && raw == 3))) {
+            return 17;
         }
         return raw;
     }
@@ -1795,6 +1935,7 @@ export component PlayerOverlay {
 
     function kb_activate() {
         if root.kb_idx == 16 { root.choose_footer_next(); return; }
+        if root.kb_idx == 17 { root.open_picture_popup(); return; }
         if root.kb_idx == 15 { CastBridge.show(); return; }
         if root.kb_idx == 14 { root.open_chapters(); return; }
         if (root.kb_idx == 10 && root.skip_segment_shown) {
@@ -1888,11 +2029,15 @@ export component PlayerOverlay {
                 } else if root.kb_menu == (root.decoder_available ? 8 : 7) + (root.player_chapters.length > 0 ? 1 : 0) {
                     root.settings_page = 11; root.kb_menu = 0;
                 } else if root.kb_menu == (root.decoder_available ? 9 : 8) + (root.player_chapters.length > 0 ? 1 : 0) {
+                    root.settings_page = 12; root.kb_menu = 0;
+                } else if root.kb_menu == (root.decoder_available ? 10 : 9) + (root.player_chapters.length > 0 ? 1 : 0) {
                     root.open_stats();
                 } else if !PartyBridge.busy {
                     root.settings_page = 4;
                     root.kb_menu = 0;
                 }
+            } else if root.settings_page == 12 {
+                root.picture_pick(root.kb_menu, 1);
             } else if root.settings_page == 11 {
                 SettingsBridge.listening_set(root.kb_menu, !SettingsBridge.listening_enabled(root.kb_menu));
             } else if root.settings_page == 10 {
@@ -1975,8 +2120,35 @@ export component PlayerOverlay {
     // its popup (appearance, second subtitles) grow from it, not the gear.
     private property <length> sub_anchor_x: 0px;
     private property <length> sub_anchor_y: 0px;
+    // Picture opened from its footer button: a compact Picture-only popup.
+    private property <bool> picture_direct: false;
+    private property <length> picture_anchor_x: 0px;
+    private property <length> picture_anchor_y: 0px;
+    function open_picture_popup() {
+        if root.open_popup == 4 && root.picture_direct { root.open_popup = 0; return; }
+        root.picture_direct = true;
+        root.speed_direct = false;
+        root.subtitle_tools_origin = 0;
+        root.settings_page = 12;
+        root.kb_menu = 0;
+        root.open_popup = 4;
+        root.osd_mouse_moved();
+    }
+    // Picture page rows: 0 reset, 1-4 scaling, 5-11 aspect, 12 zoom, 13 rotation.
+    function picture_pick(row: int, direction: int) {
+        if row == 0 { PlayerOsdBridge.picture_set(0, 0); }
+        else if row <= 4 { PlayerOsdBridge.picture_set(1, row - 1); }
+        else if row <= 11 { PlayerOsdBridge.picture_set(2, row - 5); }
+        else if row == 12 { PlayerOsdBridge.picture_set(3, direction); }
+        else if row == 13 { PlayerOsdBridge.picture_set(4, direction); }
+    }
+    function picture_scale_text() -> string {
+        let i = PlayerOsdBridge.picture_scale;
+        return i == 1 ? @tr("Fill screen (crop)") : i == 2 ? @tr("Stretch") : i == 3 ? @tr("Original size") : @tr("Fit to screen");
+    }
     function open_speed_popup() {
         if root.open_popup == 4 && root.speed_direct { root.open_popup = 0; return; }
+        root.picture_direct = false;
         root.speed_direct = true;
         root.subtitle_tools_origin = 0;
         root.settings_page = 4;
@@ -2011,7 +2183,7 @@ export component PlayerOverlay {
         }
         if root.kb_idx == 16 && !root.footer_next_enabled { root.kb_idx = 7; }
         if root.kb_idx == 13 && !root.footer_speed_visible { root.kb_idx = 7; }
-        if (root.kb_idx > root.kb_control_max()) { root.kb_idx = 1; }
+        if root.kb_idx > root.kb_control_max() && root.kb_idx != 17 { root.kb_idx = 1; }
         if root.is_android && root.kb_idx == 8 { root.kb_idx = 7; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6
             || (!root.is_android && (root.kb_idx == 3 || root.kb_idx == 4)))) {
@@ -2111,10 +2283,11 @@ export component PlayerOverlay {
     private property <length> rail_height: InterfaceStyle.tv ? 104px : root.mobile_landscape ? 54px : 102px;
     // At the smallest desktop portrait width, speed remains in Playback's
     // menu rather than squeezing seven touch targets past the safe viewport.
+    // The Picture button takes the slot Next episode used to leave free.
     private property <bool> footer_speed_visible: !InterfaceStyle.tv && !(root.narrow && !root.is_android
-        && root.next_episode_button_available && root.width - root.content_left - root.content_right < 292px);
+        && root.width - root.content_left - root.content_right < (root.next_episode_button_available ? 340px : 292px));
     private property <length> utility_width: (root.is_android ? 5 * 40px + 4 * 8px : 6 * 40px + 5 * 8px)
-        + (root.next_episode_button_available ? 48px : 0px);
+        + (root.next_episode_button_available ? 48px : 0px) + 48px;
     private property <length> caption_height: show_heading.height + episode_heading.height
         + badge_lane.height + summary_heading.height + 12px;
     // Shared deterministic geometry keeps offer avoidance aligned with the
@@ -2134,7 +2307,7 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
-        if root.open_popup != 4 { root.speed_direct = false; }
+        if root.open_popup != 4 { root.speed_direct = false; root.picture_direct = false; }
         root.focus_shell();
         // Popup teardown can destroy a pressed/hovered slider without running
         // its release handler. Reopening starts with a fresh scroll gesture.
@@ -2399,6 +2572,8 @@ export component PlayerOverlay {
                                 root.kb_menu = 1;
                             } else if root.settings_page == 9 && root.kb_menu >= 2 {
                                 if Math.mod(root.kb_menu - 2, 4) < 3 { root.kb_menu += 1; }
+                            } else if root.settings_page == 12 && root.kb_menu >= 12 {
+                                root.picture_pick(root.kb_menu, 1);
                             } else if (root.settings_page == 4 && root.kb_menu == 1) {
                                 root.request_speed_step(1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
@@ -2414,6 +2589,8 @@ export component PlayerOverlay {
                                 root.kb_menu = 0;
                             } else if root.settings_page == 9 && root.kb_menu >= 2 && Math.mod(root.kb_menu - 2, 4) > 0 {
                                 root.kb_menu -= 1;
+                            } else if root.settings_page == 12 && root.kb_menu >= 12 {
+                                root.picture_pick(root.kb_menu, -1);
                             } else if (root.settings_page == 4 && root.kb_menu == 1) {
                                 root.request_speed_step(-1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
@@ -3419,6 +3596,33 @@ export component PlayerOverlay {
                             colorize: Theme.current.text_bright;
                         }
                     }
+                    // Picture (scaling, aspect, zoom, rotation): a compact popup
+                    // that grows from this button; the same page is in Playback.
+                    picture_button := IconBtn {
+                        accessible-role: button;
+                        accessible-label: @tr("Picture") + ": " + root.picture_scale_text();
+                        base: Theme.current.player_control;
+                        border-width: self.focused ? 2px : 1px;
+                        border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
+                        active: root.open_popup == 4 && root.picture_direct;
+                        focused: root.kb_active && root.kb_idx == 17 && root.open_popup == 0;
+                        property <length> anchor_cx: self.absolute-position.x - root.absolute-position.x + self.width / 2;
+                        property <length> anchor_top: self.absolute-position.y - root.absolute-position.y;
+                        init => { root.picture_anchor_x = self.anchor_cx; root.picture_anchor_y = self.anchor_top; }
+                        changed anchor_cx => { root.picture_anchor_x = self.anchor_cx; }
+                        changed anchor_top => { root.picture_anchor_y = self.anchor_top; }
+                        clicked => {
+                            if !root.guard_osd_control() { return; }
+                            root.kb_active = false; root.kb_idx = 17;
+                            root.open_picture_popup();
+                        }
+                        Image {
+                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            width: 24px; height: 24px;
+                            source: @image-url("../../assets/icons/player/ratio.svg");
+                            colorize: PlayerOsdBridge.picture_saved || !PlayerOsdBridge.picture_default ? Theme.current.accent_soft : Theme.current.text_bright;
+                        }
+                    }
                     // Subtitle button + popup anchored above it (right edge
                     // flush with the button, 8px gap). Wide only: on narrow
                     // layouts track selection lives in the settings panel.
@@ -3585,16 +3789,17 @@ export component PlayerOverlay {
                         base: Theme.current.player_control;
                         border-width: self.focused ? 2px : 1px;
                         border-color: self.focused ? Theme.current.focus_ring : Theme.current.player_menu_border;
-                        active: root.open_popup == 4 && !root.speed_direct && root.subtitle_tools_origin != 2;
+                        active: root.open_popup == 4 && !root.speed_direct && !root.picture_direct && root.subtitle_tools_origin != 2;
                         focused: root.kb_active && root.kb_idx == 7 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
                             root.kb_active = false;
                             root.kb_idx = 7;
-                            if (root.open_popup == 4 && !root.speed_direct && root.subtitle_tools_origin != 2) {
+                            if (root.open_popup == 4 && !root.speed_direct && !root.picture_direct && root.subtitle_tools_origin != 2) {
                                 root.open_popup = 0;
                             } else {
                                 root.speed_direct = false;
+                                root.picture_direct = false;
                                 root.subtitle_tools_origin = 0;
                                 root.settings_page = 0;
                                 root.open_popup = 4;
@@ -3746,12 +3951,14 @@ export component PlayerOverlay {
         // layouts the track pickers live here instead of the control row.
         if root.playback_started && root.open_popup == 4: SettingsMenu {
             reveal_direct_subtitle_tool: root.subtitle_tools_origin == 2;
-            direct: root.speed_direct;
+            direct: root.speed_direct || root.picture_direct;
             narrow: root.narrow;
-            anchor_x: root.speed_direct ? root.speed_anchor_x
+            anchor_x: root.picture_direct ? root.picture_anchor_x
+                : root.speed_direct ? root.speed_anchor_x
                 : root.subtitle_tools_origin == 2 ? root.sub_anchor_x
                 : settings_gear.absolute-position.x - root.absolute-position.x + settings_gear.width;
-            anchor_y: root.speed_direct ? root.speed_anchor_y
+            anchor_y: root.picture_direct ? root.picture_anchor_y
+                : root.speed_direct ? root.speed_anchor_y
                 : root.subtitle_tools_origin == 2 ? root.sub_anchor_y
                 : settings_gear.absolute-position.y - root.absolute-position.y;
             safe_top: root.safe-top; safe_left: root.safe-left; safe_right: root.safe-right;

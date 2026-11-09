@@ -38,6 +38,36 @@ export global PlayerOsdBridge {
         }
     }
 
+    // Picture: scaling 0 fit, 1 fill (crop), 2 stretch, 3 original size;
+    // aspect override index (0 = from the video); zoom factor; quarter turns.
+    // The app publishes the effective values (this title's choice, else the
+    // Settings → Player default) and keeps applying them to the player.
+    in-out property <int> picture_scale: 0;
+    in-out property <int> picture_aspect: 0;
+    in-out property <float> picture_zoom: 1.0;
+    in-out property <int> picture_rotate: 0;
+    in-out property <int> picture_default_scale: 0;
+    in-out property <int> picture_default_aspect: 0;
+    // This title (or series) has its own Picture choice.
+    in-out property <bool> picture_saved: false;
+    out property <bool> picture_default: self.picture_scale == self.picture_default_scale
+        && self.picture_aspect == self.picture_default_aspect
+        && self.picture_zoom == 1.0 && self.picture_rotate == 0;
+    // An edit saves this title's choice; reset returns to the default.
+    callback picture_changed(int, int, float, int);
+    callback picture_reset();
+    // kind: 0 reset, 1 scaling = value, 2 aspect = value, 3 zoom ± one 10% step,
+    // 4 rotate ± one quarter turn.
+    public function picture_set(kind: int, value: int) {
+        if kind == 0 { self.picture_reset(); return; }
+        if kind == 1 { self.picture_scale = Math.clamp(value, 0, 3); }
+        else if kind == 2 { self.picture_aspect = Math.clamp(value, 0, 6); }
+        else if kind == 3 { self.picture_zoom = Math.clamp(Math.round((self.picture_zoom + value * 0.1) * 10) / 10, 0.5, 3.0); }
+        else if kind == 4 { self.picture_rotate = Math.mod(self.picture_rotate + value + 4, 4); }
+        else { return; }
+        self.picture_changed(self.picture_scale, self.picture_aspect, self.picture_zoom, self.picture_rotate);
+    }
+
     in-out property <[TrackRow]> secondary_sub_tracks;
     in-out property <string> secondary_sub_track_label;
     in-out property <int> secondary_subtitle_position_index;

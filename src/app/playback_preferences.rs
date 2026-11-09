@@ -7,6 +7,33 @@ use nova_config::playback_preferences::{
 
 pub(super) const PREFERENCES_KEY: &str = "playback_preferences:v1";
 type Preferences = HashMap<String, PreferenceValue>;
+/// Per-title Picture choices, keyed `media_type:id`. Kept apart from
+/// `playback_preferences:v1` so builds that predate Picture still decode
+/// their own preferences.
+const PICTURE_PREFERENCES_KEY: &str = "picture_preferences:v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+struct TitlePicture {
+    scale: u8,
+    aspect: u8,
+    zoom: f32,
+    rotate: u8,
+}
+
+impl TitlePicture {
+    fn new(scale: i32, aspect: i32, zoom: f32, rotate: i32) -> Self {
+        Self {
+            scale: scale.clamp(0, 3) as u8,
+            aspect: aspect.clamp(0, 6) as u8,
+            zoom: if zoom.is_finite() { zoom.clamp(0.5, 3.0) } else { 1.0 },
+            rotate: rotate.rem_euclid(4) as u8,
+        }
+    }
+}
+
+fn picture_preferences() -> HashMap<String, TitlePicture> {
+    read_json(PICTURE_PREFERENCES_KEY).unwrap_or_default()
+}
 
 fn title_preferences(values: &Preferences, media_type: &str, id: &str) -> TitlePreferences {
     TitlePreferences {
@@ -49,6 +76,72 @@ impl Bridge {
         values
     }
 
+    fn picture_key(&self, include_pending: bool) -> Option<String> {
+        self.playback_preference_identity(include_pending)
+            .map(|(media_type, id)| format!("{media_type}:{id}"))
+    }
+
+    /// Apply the effective Picture to the player and the OSD: the title's own
+    /// choice, otherwise the Settings → Player default.
+    pub(super) fn refresh_picture(&self, include_pending: bool) {
+        let saved = self
+            .picture_key(include_pending)
+            .and_then(|key| picture_preferences().remove(&key));
+        let picture = saved.unwrap_or_else(|| {
+            let state = self.shared.lock().unwrap();
+            let settings = &state.cache_settings;
+            TitlePicture::new(settings.picture_scale.into(), settings.picture_aspect.into(), 1.0, 0)
+        });
+        self.publish_picture(picture, saved.is_some());
+    }
+
+    fn publish_picture(&self, picture: TitlePicture, saved: bool) {
+        self.player.set_picture(
+            picture.scale.into(),
+            picture.aspect.into(),
+            picture.zoom,
+            picture.rotate.into(),
+        );
+        if let Some(app) = self.app() {
+            let settings = self.shared.lock().unwrap().cache_settings.clone();
+            let osd = app.global::<crate::PlayerOsdBridge>();
+            osd.set_picture_scale(picture.scale.into());
+            osd.set_picture_aspect(picture.aspect.into());
+            osd.set_picture_zoom(picture.zoom);
+            osd.set_picture_rotate(picture.rotate.into());
+            osd.set_picture_default_scale(settings.picture_scale.into());
+            osd.set_picture_default_aspect(settings.picture_aspect.into());
+            osd.set_picture_saved(saved);
+        }
+    }
+
+    /// An OSD Picture edit becomes this title's choice (series share one).
+    pub(super) fn change_picture(&self, scale: i32, aspect: i32, zoom: f32, rotate: i32) {
+        let picture = TitlePicture::new(scale, aspect, zoom, rotate);
+        let key = self.picture_key(false);
+        if let Some(key) = &key
+            && writable_key(PICTURE_PREFERENCES_KEY)
+        {
+            let mut values = picture_preferences();
+            values.insert(key.clone(), picture);
+            write_json(PICTURE_PREFERENCES_KEY, &values);
+        }
+        self.publish_picture(picture, key.is_some());
+    }
+
+    /// Drop this title's Picture choice and return to the Settings default.
+    pub(super) fn reset_picture(&self) {
+        if let Some(key) = self.picture_key(false)
+            && writable_key(PICTURE_PREFERENCES_KEY)
+        {
+            let mut values = picture_preferences();
+            if values.remove(&key).is_some() {
+                write_json(PICTURE_PREFERENCES_KEY, &values);
+            }
+        }
+        self.refresh_picture(false);
+    }
+
     pub(super) fn prepare_playback_preferences(&self) -> SessionPreferences {
         let title = self
             .playback_preference_identity(true)
@@ -57,6 +150,7 @@ impl Bridge {
             })
             .unwrap_or_default();
         self.preference_status_to_ui(&title);
+        self.refresh_picture(true);
         SessionPreferences::from_settings(&self.shared.lock().unwrap().cache_settings, title)
     }
 

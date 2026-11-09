@@ -861,6 +861,58 @@ export component SettingsPlayerModule inherits Window {
                 }
             }
 
+            if SettingsBridge.player_backend_index == 0: SettingsCard {
+                VerticalLayout {
+                    spacing: 0px;
+                    SettingsRow {
+                        setting-key: "picture_scale";
+                        row-title: @tr("Picture");
+                        row-desc: @tr("How video fills the player. Changes made from the player's Picture button are kept for that series or movie.");
+                        Dropdown {
+                            width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                            model: [@tr("Fit to screen"), @tr("Fill screen (crop)"), @tr("Stretch"), @tr("Original size")];
+                            accessible-role: combobox;
+                            accessible-label: @tr("Picture scaling");
+                            accessible-value: self.model[self.current-index];
+                            current-index <=> SettingsBridge.picture_scale_index;
+                            roomy: true;
+                            private property <bool> row-focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_picture_row();
+                            changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                            border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                            selected(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_picture_row();
+                                SettingsContent.schedule_setting("picture_scale");
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        setting-key: "picture_aspect";
+                        row-title: @tr("Aspect ratio");
+                        row-desc: @tr("Override the video's own shape, for files that report it wrongly.");
+                        Dropdown {
+                            width: Math.min(252px, Math.max(1px, SettingsContent.slot_width - 32px));
+                            model: [@tr("From video"), "16:9", "4:3", "21:9", "2.39:1", "1.85:1", "1:1"];
+                            accessible-role: combobox;
+                            accessible-label: @tr("Aspect ratio");
+                            accessible-value: self.model[self.current-index];
+                            current-index <=> SettingsBridge.picture_aspect_index;
+                            roomy: true;
+                            private property <bool> row-focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_picture_row() + 1;
+                            changed row-focused => { if self.row-focused { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                            border-color: self.row-focused ? Theme.current.focus_ring : Theme.current.control_border;
+                            selected(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_picture_row() + 1;
+                                SettingsContent.schedule_setting("picture_aspect");
+                            }
+                        }
+                    }
+                }
+            }
+
             if SettingsContent.advanced_visible: VerticalLayout {
                 vertical-stretch: 0; spacing: 0px;
                 if CastBridge.available: SettingsCard {
