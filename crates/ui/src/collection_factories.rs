@@ -18,6 +18,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_remove_library_item => invoke_library_bridge_remove_library_item(arg0),
             on_library_watch_action => invoke_library_bridge_library_watch_action(arg0, arg1),
             on_library_status_action => invoke_library_bridge_library_status_action(arg0, arg1),
+            on_library_status_code => invoke_library_bridge_library_status_code(arg0),
             on_library_visible_range => invoke_library_bridge_library_visible_range(arg0, arg1),
         );
         let weak = app.as_weak();

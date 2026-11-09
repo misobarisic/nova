@@ -1,0 +1,216 @@
+// The title menu (a hold or right-click on a Library title), copied from
+// Nova Reader's title menu: anchored at the pointer and grown from it, with a
+// main page and a Status sub-page. Switching pages fades the content and
+// eases the panel's height.
+import { Theme, SettingsStyle, Anim, SheetItem } from "@NovaUiShared";
+import { ControlTouchArea } from "@NovaUiBase/control-input.slint";
+import { MenuItem } from "@NovaUiBase/menu-item.slint";
+
+component IconTile inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> live: true;
+    // A toggle that is currently on (Watched) is tinted like a selected row.
+    in property <bool> on: false;
+    callback activated;
+    min-width: 44px; height: 64px; horizontal-stretch: 1;
+    border-radius: 10px;
+    background: (touch.has-hover || key.has-focus) && root.live ? Theme.current.control_hover : root.on ? Theme.current.selection_wash : transparent;
+    border-width: key.has-focus && SettingsStyle.keyboard-mode ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    accessible-role: button; accessible-label: root.label; accessible-enabled: root.live;
+    accessible-action-default => { if root.live { root.activated(); } }
+    Path {
+        x: (parent.width - 22px) / 2; y: 10px; width: 22px; height: 22px;
+        viewbox-width: 24; viewbox-height: 24; fill: transparent; stroke-width: 1.8px;
+        stroke: root.on ? Theme.current.accent_soft : Theme.current.text_bright; commands: root.icon;
+        accessible-role: none;
+    }
+    Text {
+        y: 38px; width: 100%; height: 18px; text: root.label;
+        font-size: 11px; color: root.on ? Theme.current.accent_soft : Theme.current.text_secondary;
+        horizontal-alignment: center; overflow: elide;
+        accessible-role: none;
+    }
+    key := FocusScope {
+        enabled: root.live;
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") && !e.repeat { root.activated(); return accept; }
+            return reject;
+        }
+    }
+    touch := ControlTouchArea {
+        enabled: root.live; mouse-cursor: pointer;
+        clicked => { root.activated(); }
+    }
+}
+
+export component TitleMenu inherits Rectangle {
+    in property <string> title;
+    // "Watching · 3/10", from the page.
+    in property <string> summary;
+    // Movies and fully watched series offer "Mark unwatched".
+    in property <bool> watched;
+    // The library activity action: 0 unavailable, 3 wait for new episodes,
+    // 4 resume watching.
+    in property <int> activity-action;
+    // The watch status action code to show as current (6 watching, 5 plan
+    // to watch, 7 completed, 8 new episodes, 1 on hold, 2 dropped, 0
+    // automatic), or -1 when unknown.
+    in property <int> status: -1;
+    // Coordinates of the panel's top-right corner, local to this overlay.
+    in property <length> anchor-right;
+    in property <length> anchor-bottom;
+    // Local x the panel grows from (the pointer).
+    in property <length> origin-x;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    callback picked(string);
+    callback closed;
+    private property <int> page: 0;
+    private property <bool> shown: false;
+    private property <bool> motion: Anim.enabled && Anim.player;
+    private property <float> scale-progress: 0;
+    private property <float> fade-progress: 0;
+    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_slide : Anim.player_fast) : 0ms; easing: ease-out; }
+    animate fade-progress { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
+    // Page switches: the content fades out, the page changes, it fades in.
+    private property <float> content-fade: 1;
+    animate content-fade { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
+    private property <int> next-page;
+    changed motion => {
+        root.scale-progress = root.shown ? 1 : 0; root.fade-progress = root.shown ? 1 : 0; root.content-fade = 1;
+    }
+    init => { reveal.start(); }
+    reveal := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); root.shown = true; root.scale-progress = 1; root.fade-progress = 1; scope.focus(); }
+    }
+    public function dismiss(action: string) {
+        if !root.shown { return; }
+        root.shown = false;
+        root.scale-progress = 0; root.fade-progress = 0;
+        if action != "" { root.picked(action); }
+        finish.start();
+    }
+    finish := Timer {
+        interval: root.motion ? max(1ms, Anim.player_fast) : 1ms; running: false;
+        triggered => { self.stop(); root.closed(); }
+    }
+    function go(page: int) {
+        root.next-page = page;
+        if root.motion { root.content-fade = 0; swap.start(); } else { root.page = page; scope.focus(); }
+    }
+    swap := Timer {
+        interval: max(1ms, Anim.player_fast); running: false;
+        triggered => { self.stop(); root.page = root.next-page; root.content-fade = 1; scope.focus(); }
+    }
+    scope := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape || e.text == Key.Back) && root.shown {
+                // A sub-page goes back to the main page first.
+                if root.page != 0 { root.go(0); } else { root.dismiss(""); }
+                return accept;
+            }
+            return reject;
+        }
+        TouchArea { enabled: root.shown; clicked => { root.dismiss(""); } }
+        panel := Rectangle {
+            width: min(288px, max(1px, root.width - 16px));
+            // Near the bottom of the window the panel opens above the pointer.
+            private property <length> room-below: root.height - root.anchor-bottom - root.safe-bottom - 12px;
+            private property <length> room-above: root.anchor-bottom - root.safe-top - 12px;
+            private property <bool> upward: content.preferred-height > self.room-below && self.room-above > self.room-below;
+            private property <length> target-height: min(content.preferred-height, max(1px, self.upward ? self.room-above : self.room-below));
+            height: self.target-height;
+            animate height { duration: root.motion ? Anim.player_slide : 0ms; easing: ease-out; }
+            x: Math.clamp(root.anchor-right - self.width, 8px, max(8px, root.width - self.width - 8px));
+            y: self.upward ? root.anchor-bottom - 4px - self.target-height : root.anchor-bottom + 4px;
+            background: Theme.current.popup;
+            border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
+            drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
+            clip: true;
+            opacity: root.fade-progress;
+            transform-scale: 0.86 + 0.14 * root.scale-progress;
+            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: self.upward ? self.target-height : 0px };
+            accessible-role: groupbox; accessible-label: @tr("Library options");
+            TouchArea { enabled: root.shown; }
+            content := VerticalLayout {
+                padding: 6px; spacing: 0px;
+                opacity: root.content-fade;
+                if root.page == 0: VerticalLayout {
+                    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
+                    Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
+                    if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
+                }
+                if root.page == 0: HorizontalLayout {
+                    spacing: 4px; padding-bottom: 4px;
+                    IconTile {
+                        live: root.shown; label: @tr("Open"); icon: "M8 5v14l11-7z";
+                        activated => { root.dismiss("open"); }
+                    }
+                    IconTile {
+                        live: root.shown; label: @tr("Status"); icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6";
+                        activated => { root.go(2); }
+                    }
+                    IconTile {
+                        live: root.shown; label: @tr("Watched"); on: root.watched;
+                        icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z";
+                        activated => { root.dismiss(root.watched ? "unwatched" : "watched"); }
+                    }
+                }
+                if root.page == 0: MenuItem {
+                    live: root.shown; label: @tr("Change status"); trailing: "›";
+                    icon: "M4 6h16M4 12h10M4 18h7";
+                    activated => { root.go(2); }
+                }
+                if root.page == 0 && root.activity-action > 0: MenuItem {
+                    live: root.shown;
+                    label: root.activity-action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes");
+                    icon: root.activity-action == 4 ? "M3 12a9 9 0 1 0 3-6.7M3 4v5h5" : "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 8v4l3 2";
+                    activated => { root.dismiss("activity"); }
+                }
+                if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                if root.page == 0: MenuItem {
+                    live: root.shown; label: @tr("Mark watched");
+                    icon: "M21 12a9 9 0 1 1-3-6.7M7 12l3 3 9-10";
+                    activated => { root.dismiss("watched"); }
+                }
+                if root.page == 0: MenuItem {
+                    live: root.shown; label: @tr("Mark unwatched");
+                    icon: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
+                    activated => { root.dismiss("unwatched"); }
+                }
+                if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                if root.page == 0: MenuItem {
+                    live: root.shown;
+                    label: @tr("Remove from library");
+                    danger: true;
+                    icon: "M5 12h14";
+                    activated => { root.dismiss("remove"); }
+                }
+                // Status: the manual statuses, then back to automatic.
+                if root.page == 2: MenuItem {
+                    live: root.shown; label: @tr("Status"); icon: "M15 18l-6-6 6-6";
+                    activated => { root.go(0); }
+                }
+                for choice in [
+                    { label: @tr("Watching"), code: 6, icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" },
+                    { label: @tr("Plan to Watch"), code: 5, icon: "M6 3h12v18l-6-4-6 4z" },
+                    { label: @tr("Completed"), code: 7, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6" },
+                    { label: @tr("New episodes"), code: 8, icon: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" },
+                    { label: @tr("On hold"), code: 1, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6" },
+                    { label: @tr("Dropped"), code: 2, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6" },
+                    { label: @tr("Automatic"), code: 0, icon: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" },
+                ]: MenuItem {
+                    visible: root.page == 2; height: root.page == 2 ? 44px : 0px;
+                    live: root.shown && root.page == 2; label: choice.label;
+                    selected: root.status == choice.code;
+                    icon: choice.icon;
+                    activated => { root.dismiss("status:" + choice.code); }
+                }
+            }
+        }
+    }
+}
+

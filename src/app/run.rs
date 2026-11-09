@@ -807,6 +807,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_library_status_action(move |i, s| b.library_status_action(i as usize, s));
 
     let b = bridge.clone();
+    app.on_library_status_code(move |i| {
+        usize::try_from(i).map_or(-1, |i| b.library_status_code(i))
+    });
+
+    let b = bridge.clone();
     app.on_calendar_changed(move || b.calendar_reset());
     let b = bridge.clone();
     app.on_calendar_agenda_more(move |d| b.calendar_agenda_more(d));

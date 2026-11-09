@@ -2200,8 +2200,12 @@ export component AppWindow inherits Window {
     callback home_featured_step(int);
     callback library_watch_action(int, int);
     callback library_status_action(int, int);
+    // The card's stored status action code (0 automatic, -1 unknown).
+    callback library_status_code(int) -> int;
     callback add_to_library();
     callback detail_library_action(int);
+    // The open title's stored status action code (0 automatic, -1 none).
+    callback detail_library_status_code() -> int;
     callback remove_library_item(int);
     callback library_item_picked(int);
     // System back on the root screen: background the app (Android only;
@@ -2302,6 +2306,7 @@ export component AppWindow inherits Window {
     public function library_bridge_remove_library_item(i: int) { root.remove_library_item(i); }
     public function library_bridge_library_watch_action(i: int, a: int) { root.library_watch_action(i, a); }
     public function library_bridge_library_status_action(i: int, s: int) { root.library_status_action(i, s); }
+    public function library_bridge_library_status_code(i: int) -> int { return root.library_status_code(i); }
     public function library_bridge_library_visible_range(f: int, l: int) { root.library_visible_range(f, l); }
     public function more_bridge_home_picked() { root.navigate_section(0); }
     public function more_bridge_discover_picked() { root.navigate_section(1); }

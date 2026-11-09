@@ -965,6 +965,19 @@ impl WatchStatus {
             _ => None,
         }
     }
+    /// The status action code this pin is chosen with (0 automatic), the
+    /// inverse of `from_action`.
+    pub(crate) fn action_code(self) -> i32 {
+        match self {
+            Self::Auto => 0,
+            Self::OnHold => 1,
+            Self::Dropped => 2,
+            Self::PlanToWatch => 5,
+            Self::Watching => 6,
+            Self::Completed => 7,
+            Self::NewEpisodes => 8,
+        }
+    }
     fn allows_active_viewing(self) -> bool {
         matches!(self, Self::Auto | Self::Watching | Self::NewEpisodes)
     }

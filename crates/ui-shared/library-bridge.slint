@@ -49,5 +49,6 @@ export global LibraryBridge {
     callback remove_library_item(int);
     callback library_watch_action(int, int);
     callback library_status_action(int, int);
+    callback library_status_code(int) -> int;
     callback library_visible_range(int, int);
 }

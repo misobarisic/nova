@@ -53,6 +53,7 @@ export component LibraryModule inherits Window {
         remove_library_item(arg0) => { if !LibraryBridge.view_loading { LibraryBridge.remove_library_item(arg0); } }
         library_watch_action(arg0, arg1) => { if !LibraryBridge.view_loading { LibraryBridge.library_watch_action(arg0, arg1); } }
         library_status_action(arg0, arg1) => { if !LibraryBridge.view_loading { LibraryBridge.library_status_action(arg0, arg1); } }
+        library_status_code(arg0) => { return LibraryBridge.library_status_code(arg0); }
         library_visible_range(arg0, arg1) => { LibraryBridge.library_visible_range(arg0, arg1); }
     }
 }

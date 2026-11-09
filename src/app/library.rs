@@ -632,6 +632,14 @@ impl Bridge {
     /// to automatic, 1 pin On Hold, 2 pin Dropped, 3 await return,
     /// 4 resume viewing, 5 pin Plan to Watch. Pins override the derived bucket; activity actions
     /// leave watched history unchanged.
+    /// Main thread: the stored status of a library card as its status action
+    /// code (0 automatic, else the manual pin), so the card menu's Status page
+    /// can mark the current choice. -1 when the row no longer matches.
+    pub(super) fn library_status_code(&self, index: usize) -> i32 {
+        self.current_library_entry(index)
+            .map_or(-1, |entry| entry.watch_status.action_code())
+    }
+
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
         if let Some(entry) = self.current_library_entry(index) {
             self.library_entry_status_action(&entry.type_, &entry.id, status);

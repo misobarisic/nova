@@ -9,6 +9,7 @@ import { Spinner } from "std-widgets.slint";
 import { KbMark } from "kbnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { MenuSheet } from "menusheet.slint";
+import { TitleMenu } from "title-menu.slint";
 import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { IcSearch, IcClose } from "icons.slint";
@@ -119,6 +120,9 @@ export component LibraryPage {
     // Library status: 0 automatic, 1 On Hold, 2 Dropped, 3/4 activity,
     // 5 Plan to Watch, 6 Watching, 7 Completed, 8 New episodes.
     callback library_status_action(int, int);
+    // The card's stored status action code (0 automatic, else the manual
+    // pin; -1 unknown), read when its menu opens.
+    callback library_status_code(int) -> int;
     callback remove_library_item(int);
 
     // Card bottom-sheet menu state (single instance).
@@ -136,6 +140,13 @@ export component LibraryPage {
     property <bool> menu_watched: false;
     property <int> menu_activity_action: root.menu_valid ? root.library[root.menu_idx].activity_action : 0;
     property <string> menu_id: "";
+    property <int> menu_status: -1;
+    // "Watching · 3/10" under the menu title.
+    property <string> menu_summary: !root.menu_valid ? ""
+        : root.library[root.menu_idx].episode_count > 0
+            ? (root.library[root.menu_idx].status != "" ? root.library[root.menu_idx].status + " · " : "")
+                + root.library[root.menu_idx].watched_count + "/" + root.library[root.menu_idx].episode_count
+            : root.library[root.menu_idx].status;
     // A sync or watched-state refresh can remove/reorder a filtered row while
     // its sheet is open. Never let its old index act on the replacement show.
     property <bool> menu_valid: root.menu_idx >= 0 && root.menu_idx < root.library.length
@@ -152,7 +163,31 @@ export component LibraryPage {
         root.status_menu_open = false;
         root.menu_anchored = false;
         root.menu_watched = watched;
+        root.menu_status = root.library_status_code(idx);
         root.menu_open = true;
+    }
+
+    // TitleMenu actions (see title-menu.slint).
+    function lib_menu_action(action: string) {
+        if !root.menu_valid { return; }
+        if action == "open" {
+            root.kb_active = false;
+            root.kb_zone = 2;
+            root.kb_idx = root.menu_idx;
+            root.library_item_picked(root.menu_idx);
+        } else if action == "watched" || action == "unwatched" {
+            root.library_watch_action(root.menu_idx, action == "watched" ? 1 : 2);
+        } else if action == "activity" {
+            root.library_status_action(root.menu_idx, root.menu_activity_action);
+        } else if action == "remove" {
+            root.remove_library_item(root.menu_idx);
+        } else if action == "status:6" { root.library_status_action(root.menu_idx, 6); }
+        else if action == "status:5" { root.library_status_action(root.menu_idx, 5); }
+        else if action == "status:7" { root.library_status_action(root.menu_idx, 7); }
+        else if action == "status:8" { root.library_status_action(root.menu_idx, 8); }
+        else if action == "status:1" { root.library_status_action(root.menu_idx, 1); }
+        else if action == "status:2" { root.library_status_action(root.menu_idx, 2); }
+        else if action == "status:0" { root.library_status_action(root.menu_idx, 0); }
     }
 
     function close_menu() {
@@ -1170,8 +1205,26 @@ export component LibraryPage {
 
         // Card bottom sheet (single instance, page-level overlay): the
         // dim backdrop eats outside taps (dismiss only, never forwarded).
+        // Desktop and touch: Reader's title-menu style, grown from the pointer
+        // or the hold point. TV keeps the remote-driven sheet below.
+        if root.menu_open && !InterfaceStyle.tv: TitleMenu {
+            width: 100%; height: 100%;
+            title: root.menu_valid ? root.library[root.menu_idx].title : "";
+            summary: root.menu_summary;
+            watched: root.menu_watched;
+            activity-action: root.menu_activity_action;
+            status: root.menu_status;
+            // The panel's left edge sits at the pointer, as Reader's
+            // right-click does; keyboard opens centre it on the page.
+            anchor-right: root.menu_anchored ? root.menu_anchor_x - self.absolute-position.x + 288px : self.width / 2 + 144px;
+            anchor-bottom: root.menu_anchored ? root.menu_anchor_y - self.absolute-position.y - 4px : self.height / 2 - 160px;
+            origin-x: root.menu_anchored ? root.menu_anchor_x - self.absolute-position.x : self.width / 2;
+            safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+            picked(action) => { root.lib_menu_action(action); }
+            closed => { root.close_menu(); }
+        }
         MenuSheet {
-            open: root.menu_open;
+            open: root.menu_open && InterfaceStyle.tv;
             anchored: root.menu_anchored; anchor_x: root.menu_anchor_x; anchor_y: root.menu_anchor_y;
             width: 100%;
             height: 100%;
@@ -1179,7 +1232,9 @@ export component LibraryPage {
             safe-left: root.safe-left;
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
-            sheet_title: @tr("Library options");
+            // The title and its status head the menu, as in Reader.
+            sheet_title: root.menu_valid ? root.library[root.menu_idx].title : @tr("Library options");
+            sheet_subtitle: root.menu_summary;
             items: [
                 { label: @tr("Open"), enabled: true },
                 { label: root.menu_watched ? @tr("Mark unwatched") : @tr("Mark watched"), enabled: true },
@@ -1223,6 +1278,7 @@ export component LibraryPage {
             anchored: root.menu_anchored; anchor_x: root.menu_anchor_x; anchor_y: root.menu_anchor_y;
             safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
             max_h: root.height * 0.85;
+            current_status: root.menu_summary;
             status-picked(code) => { if root.menu_valid { root.library_status_action(root.menu_idx,code); } root.close_menu(); }
             closed => { root.close_menu(); }
         }
