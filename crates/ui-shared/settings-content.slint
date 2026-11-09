@@ -5,6 +5,9 @@ import { StreamFiltersBridge } from "stream-filters-bridge.slint";
 // Submenu factories and shell-local state share the window globals bundle.
 // Backend values remain in SettingsBridge; this state resets on shell creation.
 export global SettingsContent {
+    // Settings group (0–2) the More index asked the overview to open at;
+    // consumed by the shell when it is built, -1 when none.
+    in-out property <int> landing_group_request: -1;
     in-out property <component-factory> tracking_factory;
     in-out property <component-factory> addons_factory;
     in-out property <component-factory> categories_factory;

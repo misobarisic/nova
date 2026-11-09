@@ -87,7 +87,7 @@ export component AppWindow inherits Window {
 
     in-out property <bool> party_page_open <=> PartyBridge.page_open;
     changed party_page_open => {
-        if root.party_page_open && root.more_open { root.more_choice = 5; root.route_page(9, true); }
+        if root.party_page_open && (root.more_open || (root.more_index_beside && root.more_service_route != 9)) { root.more_choice = 5; root.route_page(9, true); }
         if !root.party_page_open && root.more_service_route == 9 && !root.more_return_pending {
             root.cancel_more_subpage_back(); root.more_service_route = 0; root.more_parent = false; root.more_open = true;
         }
@@ -194,7 +194,7 @@ export component AppWindow inherits Window {
     in-out property <bool> remote_controls_open <=> RemoteBridge.controls_open;
     in-out property <bool> remote_devices_open <=> RemoteBridge.devices_open;
     changed remote_devices_open => {
-        if root.remote_devices_open && root.more_open { root.more_choice = 4; root.route_page(8, true); }
+        if root.remote_devices_open && (root.more_open || (root.more_index_beside && root.more_service_route != 8)) { root.more_choice = 4; root.route_page(8, true); }
         if !root.remote_devices_open && root.more_service_route == 8 && !root.more_return_pending {
             root.cancel_more_subpage_back(); root.more_service_route = 0; root.more_parent = false; root.more_open = true;
         }
@@ -478,6 +478,7 @@ export component AppWindow inherits Window {
         kb_zone <=> root.more_focus_zone;
         kb_nav <=> root.more_nav_index;
         kb_active <=> root.kb_active;
+        selected <=> root.more_selected;
     }
     AboutBindings {
         app_version <=> root.app_version;
@@ -1339,17 +1340,18 @@ export component AppWindow inherits Window {
     in-out property <bool> more_open: false;
     changed more_open => { if !root.more_open { JournalBridge.open = false; QueueBridge.open = false; BookmarksBridge.open = false; } }
     in-out property <bool> bookmarks_open <=> BookmarksBridge.open;
-    changed bookmarks_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } }
+    changed bookmarks_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } else if root.bookmarks_open { root.more_index_return(); } }
     in-out property <bool> journal_open <=> JournalBridge.open;
     in-out property <bool> watch_queue_open <=> QueueBridge.open;
-    changed journal_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } }
-    changed watch_queue_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } }
+    changed journal_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } else if root.journal_open { root.more_index_return(); } }
+    changed watch_queue_open => { if root.more_open { root.preserve_back_focus(); page_release_timer.start(); } else if root.watch_queue_open { root.more_index_return(); } }
     in-out property <bool> profiles_open: false;
     changed profiles_open => {
         // More stays mounted during this local page change. Keep focus on
         // the persistent scope while the outgoing scope is disabled, so the
         // same Android Back release still clears the window's held flag.
         if root.more_open { root.preserve_back_focus(); page_release_timer.start(); }
+        else if root.profiles_open { root.more_index_return(); }
     }
     in-out property <[ProfileRow]> profiles;
     in-out property <bool> profiles_busy: false;
@@ -1434,7 +1436,7 @@ export component AppWindow inherits Window {
         if (!root.more_subpage_motion && root.more_return_pending) { root.finish_more_subpage_back(); }
     }
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
-    public function navigate_section(index: int) { root.route_section(index, false); }
+    public function navigate_section(index: int) { if (index == 6) { root.settings_embedded = false; } root.route_section(index, false); }
     function route_section(index: int, from_more: bool) {
         if root.profiles_require_selection { return; }
         if (index == 3) { root.open_more(); }
@@ -1456,6 +1458,7 @@ export component AppWindow inherits Window {
         root.sync_page = index == 10;
         root.more_open = false;
         root.more_subpage_entered = !from_more;
+        if (!from_more) { root.more_selected = ""; }
         if (from_more) {
             // Establish the entry baseline before the timer enables motion,
             // even when its first painted frame arrives after that timer.
@@ -1510,6 +1513,22 @@ export component AppWindow inherits Window {
         root.show_about = false;
         root.show_home = false;
         root.show_library = false;
+        root.remote_devices_open = false;
+        root.party_page_open = false;
+        root.more_parent = false;
+        root.more_selected = "";
+        root.more_open = true;
+    }
+    // A More-local page (Profiles, Stats, Watch queue, Bookmarks) was picked
+    // from the wide index while a mounted section sat beside it: drop that
+    // section at once and let More show the local page in the same pane.
+    function more_index_return() {
+        if !root.more_index_beside || root.more_open || root.profiles_require_selection { return; }
+        root.cancel_more_subpage_back();
+        root.more_service_route = 0;
+        root.show_settings = false;
+        root.show_about = false;
+        root.sync_page = false;
         root.remote_devices_open = false;
         root.party_page_open = false;
         root.more_parent = false;
@@ -1903,6 +1922,19 @@ export component AppWindow inherits Window {
     in-out property <bool> sync_page: false;
     in-out property <int> settings_selected_id: 13;
     in-out property <bool> settings_detail_open: root.settings_two_pane;
+    // Unified More/Settings index: on wide pointer layouts More is a fixed
+    // column and the picked section (Settings section, About, Sync, Devices,
+    // Watch party) mounts beside it. TV and phones keep the pushed pages.
+    out property <bool> more_two_pane: !InterfaceStyle.tv && !root.is_android && !root.narrow_ui
+        && root.width - NavMetrics.width-for(root.width) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
+    private property <length> more_index_width: 330px;
+    // The index stays beside Calendar/Downloads only on narrow layouts, so
+    // those keep the full-width push.
+    private property <bool> more_index_beside: root.more_two_pane && root.more_parent && !root.show_calendar && !root.show_downloads;
+    // Destination ID highlighted in the index ("" = blank right pane).
+    in-out property <string> more_selected: "";
+    // Settings mounted as one section from the index rather than its overview.
+    in-out property <bool> settings_embedded: false;
     out property <bool> settings_two_pane: !root.sync_page && (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
     changed settings_two_pane => { if (root.settings_two_pane && root.show_settings) { root.settings_detail_open = true; } }
     in-out property <string> settings_search_query: "";
@@ -2321,7 +2353,25 @@ export component AppWindow inherits Window {
     public function more_bridge_calendar_picked() { root.pick_more(0); }
     public function more_bridge_downloads_picked() { root.pick_more(1); }
     public function more_bridge_sync_picked() { root.pick_more(3); }
-    public function more_bridge_settings_picked() { root.pick_more(6); }
+    // Settings overview (narrow/medium group rows); a pending
+    // `SettingsContent.landing_group_request` opens it as that group's page.
+    public function more_bridge_settings_picked() { root.settings_embedded = false; root.settings_detail_open = root.settings_two_pane; root.pick_more(6); }
+    // One Settings section from the index: beside the wide index, or pushed
+    // full-screen on narrow layouts. A mounted embedded Settings swaps its
+    // section in place instead of replaying the entry motion.
+    public function more_bridge_settings_section_picked(id: int) {
+        root.more_choice = 100 + id; root.more_focus_zone = 1;
+        root.settings_embedded = true;
+        root.settings_focused_id = id;
+        root.settings_detail_open = true;
+        if (root.settings_page_mounted && !root.sync_page && root.more_parent && !root.more_return_pending) {
+            SettingsBridge.section_request = id;
+            SettingsBridge.section_request_serial += 1;
+            return;
+        }
+        root.settings_selected_id = id;
+        root.route_section(6, true);
+    }
     public function more_bridge_about_picked() { root.pick_more(7); }
     public function about_bridge_update_check_requested() { root.update_check_requested(); }
     public function about_bridge_update_automatic_changed(v: bool) { root.update_automatic_changed(v); }
@@ -2883,10 +2933,14 @@ export component AppWindow inherits Window {
         // Keep this layer behind every subpage, including Settings/About.
         // Reader's page motion: the parent eases 24px left and fades while the
         // child slides in 48px and fades in, like a Browse catalogue opening.
-        x: root.more_open ? 0px : -24px * (1.0 - root.more_subpage_offset);
-        opacity: root.more_open ? 1.0 : 1.0 - root.more_subpage_alpha;
+        // On the wide unified layout the index column stays put while the
+        // picked section slides in beside it.
+        x: root.more_open || root.more_index_beside ? 0px : -24px * (1.0 - root.more_subpage_offset);
+        opacity: root.more_open || root.more_index_beside ? 1.0 : 1.0 - root.more_subpage_alpha;
         external_navigation: true;
         active: root.more_open;
+        two_pane: root.more_two_pane;
+        peer_open: root.more_index_beside && !root.more_return_pending;
         narrow: root.narrow_ui;
         nav-viewport-width: root.width;
         safe-top: root.safe-area-insets.top;
@@ -2899,14 +2953,15 @@ export component AppWindow inherits Window {
     // ---- Settings page --------------------------------------------------
     if root.settings_page_mounted: SettingsHost {
         viewport_width: self.width; viewport_height: self.height;
-        width: more_content_host.width; height: more_content_host.height;
-        x: 48px * root.more_subpage_offset
+        width: more_content_host.width - (root.more_index_beside ? root.more_index_width : 0px); height: more_content_host.height;
+        x: (root.more_index_beside ? root.more_index_width : 0px) + 48px * root.more_subpage_offset
             - (root.backup_motion && root.backup_visual_retained ? 24px * root.backup_slide : 0px);
         opacity: root.more_subpage_alpha * (root.backup_motion && root.backup_visual_retained ? 1.0 - root.backup_alpha : 1.0);
         external_navigation: true;
         active: !root.more_return_pending && !root.backup_visual_retained;
         standalone_sync: root.sync_page;
-        two_pane: root.settings_two_pane;
+        embedded: root.settings_embedded && !root.sync_page;
+        two_pane: root.settings_two_pane && !root.settings_embedded;
         cache_busy: root.cache_busy;
         cache_rewriting: root.cache_rewriting;
         cache_processed: root.cache_processed;
@@ -2942,8 +2997,8 @@ export component AppWindow inherits Window {
     // ---- About (with nested Licenses) -----------------------------------
     if root.about_page_mounted: AboutHost {
         viewport_width: self.width; viewport_height: self.height;
-        width: more_content_host.width; height: more_content_host.height;
-        x: 48px * root.more_subpage_offset;
+        width: more_content_host.width - (root.more_index_beside ? root.more_index_width : 0px); height: more_content_host.height;
+        x: (root.more_index_beside ? root.more_index_width : 0px) + 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         external_navigation: true;
         active: !root.more_return_pending;
@@ -2990,8 +3045,8 @@ export component AppWindow inherits Window {
     }
 
     if root.more_service_route == 9 && root.party_page_open: PartyPage {
-        width: more_content_host.width; height: more_content_host.height;
-        x: 48px * root.more_subpage_offset;
+        width: more_content_host.width - (root.more_index_beside ? root.more_index_width : 0px); height: more_content_host.height;
+        x: (root.more_index_beside ? root.more_index_width : 0px) + 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         active: !root.more_return_pending;
         safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
@@ -2999,8 +3054,8 @@ export component AppWindow inherits Window {
         back => { root.more_subpage_back(); }
     }
     if root.more_service_route == 8 && root.remote_devices_open: RemoteDevicesPage {
-        width: more_content_host.width; height: more_content_host.height;
-        x: 48px * root.more_subpage_offset;
+        width: more_content_host.width - (root.more_index_beside ? root.more_index_width : 0px); height: more_content_host.height;
+        x: (root.more_index_beside ? root.more_index_width : 0px) + 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         active: !root.more_return_pending;
         safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;

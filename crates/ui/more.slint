@@ -1,4 +1,5 @@
-import { BookmarksBridge, JournalBridge, QueueBridge, PartyBridge, RemoteBridge, InterfaceStyle, Theme, Anim, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { MoreBridge, BookmarksBridge, JournalBridge, QueueBridge, PartyBridge, RemoteBridge, BackupBridge, SettingsBridge, SettingsContent, SettingsDestinations, InterfaceStyle, Theme, Anim, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { SettingsSearch } from "settings-search.slint";
 
 import { ProfilesPage } from "profiles.slint";
 import { ViewingJournalPage } from "viewing-journal.slint";
@@ -9,9 +10,17 @@ import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
 import { SideNav } from "sidenav.slint";
 import { PageHeader } from "page-header.slint";
-import { SettingsLink, SettingsCard } from "settings-controls.slint";
+import { SearchField } from "searchfield.slint";
+import { PillButton, Segmented } from "settings-controls.slint";
+import { IndexRow, IndexGroupLabel, IndexGroup } from "more-index.slint";
 
-// A root page, like Settings landing, rather than a sheet over another page.
+// More is the unified index for the app's tools and Settings. On wide pointer
+// layouts (`two_pane`) it is a fixed-width column beside the section AppWindow
+// mounts to its right; the right side stays blank until something is picked.
+// On narrow layouts the index is the whole page and a picked entry slides in
+// over it. Local destinations (Profiles, Stats, Watch queue, Bookmarks) are
+// hosted here; Settings sections, About, Sync, Devices and Watch party are
+// routed through AppWindow.
 export component MorePage inherits Rectangle {
     // Called after publication only while AppWindow retains baseline focus.
     public function focus_shell() { if root.active { if BookmarksBridge.open { bookmarks_page.focus_shell(); } else if JournalBridge.open { journal_page.focus_shell(); } else if QueueBridge.open { queue_page.focus_shell(); } else if root.profiles_open { profiles_page.focus_shell(); } else if root.landing-active { nav_scope.focus(); } } }
@@ -72,8 +81,10 @@ export component MorePage inherits Rectangle {
     private property <bool> local-open: root.profiles_open || root.journal_open || root.queue_open || root.bookmarks_open;
     private property <float> local-slide: Math.max(root.profile-slide, root.journal-slide, root.queue-slide, root.bookmarks-slide);
     private property <float> local-alpha: Math.max(root.profile-alpha, root.journal-alpha, root.queue-alpha, root.bookmarks-alpha);
+    // The index column never leaves on wide layouts, so it is only gated by
+    // local input ownership there; narrow layouts also wait for the push.
     private property <bool> landing-active: root.active && !root.profiles_require_selection && !root.local-open
-        && (!root.profile-motion || (root.local-slide <= 0.0 && root.local-alpha <= 0.0));
+        && (root.split || !root.profile-motion || (root.local-slide <= 0.0 && root.local-alpha <= 0.0));
     changed landing-active => { if root.landing-active { entry_focus.start(); } }
     // Write endpoints while their current duration is in force. A hidden,
     // unevaluated binding must not replay old motion when animations turn on.
@@ -99,6 +110,21 @@ export component MorePage inherits Rectangle {
     in property <length> nav-viewport-width;
     in property <bool> narrow: true;
     in property <bool> external_navigation: false;
+    // Wide pointer layout: the index is a fixed column and the picked section
+    // appears beside it (locally here, or mounted by AppWindow).
+    in property <bool> two_pane: false;
+    // A section AppWindow mounted beside the index owns input and Back while
+    // the index rows stay clickable.
+    in property <bool> peer_open: false;
+    // Destination ID of the section shown beside the index ("" = blank).
+    in-out property <string> selected: "";
+    // Column width including the page gutter and the divider gap.
+    in property <length> index_width: 330px;
+    private property <bool> split: root.two_pane && !root.narrow && !root.profiles_require_selection;
+    private property <length> rail_inset: root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width);
+    // Rows accept pointer input while the landing owns input, while a local
+    // page sits beside the wide index, or while an AppWindow section does.
+    private property <bool> index_live: root.landing-active || (root.split && (root.active || root.peer_open));
     in-out property <length> scroll_y: 0px;
     private property <bool> restore_pending: true;
     // The destination can paint during return without taking input or focus.
@@ -111,50 +137,267 @@ export component MorePage inherits Rectangle {
     private property <int> last_back: 0;
     in-out property <int> kb_zone: 1;
     in-out property <int> kb_nav: 3;
+    // Keyboard selection. Tool IDs are stable: 0 Calendar, 1 Downloads,
+    // 2 Profiles, 3 Sync, 4 Devices, 5 Watch party, 7 About, 8 Stats, 9 Watch
+    // queue, 10 Bookmarks; 20–22 are the Settings group rows and 100 + id a
+    // Settings section. 6 (the former Settings link) maps onto the first
+    // Settings row.
     in-out property <int> choice: 0;
-    // Choice IDs stay stable when desktop shortcuts move into the rail.
-    private property <int> first_choice: root.narrow ? 0 : 2;
+    private property <int> reveal_request: 0;
     callback home_picked();
     callback discover_picked();
     callback library_picked();
     callback sync_picked();
+    // Opens the Settings overview (group rows); a pending group request in
+    // `SettingsContent.landing_group_request` scrolls it to that group.
     callback settings_picked();
+    // Opens one Settings section beside or over the index.
+    callback settings_section_picked(int);
     callback about_picked();
     callback calendar_picked();
     callback downloads_picked();
+
+    // ---- Search over tools and Settings destinations --------------------
+    // The query is shared with the Settings overview so a phone search that
+    // lands on a section keeps its reveal target.
+    private property <string> query: SettingsBridge.search_query;
+    private property <bool> search_active: root.query != "" && !SettingsBridge.search_matches(root.query, "");
+    // Settings destinations are listed directly beside the index and while
+    // searching; otherwise the three group rows lead to the Settings overview.
+    private property <bool> dests_mode: root.split || root.search_active;
+    pure function matches(terms: string) -> bool { return !root.search_active || SettingsBridge.search_matches(root.query, terms); }
+    private property <string> t_calendar: @tr("Calendar");
+    private property <string> t_downloads: @tr("Downloads");
+    private property <string> t_queue: @tr("Watch queue");
+    private property <string> t_bookmarks: @tr("Bookmarks");
+    private property <string> t_journal: @tr("Stats");
+    private property <string> t_party: @tr("Watch party");
+    private property <string> t_devices: @tr("Devices");
+    private property <string> t_sync: @tr("Sync");
+    private property <string> t_profiles: @tr("Profiles");
+    private property <string> t_about: @tr("About");
+    pure function tool_avail(c: int) -> bool {
+        if c == 0 { return root.narrow && root.matches(root.t_calendar + " " + @tr("Upcoming episodes from your library")); }
+        if c == 1 { return root.narrow && root.matches(root.t_downloads + " " + @tr("Watch your saved episodes")); }
+        if c == 9 { return root.matches(root.t_queue + " " + @tr("Line up tonight's movies and episodes")); }
+        if c == 10 { return root.matches(root.t_bookmarks + " " + @tr("Return to saved scenes and notes")); }
+        if c == 8 { return root.matches(root.t_journal + " " + @tr("Dated sessions, rewatches and your year in stories")); }
+        if c == 5 { return root.matches(root.t_party + " " + @tr("Watch together on your own devices")); }
+        if c == 4 { return root.matches(root.t_devices + " " + @tr("Control playback on your paired devices")); }
+        if c == 3 { return root.matches(root.t_sync + " " + @tr("Pair devices and sync all profiles")); }
+        if c == 2 { return root.matches(root.t_profiles + " " + @tr("Separate libraries, history and preferences")); }
+        if c == 7 { return root.matches(root.t_about + " " + @tr("Information about Nova")); }
+        return false;
+    }
+    private property <bool> watching_avail: root.tool_avail(0) || root.tool_avail(1) || root.tool_avail(9) || root.tool_avail(10) || root.tool_avail(8);
+    private property <bool> together_avail: root.tool_avail(5) || root.tool_avail(4) || root.tool_avail(3) || root.tool_avail(2);
+    // Settings destinations mirror the Settings overview (`settings.slint`):
+    // the same order, platform gates and search rules. Sync is listed with
+    // the tools instead of with Settings.
+    pure function dest_index(id: int) -> int {
+        if (id == 13) { return 0; }
+        if (id == 3) { return 1; }
+        if (id == 14) { return 2; }
+        if (id == 6) { return 3; }
+        if (id == 5) { return 4; }
+        if (id == 0) { return 5; }
+        if (id == 1) { return 6; }
+        if (id == 7) { return 7; }
+        if (id == 12) { return 8; }
+        if (id == 2) { return 9; }
+        if (id == 8) { return 10; }
+        if (id == 9) { return 11; }
+        if (id == 4) { return 12; }
+        if (id == 15) { return 13; }
+        return 0;
+    }
+    pure function dest_at(i: int) -> int {
+        if (i == 0) { return 13; }
+        if (i == 1) { return 3; }
+        if (i == 2) { return 14; }
+        if (i == 3) { return 6; }
+        if (i == 4) { return 5; }
+        if (i == 5) { return 0; }
+        if (i == 6) { return 1; }
+        if (i == 7) { return 7; }
+        if (i == 8) { return 12; }
+        if (i == 9) { return 2; }
+        if (i == 10) { return 8; }
+        if (i == 11) { return 9; }
+        if (i == 12) { return 4; }
+        return 15;
+    }
+    pure function dest_platform(id: int) -> bool {
+        if (id == 2) { return SettingsBridge.show_image_cache; }
+        if (id == 4) { return SettingsBridge.show_torrents; }
+        return true;
+    }
+    pure function dest_title(id: int) -> string { return SettingsDestinations.entries[root.dest_index(id)].title; }
+    pure function dest_avail(id: int) -> bool {
+        if id == 7 || !root.dests_mode || !root.dest_platform(id) { return false; }
+        let entry = SettingsDestinations.entries[root.dest_index(id)];
+        if !root.search_active { return entry.parent < 0; }
+        return SettingsSearch.target(id).key != "" || SettingsBridge.search_matches(root.query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases);
+    }
+    pure function dest_group_avail(g: int) -> bool {
+        if (g == 0) { return root.dest_avail(13) || root.dest_avail(3) || root.dest_avail(14) || root.dest_avail(6) || root.dest_avail(5); }
+        if (g == 1) { return root.dest_avail(0) || root.dest_avail(1) || root.dest_avail(12); }
+        if (g == 2) { return root.dest_avail(2) || root.dest_avail(8) || root.dest_avail(9) || root.dest_avail(4) || root.dest_avail(15); }
+        return false;
+    }
+    pure function dest_hint(id: int) -> string {
+        let target = SettingsSearch.target(id);
+        return root.search_active && target.key != "" ? target.title : "";
+    }
+    private property <bool> any_avail: root.watching_avail || root.together_avail || !root.dests_mode
+        || root.dest_group_avail(0) || root.dest_group_avail(1) || root.dest_group_avail(2) || root.tool_avail(7);
+
+    // ---- Keyboard traversal over the visual order -----------------------
+    // Slots: 0 Calendar, 1 Downloads, 2 Watch queue, 3 Bookmarks, 4 Stats,
+    // 5 Watch party, 6 Devices, 7 Sync, 8 Profiles, 9–22 Settings sections,
+    // 23–25 Settings group rows, 26 About.
+    pure function slot_choice(s: int) -> int {
+        if (s == 0) { return 0; }
+        if (s == 1) { return 1; }
+        if (s == 2) { return 9; }
+        if (s == 3) { return 10; }
+        if (s == 4) { return 8; }
+        if (s == 5) { return 5; }
+        if (s == 6) { return 4; }
+        if (s == 7) { return 3; }
+        if (s == 8) { return 2; }
+        if (s >= 9 && s <= 22) { return 100 + root.dest_at(s - 9); }
+        if (s >= 23 && s <= 25) { return 20 + s - 23; }
+        return 7;
+    }
+    pure function choice_slot(c: int) -> int {
+        if (c == 0) { return 0; }
+        if (c == 1) { return 1; }
+        if (c == 9) { return 2; }
+        if (c == 10) { return 3; }
+        if (c == 8) { return 4; }
+        if (c == 5) { return 5; }
+        if (c == 4) { return 6; }
+        if (c == 3) { return 7; }
+        if (c == 2) { return 8; }
+        if (c >= 100) { return 9 + root.dest_index(c - 100); }
+        if (c >= 20 && c <= 22) { return 23 + c - 20; }
+        if (c == 6) { return root.dests_mode ? 9 : 23; }
+        if (c == 7) { return 26; }
+        return 2;
+    }
+    pure function slot_avail(s: int) -> bool {
+        let c = root.slot_choice(s);
+        if (c >= 100) { return root.dest_avail(c - 100); }
+        if (c >= 20) { return !root.dests_mode; }
+        return root.tool_avail(c);
+    }
+    // Next available slot in `dir`, or `s` itself when none remains.
+    pure function step_slot(s: int, dir: int) -> int {
+        let s1 = s + dir; if (s1 < 0 || s1 > 26) { return s; } if (root.slot_avail(s1)) { return s1; }
+        let s2 = s1 + dir; if (s2 < 0 || s2 > 26) { return s; } if (root.slot_avail(s2)) { return s2; }
+        let s3 = s2 + dir; if (s3 < 0 || s3 > 26) { return s; } if (root.slot_avail(s3)) { return s3; }
+        let s4 = s3 + dir; if (s4 < 0 || s4 > 26) { return s; } if (root.slot_avail(s4)) { return s4; }
+        let s5 = s4 + dir; if (s5 < 0 || s5 > 26) { return s; } if (root.slot_avail(s5)) { return s5; }
+        let s6 = s5 + dir; if (s6 < 0 || s6 > 26) { return s; } if (root.slot_avail(s6)) { return s6; }
+        let s7 = s6 + dir; if (s7 < 0 || s7 > 26) { return s; } if (root.slot_avail(s7)) { return s7; }
+        let s8 = s7 + dir; if (s8 < 0 || s8 > 26) { return s; } if (root.slot_avail(s8)) { return s8; }
+        let s9 = s8 + dir; if (s9 < 0 || s9 > 26) { return s; } if (root.slot_avail(s9)) { return s9; }
+        let s10 = s9 + dir; if (s10 < 0 || s10 > 26) { return s; } if (root.slot_avail(s10)) { return s10; }
+        let s11 = s10 + dir; if (s11 < 0 || s11 > 26) { return s; } if (root.slot_avail(s11)) { return s11; }
+        let s12 = s11 + dir; if (s12 < 0 || s12 > 26) { return s; } if (root.slot_avail(s12)) { return s12; }
+        let s13 = s12 + dir; if (s13 < 0 || s13 > 26) { return s; } if (root.slot_avail(s13)) { return s13; }
+        let s14 = s13 + dir; if (s14 < 0 || s14 > 26) { return s; } if (root.slot_avail(s14)) { return s14; }
+        let s15 = s14 + dir; if (s15 < 0 || s15 > 26) { return s; } if (root.slot_avail(s15)) { return s15; }
+        let s16 = s15 + dir; if (s16 < 0 || s16 > 26) { return s; } if (root.slot_avail(s16)) { return s16; }
+        let s17 = s16 + dir; if (s17 < 0 || s17 > 26) { return s; } if (root.slot_avail(s17)) { return s17; }
+        let s18 = s17 + dir; if (s18 < 0 || s18 > 26) { return s; } if (root.slot_avail(s18)) { return s18; }
+        let s19 = s18 + dir; if (s19 < 0 || s19 > 26) { return s; } if (root.slot_avail(s19)) { return s19; }
+        let s20 = s19 + dir; if (s20 < 0 || s20 > 26) { return s; } if (root.slot_avail(s20)) { return s20; }
+        let s21 = s20 + dir; if (s21 < 0 || s21 > 26) { return s; } if (root.slot_avail(s21)) { return s21; }
+        let s22 = s21 + dir; if (s22 < 0 || s22 > 26) { return s; } if (root.slot_avail(s22)) { return s22; }
+        let s23 = s22 + dir; if (s23 < 0 || s23 > 26) { return s; } if (root.slot_avail(s23)) { return s23; }
+        let s24 = s23 + dir; if (s24 < 0 || s24 > 26) { return s; } if (root.slot_avail(s24)) { return s24; }
+        let s25 = s24 + dir; if (s25 < 0 || s25 > 26) { return s; } if (root.slot_avail(s25)) { return s25; }
+        let s26 = s25 + dir; if (s26 < 0 || s26 > 26) { return s; } if (root.slot_avail(s26)) { return s26; }
+        let s27 = s26 + dir; if (s27 < 0 || s27 > 26) { return s; } if (root.slot_avail(s27)) { return s27; }
+        return s;
+    }
+    pure function first_slot() -> int { let f = root.step_slot(-1, 1); return f < 0 ? 2 : f; }
+    pure function last_slot() -> int { let l = root.step_slot(27, -1); return l > 26 ? 26 : l; }
+    function move_choice(delta: int) {
+        let current = root.choice_slot(root.choice);
+        let next = root.slot_avail(current) ? root.step_slot(current, delta) : (delta > 0 ? root.first_slot() : root.last_slot());
+        root.choice = root.slot_choice(next);
+    }
+    function settle_choice() {
+        if !root.slot_avail(root.choice_slot(root.choice)) { root.choice = root.slot_choice(root.first_slot()); }
+    }
+    changed choice => { root.reveal_request += 1; }
+    changed dests_mode => { root.settle_choice(); }
+    // Keep the keyboard row visible inside the index scroller.
+    function reveal_abs(y: length, h: length) {
+        if !root.kb_active || root.kb_zone != 1 || !root.landing-active { return; }
+        let top = y - more_scroll.absolute-position.y;
+        let vh = more_scroll.visible-height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
+        if top < 0px { more_scroll.content-y -= top; }
+        else if top + h > vh { more_scroll.content-y = Math.max(Math.min(0px, more_scroll.visible-height - more_scroll.content-height), more_scroll.content-y - (top + h - vh)); }
+    }
+
+    // ---- Destination activation ----------------------------------------
+    function open_profiles() { root.choice = 2; root.kb_zone = 1; root.selected = "more:profiles"; root.profiles_open = true; }
+    function open_sync() { root.choice = 3; root.kb_zone = 1; root.selected = "more:sync"; root.sync_picked(); }
+    function open_devices() { root.choice = 4; root.kb_zone = 1; root.selected = "more:devices"; RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
+    function open_party() { root.choice = 5; root.kb_zone = 1; root.selected = "more:party"; PartyBridge.page_open = true; }
+    function open_about() { root.choice = 7; root.kb_zone = 1; root.selected = "more:about"; root.about_picked(); }
+    function open_journal() { root.choice = 8; root.kb_zone = 1; root.selected = "more:journal"; JournalBridge.open = true; }
+    function open_queue() { root.choice = 9; root.kb_zone = 1; root.selected = "more:queue"; QueueBridge.open = true; }
+    function open_bookmarks() { root.choice = 10; root.kb_zone = 1; root.selected = "more:bookmarks"; BookmarksBridge.open = true; }
+    function open_destination(id: int) {
+        root.choice = 100 + id; root.kb_zone = 1;
+        // Data opens the backup sheet rather than a page, as in Settings.
+        if id == 15 { BackupBridge.opened(); return; }
+        root.selected = SettingsDestinations.entries[root.dest_index(id)].stable-id;
+        root.settings_section_picked(id);
+    }
+    function open_group(g: int) {
+        root.choice = 20 + g; root.kb_zone = 1;
+        SettingsContent.landing_group_request = g;
+        root.settings_picked();
+    }
+    function activate_choice() {
+        let c = root.choice;
+        if c == 0 { root.calendar_picked(); }
+        else if c == 1 { root.downloads_picked(); }
+        else if c == 2 { root.open_profiles(); }
+        else if c == 3 { root.open_sync(); }
+        else if c == 4 { root.open_devices(); }
+        else if c == 5 { root.open_party(); }
+        else if c == 7 { root.open_about(); }
+        else if c == 8 { root.open_journal(); }
+        else if c == 9 { root.open_queue(); }
+        else if c == 10 { root.open_bookmarks(); }
+        else if c >= 100 { root.open_destination(c - 100); }
+        else if c >= 20 && c <= 22 { root.open_group(c - 20); }
+        else if c == 6 { if root.dests_mode { root.open_destination(13); } else { root.open_group(0); } }
+    }
+
     changed system_back_request => {
         if (root.active && root.last_back != root.system_back_request) {
             root.last_back = root.system_back_request;
-            if BookmarksBridge.open { bookmarks_page.go_back(); } else if JournalBridge.open { JournalBridge.open = false; } else if QueueBridge.open { QueueBridge.open = false; } else if root.profiles_open { profiles_page.go_back(); } else if root.landing-active { root.home_picked(); }
+            if BookmarksBridge.open { bookmarks_page.go_back(); }
+            else if JournalBridge.open { JournalBridge.open = false; root.selected = ""; }
+            else if QueueBridge.open { QueueBridge.open = false; root.selected = ""; }
+            else if root.profiles_open { profiles_page.go_back(); }
+            else if root.landing-active { root.home_picked(); }
         }
     }
     restore_scroll := Timer { interval: 1ms; running: false; triggered => { self.stop(); more_scroll.content-y = root.scroll_y; root.restore_pending = false; } }
     changed narrow => {
         root.kb_nav = Math.min(root.kb_nav, root.narrow ? 3 : 5);
-        root.choice = Math.max(root.first_choice, Math.min(10, root.choice));
-        // Removed shortcut cards can own native focus during a resize.
+        root.settle_choice();
+        // Removed shortcut rows can own native focus during a resize.
         if (root.active) { entry_focus.start(); }
-    }
-    function reveal_choice() {
-        if !root.kb_active || root.kb_zone != 1 || !root.landing-active { return; }
-        if root.choice < 2 { more_scroll.content-y = 0px; return; }
-        let top = root.choice == 2 ? profiles_card.y : root.choice == 3 ? sync_card.y : root.choice == 4 ? devices_card.y : root.choice == 5 ? party_card.y : root.choice == 6 ? settings_card.y : root.choice == 7 ? about_card.y : root.choice == 8 ? journal_card.y : root.choice == 9 ? queue_card.y : bookmarks_card.y;
-        let h = root.choice == 2 ? profiles_card.height : root.choice == 3 ? sync_card.height : root.choice == 4 ? devices_card.height : root.choice == 5 ? party_card.height : root.choice == 6 ? settings_card.height : root.choice == 7 ? about_card.height : root.choice == 8 ? journal_card.height : root.choice == 9 ? queue_card.height : bookmarks_card.height;
-        let vh = more_scroll.visible-height - (root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px);
-        if top < -more_scroll.content-y { more_scroll.content-y = -top; }
-        else if top + h > vh - more_scroll.content-y { more_scroll.content-y = Math.max(Math.min(0px, more_scroll.visible-height - more_scroll.content-height), vh - top - h); }
-    }
-    // Keep destination IDs stable while Settings and About finish the visual list.
-    function move_choice(delta: int) {
-        let index = root.choice <= 5 ? root.choice : root.choice == 6 ? 9 : root.choice == 7 ? 10 : root.choice - 2;
-        let next = Math.max(root.first_choice, Math.min(10, index + delta));
-        root.choice = next <= 5 ? next : next <= 8 ? next + 2 : next == 9 ? 6 : 7;
-    }
-    changed choice => {
-        if (root.choice < root.first_choice || root.choice > 10) {
-            root.choice = Math.max(root.first_choice, Math.min(10, root.choice));
-        }
-        root.reveal_choice();
     }
     entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if (root.active) { root.focus_shell(); } } }
     changed active => {
@@ -164,19 +407,19 @@ export component MorePage inherits Rectangle {
     nav_scope := FocusScope {
         enabled: root.landing-active;
         width: 100%; height: 100%;
-        init => { root.choice = Math.max(root.first_choice, Math.min(10, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
+        init => { root.settle_choice(); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
             if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
                 if (!e.repeat) { root.home_picked(); }
                 accept
             } else if (e.text == Key.UpArrow) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 7; }
+                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = root.slot_choice(root.last_slot()); }
                 else { root.move_choice(-1); }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
-                if (root.kb_zone == 1 && root.choice != 7) { root.move_choice(1); }
+                if (root.kb_zone == 1 && root.choice_slot(root.choice) != root.last_slot()) { root.move_choice(1); }
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
@@ -186,9 +429,8 @@ export component MorePage inherits Rectangle {
             } else if (e.text == Key.Return || e.text == " ") {
                 root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (!e.repeat) {
-                    if (root.kb_zone == 1) {
-                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.profiles_open = true; } else if root.choice == 3 { root.sync_picked(); } else if root.choice == 4 { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); } else if root.choice == 5 { PartyBridge.page_open = true; } else if root.choice == 6 { root.settings_picked(); } else if root.choice == 7 { root.about_picked(); } else if root.choice == 8 { JournalBridge.open = true; } else if root.choice == 9 { QueueBridge.open = true; } else { BookmarksBridge.open = true; }
-                    } else if (root.kb_nav == 0) { root.home_picked(); }
+                    if (root.kb_zone == 1) { root.activate_choice(); }
+                    else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
                     else if (!root.narrow && root.kb_nav == 4) { NavState.calendar_picked(); }
@@ -198,16 +440,23 @@ export component MorePage inherits Rectangle {
             } else { reject }
         }
     }
-    // Preserve the landing scroller and its native layout while the local
-    // Profiles subpage owns input, just as More's other children retain it.
+    // Sync line for the profile card.
+    private property <int> sync_peer_count: SettingsBridge.sync_peers.length;
+    private property <string> sync_line: !SettingsBridge.sync_enabled ? @tr("Sync off")
+        : root.sync_peer_count == 0 ? @tr("Sync on · no paired devices")
+        : @tr("Sync on · {n} device" | "Sync on · {n} devices" % root.sync_peer_count);
+
+    // The index. On narrow layouts it is the page and slides out under a
+    // pushed local page; on wide layouts it is a stationary column.
     landing := Rectangle {
-        visible: !root.profiles_require_selection && (!root.local-open || (root.profile-motion && (root.local-slide < 1.0 || root.local-alpha < 1.0)));
-        x: root.profile-motion ? -24px * root.local-slide : 0px;
-        opacity: root.profile-motion ? 1.0 - root.local-alpha : 1.0;
-        width: 100%; height: 100%;
+        visible: !root.profiles_require_selection && (root.split || !root.local-open || (root.profile-motion && (root.local-slide < 1.0 || root.local-alpha < 1.0)));
+        x: root.profile-motion && !root.split ? -24px * root.local-slide : 0px;
+        opacity: root.profile-motion && !root.split ? 1.0 - root.local-alpha : 1.0;
+        width: root.split ? root.index_width + root.rail_inset : root.width;
+        height: 100%;
     VerticalLayout {
-        padding-left: 18px + root.safe-left + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width));
-        padding-right: 18px + root.safe-right;
+        padding-left: 18px + root.safe-left + root.rail_inset;
+        padding-right: root.split ? 12px : 18px + root.safe-right;
         padding-top: 18px + root.safe-top;
         padding-bottom: root.external_navigation && root.narrow && !Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
         spacing: 0px;
@@ -218,71 +467,196 @@ export component MorePage inherits Rectangle {
             mouse-drag-pan-enabled: true;
             content-width: self.visible-width;
             VerticalLayout {
-                width: 100%; spacing: 12px;
+                width: 100%; spacing: root.split ? 4px : 12px;
                 padding-bottom: root.narrow && Theme.transparent_navbar ? 68px + root.safe-bottom : 0px;
-                PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.landing-active) { root.home_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.landing-active; destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
-                profiles_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg");
-                    title: @tr("Profiles"); subtitle: @tr("Separate libraries, history and preferences");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
-                    picked => { root.choice = 2; root.kb_zone = 1; root.profiles_open = true; }
-                } }
-                sync_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:sync";
-                    icon: @image-url("../../assets/icons/menus/sync.svg");
-                    title: @tr("Sync"); subtitle: @tr("Pair devices and sync all profiles");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
-                    picked => { root.choice = 3; root.kb_zone = 1; root.sync_picked(); }
-                } }
-                devices_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:devices"; icon: @image-url("../../assets/icons/menus/devices.svg");
-                    title: @tr("Devices"); subtitle: @tr("Control playback on your paired devices");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 4;
-                    picked => { if InterfaceStyle.tv { root.choice = 4; root.kb_zone = 1; } RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
-                } }
-                party_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:party"; icon: @image-url("../../assets/icons/menus/watch-party.svg");
-                    title: @tr("Watch party"); subtitle: @tr("Watch together on your own devices");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 5;
-                    picked => { if InterfaceStyle.tv { root.choice = 5; root.kb_zone = 1; } PartyBridge.page_open = true; }
-                } }
-                journal_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:journal";
-                    icon: @image-url("../../assets/icons/menus/journal.svg");
-                    title: @tr("Stats"); subtitle: @tr("Dated sessions, rewatches and your year in stories");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 8;
-                    picked => { root.choice = 8; root.kb_zone = 1; JournalBridge.open = true; }
-                } }
-                queue_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:queue";
-                    icon: @image-url("../../assets/icons/menus/queue.svg");
-                    title: @tr("Watch queue"); subtitle: @tr("Line up tonight's movies and episodes");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 9;
-                    picked => { root.choice = 9; root.kb_zone = 1; QueueBridge.open = true; }
-                } }
-                bookmarks_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:bookmarks";
-                    icon: @image-url("../../assets/icons/menus/bookmarks.svg");
-                    title: @tr("Bookmarks"); subtitle: @tr("Return to saved scenes and notes");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 10;
-                    picked => { root.choice = 10; root.kb_zone = 1; BookmarksBridge.open = true; }
-                } }
-                settings_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:settings";
-                    icon: @image-url("../../assets/icons/menus/settings.svg");
-                    title: @tr("Settings"); subtitle: @tr("Make Nova yours");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 6;
-                    picked => { if InterfaceStyle.tv { root.choice = 6; root.kb_zone = 1; } root.settings_picked(); }
-                } }
-                about_card := SettingsCard { SettingsLink {
-                    interactive: root.landing-active; destination-id: "more:about";
-                    icon: @image-url("../../assets/icons/menus/about.svg");
-                    title: @tr("About"); subtitle: @tr("Information about Nova");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 7;
-                    picked => { if InterfaceStyle.tv { root.choice = 7; root.kb_zone = 1; } root.about_picked(); }
-                } }
+                if !root.split: PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.landing-active) { root.home_picked(); } } }
+
+                // Profile card: current profile, sync state and Switch.
+                profile_card := Rectangle {
+                    vertical-stretch: 0;
+                    background: Theme.current.card; border-radius: Theme.card_corner_radius;
+                    border-width: 1px; border-color: Theme.current.border_soft;
+                    HorizontalLayout {
+                        // Zero spacing: inactive profiles leave empty slots.
+                        padding: 10px; spacing: 0px; alignment: stretch;
+                        for profile in MoreBridge.profiles: HorizontalLayout {
+                            horizontal-stretch: profile.active ? 1 : 0;
+                            spacing: 10px; padding-right: profile.active ? 10px : 0px;
+                            if profile.active: Rectangle {
+                                width: 36px; height: 100%;
+                                Rectangle {
+                                    width: 36px; height: 36px; border-radius: 18px;
+                                    y: (parent.height - self.height) / 2;
+                                    background: profile.avatar_background;
+                                    Text { width: 100%; height: 100%; text: profile.initial; color: profile.avatar_foreground; font-size: 15px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+                            if profile.active: VerticalLayout {
+                                spacing: 2px; alignment: center; horizontal-stretch: 1; min-width: 0px;
+                                Text { text: profile.name; font-size: 14px; font-weight: 600; color: Theme.current.text_bright; overflow: elide; min-width: 0px; }
+                                Text { text: root.sync_line; font-size: 12px; color: Theme.current.text_muted; overflow: elide; min-width: 0px; }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; min-width: 0px; }
+                        PillButton {
+                            label: @tr("Switch"); compact: true; enabled: root.index_live;
+                            clicked => { root.open_profiles(); }
+                        }
+                    }
+                }
+
+                index_search := SearchField {
+                    vertical-stretch: 0;
+                    show-pointer-focus: false; keyboard-mode: root.kb_active;
+                    roomy: !root.split; search-icon: true; text <=> SettingsBridge.search_query;
+                    search-icon-image: @image-url("../../assets/icons/menus/search.svg");
+                    enabled: root.index_live;
+                    placeholder-text: @tr("Search tools and settings");
+                    edited(q) => { root.choice = root.slot_choice(root.first_slot()); more_scroll.content-y = 0px; }
+                    accepted(q) => { root.choice = root.slot_choice(root.first_slot()); root.kb_zone = 1; root.kb_active = true; nav_scope.focus(); }
+                }
+
+                if root.watching_avail: IndexGroupLabel { text: @tr("Your watching"); }
+                if root.watching_avail: IndexGroup {
+                    card: !root.split;
+                    if root.tool_avail(0): IndexRow {
+                        destination-id: "more:calendar"; icon: @image-url("../../assets/icons/menus/calendar.svg"); title: root.t_calendar; chevron: !root.split;
+                        interactive: root.index_live; focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; reveal-request: root.reveal_request;
+                        picked => { root.choice = 0; root.kb_zone = 1; root.calendar_picked(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(1): IndexRow {
+                        destination-id: "more:downloads"; icon: @image-url("../../assets/icons/menus/download.svg"); title: root.t_downloads; chevron: !root.split;
+                        interactive: root.index_live; focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; reveal-request: root.reveal_request;
+                        picked => { root.choice = 1; root.kb_zone = 1; root.downloads_picked(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(9): IndexRow {
+                        destination-id: "more:queue"; icon: @image-url("../../assets/icons/menus/queue.svg"); title: root.t_queue; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:queue"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 9; reveal-request: root.reveal_request;
+                        picked => { root.open_queue(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(10): IndexRow {
+                        destination-id: "more:bookmarks"; icon: @image-url("../../assets/icons/menus/bookmarks.svg"); title: root.t_bookmarks; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:bookmarks"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 10; reveal-request: root.reveal_request;
+                        picked => { root.open_bookmarks(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(8): IndexRow {
+                        destination-id: "more:journal"; icon: @image-url("../../assets/icons/menus/journal.svg"); title: root.t_journal; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:journal"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 8; reveal-request: root.reveal_request;
+                        picked => { root.open_journal(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                }
+
+                if root.together_avail: IndexGroupLabel { text: @tr("Together"); }
+                if root.together_avail: IndexGroup {
+                    card: !root.split;
+                    if root.tool_avail(5): IndexRow {
+                        destination-id: "more:party"; icon: @image-url("../../assets/icons/menus/watch-party.svg"); title: root.t_party; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:party"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 5; reveal-request: root.reveal_request;
+                        picked => { root.open_party(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(4): IndexRow {
+                        destination-id: "more:devices"; icon: @image-url("../../assets/icons/menus/devices.svg"); title: root.t_devices; chevron: !root.split;
+                        trailing: RemoteBridge.devices.length > 0 ? "" + RemoteBridge.devices.length : "";
+                        interactive: root.index_live; selected: root.selected == "more:devices"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 4; reveal-request: root.reveal_request;
+                        picked => { root.open_devices(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(3): IndexRow {
+                        destination-id: "more:sync"; icon: @image-url("../../assets/icons/menus/sync.svg"); title: root.t_sync; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:sync"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 3; reveal-request: root.reveal_request;
+                        picked => { root.open_sync(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    if root.tool_avail(2): IndexRow {
+                        destination-id: "more:profiles"; icon: @image-url("../../assets/icons/menus/profiles.svg"); title: root.t_profiles; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:profiles"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 2; reveal-request: root.reveal_request;
+                        picked => { root.open_profiles(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                }
+
+                // Settings view selector lives in the wide index; narrow
+                // layouts keep it on the Settings overview.
+                if root.split: HorizontalLayout {
+                    vertical-stretch: 0; padding-top: 10px; spacing: 10px; alignment: stretch;
+                    Text { text: @tr("Settings view"); font-size: 12px; color: Theme.current.text_muted; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+                    Segmented {
+                        labels: [@tr("Simple"), @tr("Advanced")];
+                        current_index: SettingsBridge.advanced ? 1 : 0;
+                        enabled: root.index_live;
+                        picked(index) => { SettingsBridge.advanced = index == 1; SettingsBridge.view_changed(index == 1); }
+                    }
+                }
+
+                // Settings sections, grouped as on the Settings overview.
+                if root.dests_mode: VerticalLayout {
+                    vertical-stretch: 0; spacing: root.split ? 4px : 12px;
+                    for group[g] in [@tr("Settings · Experience"), @tr("Settings · Library and services"), @tr("Settings · Storage and network")]: VerticalLayout {
+                        vertical-stretch: 0; spacing: root.split ? 4px : 12px;
+                        if root.dest_group_avail(g): IndexGroupLabel { text: group; }
+                        if root.dest_group_avail(g): IndexGroup {
+                            card: !root.split;
+                            for entry in SettingsDestinations.entries: VerticalLayout {
+                                vertical-stretch: 0; spacing: 0px;
+                                if entry.group == g && root.dest_avail(entry.id): IndexRow {
+                                    destination-id: entry.stable-id; icon-kind: entry.id;
+                                    title: entry.parent < 0 ? entry.title : root.dest_title(entry.parent) + " › " + entry.title;
+                                    trailing: root.dest_hint(entry.id); chevron: !root.split;
+                                    interactive: root.index_live; selected: root.selected == entry.stable-id;
+                                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 100 + entry.id; reveal-request: root.reveal_request;
+                                    picked => { root.open_destination(entry.id); }
+                                    reveal(y, h) => { root.reveal_abs(y, h); }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Group rows lead to the Settings overview at that group.
+                if !root.dests_mode: IndexGroupLabel { text: @tr("Settings"); }
+                if !root.dests_mode: IndexGroup {
+                    card: true;
+                    IndexRow {
+                        destination-id: "more:settings-experience"; icon-kind: 13; title: @tr("Experience"); trailing: @tr("Home, Theme…"); chevron: true;
+                        interactive: root.index_live; focused: root.kb_active && root.kb_zone == 1 && root.choice == 20; reveal-request: root.reveal_request;
+                        picked => { root.open_group(0); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    IndexRow {
+                        destination-id: "more:settings-services"; icon-kind: 0; title: @tr("Library and services"); trailing: @tr("Addons…"); chevron: true;
+                        interactive: root.index_live; focused: root.kb_active && root.kb_zone == 1 && root.choice == 21; reveal-request: root.reveal_request;
+                        picked => { root.open_group(1); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                    IndexRow {
+                        destination-id: "more:settings-storage"; icon-kind: 4; title: @tr("Storage and network"); trailing: @tr("Cache…"); chevron: true;
+                        interactive: root.index_live; focused: root.kb_active && root.kb_zone == 1 && root.choice == 22; reveal-request: root.reveal_request;
+                        picked => { root.open_group(2); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                }
+
+                if root.tool_avail(7): IndexGroupLabel { text: "Nova"; }
+                if root.tool_avail(7): IndexGroup {
+                    card: !root.split;
+                    IndexRow {
+                        destination-id: "more:about"; icon: @image-url("../../assets/icons/menus/about.svg"); title: root.t_about; chevron: !root.split;
+                        interactive: root.index_live; selected: root.selected == "more:about"; focused: root.kb_active && root.kb_zone == 1 && root.choice == 7; reveal-request: root.reveal_request;
+                        picked => { root.open_about(); }
+                        reveal(y, h) => { root.reveal_abs(y, h); }
+                    }
+                }
+
+                if root.search_active && !root.any_avail: VerticalLayout {
+                    vertical-stretch: 0; spacing: 12px; padding-top: 12px;
+                    Text { text: @tr("Nothing found."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                    PillButton { label: @tr("Clear search"); clicked => { SettingsBridge.search_query = ""; } }
+                }
                 Rectangle { vertical-stretch: 1; }
             }
         }
@@ -296,54 +670,60 @@ export component MorePage inherits Rectangle {
             library_picked => { if (root.active) { root.library_picked(); } }
         }
     }
+        if root.split: Rectangle { x: parent.width - 1px; y: 0px; width: 1px; height: 100%; background: Theme.current.border_soft; }
     }
+    // Local pages fill the page on narrow layouts and the pane beside the
+    // index on wide ones, keeping the same short push motion.
+    private property <length> pane_x: root.split ? landing.width : 0px;
+    private property <length> pane_width: root.split ? root.width - landing.width : root.width;
+    private property <length> pane_safe_left: root.split ? 0px : root.safe-left + root.rail_inset;
     profiles_page := ProfilesPage {
         visible: root.profiles_open || (root.profile-motion && (root.profile-slide > 0.0 || root.profile-alpha > 0.0));
-        x: root.profile-motion ? 48px * (1.0 - root.profile-slide) : 0px;
+        x: root.pane_x + (root.profile-motion ? 48px * (1.0 - root.profile-slide) : 0px);
         opacity: root.profile-motion ? root.profile-alpha : 1.0;
         active: root.active && root.profiles_open;
-        width: 100%; height: 100%;
+        width: root.profiles_require_selection ? root.width : root.pane_width; height: 100%;
         safe-top: root.safe-top;
         safe-bottom: root.safe-bottom + (root.external_navigation && root.narrow && !root.profiles_require_selection ? 68px : 0px);
-        safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
+        safe-left: root.profiles_require_selection ? root.safe-left : root.pane_safe_left;
         safe-right: root.safe-right;
-        back => { if !root.profiles_require_selection { root.profiles_open = false; entry_focus.start(); } }
+        back => { if !root.profiles_require_selection { root.profiles_open = false; root.selected = ""; entry_focus.start(); } }
     }
     journal_page := ViewingJournalPage {
         visible: !root.profiles_require_selection && (JournalBridge.open || (root.profile-motion && (root.journal-slide > 0.0 || root.journal-alpha > 0.0)));
-        x: root.profile-motion ? 48px * (1.0 - root.journal-slide) : 0px;
+        x: root.pane_x + (root.profile-motion ? 48px * (1.0 - root.journal-slide) : 0px);
         opacity: root.profile-motion ? root.journal-alpha : 1.0;
         active: root.active && JournalBridge.open && !root.profiles_require_selection;
-        width: 100%; height: 100%; narrow: root.narrow;
+        width: root.pane_width; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
         safe-bottom: root.safe-bottom;
-        safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
+        safe-left: root.pane_safe_left;
         safe-right: root.safe-right;
-        back => { JournalBridge.open = false; entry_focus.start(); }
+        back => { JournalBridge.open = false; root.selected = ""; entry_focus.start(); }
     }
     queue_page := WatchQueuePage {
         visible: !root.profiles_require_selection && (QueueBridge.open || (root.profile-motion && (root.queue-slide > 0.0 || root.queue-alpha > 0.0)));
-        x: root.profile-motion ? 48px * (1.0 - root.queue-slide) : 0px;
+        x: root.pane_x + (root.profile-motion ? 48px * (1.0 - root.queue-slide) : 0px);
         opacity: root.profile-motion ? root.queue-alpha : 1.0;
         active: root.active && QueueBridge.open && !root.profiles_require_selection;
-        width: 100%; height: 100%; narrow: root.narrow;
+        width: root.pane_width; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
         safe-bottom: root.safe-bottom;
-        safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
+        safe-left: root.pane_safe_left;
         safe-right: root.safe-right;
-        back => { QueueBridge.open = false; entry_focus.start(); }
+        back => { QueueBridge.open = false; root.selected = ""; entry_focus.start(); }
     }
     bookmarks_page := BookmarksPage {
         visible: !root.profiles_require_selection && (BookmarksBridge.open || (root.profile-motion && (root.bookmarks-slide > 0.0 || root.bookmarks-alpha > 0.0)));
-        x: root.profile-motion ? 48px * (1.0 - root.bookmarks-slide) : 0px;
+        x: root.pane_x + (root.profile-motion ? 48px * (1.0 - root.bookmarks-slide) : 0px);
         opacity: root.profile-motion ? root.bookmarks-alpha : 1.0;
         active: root.active && BookmarksBridge.open && !root.profiles_require_selection;
-        width: 100%; height: 100%; narrow: root.narrow;
+        width: root.pane_width; height: 100%; narrow: root.narrow;
         safe-top: root.safe-top;
         safe-bottom: root.safe-bottom;
-        safe-left: root.safe-left + (!root.narrow && !root.external_navigation ? NavMetrics.width-for(root.nav-viewport-width) : 0px);
+        safe-left: root.pane_safe_left;
         safe-right: root.safe-right;
-        back => { BookmarksBridge.open = false; entry_focus.start(); }
+        back => { BookmarksBridge.open = false; root.selected = ""; entry_focus.start(); }
     }
     if !root.narrow && !root.external_navigation && !root.profiles_require_selection: SideNav {
         viewport-width: root.nav-viewport-width;
@@ -359,8 +739,11 @@ export component MorePage inherits Rectangle {
         library_picked => { if (root.active) { root.library_picked(); } }
         more_picked => { }
     }
+    // While inactive, block stray input to the pane; the wide index itself
+    // stays clickable when a section sits beside it.
     if !root.active: TouchArea {
-        width: 100%; height: 100%;
+        x: root.index_live ? landing.width : 0px; y: 0px;
+        width: root.width - self.x; height: 100%;
         clicked => { }
         scroll-event(event) => { accept }
     }

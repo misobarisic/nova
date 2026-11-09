@@ -19,6 +19,9 @@ export component MoreModule inherits Window {
         kb_active <=> MoreBridge.kb_active;
         external_navigation <=> MoreBridge.external_navigation;
         active <=> MoreBridge.active;
+        two_pane <=> MoreBridge.two_pane;
+        peer_open <=> MoreBridge.peer_open;
+        selected <=> MoreBridge.selected;
         narrow <=> MoreBridge.narrow;
         nav-viewport-width <=> MoreBridge.nav-viewport-width;
         safe-top <=> MoreBridge.safe-top;
@@ -33,6 +36,7 @@ export component MoreModule inherits Window {
         downloads_picked() => { MoreBridge.downloads_picked(); }
         sync_picked() => { MoreBridge.sync_picked(); }
         settings_picked() => { MoreBridge.settings_picked(); }
+        settings_section_picked(id) => { MoreBridge.settings_section_picked(id); }
         about_picked() => { MoreBridge.about_picked(); }
     }
 }

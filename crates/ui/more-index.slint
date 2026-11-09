@@ -1,0 +1,131 @@
+// Rows for the unified More/Settings index. The index is a flat list of
+// grouped destinations: a leading icon, a label and an optional trailing hint
+// or count. `selected` marks the destination shown beside the index on wide
+// layouts: the whole row is tinted with an accent edge and accent text, the
+// same treatment as `MenuItem`. `focused` is keyboard selection owned by the
+// page.
+import { Theme, Anim, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { ControlTouchArea } from "control-input.slint";
+import { IcChevronRight } from "icons.slint";
+
+export component IndexRow inherits Rectangle {
+    // Settings section IDs resolve to their menu icon; More destinations pass
+    // an explicit image instead.
+    in property <int> icon-kind: -1;
+    in property <image> icon:
+        root.icon-kind == 0 ? @image-url("../../assets/icons/menus/addons.svg") :
+        root.icon-kind == 1 ? @image-url("../../assets/icons/menus/categories.svg") :
+        root.icon-kind == 2 ? @image-url("../../assets/icons/menus/image-cache.svg") :
+        root.icon-kind == 3 ? @image-url("../../assets/icons/menus/display.svg") :
+        root.icon-kind == 4 ? @image-url("../../assets/icons/menus/storage.svg") :
+        root.icon-kind == 5 ? @image-url("../../assets/icons/menus/player.svg") :
+        root.icon-kind == 6 ? @image-url("../../assets/icons/menus/look-and-feel.svg") :
+        root.icon-kind == 7 ? @image-url("../../assets/icons/menus/sync.svg") :
+        root.icon-kind == 8 ? @image-url("../../assets/icons/menus/downloads-storage.svg") :
+        root.icon-kind == 9 ? @image-url("../../assets/icons/menus/download.svg") :
+        root.icon-kind == 12 ? @image-url("../../assets/icons/menus/tracking.svg") :
+        root.icon-kind == 13 ? @image-url("../../assets/icons/menus/home.svg") :
+        root.icon-kind == 14 ? @image-url("../../assets/icons/menus/theme.svg") :
+        root.icon-kind == 15 ? @image-url("../../assets/icons/menus/settings.svg") : root.no-icon;
+    private property <image> no-icon;
+    in property <string> title;
+    // A count, a matched-control hint or similar at the trailing edge.
+    in property <string> trailing;
+    in property <bool> chevron: false;
+    in property <string> destination-id;
+    in property <bool> selected;
+    in property <bool> focused;
+    // False while another layer owns input: blocks taps that would fall
+    // through (Slint hit-tests TouchAreas regardless of z-order).
+    in property <bool> interactive: true;
+    callback picked();
+    // Emitted with the row's absolute top and height whenever keyboard
+    // selection lands on it, so the host can scroll it into view.
+    callback reveal(length, length);
+    in property <int> reveal-request;
+    changed reveal-request => { if root.focused { root.reveal(root.absolute-position.y, root.height); } }
+    changed focused => { if root.focused { root.reveal(root.absolute-position.y, root.height); } }
+
+    height: InterfaceStyle.tv ? 56px : 44px;
+    border-radius: 10px;
+    background: root.selected ? Theme.current.selection_wash
+        : (touch.has-hover || touch.feedback-active) && root.interactive ? Theme.current.control_hover : transparent;
+    animate background { duration: Anim.hover_fast; }
+    border-width: SettingsStyle.keyboard-mode && root.focused ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    accessible-role: button;
+    accessible-id: root.destination-id;
+    accessible-label: root.title;
+    accessible-description: root.trailing;
+    accessible-enabled: root.interactive;
+    accessible-checkable: root.selected;
+    accessible-checked: root.selected;
+    accessible-action-default => { if root.interactive { root.picked(); } }
+
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 12px;
+        alignment: stretch;
+        Rectangle {
+            width: 20px; height: 100%;
+            if root.icon.width > 0: Image {
+                width: 20px; height: 20px; y: (parent.height - self.height) / 2;
+                source: root.icon; image-fit: contain;
+                colorize: root.selected ? Theme.current.accent_soft : Theme.current.text_secondary;
+                accessible-role: none;
+            }
+        }
+        Text {
+            horizontal-stretch: 1; min-width: 0px;
+            text: root.title; overflow: elide; vertical-alignment: center;
+            font-size: InterfaceStyle.tv ? 20px : 14px;
+            font-weight: root.selected ? 600 : 500;
+            color: root.selected ? Theme.current.accent_soft : Theme.current.text_bright;
+            accessible-role: none;
+        }
+        if root.trailing != "": Text {
+            horizontal-stretch: 0; max-width: 150px;
+            text: root.trailing; overflow: elide; vertical-alignment: center; horizontal-alignment: right;
+            font-size: InterfaceStyle.tv ? 16px : 12px;
+            color: Theme.current.text_muted;
+            accessible-role: none;
+        }
+        if root.chevron: Rectangle {
+            width: 16px; height: 100%;
+            IcChevronRight { width: 16px; height: 16px; y: (parent.height - self.height) / 2; fill: Theme.current.text_muted; }
+        }
+    }
+    if root.selected: Rectangle {
+        x: 0px; y: 10px; width: 3px; height: parent.height - 20px; border-radius: 2px;
+        background: Theme.current.accent_soft;
+    }
+    touch := ControlTouchArea {
+        width: 100%; height: 100%;
+        enabled: root.interactive; mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; root.picked(); }
+    }
+}
+
+// Small caption above a group of rows.
+export component IndexGroupLabel inherits Text {
+    font-size: InterfaceStyle.tv ? 16px : 11px;
+    font-weight: 600;
+    color: Theme.current.text_muted;
+    vertical-stretch: 0;
+    min-width: 0px;
+    overflow: elide;
+    height: self.preferred-height + 12px;
+    vertical-alignment: bottom;
+}
+
+// Holds a group's rows: a card on narrow layouts, a plain column inside the
+// wide index. Zero spacing keeps hidden repeater slots from leaving gaps.
+export component IndexGroup inherits Rectangle {
+    in property <bool> card: true;
+    vertical-stretch: 0;
+    background: root.card ? Theme.current.card : transparent;
+    border-radius: root.card ? Theme.card_corner_radius : 0px;
+    border-width: root.card ? 1px : 0px;
+    border-color: Theme.current.border_soft;
+    clip: root.card;
+    VerticalLayout { padding: root.card ? 4px : 0px; spacing: 0px; @children }
+}

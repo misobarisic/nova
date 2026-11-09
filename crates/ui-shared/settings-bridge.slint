@@ -32,6 +32,12 @@ export global SettingsBridge {
     in-out property <int> sel: 13;
     in-out property <bool> sub_open: false;
     in-out property <bool> two_pane;
+    // Mounted as one section beside/over the More index: no overview of its
+    // own, Back leaves the page. `section_request` switches the mounted
+    // section; the serial makes repeated picks observable.
+    in-out property <bool> embedded: false;
+    in-out property <int> section_request: -1;
+    in-out property <int> section_request_serial: 0;
     in-out property <string> search_query: "";
     in-out property <int> kb_land: 13;
     in-out property <length> land_scroll_y: 0px;

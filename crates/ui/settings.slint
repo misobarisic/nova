@@ -42,11 +42,32 @@ export component SettingsPage {
     }
 
     in property <bool> standalone_sync: false;
+    // Mounted by AppWindow as one section beside or over the More index: the
+    // overview stays hidden and closing the section leaves the page.
+    in property <bool> embedded: false;
+    private property <int> section_serial: SettingsBridge.section_request_serial;
+    changed section_serial => { if root.embedded && SettingsBridge.section_request >= 0 { root.open_search_result(SettingsBridge.section_request); } }
+    // Narrow More group rows open the overview as that group's page: only
+    // its sections are listed under the group's title until a search widens it.
+    private property <int> landing_group: -1;
+    private property <string> landing_title: root.landing_group == 0 ? @tr("Experience") : root.landing_group == 1 ? @tr("Library and services") : root.landing_group == 2 ? @tr("Storage and network") : @tr("Settings");
     function apply_page_mode() {
         if root.standalone_sync { root.open_page(7); }
+        else if root.embedded {
+            root.sub_open = true;
+            root.reset_pending = true;
+            root.kb_zone = root.page_first_zone();
+            root.apply_search_target(root.sel);
+        }
         else if root.sel == 7 {
             root.sel = 13; root.sub_open = root.two_pane;
             root.kb_zone = root.two_pane ? 16 : 8;
+        }
+        if !root.embedded && !root.standalone_sync && SettingsContent.landing_group_request >= 0 {
+            root.landing_group = SettingsContent.landing_group_request;
+            SettingsContent.landing_group_request = -1;
+            root.kb_land = root.land_first();
+            land_scroll.content-y = 0px;
         }
     }
     changed standalone_sync => { root.apply_page_mode(); }
@@ -663,9 +684,11 @@ export component SettingsPage {
     }
     function land_avail(id: int) -> bool {
         let entry = SettingsDestinations.entries[root.destination_index(id)];
+        if (root.landing_group >= 0 && !root.search_active && entry.group != root.landing_group) { return false; }
         return id != 7 && root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : SettingsSearch.target(id).key != "" || root.search_matches(root.search_query, entry.title + " " + root.land_desc(id) + " " + entry.terms + " " + entry.aliases));
     }
     function group_available(group: int) -> bool {
+        if (root.landing_group >= 0 && !root.search_active && group != root.landing_group) { return false; }
         if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(14) || root.land_avail(6) || root.land_avail(5); }
         if (group == 1) { return root.land_avail(0) || root.land_avail(1) || root.land_avail(7) || root.land_avail(12); }
         if (group == 2) { return root.land_avail(2) || root.land_avail(8) || root.land_avail(9) || root.land_avail(4) || root.land_avail(15); }
@@ -762,11 +785,15 @@ export component SettingsPage {
     }
 
     function open_search_result(id: int) {
-        let target = SettingsSearch.target(id);
         // Yield native text focus before mounting a leaf. Subsequent remote
         // arrows then operate on the same row that touch users see highlighted.
         nav_scope.focus();
         root.open_page(id);
+        root.apply_search_target(id);
+    }
+    // Reveal the control matched by the current search inside section `id`.
+    function apply_search_target(id: int) {
+        let target = SettingsSearch.target(id);
         if target.key != "" {
             root.kb_zone = target.zone;
             if target.zone == 9 { root.kb_pr = target.row; }
@@ -791,6 +818,9 @@ export component SettingsPage {
             return;
         }
         root.page_scrolls[root.sel] = root.scroll_y;
+        // An embedded section has no overview of its own: Back leaves the
+        // page and AppWindow clears the index selection.
+        if (root.embedded) { root.back_picked(); return; }
         root.sub_open = root.two_pane;
         root.kb_zone = 8;
         // Returning to the landing menu: drop any horizontal pan it may have
@@ -2175,7 +2205,7 @@ export component SettingsPage {
                 SliderGesture.active = false; SliderGesture.hovered = false;
                 self.focus();
                 root.apply_page_mode();
-                if (root.two_pane) { root.sub_open = true; }
+                if (root.two_pane || root.embedded) { root.sub_open = true; }
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
@@ -2267,7 +2297,7 @@ export component SettingsPage {
 
                 // ---- Landing menu (section list) ---------------------
                 landing_layer := Rectangle {
-                    visible: !root.standalone_sync;
+                    visible: !root.standalone_sync && !root.embedded;
                     width: root.two_pane ? 340px : content_host.width;
                     height: 100%;
                     // Push transition: slides left and dims while a subpage
@@ -2377,7 +2407,7 @@ export component SettingsPage {
                                 width: 100%; height: 0px; clip: true;
                                 landing_heading_measure := Text {
                                     width: Math.max(0px, parent.width - 88px);
-                                    text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; wrap: word-wrap;
+                                    text: root.landing_title; font-size: root.two_pane ? 28px : 32px; font-weight: 700; wrap: word-wrap;
                                 }
                                 landing_intro_measure := Text {
                                     width: Math.max(0px, parent.width - 32px);
@@ -2387,7 +2417,7 @@ export component SettingsPage {
                             Text {
                                 x: 72px; y: 24px + root.landing_header_shift;
                                 width: parent.width - 88px;
-                                text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap;
+                                text: root.landing_title; font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap;
                             }
                             Text {
                                 x: 16px; y: 24px + landing_heading_measure.preferred-height + 8px + root.landing_header_shift;
@@ -2431,7 +2461,7 @@ export component SettingsPage {
                             height: 44px;
                             spacing: 4px;
                             for group[i] in [@tr("Experience"), @tr("Services"), @tr("Storage")]: PillButton {
-                                label: group; compact: true; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
+                                label: group; compact: true; visible: root.landing_group < 0 || root.search_active; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
                                 clicked => { root.jump_section(i); }
                             }
                         }
@@ -2575,7 +2605,7 @@ export component SettingsPage {
                     // and shortcuts move below the lane without losing focus.
                     sticky_landing_header := Rectangle {
                         property <length> cover_left: root.two_pane ? 0px : 18px + root.safe-left;
-                        visible: (!root.sub_open || root.two_pane) && root.landing_compact_progress > 0;
+                        visible: (!root.sub_open || root.two_pane) && root.landing_compact_progress > 0 && !root.embedded && !root.standalone_sync;
                         opacity: landing_layer.opacity * root.landing_compact_progress;
                         x: landing_layer.absolute-position.x - root.absolute-position.x - self.cover_left;
                         y: root.safe-top;
@@ -2595,7 +2625,7 @@ export component SettingsPage {
                                 focused: root.phone_layout && root.kb_zone == 0 && root.kb_active;
                                 clicked => { if root.two_pane { root.kb_zone = 8; } root.system_back(); }
                             }
-                            Text { text: @tr("Settings"); font-size: 20px; font-weight: 700; color: Theme.current.text_bright; vertical-alignment: center; overflow: elide; }
+                            Text { text: root.landing_title; font-size: 20px; font-weight: 700; color: Theme.current.text_bright; vertical-alignment: center; overflow: elide; }
                         }
                     }
 

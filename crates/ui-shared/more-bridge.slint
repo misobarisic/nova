@@ -65,5 +65,11 @@ export global MoreBridge {
     callback downloads_picked();
     callback sync_picked();
     callback settings_picked();
+    // One Settings section picked from the unified index.
+    callback settings_section_picked(int);
     callback about_picked();
+    // Unified More/Settings index: wide column beside a mounted section.
+    in-out property <bool> two_pane;
+    in-out property <bool> peer_open;
+    in-out property <string> selected;
 }
