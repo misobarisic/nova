@@ -937,6 +937,20 @@ pub fn tr(english: &str) -> &str {
         "Different edition or duration" => "Različito izdanje ili trajanje",
         "This stream cannot seek" => "Ovaj prijenos ne podržava premotavanje",
         "Local stream unavailable" => "Lokalni prijenos nije dostupan",
+        "Host" => "Domaćin",
+        "Away" => "Odsutan",
+        "Disconnected" => "Odspojeno",
+        "Buffering" => "Učitavanje",
+        "Waiting for the host to return…" => "Čekanje povratka domaćina…",
+        "Waiting for your stream…" => "Čekanje vašeg prijenosa…",
+        "Waiting for the host's stream…" => "Čekanje domaćinova prijenosa…",
+        "The watch party is full." => "Zajedničko gledanje je popunjeno.",
+        "You cannot join your own watch party." => {
+            "Ne možete se pridružiti vlastitom zajedničkom gledanju."
+        }
+        "This profile cannot open the selected title. Switch profiles or leave the party." => {
+            "Ovaj profil ne može otvoriti odabrani naslov. Promijenite profil ili napustite zajedničko gledanje."
+        }
         "Finished" => "Završeno",
         "Choose the same title and episode" => "Odaberite isti naslov i epizodu",
         "Disconnect remote controls before joining a watch party." => {

@@ -24,7 +24,15 @@ pub const MAX_TARGET_RATE: f64 = 2.0;
 pub const TARGET_RATE_STEP: f64 = 0.05;
 pub const CATCH_UP_MULTIPLIER: f64 = 1.03;
 pub const START_LEAD_MS: u64 = 1_000;
+/// Guests give up on an unreachable host after this many milliseconds of
+/// consecutive failed requests. The host's own process never applies it.
 pub const HOST_TIMEOUT_MS: u64 = 30_000;
+/// How far before the end a shared position must be for a player parked at
+/// EOF to be seeked back onto the timeline.
+pub const EOF_REWIND_MARGIN_S: f64 = 5.0;
+/// Hosts re-issue their invite after this long so late (re)joiners are never
+/// locked out by the one-hour ticket validity.
+pub const INVITE_RENEWAL_MS: u64 = 45 * 60 * 1_000;
 
 static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -243,9 +251,12 @@ pub fn drift_correction(room: &RoomSnapshot, local: &LocalReport, now_ms: u64) -
     let rounding_tolerance = 4.0 * f64::EPSILON * (target.abs() + local.position.abs()).max(1.0)
         / if paused { 1.0 } else { base };
     let seek_threshold = if paused { 0.15 } else { 1.25 };
+    // A player parked at EOF (keep-open) only clears that state through a
+    // seek, so a host rewind to well before the end must still move it.
+    let rewind_from_end = local.ended && target + EOF_REWIND_MARGIN_S < media.duration;
     let seek_to = (compatible
         && local.loaded
-        && !local.ended
+        && (!local.ended || rewind_from_end)
         && local.seekable
         && gap > seek_threshold + rounding_tolerance)
         .then_some(target);

@@ -14,6 +14,15 @@ use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 
 const EXCHANGE_TIMEOUT: Duration = Duration::from_millis(2_500);
+/// The first connection may go through a relay or NAT traversal; joining
+/// deserves a far longer budget than a steady-state heartbeat.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long an ending host keeps answering so guests hear "ended" on their
+/// next heartbeat instead of waiting out their reconnect timeout.
+const END_NOTICE: Duration = Duration::from_millis(1_200);
+/// Attempts further apart than this (the app was suspended) restart the
+/// consecutive-failure window used to declare the host gone.
+const ATTEMPT_GAP_RESET_MS: u64 = 10_000;
 
 #[derive(Debug)]
 struct TerminalError(String);
@@ -74,16 +83,53 @@ struct Guest {
     connection: Option<Connection>,
     next_sequence: u64,
     next_control_sequence: u64,
-    last_success: u64,
+    /// Start of the current run of consecutive failed exchanges, if any.
+    failing_since: Option<u64>,
+    last_attempt: Option<u64>,
     best_rtt: f64,
     best_sample_at: u64,
     offset: f64,
+}
+
+impl Guest {
+    fn new(ticket: Ticket) -> Self {
+        Self {
+            ticket,
+            connection: None,
+            next_sequence: 1,
+            next_control_sequence: 1,
+            failing_since: None,
+            last_attempt: None,
+            best_rtt: f64::INFINITY,
+            best_sample_at: 0,
+            offset: 0.0,
+        }
+    }
+
+    /// Only an unbroken run of failures while the app was actually trying
+    /// counts; a resume after suspension always gets a fresh attempt first.
+    fn note_attempt(&mut self, started: u64) {
+        if self
+            .last_attempt
+            .is_some_and(|at| started.saturating_sub(at) > ATTEMPT_GAP_RESET_MS)
+        {
+            self.failing_since = None;
+        }
+        self.last_attempt = Some(started);
+    }
+
+    fn host_unreachable(&self, now: u64) -> bool {
+        self.failing_since
+            .is_some_and(|since| now.saturating_sub(since) >= HOST_TIMEOUT_MS)
+    }
 }
 
 #[derive(Default)]
 struct Session {
     network: Option<Network>,
     guest: Option<Guest>,
+    /// The host's invite ticket, re-encoded with a later expiry on renewal.
+    host_ticket: Option<Ticket>,
 }
 
 /// All mutating methods block briefly and belong on application workers. The
@@ -198,7 +244,7 @@ impl PartyService {
         let now = local_now_ms();
         let room = if let Some(media) = media {
             HostRoom::new(
-                ticket.room_id,
+                ticket.room_id.clone(),
                 host_id,
                 ticket.capability,
                 media,
@@ -207,11 +253,32 @@ impl PartyService {
                 now,
             )
         } else {
-            HostRoom::lobby(ticket.room_id, host_id, ticket.capability, name, now)
+            HostRoom::lobby(
+                ticket.room_id.clone(),
+                host_id,
+                ticket.capability,
+                name,
+                now,
+            )
         };
         self.shared.publish(room.snapshot.clone());
         *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         session.network = Some(network);
+        session.host_ticket = Some(ticket);
+        Ok(invite)
+    }
+
+    /// Issue a fresh copy of the host's invite. The capability and room stay
+    /// the same, so copies already shared remain valid until their own expiry.
+    pub fn renew_invite(&self) -> Result<String> {
+        let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ticket = session
+            .host_ticket
+            .clone()
+            .context("only the host can renew the invite")?;
+        ticket.expires_unix = ticket::unix_now() + engine::INVITE_LIFETIME_MS / 1_000;
+        let invite = ticket.encode()?;
+        self.with_host(|room| room.renew_invite(local_now_ms()))?;
         Ok(invite)
     }
 
@@ -226,16 +293,7 @@ impl PartyService {
             network.endpoint.id() != ticket.host.id,
             "host cannot join itself"
         );
-        let mut guest = Guest {
-            ticket,
-            connection: None,
-            next_sequence: 1,
-            next_control_sequence: 1,
-            last_success: local_now_ms(),
-            best_rtt: f64::INFINITY,
-            best_sample_at: 0,
-            offset: 0.0,
-        };
+        let mut guest = Guest::new(ticket);
         let result = runtime.block_on(exchange(
             &network.endpoint,
             &mut guest,
@@ -264,22 +322,15 @@ impl PartyService {
     pub fn report(&self, report: LocalReport) -> Result<()> {
         engine::validate_report(&report)?;
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        let Session { network, guest } = &mut *session;
+        let Session { network, guest, .. } = &mut *session;
         let network = network.as_ref().context("not in a party")?;
         if let Some(guest) = guest {
             ensure!(
                 !self.snapshot().is_some_and(|snapshot| snapshot.ended),
                 "party has ended"
             );
-            if local_now_ms().saturating_sub(guest.last_success) >= HOST_TIMEOUT_MS {
-                if let Some(mut snapshot) = self.snapshot() {
-                    pause_disconnected(&mut snapshot, local_now_ms());
-                    snapshot.ended = true;
-                    snapshot.error = Some("host disconnected; party ended".into());
-                    self.shared.publish(snapshot);
-                }
-                anyhow::bail!("host disconnected; party ended");
-            }
+            // Always try the host first: a guest resuming from the background
+            // is not "disconnected" until requests actually keep failing.
             let result = self.runtime()?.block_on(exchange(
                 &network.endpoint,
                 guest,
@@ -298,8 +349,7 @@ impl PartyService {
                     }
                     if let Some(mut snapshot) = self.snapshot() {
                         pause_disconnected(&mut snapshot, local_now_ms());
-                        snapshot.ended |=
-                            local_now_ms().saturating_sub(guest.last_success) >= HOST_TIMEOUT_MS;
+                        snapshot.ended |= guest.host_unreachable(local_now_ms());
                         let terminal = result
                             .as_ref()
                             .err()
@@ -392,7 +442,7 @@ impl PartyService {
 
     fn control(&self, generation: u64, control_revision: u64, intent: ControlIntent) -> Result<()> {
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        let Session { network, guest } = &mut *session;
+        let Session { network, guest, .. } = &mut *session;
         if let Some(guest) = guest {
             let network = network.as_ref().context("not in a party")?;
             let result = self.runtime()?.block_on(exchange(
@@ -482,15 +532,31 @@ impl PartyService {
 
     pub fn leave(&self) -> Result<()> {
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        // Revoke before awaiting shutdown; already accepted frames must fail.
-        *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        session.host_ticket = None;
+        // An ending host first answers heartbeats with an ended snapshot for a
+        // moment; `end` also stops accepting commands and media changes. Only
+        // then is the room dropped so later frames fail outright.
+        let notify_guests = {
+            let mut host = self.shared.host.lock().unwrap_or_else(|e| e.into_inner());
+            match host.as_mut() {
+                Some(room) if session.network.is_some() => {
+                    room.end("party has ended", local_now_ms());
+                    room.members.len() > 1
+                }
+                _ => false,
+            }
+        };
         if let Some(network) = session.network.take() {
             let runtime = self.runtime()?;
             if let Some(mut guest) = session.guest.take() {
                 let _ = runtime.block_on(exchange(&network.endpoint, &mut guest, Operation::Leave));
+            } else if notify_guests {
+                runtime.block_on(async { tokio::time::sleep(END_NOTICE).await });
             }
+            *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
             let _ = runtime.block_on(network.router.shutdown());
         }
+        *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self
             .shared
             .snapshot
@@ -536,7 +602,22 @@ async fn exchange(
         operation,
     };
     let started = local_now_ms();
-    let result = tokio::time::timeout(EXCHANGE_TIMEOUT, async {
+    guest.note_attempt(started);
+    // The host closes idle connections; reusing one it already closed would
+    // turn every return from a pause into a spurious failed heartbeat.
+    if guest
+        .connection
+        .as_ref()
+        .is_some_and(|connection| connection.close_reason().is_some())
+    {
+        guest.connection = None;
+    }
+    let budget = if matches!(request.operation, Operation::Join { .. }) {
+        JOIN_TIMEOUT
+    } else {
+        EXCHANGE_TIMEOUT
+    };
+    let result = tokio::time::timeout(budget, async {
         if guest.connection.is_none() {
             guest.connection = Some(endpoint.connect(guest.ticket.host.clone(), ALPN).await?);
         }
@@ -603,7 +684,7 @@ async fn exchange(
                 "invalid party timeline"
             );
         }
-        guest.last_success = finished;
+        guest.failing_since = None;
         if let Some(reason) = response.rejection {
             return Err(ControlRejection {
                 reason,
@@ -626,9 +707,11 @@ async fn exchange(
     if result.as_ref().err().is_some_and(|error| {
         error.downcast_ref::<ControlRejection>().is_none()
             && error.downcast_ref::<NonterminalError>().is_none()
-    }) && let Some(connection) = guest.connection.take()
-    {
-        connection.close(0u32.into(), b"party request failed");
+    }) {
+        guest.failing_since.get_or_insert(started);
+        if let Some(connection) = guest.connection.take() {
+            connection.close(0u32.into(), b"party request failed");
+        }
     }
     result
 }
@@ -809,16 +892,152 @@ mod tests {
     }
 
     fn guest(ticket: Ticket) -> Guest {
-        Guest {
-            ticket,
-            connection: None,
-            next_sequence: 1,
-            next_control_sequence: 1,
-            last_success: local_now_ms(),
-            best_rtt: f64::INFINITY,
-            best_sample_at: 0,
-            offset: 0.0,
+        Guest::new(ticket)
+    }
+
+    #[test]
+    fn host_is_gone_only_after_consecutive_failures_while_actually_trying() {
+        let ticket = Ticket {
+            host: iroh::SecretKey::generate().public().into(),
+            room_id: ticket::random_hex(),
+            capability: [1; 32],
+            expires_unix: ticket::unix_now() + 60,
+        };
+        let mut guest = Guest::new(ticket);
+        assert!(!guest.host_unreachable(HOST_TIMEOUT_MS * 3));
+        // A failure, then the app is suspended for minutes: the first attempt
+        // after resume starts a fresh window instead of ending the party.
+        guest.note_attempt(1_000);
+        guest.failing_since.get_or_insert(1_000);
+        let resumed = 1_000 + 3 * HOST_TIMEOUT_MS;
+        guest.note_attempt(resumed);
+        assert!(guest.failing_since.is_none());
+        assert!(!guest.host_unreachable(resumed));
+        guest.failing_since.get_or_insert(resumed);
+        // Steady retries keep the window; it closes after HOST_TIMEOUT_MS.
+        for step in 1..=10u64 {
+            guest.note_attempt(resumed + step * 2_500);
         }
+        assert_eq!(guest.failing_since, Some(resumed));
+        assert!(!guest.host_unreachable(resumed + HOST_TIMEOUT_MS - 1));
+        assert!(guest.host_unreachable(resumed + HOST_TIMEOUT_MS));
+        // Any success clears it.
+        guest.failing_since = None;
+        assert!(!guest.host_unreachable(resumed + 2 * HOST_TIMEOUT_MS));
+    }
+
+    #[tokio::test]
+    async fn closed_connections_are_replaced_without_a_failed_heartbeat() {
+        let (_host, router, _handler, ticket) = host().await;
+        let endpoint = endpoint().await;
+        let mut guest = guest(ticket);
+        exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Join {
+                name: "Guest".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // The host side closes idle connections; the guest must notice the
+        // closed handle before opening a stream on it.
+        guest
+            .connection
+            .as_ref()
+            .unwrap()
+            .close(0u32.into(), b"idle");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(guest.connection.as_ref().unwrap().close_reason().is_some());
+        let snapshot = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(engine::tests::report()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(snapshot.connected && !snapshot.ended);
+        assert!(guest.failing_since.is_none());
+        endpoint.close().await;
+        router.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn ending_host_tells_connected_guests_before_shutting_down() {
+        let service = PartyService::new().unwrap();
+        let runtime = service.runtime().unwrap();
+        let shared = service.shared.clone();
+        let (host_endpoint, router, ticket) = runtime.block_on(async move {
+            let endpoint = endpoint().await;
+            let ticket = Ticket {
+                host: endpoint.addr(),
+                room_id: ticket::random_hex(),
+                capability: [42; 32],
+                expires_unix: ticket::unix_now() + 60,
+            };
+            *shared.host.lock().unwrap() = Some(HostRoom::new(
+                ticket.room_id.clone(),
+                endpoint.id().to_string(),
+                ticket.capability,
+                engine::tests::media(),
+                engine::tests::report(),
+                "Host".into(),
+                local_now_ms(),
+            ));
+            let router = Router::builder(endpoint.clone())
+                .accept(
+                    ALPN,
+                    Handler {
+                        shared,
+                        connections: Arc::new(Semaphore::new(16)),
+                    },
+                )
+                .spawn();
+            (endpoint, router, ticket)
+        });
+        {
+            let mut session = service.session.lock().unwrap();
+            session.network = Some(Network {
+                endpoint: host_endpoint,
+                router,
+            });
+            session.host_ticket = Some(ticket.clone());
+        }
+        let guest_endpoint = runtime.block_on(endpoint());
+        let mut guest = guest(ticket);
+        runtime
+            .block_on(exchange(
+                &guest_endpoint,
+                &mut guest,
+                Operation::Join {
+                    name: "Guest".into(),
+                },
+            ))
+            .unwrap()
+            .unwrap();
+        let renewed = service.renew_invite().unwrap();
+        assert!(renewed.starts_with("NVP2"));
+        let leaving = {
+            let service = service.clone();
+            std::thread::spawn(move || service.leave().unwrap())
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let ended = runtime
+            .block_on(exchange(
+                &guest_endpoint,
+                &mut guest,
+                Operation::Report(engine::tests::report()),
+            ))
+            .unwrap()
+            .unwrap();
+        assert!(ended.ended);
+        assert_eq!(ended.error.as_deref(), Some("party has ended"));
+        leaving.join().unwrap();
+        assert!(service.snapshot().is_none());
+        assert!(service.renew_invite().is_err());
+        runtime.block_on(guest_endpoint.close());
     }
 
     #[test]

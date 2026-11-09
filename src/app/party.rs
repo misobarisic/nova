@@ -28,6 +28,45 @@ fn party_episode_caption(state: &Shared, media: &PartyMedia) -> String {
     }
 }
 
+/// People rows: the host row reads "Host" while fine and names its own
+/// problem otherwise; the buffered figure only accompanies a playing stream.
+fn participant_status(p: &nova_party::Participant) -> String {
+    let status = if !p.connected {
+        if p.is_host { "Away" } else { "Disconnected" }
+    } else if p.buffering {
+        "Buffering"
+    } else if p.ready {
+        "Ready"
+    } else {
+        match p.reason.as_deref() {
+            Some("waiting for host to choose media") => "Waiting for the host to choose",
+            Some("buffering") => "Buffering",
+            Some("waiting for current media") => "Loading stream…",
+            Some("different media duration or edition") => "Different edition or duration",
+            Some("this source cannot seek") => "This stream cannot seek",
+            Some("local source unavailable") => "Local stream unavailable",
+            Some("local media finished") => "Finished",
+            Some("choose the same title and episode") => "Choose the same title and episode",
+            _ => "Choosing a stream",
+        }
+    };
+    let playing = p.connected && (p.ready || p.buffering);
+    let detail = if playing {
+        text::party_buffered_status(status, p.buffered_ahead)
+    } else {
+        text::tr(status).to_string()
+    };
+    if p.is_host {
+        if p.ready {
+            text::tr("Host").to_string()
+        } else {
+            format!("{} · {detail}", text::tr("Host"))
+        }
+    } else {
+        detail
+    }
+}
+
 fn participant_initial(name: &str) -> SharedString {
     name.trim()
         .nfc()
@@ -64,6 +103,46 @@ pub(super) struct State {
     setup_restore: Option<(u64, bool)>,
     source_choice: Option<SourceChoice>,
     selection: Option<Selection>,
+    /// The visible error is a transport failure; the next successful
+    /// heartbeat clears it instead of leaving a stale "Could not connect".
+    connection_error_shown: bool,
+    /// This profile may not open the room's title: report the source as
+    /// unavailable so the host sees why instead of waiting on this guest.
+    title_blocked: bool,
+    /// When the host's invite was last issued; hosts re-issue it periodically.
+    invite_issued: Option<Instant>,
+}
+
+/// Hosts renew well inside the ticket validity so a copy taken from the page
+/// is never about to expire.
+fn invite_renewal_due(issued: Option<Instant>, now: Instant) -> bool {
+    issued.is_some_and(|at| {
+        now.saturating_duration_since(at) >= Duration::from_millis(nova_party::INVITE_RENEWAL_MS)
+    })
+}
+
+/// Engine and transport failures reach the page as a few actionable messages.
+fn party_error_text(
+    rejection: Option<&nova_party::ControlRejection>,
+    message: &str,
+) -> SharedString {
+    if let Some(rejection) = rejection {
+        return text::tr(&rejection.to_string()).into();
+    }
+    text::tr(if message.contains("invite") {
+        "The watch-party invite is invalid or expired."
+    } else if message.contains("party is full") {
+        "The watch party is full."
+    } else if message.contains("host cannot join itself") {
+        "You cannot join your own watch party."
+    } else if message.contains("membership revoked") {
+        "party membership revoked"
+    } else if message.contains("party has ended") {
+        "The watch party has ended."
+    } else {
+        "Could not connect to the watch party. Try again."
+    })
+    .into()
 }
 
 #[derive(Clone)]
@@ -195,13 +274,19 @@ impl State {
     }
 
     fn push_operation(&mut self, operation: Operation) -> bool {
-        // Absolute slider moves supersede only an adjacent absolute move in
-        // the same room state. Steps, resets and other actions keep ordering.
-        if let Operation::Command(generation, revision, HostCommand::SetRate(_)) = &operation
-            && let Some(Operation::Command(old_generation, old_revision, HostCommand::SetRate(_))) =
+        // Absolute slider moves (speed or timeline) supersede only an adjacent
+        // absolute move of the same kind in the same room state. Steps, resets,
+        // relative seeks and other actions keep ordering.
+        if let Operation::Command(generation, revision, command) = &operation
+            && let Some(Operation::Command(old_generation, old_revision, previous)) =
                 self.pending.back()
             && generation == old_generation
             && revision == old_revision
+            && matches!(
+                (command, previous),
+                (HostCommand::SetRate(_), HostCommand::SetRate(_))
+                    | (HostCommand::SeekAbsolute(_), HostCommand::SeekAbsolute(_))
+            )
         {
             *self.pending.back_mut().unwrap() = operation;
             return true;
@@ -375,6 +460,7 @@ enum Operation {
     Kick(String),
     Wait(bool),
     Continue,
+    RenewInvite,
     Report(LocalReport),
 }
 
@@ -383,6 +469,13 @@ impl Operation {
         matches!(
             self,
             Self::Command(..) | Self::Pause(_) | Self::PrepareMedia(..)
+        )
+    }
+
+    fn is_media_change(&self) -> bool {
+        matches!(
+            self,
+            Self::ClearMedia { .. } | Self::PrepareMedia(..) | Self::SelectMedia(..)
         )
     }
 }
@@ -700,7 +793,10 @@ impl Bridge {
             };
         }
         let local = self.party_media();
-        let manual = self.shared.lock().unwrap().party.choosing_source;
+        let (manual, blocked) = {
+            let state = self.shared.lock().unwrap();
+            (state.party.choosing_source, state.party.title_blocked)
+        };
         let matches = room.is_none_or(|room| {
             local.as_ref().is_some_and(|local| {
                 room.selected_media()
@@ -710,7 +806,10 @@ impl Bridge {
         let readiness = self.player.playback_readiness();
         let loaded =
             app.get_player_open() && app.get_playback_started() && !app.get_resume_prompt_visible();
-        let media = matches
+        // A profile that cannot open the title claims the room's identity with
+        // a source error: the host sees "Local stream unavailable" and the
+        // room does not wait on a guest that can never become ready.
+        let media = (matches || blocked)
             .then(|| {
                 room.and_then(|r| r.selected_media().map(|media| media.identity.clone()))
                     .or_else(|| local.as_ref().map(|m| m.identity.clone()))
@@ -727,8 +826,12 @@ impl Bridge {
             buffered_ahead: readiness.buffered_ahead,
             buffering: readiness.buffering,
             ended: readiness.ended,
-            ready: loaded && matches && readiness.seekable && !readiness.buffering,
-            error: (!matches).then(|| "choose a local stream".into()),
+            ready: loaded && matches && !blocked && readiness.seekable && !readiness.buffering,
+            error: if blocked {
+                Some("profile cannot open this title".into())
+            } else {
+                (!matches).then(|| "choose a local stream".into())
+            },
         }
     }
 
@@ -838,6 +941,7 @@ impl Bridge {
                             state.party.snapshot = snapshot;
                             state.party.choosing_media = invite_is_host;
                             state.party.selection_epoch = playback_epoch;
+                            state.party.invite_issued = invite_is_host.then(Instant::now);
                         }
                         b.release_speed_preview_for_party();
                         b.player.set_party_playback_rate(Some(1.0));
@@ -858,14 +962,10 @@ impl Bridge {
                             state.party.setup_restore.take()
                         };
                         b.party_restore_setup(restore);
-                        app.set_party_error(
-                            text::tr(if error.to_string().contains("invite") {
-                                "The watch-party invite is invalid or expired."
-                            } else {
-                                "Could not connect to the watch party. Try again."
-                            })
-                            .into(),
-                        );
+                        app.set_party_error(party_error_text(
+                            error.downcast_ref(),
+                            &error.to_string(),
+                        ));
                     }
                 }
             });
@@ -1425,6 +1525,17 @@ impl Bridge {
             &media.identity.media_type,
             &media.identity.title_id,
         ) {
+            // Say so here and in every report: otherwise the room silently
+            // waits on this guest while it sees nothing at all.
+            self.shared.lock().unwrap().party.title_blocked = true;
+            if let Some(app) = self.app() {
+                app.set_party_error(
+                    text::tr(
+                        "This profile cannot open the selected title. Switch profiles or leave the party.",
+                    )
+                    .into(),
+                );
+            }
             return;
         }
         if self.app().is_some_and(|app| app.get_player_open()) {
@@ -1878,6 +1989,23 @@ impl Bridge {
         if snapshot.as_ref().is_some_and(|r| r.media.is_none()) && app.get_player_open() {
             self.player.set_paused(true);
         }
+        if snapshot
+            .as_ref()
+            .is_some_and(|room| room.role == PartyRole::Host && !room.ended)
+        {
+            let mut state = self.shared.lock().unwrap();
+            let p = &mut state.party;
+            if invite_renewal_due(p.invite_issued, Instant::now())
+                && !p
+                    .pending
+                    .iter()
+                    .any(|op| matches!(op, Operation::RenewInvite))
+            {
+                // A failed renewal simply retries after the next interval.
+                p.invite_issued = Some(Instant::now());
+                p.pending.push_back(Operation::RenewInvite);
+            }
+        }
         if let Some(room) = snapshot.as_ref()
             && report.loaded
             && !self.shared.lock().unwrap().party.resume_guard
@@ -2003,6 +2131,7 @@ impl Bridge {
             };
             let report_only = matches!(operation, Operation::Report(_));
             let mut pause_skipped = false;
+            let mut renewed_invite = None;
             let result = if !remote_playback::is_foreground() && report_only {
                 Ok(())
             } else {
@@ -2080,6 +2209,9 @@ impl Bridge {
                     Operation::Kick(id) => service.kick(&id),
                     Operation::Wait(enabled) => service.set_wait_for_guests(enabled),
                     Operation::Continue => service.continue_without_waiting(),
+                    Operation::RenewInvite => service.renew_invite().map(|invite| {
+                        renewed_invite = Some(invite);
+                    }),
                     Operation::Report(report) => service.report(report),
                 }
             };
@@ -2089,6 +2221,9 @@ impl Bridge {
                 let reopen_room;
                 let mut download = None;
                 let mut next = None;
+                let mut retired_media = false;
+                let mut ui_busy = None;
+                let error_message;
                 {
                     let mut state = b.shared.lock().unwrap();
                     let p = &mut state.party;
@@ -2105,7 +2240,14 @@ impl Bridge {
                     }
                     if media_change && p.selection_revision != selection_revision {
                         p.busy = false;
+                        // A superseded media change must not leave the page's
+                        // buttons disabled when nothing else is in flight.
+                        let ui_busy = p.pending.iter().any(Operation::is_media_change)
+                            || p.selection.as_ref().is_some_and(|s| s.next.is_some());
                         drop(state);
+                        if let Some(app) = b.app() {
+                            app.set_party_busy(ui_busy);
+                        }
                         b.party_tick();
                         return;
                     }
@@ -2147,9 +2289,14 @@ impl Bridge {
                         if changed {
                             // A late rejected proposal must not clear the
                             // creator's new source-follow/activation intent.
+                            let media_ops =
+                                p.pending.iter().filter(|op| op.is_media_change()).count();
                             p.retire_old_operations(room.generation);
+                            retired_media = media_ops
+                                > p.pending.iter().filter(|op| op.is_media_change()).count();
                             p.last_seek = None;
                             p.choosing_source = false;
+                            p.title_blocked = false;
                             // A host source can finish while its episode
                             // announcement is in flight. Both host selection
                             // stages bind that same local asset to this generation.
@@ -2179,6 +2326,34 @@ impl Bridge {
                     {
                         p.resume_guard = false;
                     }
+                    // Heartbeat failures are not errors to the person: the
+                    // status already reads "Reconnecting to the host…" and the
+                    // next successful heartbeat ends it. Only a room-level
+                    // refusal of the heartbeat (a full room) is worth a message.
+                    error_message = match &result {
+                        Err(error) if !report_only => {
+                            p.connection_error_shown = error
+                                .downcast_ref::<nova_party::ControlRejection>()
+                                .is_none();
+                            Some(party_error_text(error.downcast_ref(), &error.to_string()))
+                        }
+                        Err(error) if error.to_string().contains("party is full") => {
+                            p.connection_error_shown = true;
+                            Some(party_error_text(None, &error.to_string()))
+                        }
+                        Err(_) => None,
+                        Ok(()) if !report_only || p.connection_error_shown => {
+                            p.connection_error_shown = false;
+                            Some("".into())
+                        }
+                        Ok(()) => None,
+                    };
+                    if media_change || retired_media {
+                        ui_busy = Some(
+                            p.pending.iter().any(Operation::is_media_change)
+                                || p.selection.as_ref().is_some_and(|s| s.next.is_some()),
+                        );
+                    }
                 }
                 if let Some(app) = b.app() {
                     // Guests choose their own source for each newly selected
@@ -2186,21 +2361,15 @@ impl Bridge {
                     if reopen_room {
                         app.set_party_page_open(true);
                     }
-                    if media_change {
-                        app.set_party_busy(false);
+                    if let Some(busy) = ui_busy {
+                        app.set_party_busy(busy);
                     }
-                    if let Err(error) = &result {
-                        app.set_party_error(
-                            if let Some(rejection) =
-                                error.downcast_ref::<nova_party::ControlRejection>()
-                            {
-                                text::tr(&rejection.to_string()).into()
-                            } else {
-                                text::tr("Could not connect to the watch party. Try again.").into()
-                            },
-                        );
-                    } else if !report_only {
-                        app.set_party_error("".into());
+                    if let Some(message) = error_message {
+                        app.set_party_error(message);
+                    }
+                    if let Some(invite) = renewed_invite {
+                        app.set_party_invite_qr(invite_qr_image(&invite).unwrap_or_default());
+                        app.set_party_invite(invite.into());
                     }
                 }
                 if browse && result.is_ok() {
@@ -2272,6 +2441,7 @@ impl Bridge {
         } else {
             "".into()
         });
+        let host = room.participants.iter().find(|p| p.is_host);
         let status = if room.ended {
             "The watch party has ended."
         } else if !room.connected {
@@ -2286,7 +2456,19 @@ impl Bridge {
                 "Waiting for the host to choose"
             }
         } else if !room.waiting.is_empty() {
-            "Waiting for participants to buffer…"
+            // The host always holds the room; name it instead of blaming
+            // guests when it is the host's own absence or stream.
+            if host.is_some_and(|host| !host.connected) {
+                "Waiting for the host to return…"
+            } else if host.is_some_and(|host| !host.ready) {
+                if room.role == PartyRole::Host {
+                    "Waiting for your stream…"
+                } else {
+                    "Waiting for the host's stream…"
+                }
+            } else {
+                "Waiting for participants to buffer…"
+            }
         } else if room.timeline.paused {
             "Paused"
         } else {
@@ -2305,35 +2487,7 @@ impl Bridge {
                         is_host: p.is_host,
                         ready: p.ready,
                         can_remove: room.role == PartyRole::Host && !p.is_host,
-                        status: text::party_buffered_status(
-                            if !p.connected {
-                                "Disconnected"
-                            } else if p.buffering {
-                                "Buffering"
-                            } else if p.ready {
-                                "Ready"
-                            } else {
-                                match p.reason.as_deref() {
-                                    Some("waiting for host to choose media") => {
-                                        "Waiting for the host to choose"
-                                    }
-                                    Some("buffering") => "Buffering",
-                                    Some("waiting for current media") => "Loading stream…",
-                                    Some("different media duration or edition") => {
-                                        "Different edition or duration"
-                                    }
-                                    Some("this source cannot seek") => "This stream cannot seek",
-                                    Some("local source unavailable") => "Local stream unavailable",
-                                    Some("local media finished") => "Finished",
-                                    Some("choose the same title and episode") => {
-                                        "Choose the same title and episode"
-                                    }
-                                    _ => "Choosing a stream",
-                                }
-                            },
-                            p.buffered_ahead,
-                        )
-                        .into(),
+                        status: participant_status(p).into(),
                     })
                     .collect::<Vec<_>>(),
             ))
@@ -2455,6 +2609,180 @@ mod tests {
         assert!(matches!(state.pending[2], Operation::Kick(_)));
         assert!(matches!(state.pending[3], Operation::Wait(false)));
         assert!(matches!(state.pending[4], Operation::Policy(_)));
+    }
+
+    #[test]
+    fn timeline_scrubs_coalesce_like_speed_but_never_cross_other_commands() {
+        let mut state = State::default();
+        for position in [10.0, 20.0, 30.0] {
+            assert!(state.push_operation(Operation::Command(
+                1,
+                0,
+                HostCommand::SeekAbsolute(position)
+            )));
+        }
+        assert_eq!(state.pending.len(), 1);
+        assert!(matches!(
+            state.pending[0],
+            Operation::Command(1, 0, HostCommand::SeekAbsolute(p)) if p == 30.0
+        ));
+        // A relative step, a different room state or another command kind
+        // keeps its own slot and ordering.
+        assert!(state.push_operation(Operation::Command(1, 0, HostCommand::SeekRelative(10.0))));
+        assert!(state.push_operation(Operation::Command(1, 0, HostCommand::SeekAbsolute(40.0))));
+        assert!(state.push_operation(Operation::Command(1, 1, HostCommand::SeekAbsolute(50.0))));
+        assert!(state.push_operation(Operation::Command(1, 1, HostCommand::SetRate(1.5))));
+        assert!(state.push_operation(Operation::Command(1, 1, HostCommand::SeekAbsolute(60.0))));
+        assert_eq!(state.pending.len(), 6);
+        assert!(matches!(
+            state.pending[3],
+            Operation::Command(1, 1, HostCommand::SeekAbsolute(p)) if p == 50.0
+        ));
+        assert!(matches!(
+            state.pending[5],
+            Operation::Command(1, 1, HostCommand::SeekAbsolute(p)) if p == 60.0
+        ));
+    }
+
+    #[test]
+    fn invite_renewal_is_due_only_for_hosts_after_the_interval() {
+        let issued = Instant::now();
+        assert!(!invite_renewal_due(None, issued));
+        assert!(!invite_renewal_due(
+            Some(issued),
+            issued + Duration::from_millis(nova_party::INVITE_RENEWAL_MS - 1)
+        ));
+        assert!(invite_renewal_due(
+            Some(issued),
+            issued + Duration::from_millis(nova_party::INVITE_RENEWAL_MS)
+        ));
+    }
+
+    #[test]
+    fn participant_rows_name_host_problems_and_show_buffer_only_while_playing() {
+        let host = nova_party::Participant {
+            source_fingerprint: None,
+            id: "host".into(),
+            name: "Host".into(),
+            is_host: true,
+            connected: true,
+            ready: true,
+            buffering: false,
+            position: 10.0,
+            buffered_ahead: 12.0,
+            reason: None,
+        };
+        assert_eq!(participant_status(&host), "Host");
+        let away = nova_party::Participant {
+            connected: false,
+            ready: false,
+            reason: Some("disconnected".into()),
+            ..host.clone()
+        };
+        assert_eq!(participant_status(&away), "Host · Away");
+        let edition = nova_party::Participant {
+            ready: false,
+            reason: Some("different media duration or edition".into()),
+            ..host.clone()
+        };
+        assert_eq!(
+            participant_status(&edition),
+            "Host · Different edition or duration"
+        );
+        let guest = nova_party::Participant {
+            id: "guest".into(),
+            name: "Guest".into(),
+            is_host: false,
+            ..host.clone()
+        };
+        assert_eq!(participant_status(&guest), "Ready · 12.0 s buffered");
+        let buffering = nova_party::Participant {
+            ready: false,
+            buffering: true,
+            buffered_ahead: 0.4,
+            reason: Some("buffering".into()),
+            ..guest.clone()
+        };
+        assert_eq!(participant_status(&buffering), "Buffering · 0.4 s buffered");
+        let choosing = nova_party::Participant {
+            ready: false,
+            buffered_ahead: 0.0,
+            reason: Some("choose the same title and episode".into()),
+            ..guest.clone()
+        };
+        assert_eq!(
+            participant_status(&choosing),
+            "Choose the same title and episode"
+        );
+        let gone = nova_party::Participant {
+            connected: false,
+            ready: false,
+            reason: Some("disconnected".into()),
+            ..guest.clone()
+        };
+        assert_eq!(participant_status(&gone), "Disconnected");
+        let unavailable = nova_party::Participant {
+            ready: false,
+            reason: Some("local source unavailable".into()),
+            ..guest
+        };
+        assert_eq!(participant_status(&unavailable), "Local stream unavailable");
+    }
+
+    #[test]
+    fn room_errors_map_to_specific_messages_with_a_generic_fallback() {
+        let text = |message: &str| party_error_text(None, message).to_string();
+        assert_eq!(text("party is full"), "The watch party is full.");
+        assert_eq!(
+            text("host cannot join itself"),
+            "You cannot join your own watch party."
+        );
+        assert_eq!(text("party has ended"), "The watch party has ended.");
+        assert_eq!(
+            text("invite expired"),
+            "The watch-party invite is invalid or expired."
+        );
+        assert_eq!(
+            text("party invite expired or clock differs"),
+            "The watch-party invite is invalid or expired."
+        );
+        assert_eq!(text("party membership revoked"), "party membership revoked");
+        assert_eq!(
+            text("party request timed out"),
+            "Could not connect to the watch party. Try again."
+        );
+        let rejection = nova_party::ControlRejection {
+            reason: nova_party::ControlRejectionReason::RateLimited,
+            snapshot: Box::new(RoomSnapshot {
+                role: PartyRole::Guest,
+                room_id: "room".into(),
+                host_id: "host".into(),
+                member_id: "guest".into(),
+                media: None,
+                pending_media: None,
+                generation: 1,
+                revision: 1,
+                control_policy: ControlPolicy::Everyone,
+                control_revision: 0,
+                timeline: nova_party::Timeline {
+                    position: 0.0,
+                    anchor_ms: 0,
+                    paused: true,
+                    target_rate: 1.0,
+                },
+                participants: Vec::new(),
+                waiting: Vec::new(),
+                wait_for_guests: true,
+                connected: true,
+                ended: false,
+                error: None,
+                clock_offset_ms: 0.0,
+            }),
+        };
+        assert_eq!(
+            party_error_text(Some(&rejection), "ignored").to_string(),
+            "party commands too frequent"
+        );
     }
 
     fn media(id: &str, episode: u32) -> PartyMedia {

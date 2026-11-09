@@ -1054,6 +1054,74 @@ fn party_player_speed_menu_is_read_only_until_live_policy_allows_edits() {
 }
 
 #[test]
+fn timeline_scrubs_commit_once_at_rest_and_leaving_never_waits_for_busy() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::timeline_scrubs_commit_once_at_rest_and_leaving_never_waits_for_busy"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(1280, 800));
+    app.set_party_active(true);
+    set_host(&app, true);
+    app.set_party_has_media(true);
+    app.set_party_duration(3600.0);
+    app.set_party_position(100.0);
+    app.set_party_title("A film".into());
+    let seeks = Rc::new(RefCell::new(Vec::new()));
+    let recorded = seeks.clone();
+    app.on_party_seek(move |position| recorded.borrow_mut().push(position));
+    let leaves = Rc::new(RefCell::new(0));
+    let recorded = leaves.clone();
+    app.on_party_leave(move || *recorded.borrow_mut() += 1);
+    app.window().show().unwrap();
+    app.set_party_page_open(true);
+    settle();
+    let timeline = || {
+        ElementHandle::find_by_element_id(&app, "PartyPage::party_timeline")
+            .next()
+            .unwrap()
+    };
+    // A drag is a burst of value changes: nothing is sent while the hand is
+    // still moving, then exactly one seek with the resting position.
+    for value in ["600", "700", "800"] {
+        timeline().set_accessible_value(value);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        assert!(
+            seeks.borrow().is_empty(),
+            "intermediate positions never seek"
+        );
+    }
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert_eq!(&*seeks.borrow(), &[800.0]);
+    // Room updates during the drag do not yank the knob back; afterwards the
+    // slider follows the published position again.
+    timeline().set_accessible_value("900");
+    app.set_party_position(120.0);
+    settle();
+    assert_eq!(timeline().accessible_value().as_deref(), Some("900"));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert_eq!(&*seeks.borrow(), &[800.0, 900.0]);
+    app.set_party_position(130.0);
+    settle();
+    assert_eq!(timeline().accessible_value().as_deref(), Some("130"));
+    // End/Leave stays available while an operation is in flight.
+    app.set_party_busy(true);
+    settle();
+    assert_eq!(button(&app, "End party").accessible_enabled(), Some(true));
+    button(&app, "End party").mock_single_click(slint::platform::PointerEventButton::Left);
+    settle();
+    button(&app, "Confirm end party").mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(*leaves.borrow(), 1);
+    app.set_party_is_host(false);
+    settle();
+    assert_eq!(button(&app, "Leave party").accessible_enabled(), Some(true));
+}
+
+#[test]
 fn party_transport_uses_pending_pause_feedback_before_native_scheduled_start() {
     if !crate::isolation::run(concat!(
         module_path!(),

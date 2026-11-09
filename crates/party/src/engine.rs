@@ -3,13 +3,32 @@ use crate::*;
 use anyhow::{Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) const DISCONNECTED_MS: u64 = 2_000;
+/// Longer than one request timeout plus the report cadence, so a single slow
+/// or timed-out heartbeat does not flap a member into "disconnected" and hold
+/// everyone else.
+pub(crate) const DISCONNECTED_MS: u64 = 4_000;
+// One 2.5 s request timeout plus a 500 ms report cadence, with margin.
+const _: () = assert!(DISCONNECTED_MS >= 2_500 + 500 + 500);
 const DISCONNECT_GRACE_MS: u64 = 10_000;
+/// Members unseen this long are hidden from the People list and stop counting
+/// toward the member limit. Identities are ephemeral, so a crashed or
+/// restarted app leaves such ghosts behind; they revive on their next report.
+pub(crate) const DORMANT_MS: u64 = 5 * 60 * 1_000;
 const STALL_DEBOUNCE_MS: u64 = 800;
 const RECOVER_MS: u64 = 500;
-pub(crate) const ROOM_LIFETIME_MS: u64 = 4 * 60 * 60 * 1_000;
+/// A room ends once its host has been silent this long (sliding), or at the
+/// absolute cap below. The host's heartbeat keeps a marathon alive.
+pub(crate) const ROOM_IDLE_MS: u64 = 4 * 60 * 60 * 1_000;
+pub(crate) const ROOM_MAX_LIFETIME_MS: u64 = 24 * 60 * 60 * 1_000;
+/// Validity of one issued invite. The host can issue a fresh one at any time;
+/// guests reject tickets further than ~65 minutes out, so this never grows.
 pub(crate) const INVITE_LIFETIME_MS: u64 = 60 * 60 * 1_000;
 const MAX_ADMISSIONS: usize = 64;
+/// A host report lagging the shared clock inside this window is a micro-stall
+/// of the host's own player; the clock follows it instead of making the host
+/// skip ahead. Larger gaps are real stalls or seeks and keep normal handling.
+const HOST_REANCHOR_MIN_S: f64 = 0.75;
+const HOST_REANCHOR_MAX_S: f64 = 3.0;
 
 pub(crate) struct Member {
     pub participant: Participant,
@@ -34,6 +53,8 @@ pub(crate) struct HostRoom {
     intended_paused: bool,
     held: bool,
     admissions: usize,
+    /// Host-monotonic deadline of the most recently issued invite.
+    invite_until: u64,
 }
 
 pub(crate) fn media_matches(expected: &MediaIdentity, actual: Option<&MediaIdentity>) -> bool {
@@ -273,9 +294,48 @@ impl HostRoom {
             intended_paused: false,
             held: false,
             admissions: 1,
+            invite_until: now + INVITE_LIFETIME_MS,
         };
         room.tick(now);
         room
+    }
+
+    /// Rooms expire by host silence (sliding) or by the absolute lifetime cap.
+    /// The host's own process never times itself out otherwise: a suspended
+    /// Android host merely pauses everyone until it returns; guests apply
+    /// their own reachability timeout.
+    fn expired(&self, now: u64) -> bool {
+        let host_seen = self.members[&self.snapshot.host_id].last_seen;
+        now.saturating_sub(self.created) >= ROOM_MAX_LIFETIME_MS
+            || now.saturating_sub(host_seen) >= ROOM_IDLE_MS
+    }
+
+    fn dormant(member: &Member, now: u64) -> bool {
+        !member.participant.is_host && now.saturating_sub(member.last_seen) > DORMANT_MS
+    }
+
+    fn active_members(&self, now: u64) -> usize {
+        self.members
+            .values()
+            .filter(|member| !Self::dormant(member, now))
+            .count()
+    }
+
+    /// Issue a new invite deadline; the service re-encodes the ticket with the
+    /// same capability so earlier copies stay valid until their own expiry.
+    pub fn renew_invite(&mut self, now: u64) -> Result<()> {
+        self.tick(now);
+        ensure!(!self.snapshot.ended, "party has ended");
+        self.invite_until = now + INVITE_LIFETIME_MS;
+        Ok(())
+    }
+
+    /// Mark the room ended so connected guests learn it on their next
+    /// heartbeat instead of waiting out their reconnect timeout.
+    pub fn end(&mut self, reason: &str, now: u64) {
+        self.snapshot.ended = true;
+        self.snapshot.error = Some(reason.into());
+        self.tick(now);
     }
 
     /// Authentication is checked after reading every frame, while holding the
@@ -297,8 +357,7 @@ impl HostRoom {
             "invalid party capability"
         );
         ensure!(
-            (!self.snapshot.ended || self.members.contains_key(peer))
-                && now.saturating_sub(self.created) < ROOM_LIFETIME_MS,
+            (!self.snapshot.ended || self.members.contains_key(peer)) && !self.expired(now),
             "party has ended"
         );
         ensure!(!self.revoked.contains(peer), "party membership revoked");
@@ -315,12 +374,9 @@ impl HostRoom {
             }
             return Ok(());
         }
+        ensure!(now < self.invite_until, "invite expired");
         ensure!(
-            now.saturating_sub(self.created) < INVITE_LIFETIME_MS,
-            "invite expired"
-        );
-        ensure!(
-            self.members.len() < MAX_MEMBERS && self.admissions < MAX_ADMISSIONS,
+            self.active_members(now) < MAX_MEMBERS && self.admissions < MAX_ADMISSIONS,
             "party is full"
         );
         let mut member = Member::new(id.into(), name, false, now);
@@ -333,6 +389,17 @@ impl HostRoom {
 
     pub fn report(&mut self, id: &str, report: LocalReport, sequence: u64, now: u64) -> Result<()> {
         validate_report(&report)?;
+        // A dormant member returning after a long absence takes a seat again;
+        // when others filled the room meanwhile it stays hidden rather than
+        // pushing the People list past the member limit.
+        let returning = self
+            .members
+            .get(id)
+            .is_some_and(|member| Self::dormant(member, now));
+        ensure!(
+            !returning || self.active_members(now) < MAX_MEMBERS,
+            "party is full"
+        );
         let member = self
             .members
             .get_mut(id)
@@ -360,14 +427,51 @@ impl HostRoom {
 
     pub fn local_report(&mut self, report: LocalReport, now: u64) -> Result<()> {
         validate_report(&report)?;
-        if now.saturating_sub(self.members[&self.snapshot.host_id].last_seen) >= HOST_TIMEOUT_MS {
-            self.snapshot.ended = true;
-            self.snapshot.error = Some("host disconnected".into());
-        }
         // Reports from a previous load can still be queued while the host
         // chooses another episode. They keep the foreground heartbeat alive,
         // but cannot finish or change readiness for the current selection.
         let current = report.generation == self.snapshot.generation;
+        let playing_current = current
+            && report.loaded
+            && report.seekable
+            && !report.ended
+            && self
+                .snapshot
+                .media
+                .as_ref()
+                .is_some_and(|media| media_matches(&media.identity, report.media.as_ref()));
+        if playing_current
+            && !self.snapshot.ended
+            && let Some(media) = self.snapshot.media.as_mut()
+            && report.duration.is_finite()
+            && report.duration > 0.0
+            && report.duration <= 604_800.0
+            && !duration_matches(media.duration, report.duration)
+        {
+            // The host replaced its own stream with another edition of the
+            // same episode. The host is the edition authority: adopt the new
+            // duration so guests re-validate against it instead of the room
+            // waiting forever on its own "different edition" host.
+            media.duration = report.duration;
+            let position = self
+                .snapshot
+                .timeline
+                .position_at(now as f64)
+                .min(report.duration);
+            self.snapshot.timeline.position = position;
+            self.snapshot.timeline.anchor_ms = now + START_LEAD_MS;
+        }
+        if playing_current
+            && !self.held
+            && !self.snapshot.timeline.paused
+            && self.snapshot.timeline.anchor_ms <= now
+        {
+            let lag = self.snapshot.timeline.position_at(now as f64) - report.position;
+            if (HOST_REANCHOR_MIN_S..=HOST_REANCHOR_MAX_S).contains(&lag) {
+                self.snapshot.timeline.position = report.position;
+                self.snapshot.timeline.anchor_ms = now;
+            }
+        }
         if current
             && report.ended
             && self
@@ -703,16 +807,18 @@ impl HostRoom {
     }
 
     pub fn tick(&mut self, now: u64) {
-        if now.saturating_sub(self.created) >= ROOM_LIFETIME_MS {
+        if self.expired(now) {
             self.snapshot.ended = true;
             self.snapshot.error = Some("party expired".into());
         }
         let mut waiting = Vec::new();
         for member in self.members.values_mut() {
             let age = now.saturating_sub(member.last_seen);
-            // A slightly shorter compatible edition can reach EOF first. It
-            // remains a visible, paused member without holding everyone else.
-            if member.report.ended
+            // A slightly shorter compatible edition can reach EOF first, and a
+            // guest whose own source failed (or whose profile cannot open the
+            // title) cannot recover by waiting. Both remain visible, paused
+            // members without holding everyone else; readiness re-admits them.
+            if (member.report.ended || member.report.error.is_some())
                 && !member.participant.is_host
                 && member.report.generation == self.snapshot.generation
                 && self.snapshot.media.as_ref().is_some_and(|media| {
@@ -770,10 +876,6 @@ impl HostRoom {
             if !member.participant.is_host && age > DISCONNECT_GRACE_MS {
                 member.admitted = false;
             }
-            if member.participant.is_host && age > HOST_TIMEOUT_MS {
-                self.snapshot.ended = true;
-                self.snapshot.error = Some("host disconnected".into());
-            }
             if self.snapshot.media.is_some()
                 && member.admitted
                 && member.stalled
@@ -800,6 +902,7 @@ impl HostRoom {
         self.snapshot.participants = self
             .members
             .values()
+            .filter(|member| !Self::dormant(member, now))
             .map(|m| m.participant.clone())
             .collect();
         self.snapshot.revision = self.snapshot.revision.saturating_add(1);
@@ -978,13 +1081,13 @@ pub(crate) mod tests {
                 ControlRejectionReason::InvalidIntent,
             );
         }
-        room.control("guest", 1, revision, Some(2000), seek, 3_000)
+        room.control("guest", 1, revision, Some(2000), seek, 5_000)
             .unwrap();
         assert!(
             !room.members["guest"].participant.connected,
             "controls cannot fake readiness heartbeats"
         );
-        room.report("guest", report(), 4, 3_000).unwrap();
+        room.report("guest", report(), 4, 5_000).unwrap();
         assert!(room.members["guest"].participant.connected);
     }
 
@@ -1108,7 +1211,7 @@ pub(crate) mod tests {
                 .is_err()
         );
         assert!(
-            room.authorize(&"a".repeat(32), &[7; 32], "new", ROOM_LIFETIME_MS)
+            room.authorize(&"a".repeat(32), &[7; 32], "new", ROOM_IDLE_MS)
                 .is_err()
         );
     }
@@ -1162,7 +1265,12 @@ pub(crate) mod tests {
         assert!(!room.snapshot.timeline.paused);
         assert_eq!(room.snapshot.timeline.anchor_ms, 2_700);
         room.local_report(report(), 4_000).unwrap();
-        room.local_report(report(), 4_900).unwrap();
+        assert!(
+            !room.snapshot.timeline.paused,
+            "one slow heartbeat is not a disconnect"
+        );
+        room.local_report(report(), 6_000).unwrap();
+        room.local_report(report(), 7_000).unwrap();
         assert!(room.snapshot.timeline.paused);
         room.local_report(report(), 12_000).unwrap();
         assert!(
@@ -1207,15 +1315,255 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn host_cannot_resume_an_expired_foreground_session() {
+    fn host_silence_holds_the_room_and_the_returning_host_resumes_it() {
+        // A suspended Android host stops reporting. Nobody may end the room
+        // for that: guests see the host as away and the shared clock holds.
         let mut room = room();
-        room.local_report(report(), HOST_TIMEOUT_MS + 1).unwrap();
-        assert!(room.snapshot.ended && room.snapshot.timeline.paused);
-        assert_eq!(room.snapshot.error.as_deref(), Some("host disconnected"));
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.report("guest", report(), 2, 200).unwrap();
+        room.local_report(report(), 1_200).unwrap();
+        assert!(!room.snapshot.timeline.paused);
+        let away = 1_200 + HOST_TIMEOUT_MS + 5_000;
+        room.report("guest", report(), 3, away).unwrap();
+        assert!(!room.snapshot.ended);
+        room.report("guest", report(), 4, away + STALL_DEBOUNCE_MS)
+            .unwrap();
+        assert!(!room.snapshot.ended);
+        assert_eq!(room.snapshot.waiting, ["Host"]);
+        assert!(room.snapshot.timeline.paused);
+        let host = room
+            .snapshot
+            .participants
+            .iter()
+            .find(|p| p.is_host)
+            .unwrap();
+        assert!(!host.connected && !host.ready);
+        assert_eq!(host.reason.as_deref(), Some("disconnected"));
+        // The host's own first report after resume never ends the room either.
+        room.local_report(report(), away + 100).unwrap();
+        assert!(!room.snapshot.ended);
+        assert!(room.snapshot.error.is_none());
+        room.local_report(report(), away + 100 + RECOVER_MS)
+            .unwrap();
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+        room.command(HostCommand::SetPaused(false), away + 700)
+            .unwrap();
+        assert!(!room.snapshot.ended);
+    }
+
+    #[test]
+    fn rooms_expire_on_host_silence_or_the_absolute_cap_only() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.local_report(report(), 10_000).unwrap();
+        // Guests alone cannot keep a room alive forever without its host.
+        room.report("guest", report(), 2, 10_000 + ROOM_IDLE_MS - 1_000)
+            .unwrap();
+        assert!(!room.snapshot.ended);
+        room.report("guest", report(), 3, 10_000 + ROOM_IDLE_MS)
+            .unwrap();
+        assert!(room.snapshot.ended);
+        assert_eq!(room.snapshot.error.as_deref(), Some("party expired"));
+
+        let mut marathon = super::tests::room();
+        let mut now = 0;
+        while now + ROOM_IDLE_MS / 2 < ROOM_MAX_LIFETIME_MS {
+            now += ROOM_IDLE_MS / 2;
+            marathon.local_report(report(), now).unwrap();
+            assert!(!marathon.snapshot.ended, "active hosts slide the lifetime");
+        }
+        marathon
+            .local_report(report(), ROOM_MAX_LIFETIME_MS)
+            .unwrap();
+        assert!(marathon.snapshot.ended);
+    }
+
+    #[test]
+    fn host_edition_replacement_adopts_its_duration_instead_of_waiting_on_itself() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.report("guest", report(), 2, 200).unwrap();
+        room.local_report(report(), 1_200).unwrap();
+        let mut other_cut = report();
+        other_cut.duration = 130.0;
+        other_cut.position = 10.0;
+        room.local_report(other_cut, 2_000).unwrap();
+        assert_eq!(room.snapshot.media.as_ref().unwrap().duration, 130.0);
+        assert!(room.members["host"].participant.ready);
+        assert_eq!(room.snapshot.timeline.anchor_ms, 2_000 + START_LEAD_MS);
+        // Guests now validate against the host's edition: the 120 s guest is
+        // the one shown as a different edition, and it holds like any other
+        // present member until the host continues or it picks another source.
+        room.report("guest", report(), 3, 2_100).unwrap();
+        let guest = room
+            .snapshot
+            .participants
+            .iter()
+            .find(|p| !p.is_host)
+            .unwrap();
+        assert_eq!(
+            guest.reason.as_deref(),
+            Some("different media duration or edition")
+        );
+        assert_eq!(room.snapshot.generation, 1, "same selection, no re-follow");
+        // A still-loading report (no duration yet) must not shrink the media.
+        let mut loading = report();
+        loading.duration = 0.0;
+        loading.loaded = false;
+        room.local_report(loading, 2_200).unwrap();
+        assert_eq!(room.snapshot.media.as_ref().unwrap().duration, 130.0);
+    }
+
+    #[test]
+    fn host_micro_stalls_reanchor_the_clock_only_inside_the_window() {
+        let mut room = room();
+        room.local_report(report(), 1_000).unwrap();
+        // Position 10 at anchor 1_000: at 3_000 the clock says 12. A host
+        // report at 11 (one second behind, under the stall debounce) pulls
+        // the clock back rather than making the host skip ahead.
+        let mut behind = report();
+        behind.position = 11.0;
+        room.local_report(behind, 3_000).unwrap();
+        assert_eq!(room.snapshot.timeline.position, 11.0);
+        assert_eq!(room.snapshot.timeline.anchor_ms, 3_000);
+        // Small jitter and the host running ahead leave the clock alone.
+        let mut jitter = report();
+        jitter.position = 12.6;
+        room.local_report(jitter, 5_000).unwrap();
+        assert_eq!(room.snapshot.timeline.anchor_ms, 3_000);
+        let mut ahead = report();
+        ahead.position = 20.0;
+        room.local_report(ahead, 6_000).unwrap();
+        assert_eq!(room.snapshot.timeline.anchor_ms, 3_000);
+        // A large gap is a real stall or seek: drift correction handles it.
+        let mut far = report();
+        far.position = 5.0;
+        room.local_report(far, 7_000).unwrap();
+        assert_eq!(room.snapshot.timeline.anchor_ms, 3_000);
+        // Paused or scheduled timelines never move.
+        room.command(HostCommand::SetPaused(true), 7_100).unwrap();
+        let paused_position = room.snapshot.timeline.position;
+        let mut lagging = report();
+        lagging.position = paused_position - 1.0;
+        room.local_report(lagging, 7_200).unwrap();
+        assert_eq!(room.snapshot.timeline.position, paused_position);
+    }
+
+    #[test]
+    fn dormant_members_free_their_seat_and_return_only_while_room_has_space() {
+        let mut room = room();
+        room.join("ghost", "Ghost".into(), 1, 100).unwrap();
+        room.report("ghost", report(), 2, 200).unwrap();
+        for n in 1..MAX_MEMBERS - 1 {
+            room.join(&format!("g{n}"), "Guest".into(), 1, 300 + n as u64)
+                .unwrap();
+        }
+        assert!(room.join("extra", "Extra".into(), 1, 400).is_err());
+        let later = 200 + DORMANT_MS + 1;
+        room.local_report(report(), later).unwrap();
         assert!(
-            room.command(HostCommand::SetPaused(false), HOST_TIMEOUT_MS + 2)
+            room.snapshot.participants.iter().all(|p| p.id != "ghost"),
+            "a long-gone member no longer clutters the People list"
+        );
+        assert_eq!(room.snapshot.participants.len(), MAX_MEMBERS - 1);
+        room.join("extra", "Extra".into(), 1, later + 1).unwrap();
+        assert_eq!(room.snapshot.participants.len(), MAX_MEMBERS);
+        // The ghost's identity still exists; it is not revoked, but the room
+        // is full now so it stays hidden until a seat frees up.
+        let full = room.report("ghost", report(), 3, later + 2).unwrap_err();
+        assert_eq!(full.to_string(), "party is full");
+        assert!(room.snapshot.participants.iter().all(|p| p.id != "ghost"));
+        room.remove("extra", later + 3).unwrap();
+        room.report("ghost", report(), 3, later + 4).unwrap();
+        assert!(room.snapshot.participants.iter().any(|p| p.id == "ghost"));
+    }
+
+    #[test]
+    fn invite_renewal_extends_joining_without_changing_the_room() {
+        let mut room = room();
+        assert!(
+            room.join("late", "Late".into(), 1, INVITE_LIFETIME_MS + 1)
                 .is_err()
         );
+        room.local_report(report(), INVITE_LIFETIME_MS - 1_000)
+            .unwrap();
+        room.renew_invite(INVITE_LIFETIME_MS - 1_000).unwrap();
+        room.join("late", "Late".into(), 1, INVITE_LIFETIME_MS + 1)
+            .unwrap();
+        assert_eq!(room.snapshot.room_id, "a".repeat(32));
+        assert_eq!(room.capability, [7; 32]);
+        assert!(
+            room.join("later", "Later".into(), 1, 2 * INVITE_LIFETIME_MS)
+                .is_err()
+        );
+        room.end("party has ended", 2 * INVITE_LIFETIME_MS);
+        assert!(room.renew_invite(2 * INVITE_LIFETIME_MS).is_err());
+    }
+
+    #[test]
+    fn failed_guest_sources_do_not_hold_the_room() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.report("guest", report(), 2, 200).unwrap();
+        let mut broken = report();
+        broken.error = Some("local source unavailable".into());
+        broken.ready = false;
+        room.report("guest", broken.clone(), 3, 300).unwrap();
+        room.local_report(report(), 1_300).unwrap();
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+        let guest = room
+            .snapshot
+            .participants
+            .iter()
+            .find(|p| !p.is_host)
+            .unwrap();
+        assert_eq!(guest.reason.as_deref(), Some("local source unavailable"));
+        room.report("guest", report(), 4, 1_400).unwrap();
+        assert!(room.members["guest"].admitted);
+    }
+
+    #[test]
+    fn ended_rooms_answer_members_with_the_ended_snapshot() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.end("party has ended", 200);
+        assert!(room.snapshot.ended && room.snapshot.timeline.paused);
+        room.authorize(&"a".repeat(32), &[7; 32], "guest", 300)
+            .unwrap();
+        room.report("guest", report(), 2, 300).unwrap();
+        assert!(room.snapshot.ended);
+        assert_eq!(room.snapshot.error.as_deref(), Some("party has ended"));
+        assert!(room.command(HostCommand::SetPaused(false), 400).is_err());
+        assert!(
+            room.authorize(&"a".repeat(32), &[7; 32], "stranger", 300)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn eof_parked_guests_seek_back_for_a_host_rewind() {
+        let mut snapshot = room().snapshot;
+        snapshot.timeline = Timeline {
+            position: 30.0,
+            anchor_ms: 0,
+            paused: false,
+            target_rate: 1.0,
+        };
+        let eof = LocalReport {
+            ended: true,
+            position: 120.0,
+            buffered_ahead: 0.0,
+            ..report()
+        };
+        let correction = drift_correction(&snapshot, &eof, 1_000);
+        assert!(correction.paused, "not ready until the seek clears EOF");
+        assert_eq!(correction.seek_to, Some(31.0));
+        // Near the end the player stays parked: that is where it belongs.
+        snapshot.timeline.position = 117.0;
+        let correction = drift_correction(&snapshot, &eof, 1_000);
+        assert_eq!(correction.seek_to, None);
     }
 
     #[test]
@@ -1236,7 +1584,8 @@ pub(crate) mod tests {
         assert!(!room.members["guest"].admitted);
         assert!(!room.members["guest"].participant.ready);
         let correction = drift_correction(&room.snapshot, &eof, 1_200);
-        assert!(correction.paused && correction.seek_to.is_none());
+        // Parked at EOF far ahead of the room, the guest follows the host back.
+        assert!(correction.paused && correction.seek_to.is_some());
         room.report("guest", report(), 4, 1_300).unwrap();
         assert!(room.members["guest"].admitted);
         room.local_report(eof, 1_400).unwrap();
@@ -1320,7 +1669,7 @@ pub(crate) mod tests {
             room.join("late", "Late".into(), 1, INVITE_LIFETIME_MS + 1)
                 .is_err()
         );
-        assert!(room.clear_media(ROOM_LIFETIME_MS).is_err());
+        assert!(room.clear_media(ROOM_IDLE_MS + 1_500).is_err());
         assert!(room.snapshot.ended);
     }
 
@@ -1424,7 +1773,7 @@ pub(crate) mod tests {
             generation: room.snapshot.generation,
             ..report()
         };
-        room.local_report(current.clone(), 3_000).unwrap();
+        room.local_report(current.clone(), 5_000).unwrap();
         assert!(!room.members["guest"].participant.connected);
         assert!(room.snapshot.timeline.paused);
         assert_eq!(room.snapshot.waiting, ["Guest"]);
@@ -1452,7 +1801,7 @@ pub(crate) mod tests {
                 .is_err()
         );
         assert!(
-            room.select_media(media(), report(), HOST_TIMEOUT_MS + 401)
+            room.select_media(media(), report(), ROOM_IDLE_MS + 401)
                 .is_err()
         );
         assert!(room.snapshot.ended);
@@ -1760,7 +2109,8 @@ mod speed_tests {
             ControlRejectionReason::StaleControlRevision
         );
         close(room.snapshot.timeline.target_rate, 1.5);
-        assert_eq!(ROOM_LIFETIME_MS, 4 * 60 * 60 * 1_000);
+        assert_eq!(ROOM_IDLE_MS, 4 * 60 * 60 * 1_000);
+        assert_eq!(ROOM_MAX_LIFETIME_MS, 24 * 60 * 60 * 1_000);
         assert_eq!(HOST_TIMEOUT_MS, 30_000);
     }
 

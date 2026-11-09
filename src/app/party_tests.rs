@@ -529,13 +529,11 @@ fn semantic_chapter_and_bookmark_seeks_use_the_host_timeline_and_reject_guests()
             }
             {
                 let mut state = bridge.shared.lock().unwrap();
-                assert_eq!(state.party.pending.len(), 2);
+                // Adjacent absolute seeks coalesce: only the latest target
+                // reaches the room, like a scrub coming to rest.
+                assert_eq!(state.party.pending.len(), 1);
                 assert!(matches!(
                     state.party.pending[0],
-                    Operation::Command(1, 0, HostCommand::SeekAbsolute(35.0))
-                ));
-                assert!(matches!(
-                    state.party.pending[1],
                     Operation::Command(1, 0, HostCommand::SeekAbsolute(80.0))
                 ));
                 state.party.pending.clear();
@@ -1750,6 +1748,52 @@ fn locked_profile_preflight_cannot_announce_or_replace_party_media() {
             assert!(state.party.pending.is_empty());
             drop(state);
             profile_policy::set_entry_blocked(false);
+        },
+    );
+}
+
+#[test]
+fn blocked_profile_guest_reports_an_unavailable_source_and_sees_why() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::blocked_profile_guest_reports_an_unavailable_source_and_sees_why"
+        ),
+        |Fixture { app, bridge }| {
+            let _service = install_room(&bridge, &app, PartyRole::Guest);
+            let expected = room(PartyRole::Guest).media.unwrap().identity;
+            profile_policy::set_entry_blocked(true);
+            bridge.party_choose_stream();
+            assert!(bridge.shared.lock().unwrap().party.title_blocked);
+            assert!(
+                app.get_party_error()
+                    .contains("This profile cannot open the selected title"),
+                "the guest learns why nothing happened"
+            );
+            assert!(
+                !app.get_detail_deep_stream(),
+                "no picker opens for a title this profile may not browse"
+            );
+            // The heartbeat claims the room's identity with a source error, so
+            // the host sees this member as unavailable and stops waiting on it.
+            // Clone first: party_report takes the shared lock itself.
+            let snapshot = bridge
+                .shared
+                .lock()
+                .unwrap()
+                .party
+                .snapshot
+                .clone()
+                .unwrap();
+            let report = bridge.party_report(Some(&snapshot));
+            assert_eq!(report.media.as_ref(), Some(&expected));
+            assert!(report.error.is_some() && !report.ready);
+            assert!(
+                nova_party::drift_correction(&snapshot, &report, nova_party::local_now_ms()).paused
+            );
+            profile_policy::set_entry_blocked(false);
+            bridge.party_leave();
+            assert!(!bridge.shared.lock().unwrap().party.title_blocked);
         },
     );
 }

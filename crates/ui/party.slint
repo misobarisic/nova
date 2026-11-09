@@ -88,13 +88,14 @@ export component PartyPage inherits Rectangle {
             if root.tv-index < 12 && (!PartyBridge.active || PartyBridge.is_host) && !PartyBridge.busy { root.tv-index = 12; return; }
             if root.tv-index < 13 && (PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 13; return; }
             if root.tv-index < 14 && (PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "") { root.tv-index = 14; return; }
-            if root.tv-index < 15 && (PartyBridge.active && !PartyBridge.busy) { root.tv-index = 15; return; }
+            // Leaving is always possible, even while an operation is in flight.
+            if root.tv-index < 15 && PartyBridge.active { root.tv-index = 15; return; }
             if root.tv-index < 16 && !PartyBridge.active && PartyBridge.busy { root.tv-index = 16; return; }
             if root.tv-index < 17 && PartyBridge.active && PartyBridge.is_host && PartyBridge.participants.length > 0 { root.tv-index = 17; party_scope.focus(); return; }
         }
         if direction < 0 {
             if root.tv-index > 17 { root.tv-index -= 1; party_scope.focus(); return; }
-            if root.tv-index > 15 && (PartyBridge.active && !PartyBridge.busy) { root.tv-index = 15; return; }
+            if root.tv-index > 15 && PartyBridge.active { root.tv-index = 15; return; }
             if root.tv-index > 14 && (PartyBridge.active && PartyBridge.is_host && PartyBridge.invite != "") { root.tv-index = 14; return; }
             if root.tv-index > 13 && (PartyBridge.active && PartyBridge.is_host && !PartyBridge.busy) { root.tv-index = 13; return; }
             if root.tv-index > 12 && (!PartyBridge.active || PartyBridge.is_host) && !PartyBridge.busy { root.tv-index = 12; return; }
@@ -200,10 +201,22 @@ export component PartyPage inherits Rectangle {
                     }
                     if PartyBridge.status != "": Text { text: PartyBridge.status; color: Theme.current.accent_soft; wrap: word-wrap; min-width: 0px; }
                     Text { font-size: 13px; text: PartyBridge.time_text; color: Theme.current.text_muted; }
+                    // Dragging emits a value per pointer move. Commit once the hand
+                    // rests instead of seeking everyone through each intermediate
+                    // position, and keep the published position from yanking the
+                    // knob back while the drag is still in progress.
                     party_timeline := MiniSlider {
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); minimum: 0; maximum: Math.max(1, PartyBridge.duration); value: PartyBridge.position; enabled: PartyBridge.can_control && !PartyBridge.busy && PartyBridge.duration > 0; changed(value) => { if InterfaceStyle.tv { root.tv-index = 4; } PartyBridge.seek(value); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    property <float> pending-seek;
+                    property <float> room-position: PartyBridge.position;
+                    changed room-position => { if !seek_commit.running { self.value = self.room-position; } }
+                    seek_commit := Timer {
+                        interval: 250ms; running: false;
+                        triggered => { self.running = false; PartyBridge.seek(party_timeline.pending-seek); }
+                    }
+                    name: @tr("Playback position"); minimum: 0; maximum: Math.max(1, PartyBridge.duration); value: PartyBridge.position; enabled: PartyBridge.can_control && !PartyBridge.busy && PartyBridge.duration > 0; changed(value) => { if InterfaceStyle.tv { root.tv-index = 4; } self.pending-seek = value; seek_commit.running = false; seek_commit.running = true; } }
                     if PartyBridge.can_control: party_transport := Rectangle { height: 80px;
                     if !InterfaceStyle.tv: SessionTransportButton { kind: -1; caption: @tr("−10 s"); x: parent.width / 2 - 104px; y: 14px; enabled: !PartyBridge.busy && PartyBridge.duration > 0; clicked => { PartyBridge.seek(Math.clamp(PartyBridge.position - 10, 0, PartyBridge.duration)); } }
                     party_pause := SessionTransportButton {
@@ -290,7 +303,8 @@ export component PartyPage inherits Rectangle {
                             SessionAvatar { initial: member.initial; y: (parent.height - self.height) / 2; }
                             member_col := VerticalLayout { min-width: 0px; horizontal-stretch: 1; spacing: 4px; alignment: center;
                                 Text { font-size: 14px; text: member.name; color: Theme.current.text_bright; font-weight: 600; overflow: elide; min-width: 0px; }
-                                Text { font-size: 13px; text: member.is_host ? @tr("Host") : member.status; color: member.ready ? Theme.current.accent_soft : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                                // The backend row text already reads "Host" and names the host's own problem when there is one.
+                                Text { font-size: 13px; text: member.status; color: member.ready ? Theme.current.accent_soft : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
                             }
                             if PartyBridge.is_host && member.can_remove: PillButton { focused: InterfaceStyle.tv && root.tv-index == index + 17; changed focused => { if self.focused { root.tv_reveal(self.absolute-position.y, self.height); } } label: root.confirm-remove == member.id ? @tr("Confirm remove") : @tr("Remove"); compact: true; destructive: true; vertical-stretch: 0; enabled: !PartyBridge.busy; clicked => { if root.confirm-remove == member.id { root.confirm-remove = ""; PartyBridge.remove_member(member.id); } else { root.confirm-remove = member.id; } } }
                         }
@@ -362,7 +376,7 @@ export component PartyPage inherits Rectangle {
                     width: Math.min(240px, room_scroll.visible-width); horizontal-stretch: 0;
                     property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 15;
                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
-                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? (root.confirm-end ? @tr("Confirm end party") : @tr("End party")) : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } if PartyBridge.is_host && !root.confirm-end { root.confirm-end = true; } else { root.confirm-end = false; PartyBridge.leave(); } } }                }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: PartyBridge.is_host ? (root.confirm-end ? @tr("Confirm end party") : @tr("End party")) : @tr("Leave party"); destructive: true; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } if PartyBridge.is_host && !root.confirm-end { root.confirm-end = true; } else { root.confirm-end = false; PartyBridge.leave(); } } }                }
             }
         }
     }
