@@ -214,3 +214,103 @@ export component TitleMenu inherits Rectangle {
     }
 }
 
+
+// One action in a CardMenu: a stable id reported by `picked`, its label and
+// icon (SVG path commands on a 24×24 viewbox).
+export struct CardMenuAction { id: string, label: string, icon: string, danger: bool, enabled: bool }
+
+// The same panel as the title menu for plain card actions (Home's Continue
+// Watching, New episodes, Upcoming, history and recommendation cards): the
+// title and summary, `tiles` as icon tiles, then `rows` as icon rows; a
+// destructive row starts its own group below a divider.
+export component CardMenu inherits Rectangle {
+    in property <string> title;
+    in property <string> summary;
+    in property <[CardMenuAction]> tiles;
+    in property <[CardMenuAction]> rows;
+    // Coordinates of the panel's top-right corner, local to this overlay.
+    in property <length> anchor-right;
+    in property <length> anchor-bottom;
+    // Local x the panel grows from (the pointer).
+    in property <length> origin-x;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    callback picked(string);
+    callback closed;
+    private property <bool> shown: false;
+    private property <bool> motion: Anim.enabled && Anim.player;
+    private property <float> scale-progress: 0;
+    private property <float> fade-progress: 0;
+    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_slide : Anim.player_fast) : 0ms; easing: ease-out; }
+    animate fade-progress { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
+    changed motion => {
+        root.scale-progress = root.shown ? 1 : 0; root.fade-progress = root.shown ? 1 : 0;
+    }
+    init => { reveal.start(); }
+    reveal := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); root.shown = true; root.scale-progress = 1; root.fade-progress = 1; scope.focus(); }
+    }
+    public function dismiss(action: string) {
+        if !root.shown { return; }
+        root.shown = false;
+        root.scale-progress = 0; root.fade-progress = 0;
+        if action != "" { root.picked(action); }
+        finish.start();
+    }
+    finish := Timer {
+        interval: root.motion ? max(1ms, Anim.player_fast) : 1ms; running: false;
+        triggered => { self.stop(); root.closed(); }
+    }
+    scope := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape || e.text == Key.Back) && root.shown { root.dismiss(""); return accept; }
+            return reject;
+        }
+        TouchArea { enabled: root.shown; clicked => { root.dismiss(""); } }
+        panel := Rectangle {
+            width: min(288px, max(1px, root.width - 16px));
+            // Near the bottom of the window the panel opens above the pointer.
+            private property <length> room-below: root.height - root.anchor-bottom - root.safe-bottom - 12px;
+            private property <length> room-above: root.anchor-bottom - root.safe-top - 12px;
+            private property <bool> upward: content.preferred-height > self.room-below && self.room-above > self.room-below;
+            private property <length> target-height: min(content.preferred-height, max(1px, self.upward ? self.room-above : self.room-below));
+            height: self.target-height;
+            x: Math.clamp(root.anchor-right - self.width, 8px, max(8px, root.width - self.width - 8px));
+            y: self.upward ? root.anchor-bottom - 4px - self.target-height : root.anchor-bottom + 4px;
+            background: Theme.current.popup;
+            border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
+            drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
+            clip: true;
+            opacity: root.fade-progress;
+            transform-scale: 0.86 + 0.14 * root.scale-progress;
+            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: self.upward ? self.target-height : 0px };
+            accessible-role: groupbox; accessible-label: root.title;
+            TouchArea { enabled: root.shown; }
+            content := VerticalLayout {
+                padding: 6px; spacing: 0px;
+                VerticalLayout {
+                    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
+                    Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
+                    if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
+                }
+                if root.tiles.length > 0: HorizontalLayout {
+                    spacing: 4px; padding-bottom: 4px;
+                    for tile in root.tiles: IconTile {
+                        live: root.shown && tile.enabled; label: tile.label; icon: tile.icon;
+                        opacity: tile.enabled ? 1 : 0.45;
+                        activated => { root.dismiss(tile.id); }
+                    }
+                }
+                for action[index] in root.rows: VerticalLayout {
+                    if action.danger || (index == 0 && root.tiles.length > 0): Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                    MenuItem {
+                        live: root.shown && action.enabled; label: action.label; icon: action.icon; danger: action.danger;
+                        opacity: action.enabled ? 1 : 0.45;
+                        activated => { root.dismiss(action.id); }
+                    }
+                }
+            }
+        }
+    }
+}
