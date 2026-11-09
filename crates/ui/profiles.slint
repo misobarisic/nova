@@ -216,13 +216,39 @@ export component ProfilesPage inherits Rectangle {
         if !root.available(root.choice) { root.choice = Math.max(0, root.choice - 1); }
     }
     changed managing => { profile_scroll.content-y = 0px; }
+    // The list, Manage profiles and the editors are levels of one page. Push
+    // them with Reader's page motion: a deeper level slides 48px in from the
+    // right while fading in, and going back eases in from 24px on the left.
+    private property <int> level: root.editor > 0 ? 2 : root.managing ? 1 : 0;
+    private property <int> shown-level: 0;
+    private property <bool> scene-motion: Anim.enabled && Anim.transitions;
+    private property <bool> scene-snap: false;
+    private property <float> scene-enter: 1.0;
+    private property <length> scene-from: 48px;
+    animate scene-enter { duration: root.scene-motion && !root.scene-snap ? Anim.transition_slide : 0ms; easing: ease-out; }
+    changed level => {
+        if root.level != root.shown-level && root.active && root.scene-motion {
+            root.scene-from = root.level > root.shown-level ? 48px : -24px;
+            // Jump to the start pose, then animate in on the next tick.
+            root.scene-snap = true;
+            root.scene-enter = 0.0;
+            scene_arm.start();
+        }
+        root.shown-level = root.level;
+    }
+    scene_arm := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.scene-snap = false; root.scene-enter = 1.0; } }
     changed active => {
         if root.active {
             root.editor = 0;
             root.managing = false;
             root.choice = 0;
+            // Re-entering the page uses the page transition, not a level push.
+            root.shown-level = 0;
             entry_focus.start();
-        } else { entry_focus.stop(); editor_focus.stop(); }
+        } else {
+            entry_focus.stop(); editor_focus.stop();
+            scene_arm.stop(); root.scene-snap = true; root.scene-enter = 1.0; root.scene-snap = false;
+        }
     }
     entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.focus_shell(); } }
     editor_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if root.active { if root.editor == 1 || root.editor == 2 { root.name-focus-request += 1; } else { page_scope.focus(); } } } }
@@ -244,8 +270,9 @@ export component ProfilesPage inherits Rectangle {
             } else { reject }
         }
         profile_scroll := ScrollView {
-            x: root.safe-left + 18px + (root.required ? Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2) : 0px);
+            x: root.safe-left + 18px + (root.required ? Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2) : 0px) + (1.0 - root.scene-enter) * root.scene-from;
             y: root.safe-top + 18px;
+            opacity: root.scene-enter;
             width: Math.max(1px, root.required ? Math.min(764px, root.width - root.safe-left - root.safe-right - 36px) : root.width - root.safe-left - root.safe-right - 36px);
             height: Math.max(1px, root.height - root.safe-top - root.safe-bottom - 36px);
             content-width: self.visible-width;
