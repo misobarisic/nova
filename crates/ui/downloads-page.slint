@@ -19,12 +19,15 @@ component DownloadButton inherits Rectangle {
     in property <bool> expanded: false;
     in property <bool> wrap-label: false;
     in property <bool> tv-focused: false;
+    // Icon buttons inside cards (expand, delete) sit on the card surface.
+    in property <bool> quiet: false;
     callback reveal(length, length);
     changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback picked();
     width: Math.max(44px, label-text.preferred-width + 20px); height: InterfaceStyle.tv ? 56px : 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
+    background: root.quiet ? (touch.has-hover ? Theme.current.control_hover : transparent)
+        : root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
     label-text := Text { width: 100%; height: 100%; wrap: root.wrap-label ? word-wrap : no-wrap; visible: !root.chevron && !root.trash; text: root.label; color: root.destructive ? Theme.current.text_destructive : root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: InterfaceStyle.tv ? 19px : 12px; horizontal-alignment: center; vertical-alignment: center; }
     if root.trash: IcDelete {
@@ -67,7 +70,12 @@ component DownloadEpisodeRow inherits Rectangle {
     private property <length> base-height: InterfaceStyle.tv ? 106px : root.stacked ? 118px : 82px;
     private property <length> error-height: root.episode.action_kind == 3 ? failure_details.preferred-height + 16px : 0px;
     height: root.base-height + root.error-height + root.recovery-height;
-    background: Theme.current.artwork_canvas;
+    // Rows sit on their card (a series or the transfers list), each opened
+    // by a hairline, as Reader's chapter rows are.
+    background: transparent;
+    // The first transfer opens its card, so it needs no divider.
+    in property <bool> first: false;
+    if !root.first: Rectangle { x: 12px; y: 0px; width: Math.max(0px, root.width - 24px); height: 1px; background: Theme.current.border_soft; }
     if root.episode.action_kind == 3: DownloadButton {
         x: 8px; y: root.height - root.recovery-height + 4px; width: root.width - 16px; height: InterfaceStyle.tv ? 56px : 44px;
         label: @tr("Choose another stream");
@@ -102,7 +110,7 @@ component DownloadEpisodeRow inherits Rectangle {
     }
     episode_badge := Rectangle {
         x: 8px; y: root.stacked ? 66px : (root.base-height - self.height) / 2;
-        width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
+        width: root.narrow ? 49px : 62px; height: 30px; border-radius: 8px; background: Theme.current.control;
         Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center; vertical-alignment: center; }
     }
     episode_action := DownloadButton {
@@ -119,7 +127,7 @@ component DownloadEpisodeRow inherits Rectangle {
         tv-focused: root.tv-focused && root.tv-action == 1;
         reveal(y,h) => { root.reveal(y,h); }
         width: InterfaceStyle.tv ? 56px : 44px;
-        label: "×"; trash: root.episode.action_kind == 4; destructive: root.episode.action_kind == 4;
+        label: "×"; trash: root.episode.action_kind == 4; destructive: root.episode.action_kind == 4; quiet: true;
         accessible-label: root.episode.action_kind == 4 ? @tr("Delete downloaded file") : @tr("Cancel download");
         // Cancelling also deletes partial data, so it asks like deleting a finished file.
         picked => { root.delete-requested(root.episode.id, root.episode.title, root.episode.action_kind != 4); }
@@ -133,7 +141,7 @@ component DownloadSeriesCard inherits Rectangle {
     in property <length> viewport-height;
     callback artwork-visible(string, bool);
     private property <bool> artwork-retained: root.artwork-active && root.viewport-height > 0px
-        && self.absolute-position.y + 86px >= root.viewport-top - root.viewport-height
+        && self.absolute-position.y + 116px >= root.viewport-top - root.viewport-height
         && self.absolute-position.y <= root.viewport-top + 2 * root.viewport-height;
     private property <string> artwork-report: root.group.id + root.group.artwork_identity + (root.artwork-retained ? "1" : "0");
     Timer { interval: 1500ms; running: root.artwork-retained; triggered => { root.artwork-visible(root.group.id, true); } }
@@ -150,28 +158,57 @@ component DownloadSeriesCard inherits Rectangle {
     callback toggled(string);
     callback action(string,int);
     callback delete-requested(string, string, bool);
-    border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
-    background: Theme.current.artwork_canvas; clip: true;
-    // Only the chevron animates; rows and card height switch immediately.
-    // Measure expanded rows, including wrapped failures; collapsed cards keep
-    // no episode delegates.
-    height: 86px + episodes_body.preferred-height;
+    // Reader's download card: the poster and title head the card and the
+    // expanded episodes join it below, divided by hairlines.
+    border-radius: Theme.card_corner_radius + 4px; border-width: 1px; border-color: Theme.current.border_soft;
+    background: Theme.current.card; clip: true;
+    // Expanding eases the card open while the episodes fade in; collapsing
+    // keeps the rows mounted until the card has eased shut, then drops them,
+    // so collapsed cards keep no episode delegates. Motion off switches at
+    // once. Measure expanded rows, including wrapped failures.
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <bool> rows-retained: false;
+    private property <bool> rows-shown: !root.group.collapsed || root.rows-retained;
+    private property <length> target-height: 116px + (root.group.collapsed ? 0px : episodes_body.preferred-height);
+    private property <length> shown-height: self.target-height;
+    changed target-height => { self.shown-height = self.target-height; }
+    animate shown-height { duration: root.motion ? Anim.transition_slide : 0ms; easing: ease-in-out; }
+    // Assigning the endpoint stops an in-flight resize when motion turns off.
+    changed motion => { if !root.motion { self.shown-height = self.target-height; root.rows-retained = false; release-rows.stop(); } }
+    property <bool> collapsed-now: root.group.collapsed;
+    changed collapsed-now => {
+        if root.collapsed-now && root.motion { root.rows-retained = true; release-rows.restart(); }
+        else { root.rows-retained = false; release-rows.stop(); }
+    }
+    release-rows := Timer { interval: Anim.transition_slide; running: false; triggered => { self.stop(); root.rows-retained = false; } }
+    height: root.motion ? self.shown-height : self.target-height;
     // Without an explicit anchor Slint centers this fixed-height child in
     // the expanded card, moving the artwork and clipping the toggle in rows.
-    Rectangle { x: 0px; y: 0px; width: 100%; height: 86px; background: Theme.current.control;
-        Image { source: root.group.artwork; width: 100%; height: 100%; image-fit: cover; }
-        Rectangle { width: 100%; height: 100%; background: #00000090; }
-        HorizontalLayout { padding: 14px; spacing: 10px;
-            VerticalLayout { spacing: 5px;
-                Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 17px; font-weight: 700; overflow: elide; }
-                Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 19px : 12px; overflow: elide; }
-            }
-            DownloadButton { tv-focused: root.tv-focused && root.tv-episode < 0; reveal(y,h) => { root.reveal(y,h); } width: InterfaceStyle.tv ? 56px : 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
+    Rectangle { x: 0px; y: 0px; width: 100%; height: 116px;
+        Rectangle {
+            x: 12px; y: 10px; width: 64px; height: 96px; clip: true;
+            border-radius: Math.min(Theme.card_corner_radius, 8px);
+            background: Theme.current.home_artwork_placeholder;
+            Image { source: root.group.artwork; width: 100%; height: 100%; image-fit: cover; }
+        }
+        VerticalLayout {
+            x: 90px; y: 0px; height: 100%;
+            width: Math.max(1px, parent.width - 90px - (InterfaceStyle.tv ? 72px : 56px));
+            spacing: 4px; alignment: center;
+            Text { vertical-stretch: 0; min-width: 0px; text: root.group.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 15px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide; }
+            Text { vertical-stretch: 0; min-width: 0px; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide; }
+        }
+        DownloadButton {
+            x: parent.width - self.width - 8px; y: (parent.height - self.height) / 2;
+            quiet: true;
+            tv-focused: root.tv-focused && root.tv-episode < 0; reveal(y,h) => { root.reveal(y,h); } width: InterfaceStyle.tv ? 56px : 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); }
         }
     }
     episodes_body := VerticalLayout {
-        y: 86px; width: 100%; height: self.preferred-height; spacing: 0px;
-        for episode[index] in (root.group.collapsed ? [] : root.group.episodes): DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.page-error(y,h,d); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.delete-requested(id,title,partial); } }
+        y: 116px; width: 100%; height: self.preferred-height; spacing: 0px;
+        opacity: root.group.collapsed ? 0 : 1;
+        animate opacity { duration: root.motion ? Anim.transition_fade : 0ms; easing: ease-out; }
+        for episode[index] in (root.rows-shown ? root.group.episodes : []): DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.page-error(y,h,d); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.delete-requested(id,title,partial); } }
     }
 }
 component DownloadDeleteDialog inherits Rectangle {
@@ -181,7 +218,12 @@ component DownloadDeleteDialog inherits Rectangle {
     in property <length> safe-top; in property <length> safe-bottom;
     in property <length> safe-left; in property <length> safe-right;
     callback finished(bool);
-    background: Theme.current.artwork_canvas;
+    // A centred popup over a scrim, in the kit dialog style.
+    background: transparent;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <float> shown: 0;
+    animate shown { duration: root.motion ? Anim.transition_slide : 0ms; easing: ease-out; }
+    arm_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.shown = 1; } }
     function reveal-selected() {
         let y = root.cancel-selected ? cancel_action.absolute-position.y : delete_action.absolute-position.y;
         let h = root.cancel-selected ? cancel_action.height : delete_action.height;
@@ -190,27 +232,43 @@ component DownloadDeleteDialog inherits Rectangle {
         if y < top { dialog_scroll.content-y += top - y; }
         else if y + h > bottom { dialog_scroll.content-y -= y + h - bottom; }
     }
-    init => { reveal_timer.restart(); }
+    init => { reveal_timer.restart(); if root.motion { arm_timer.start(); } else { root.shown = 1; } }
     changed width => { reveal_timer.restart(); }
     changed height => { reveal_timer.restart(); }
     changed title => { reveal_timer.restart(); }
     changed cancel-selected => { root.reveal-selected(); reveal_timer.restart(); }
     reveal_timer := Timer { interval: 1ms; triggered => { self.stop(); root.reveal-selected(); } }
-    TouchArea { width: 100%; height: 100%; scroll-event(event) => { accept } }
-    dialog_scroll := ScrollView {
-        x: root.safe-left; y: root.safe-top;
-        width: root.width - root.safe-left - root.safe-right;
-        height: root.height - root.safe-top - root.safe-bottom;
-        content-width: self.visible-width; mouse-drag-pan-enabled: true;
-        VerticalLayout {
-            x: Math.max(0px, (dialog_scroll.visible-width - self.width) / 2);
-            width: Math.min(720px, dialog_scroll.visible-width);
-            padding: 18px; spacing: 16px; alignment: start;
-            Text { vertical-stretch: 0; text: root.partial ? @tr("Cancel download?") : @tr("Delete downloaded file?"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 28px : 24px; font-weight: 700; wrap: word-wrap; }
-            Text { vertical-stretch: 0; text: root.title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 22px : 16px; wrap: word-wrap; }
-            Text { vertical-stretch: 0; text: root.partial ? @tr("The partially downloaded data will be deleted from this device.") : @tr("This file will be deleted from this device."); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
-            cancel_action := DownloadButton { label: root.partial ? @tr("Keep downloading") : @tr("Cancel"); tv-focused: root.cancel-selected; picked => { root.finished(false); } }
-            delete_action := DownloadButton { label: root.partial ? @tr("Cancel download") : @tr("Delete file"); destructive: true; tv-focused: !root.cancel-selected; picked => { root.finished(true); } }
+    Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_shadow; opacity: root.shown; }
+    // An outside tap keeps the download, like Cancel.
+    TouchArea { width: 100%; height: 100%; clicked => { root.finished(false); } scroll-event(event) => { accept } }
+    panel := Rectangle {
+        width: Math.max(1px, Math.min(InterfaceStyle.tv ? 560px : 380px, root.width - root.safe-left - root.safe-right - 32px));
+        height: Math.max(1px, Math.min(dialog_body.preferred-height, root.height - root.safe-top - root.safe-bottom - 32px));
+        x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+        y: root.safe-top + (root.height - root.safe-top - root.safe-bottom - self.height) / 2;
+        background: Theme.current.popup;
+        border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
+        drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
+        clip: true;
+        opacity: root.shown;
+        transform-scale: 0.92 + 0.08 * root.shown;
+        TouchArea { width: 100%; height: 100%; }
+        dialog_scroll := ScrollView {
+            width: 100%; height: 100%;
+            content-width: self.visible-width; mouse-drag-pan-enabled: true;
+            dialog_body := VerticalLayout {
+                width: panel.width;
+                padding: 20px; spacing: 10px; alignment: start;
+                Text { vertical-stretch: 0; text: root.partial ? @tr("Cancel download?") : @tr("Delete downloaded file?"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 26px : 18px; font-weight: 700; wrap: word-wrap; }
+                Text { vertical-stretch: 0; text: root.title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 21px : 14px; font-weight: 600; wrap: word-wrap; }
+                Text { vertical-stretch: 0; text: root.partial ? @tr("The partially downloaded data will be deleted from this device.") : @tr("This file will be deleted from this device."); color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 19px : 13px; wrap: word-wrap; }
+                Rectangle { height: 6px; vertical-stretch: 0; }
+                HorizontalLayout {
+                    spacing: 8px; alignment: end; vertical-stretch: 0;
+                    cancel_action := DownloadButton { label: root.partial ? @tr("Keep downloading") : @tr("Cancel"); tv-focused: root.cancel-selected; picked => { root.finished(false); } }
+                    delete_action := DownloadButton { label: root.partial ? @tr("Cancel download") : @tr("Delete file"); destructive: true; tv-focused: !root.cancel-selected; picked => { root.finished(true); } }
+                }
+            }
         }
     }
 }
@@ -460,8 +518,13 @@ export component DownloadsPage inherits Rectangle {
             }
             Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 19px : 12px; }
             controls_slot := Rectangle { height: download_controls.preferred-height; vertical-stretch: 0; }
-            DownloadButton {label:@tr("Smart downloads");tv-focused:InterfaceStyle.tv && root.kb_active && root.tv-zone==2 && root.smart-button-selected;picked=>{OfflineBridge.open_requested();}}
-            DownloadButton { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2 && !root.smart-button-selected; reveal(y,h) => { root.tv-reveal(y,h); } label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+            // Smart downloads and the sort order share one row (Left/Right
+            // on a remote moves between them).
+            HorizontalLayout {
+                spacing: 8px; alignment: start; vertical-stretch: 0;
+                DownloadButton {label:@tr("Smart downloads");tv-focused:InterfaceStyle.tv && root.kb_active && root.tv-zone==2 && root.smart-button-selected;picked=>{OfflineBridge.open_requested();}}
+                DownloadButton { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2 && !root.smart-button-selected; reveal(y,h) => { root.tv-reveal(y,h); } label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+            }
             if root.groups.length == 0: Text { vertical-stretch: 0;
                 text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
                 color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
@@ -471,8 +534,17 @@ export component DownloadsPage inherits Rectangle {
                 if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
                 if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
             }
-            if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
-            for transfer[index] in root.transfers: DownloadEpisodeRow { tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 4 && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
+            if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 17px; font-weight: 700; }
+            if root.transfers.length > 0: Rectangle {
+                vertical-stretch: 0;
+                height: transfers_col.preferred-height;
+                border-radius: Theme.card_corner_radius + 4px; border-width: 1px; border-color: Theme.current.border_soft;
+                background: Theme.current.card; clip: true;
+                transfers_col := VerticalLayout {
+                    y: 0px; width: 100%; height: self.preferred-height; spacing: 0px;
+            for transfer[index] in root.transfers: DownloadEpisodeRow { first: index == 0; tv-page-request: root.tv-page-request; tv-page-direction: root.tv-page-direction; tv-page-target: root.tv-page-target; page-error(y,h,d) => { root.tv-page-error(y,h,d); } tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 4 && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } delete-requested(id,title,partial) => { root.request-delete(id,title,partial); } }
+                }
+            }
         }
     }
     download_header := PageHeader {

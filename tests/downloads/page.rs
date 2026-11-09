@@ -327,7 +327,7 @@ fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
             let card_top = card.absolute_position().y;
             let toggle_top = toggle.absolute_position().y;
             assert!(
-                toggle_top >= card_top && toggle_top + toggle.size().height <= card_top + 86.0,
+                toggle_top >= card_top && toggle_top + toggle.size().height <= card_top + 116.0,
                 "chevron must stay inside the fixed header throughout expansion: card top={card_top}, toggle top={toggle_top}"
             );
         }
@@ -348,17 +348,25 @@ fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
             .size()
             .width;
         let row_height = if card_width < 480.0 { 118.0 } else { 82.0 };
-        let expanded_height = 86.0 + 2.0 * row_height;
+        let expanded_height = 116.0 + 2.0 * row_height;
         assert_eq!(height(), expanded_height);
         for (master, transitions) in [(true, true), (true, false), (false, true)] {
             app.global::<nova::Anim>().set_enabled(master);
             app.global::<nova::Anim>().set_transitions(transitions);
+            let motion = master && transitions;
             collapse(true);
             advance(1);
+            if motion {
+                assert!(
+                    height() > 116.0,
+                    "the card eases shut while motion is enabled"
+                );
+                advance(400);
+            }
             assert_eq!(
                 height(),
-                86.0,
-                "episode list closes immediately even with motion enabled"
+                116.0,
+                "the episode list closes (immediately when motion is off)"
             );
             assert_eq!(
                 ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow").count(),
@@ -367,10 +375,17 @@ fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
             );
             collapse(false);
             advance(1);
+            if motion {
+                assert!(
+                    height() < expanded_height,
+                    "the card eases open while motion is enabled"
+                );
+                advance(400);
+            }
             assert_eq!(
                 height(),
                 expanded_height,
-                "episode list opens immediately even with motion enabled"
+                "the episode list opens (immediately when motion is off)"
             );
             for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
                 assert_eq!(row.size().height, row_height);
@@ -457,7 +472,7 @@ fn chevron_rotation_paints_intermediate_frames_inside_the_header() {
                 .unwrap();
             assert!(
                 p.y >= card.absolute_position().y
-                    && p.y + toggle.size().height <= card.absolute_position().y + 86.0
+                    && p.y + toggle.size().height <= card.absolute_position().y + 116.0
             );
             let snapshot = app.window().take_snapshot().unwrap();
             let scale = app.window().scale_factor();
