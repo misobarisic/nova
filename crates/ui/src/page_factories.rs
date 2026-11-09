@@ -332,6 +332,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_episodes_back => invoke_detail_bridge_episodes_back(),
             on_add_to_library => invoke_detail_bridge_add_to_library(),
             on_library_action => invoke_detail_bridge_library_action(arg0),
+            on_library_status_code => invoke_detail_bridge_library_status_code(),
             on_open_categories => invoke_detail_bridge_open_categories(),
             on_season_download_start => invoke_detail_bridge_season_download_start(arg0, arg1),
             on_season_download_retry => invoke_detail_bridge_season_download_retry(),

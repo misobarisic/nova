@@ -11,6 +11,7 @@ import { DetailExtrasPanel } from "detail-extras.slint";
 
 
 import { MenuSheet } from "menusheet.slint";
+import { TitleMenu, CardMenu } from "title-menu.slint";
 import { TrackingButton } from "tracking-controls.slint";
 import { IcPlay, IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 
@@ -698,6 +699,10 @@ export component DetailPage {
     callback add_to_library();
     callback library_action(int);
     callback open_categories();
+    // The title's stored status action code (0 automatic, else the manual
+    // pin; -1 none), read when the ⋯ menu opens.
+    callback library_status_code() -> int;
+    property <int> library_menu_status: -1;
     callback season_picked(int);
     callback episode_picked(int);
     // Pager move (absolute target page; the backend clamps it).
@@ -759,13 +764,68 @@ export component DetailPage {
     function open_library_menu() {
         // Touch and TV open it centred; a desktop pointer grows it from
         // below the options button (window coordinates).
-        if (root.touch_menus || InterfaceStyle.tv) { DetailContent.menu_anchored = false; }
-        else {
-            DetailContent.menu_anchor_x = root.absolute-position.x + root.width - root.safe-right - (root.narrow ? 10px + 44px : 16px + 48px);
-            DetailContent.menu_anchor_y = root.absolute-position.y + root.safe-top + (root.narrow ? 10px + 44px : 16px + 48px);
-            DetailContent.menu_anchored = true;
-        }
+        // The Reader-style title menu always hangs from the button.
+        DetailContent.menu_anchor_x = root.absolute-position.x + root.width - root.safe-right - (root.narrow ? 10px : 16px);
+        DetailContent.menu_anchor_y = root.absolute-position.y + root.safe-top + (root.narrow ? 10px + 44px : 16px + 48px);
+        DetailContent.menu_anchored = !(root.touch_menus || InterfaceStyle.tv);
+        root.library_menu_status = root.library_status_code();
         root.menu_kind = 2;
+    }
+
+    // Episode menu actions: 0 toggle watched, 1 this and previous watched,
+    // 2 clear resume position, 3 open, 4 add to queue, 5 reveal spoilers,
+    // 6 include/exclude from progress.
+    function episode_menu_picked(a: int) {
+        if (a == 0) {
+            root.episode_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
+        } else if (a == 1) {
+            root.episode_watch_action(root.menu_idx, 3);
+        } else if (a == 2) {
+            root.episode_watch_action(root.menu_idx, 4);
+        } else if (a == 3) {
+            root.kb_active = false;
+            root.episode_picked(root.menu_idx);
+        } else {
+            if a == 4 { QueueBridge.add_episode(root.menu_idx); }
+            else { root.episode_watch_action(root.menu_idx, a == 6 ? 6 : 5); }
+        }
+        root.close_menu();
+    }
+
+    // Season menu actions: 0 toggle watched, 1 select, 2 download,
+    // 3 include/exclude from progress.
+    function season_menu_picked(a: int) {
+        if (a == 0) {
+            root.season_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
+        } else if (a == 3) {
+            root.season_watch_action(root.menu_idx, 3);
+        } else if (a == 2) {
+            DetailBridge.season_download_menu = root.menu_idx;
+        } else {
+            root.kb_active = false;
+            root.kb_zone = 3;
+            root.kb_ci = 0;
+            root.season_picked(root.menu_idx);
+        }
+        root.close_menu();
+    }
+
+    // TitleMenu actions (see title-menu.slint) onto the detail library codes.
+    function title_menu_picked(action: string) {
+        if action == "watched" { if !root.library_watched { root.library_action(0); } }
+        else if action == "unwatched" { if root.library_watched { root.library_action(0); } }
+        else if action == "activity" { root.library_action(root.library_activity_action == 4 ? 6 : 5); }
+        else if action == "remove" { root.library_action(4); }
+        else if action == "categories" { root.close_menu(); root.open_categories(); }
+        else if action == "reminders" { root.menu_kind = 3; }
+        else if action == "progress" { root.menu_kind = 4; }
+        else if action == "status:0" { root.library_action(3); }
+        else if action == "status:1" { root.library_action(1); }
+        else if action == "status:2" { root.library_action(2); }
+        else if action == "status:5" { root.library_action(7); }
+        else if action == "status:6" { root.library_action(8); }
+        else if action == "status:7" { root.library_action(9); }
+        else if action == "status:8" { root.library_action(10); }
     }
 
     function library_menu_picked(a: int) {
@@ -1456,8 +1516,41 @@ export component DetailPage {
 
         // Card bottom sheets (single instance per kind): the dim
         // backdrop eats outside taps (dismiss only, never forwarded).
+        // Desktop and touch: the title-menu panel, grown from the pointer on
+        // a right-click and centred otherwise. TV keeps the sheets below.
+        if root.menu_kind == 0 && !InterfaceStyle.tv: CardMenu {
+            width: 100%; height: 100%;
+            property <EpisodeRow> ep: root.episode_rows[root.menu_idx - root.episode_page_start];
+            property <length> local-x: DetailContent.menu_anchored ? DetailContent.menu_anchor_x - self.absolute-position.x : self.width / 2 - 144px;
+            property <length> local-y: DetailContent.menu_anchored ? DetailContent.menu_anchor_y - self.absolute-position.y : self.height / 2 - 170px;
+            anchor-right: self.local-x + 288px;
+            anchor-bottom: self.local-y - 4px;
+            origin-x: DetailContent.menu_anchored ? self.local-x : self.width / 2;
+            safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+            title: self.ep.text != "" ? self.ep.text : @tr("Episode options");
+            summary: self.ep.ep_no + (self.ep.date != "" ? " · " + self.ep.date : "");
+            tiles: [
+                { id: "3", label: @tr("Open episode"), icon: "M8 5v14l11-7z", enabled: true },
+                { id: "0", label: root.menu_flag ? @tr("Mark unwatched") : @tr("Mark watched"),
+                  icon: root.menu_flag ? "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" : "M21 12a9 9 0 1 1-3-6.7M7 12l3 3 9-10", enabled: true },
+            ];
+            rows: root.progress_include_specials ? [
+                { id: "4", label: @tr("Add to watch queue"), icon: "M4 6h16M4 12h10M4 18h7M17 15v6M14 18h6", enabled: true },
+                { id: "1", label: @tr("Mark episode and previous as watched"), icon: "M2 12l4 4 8-9M10 16l1 1 9-10", enabled: !root.menu_flag },
+                { id: "2", label: @tr("Clear resume position"), icon: "M3 12a9 9 0 1 0 3-6.7M3 4v5h5", enabled: !root.menu_flag && root.menu_progress > 0 },
+                { id: "5", label: @tr("Reveal episode spoilers"), icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", enabled: true },
+                { id: "6", label: self.ep.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress"), icon: "M4 20V10M10 20V4M16 20v-7M22 20H2", enabled: true },
+            ] : [
+                { id: "4", label: @tr("Add to watch queue"), icon: "M4 6h16M4 12h10M4 18h7M17 15v6M14 18h6", enabled: true },
+                { id: "1", label: @tr("Mark episode and previous as watched"), icon: "M2 12l4 4 8-9M10 16l1 1 9-10", enabled: !root.menu_flag },
+                { id: "2", label: @tr("Clear resume position"), icon: "M3 12a9 9 0 1 0 3-6.7M3 4v5h5", enabled: !root.menu_flag && root.menu_progress > 0 },
+                { id: "5", label: @tr("Reveal episode spoilers"), icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", enabled: true },
+            ];
+            picked(id) => { root.episode_menu_picked(id.to-float()); }
+            closed => { root.close_menu(); }
+        }
         MenuSheet {
-            open: root.menu_kind == 0;
+            open: root.menu_kind == 0 && InterfaceStyle.tv;
             anchored: DetailContent.menu_anchored; anchor_x: DetailContent.menu_anchor_x; anchor_y: DetailContent.menu_anchor_y;
             width: 100%;
             height: 100%;
@@ -1482,22 +1575,7 @@ export component DetailPage {
                 { label: @tr("Add to watch queue"), enabled: true },
                 { label: @tr("Reveal episode spoilers"), enabled: true },
             ];
-            picked(a) => {
-                if (a == 0) {
-                    root.episode_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
-                } else if (a == 1) {
-                    root.episode_watch_action(root.menu_idx, 3);
-                } else if (a == 2) {
-                    root.episode_watch_action(root.menu_idx, 4);
-                } else if (a == 3) {
-                    root.kb_active = false;
-                    root.episode_picked(root.menu_idx);
-                } else {
-                    if a == 4 { QueueBridge.add_episode(root.menu_idx); }
-                    else { root.episode_watch_action(root.menu_idx, a == 6 ? 6 : 5); }
-                }
-                root.close_menu();
-            }
+            picked(a) => { root.episode_menu_picked(a); }
             closed => { root.close_menu(); }
         }
 
@@ -1510,8 +1588,32 @@ export component DetailPage {
             closed => { DetailBridge.season_download_menu = -1; }
         }
 
+        if root.menu_kind == 1 && !InterfaceStyle.tv: CardMenu {
+            width: 100%; height: 100%;
+            property <length> local-x: DetailContent.menu_anchored ? DetailContent.menu_anchor_x - self.absolute-position.x : self.width / 2 - 144px;
+            property <length> local-y: DetailContent.menu_anchored ? DetailContent.menu_anchor_y - self.absolute-position.y : self.height / 2 - 120px;
+            anchor-right: self.local-x + 288px;
+            anchor-bottom: self.local-y - 4px;
+            origin-x: DetailContent.menu_anchored ? self.local-x : self.width / 2;
+            safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+            title: root.season_cards[root.menu_idx].name != "" ? root.season_cards[root.menu_idx].name : @tr("Season options");
+            summary: "";
+            tiles: [
+                { id: "1", label: @tr("Select season"), icon: "M4 6h16M4 12h16M4 18h10", enabled: true },
+                { id: "0", label: root.menu_flag ? @tr("Mark unwatched") : @tr("Mark watched"),
+                  icon: root.menu_flag ? "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" : "M21 12a9 9 0 1 1-3-6.7M7 12l3 3 9-10", enabled: true },
+            ];
+            rows: root.progress_include_specials ? [
+                { id: "2", label: @tr("Download season"), icon: "M12 3v12M7 10l5 5 5-5M5 16v5h14v-5", enabled: true },
+                { id: "3", label: root.season_cards[root.menu_idx].progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress"), icon: "M4 20V10M10 20V4M16 20v-7M22 20H2", enabled: true },
+            ] : [
+                { id: "2", label: @tr("Download season"), icon: "M12 3v12M7 10l5 5 5-5M5 16v5h14v-5", enabled: true },
+            ];
+            picked(id) => { root.season_menu_picked(id.to-float()); }
+            closed => { root.close_menu(); }
+        }
         MenuSheet {
-            open: root.menu_kind == 1;
+            open: root.menu_kind == 1 && InterfaceStyle.tv;
             anchored: DetailContent.menu_anchored; anchor_x: DetailContent.menu_anchor_x; anchor_y: DetailContent.menu_anchor_y;
             width: 100%;
             height: 100%;
@@ -1530,21 +1632,7 @@ export component DetailPage {
                 { label: @tr("Select season"), enabled: true },
                 { label: @tr("Download season"), enabled: true },
             ];
-            picked(a) => {
-                if (a == 0) {
-                    root.season_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
-                } else if (a == 3) {
-                    root.season_watch_action(root.menu_idx, 3);
-                } else if (a == 2) {
-                    DetailBridge.season_download_menu = root.menu_idx;
-                } else {
-                    root.kb_active = false;
-                    root.kb_zone = 3;
-                    root.kb_ci = 0;
-                    root.season_picked(root.menu_idx);
-                }
-                root.close_menu();
-            }
+            picked(a) => { root.season_menu_picked(a); }
             closed => { root.close_menu(); }
         }
         progress_options_sheet := MenuSheet {
@@ -1591,8 +1679,28 @@ export component DetailPage {
             }
             closed => { root.close_menu(); }
         }
+        // Desktop and touch: Reader's title menu hanging from the ⋯ button.
+        if root.in_library && root.menu_kind == 2 && !InterfaceStyle.tv: TitleMenu {
+            width: 100%; height: 100%;
+            on-detail: true;
+            series: !root.is_movie;
+            categories-enabled: root.category_rows.length > 0;
+            title: root.selected_title;
+            summary: root.library_menu_status == 1 ? @tr("On hold") : root.library_menu_status == 2 ? @tr("Dropped")
+                : root.library_menu_status == 5 ? @tr("Plan to Watch") : root.library_menu_status == 6 ? @tr("Watching")
+                : root.library_menu_status == 7 ? @tr("Completed") : root.library_menu_status == 8 ? @tr("New episodes") : "";
+            watched: root.library_watched;
+            activity-action: root.library_activity_action;
+            status: root.library_menu_status;
+            anchor-right: DetailContent.menu_anchor_x - self.absolute-position.x;
+            anchor-bottom: DetailContent.menu_anchor_y - self.absolute-position.y;
+            origin-x: DetailContent.menu_anchor_x - self.absolute-position.x;
+            safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+            picked(action) => { root.title_menu_picked(action); }
+            closed => { root.close_menu(); }
+        }
         library_options_sheet := MenuSheet {
-            open: root.in_library && root.menu_kind == 2;
+            open: root.in_library && root.menu_kind == 2 && InterfaceStyle.tv;
             anchored: DetailContent.menu_anchored; anchor_x: DetailContent.menu_anchor_x; anchor_y: DetailContent.menu_anchor_y;
             safe-bottom: root.safe-bottom;
             safe-left: root.safe-left;

@@ -2435,6 +2435,7 @@ export component AppWindow inherits Window {
     public function detail_bridge_add_to_library() { root.add_to_library(); }
     public function detail_bridge_library_action(a: int) { root.detail_library_action(a); }
     public function detail_bridge_open_categories() { root.categories_modal = true; }
+    public function detail_bridge_library_status_code() -> int { return root.detail_library_status_code(); }
     public function detail_bridge_season_download_start(i: int, unwatched: bool) { root.season_download_start(i, unwatched); }
     public function detail_bridge_season_download_retry() { root.season_download_retry(); }
     public function detail_bridge_season_download_confirm() { root.season_download_confirm(); }

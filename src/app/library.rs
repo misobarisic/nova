@@ -722,6 +722,23 @@ impl Bridge {
     /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove,
     /// 5 await return, 6 resume viewing, 7 Plan to Watch, 8 Watching,
     /// 9 Completed, 10 New episodes.
+    /// Main thread: the open title's stored status as a library status action
+    /// code (0 automatic, else the manual pin), for the ⋯ menu's Status page.
+    /// -1 when the title is not in the library.
+    pub(super) fn detail_library_status_code(&self) -> i32 {
+        let state = self.shared.lock().unwrap();
+        state
+            .modal_item
+            .as_ref()
+            .and_then(|item| {
+                state
+                    .entries
+                    .iter()
+                    .find(|e| e.id == item.id && e.type_ == item.type_)
+            })
+            .map_or(-1, |entry| entry.watch_status.action_code())
+    }
+
     pub(super) fn detail_library_action(&self, action: i32) {
         let entry = {
             let state = self.shared.lock().unwrap();

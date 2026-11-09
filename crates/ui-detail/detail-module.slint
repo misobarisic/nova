@@ -123,6 +123,7 @@ export component DetailModule inherits Window {
         add_to_library() => { DetailBridge.add_to_library(); }
         library_action(arg0) => { DetailBridge.library_action(arg0); }
         open_categories() => { DetailBridge.open_categories(); }
+        library_status_code() => { return DetailBridge.library_status_code(); }
         season_picked(arg0) => { DetailBridge.season_picked(arg0); }
         episode_picked(arg0) => { DetailBridge.episode_picked(arg0); }
         episode_page_picked(arg0) => { DetailBridge.episode_page_picked(arg0); }
