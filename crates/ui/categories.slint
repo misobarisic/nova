@@ -1,9 +1,7 @@
 import { Theme, Anim, CategoryRow } from "@NovaUiShared";
 
-import { Button } from "std-widgets.slint";
 import { ScrollView } from "scrollview.slint";
 
-import { KbMark } from "kbnav.slint";
 import { IcCheck } from "icons.slint";
 
 export component CategoryPickerPopup {
@@ -23,8 +21,14 @@ export component CategoryPickerPopup {
     // ---- 6-button keyboard nav: chips grid + Done ----
     property <int> kb_zone: 0; // 0 chips, 1 done
     property <int> kb_idx: 0;
-    // Fewer columns on phones so names don't clip (kb nav follows it).
-    property <int> chip_cols: root.width < 430px ? 2 : 3;
+    // One category per row, as in Reader's title menu (kb nav follows it).
+    property <int> chip_cols: 1;
+    // Entrance: the panel scales and fades in like the title menu.
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <float> shown: 0;
+    animate shown { duration: root.motion ? Anim.player_slide : 0ms; easing: ease-out; }
+    init => { if root.motion { reveal.start(); } else { root.shown = 1; } }
+    reveal := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.shown = 1; } }
 
     function kb_clamp() {
         if (root.kb_idx >= root.category_rows.length) {
@@ -40,7 +44,7 @@ export component CategoryPickerPopup {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: Theme.current.scrim_category;
+        background: Theme.current.scrim_shadow;
 
         nav_scope := FocusScope {
             width: 100%;
@@ -104,61 +108,92 @@ export component CategoryPickerPopup {
             clicked => { root.kb_active = false; root.closed(); }
         }
 
-        Rectangle {
-            width: min(520px, parent.width - 40px);
-            // Bound the card to a concrete height so its content (and the
-            // header's Done button) can never stretch it to full window.
-            height: min(parent.height - 40px, 200px);
-            background: Theme.current.category_panel;
-            border-radius: 14px;
+        panel := Rectangle {
+            width: min(340px, parent.width - 32px);
+            // Bound the card to a concrete height: the header, the selected
+            // title and up to six rows, scrolling beyond that.
+            height: min(parent.height - 40px, 6px + 44px + 8px + 18px + 9px + Math.max(52px, Math.min(root.category_rows.length * 44px, 264px)) + 6px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
+            background: Theme.current.popup;
+            border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
+            drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
+            clip: true;
+            opacity: root.shown;
+            transform-scale: 0.92 + 0.08 * root.shown;
+            // Taps inside the panel never reach the dismissing backdrop.
+            TouchArea {}
 
             VerticalLayout {
-                padding: 14px;
-                spacing: 8px;
+                padding: 6px;
+                spacing: 0px;
 
-                // Combined header: title left, Done right (no separate
-                // bottom button row — that was most of the height). Fixed row
-                // height keeps the Done button compact instead of stretching.
+                // Header: title left, Done right; the selected title below.
                 HorizontalLayout {
                     height: 44px;
+                    padding-left: 10px;
+                    spacing: 8px;
 
                     Text {
                         text: @tr("Assign categories");
-                        font-size: 16px;
-                        font-weight: 700;
+                        font-size: 14px;
+                        font-weight: 600;
                         color: Theme.current.text_bright;
                         horizontal-stretch: 1;
                         overflow: elide;
                         vertical-alignment: center;
                     }
 
-                    Button {
-                        text: @tr("Done");
-                        primary: true;
-                        min-height: 44px;
-                        vertical-stretch: 0;
-                        clicked => { root.kb_active = false; root.closed(); }
+                    done_button := Rectangle {
+                        width: done_label.preferred-width + 28px;
+                        height: 44px;
+                        border-radius: 10px;
+                        background: done_touch.has-hover ? Theme.current.control_hover : transparent;
+                        border-width: root.kb_active && root.kb_zone == 1 ? 2px : 0px;
+                        border-color: Theme.current.focus_ring;
+                        accessible-role: button;
+                        accessible-label: @tr("Done");
+                        accessible-action-default => { root.kb_active = false; root.closed(); }
+                        done_label := Text {
+                            text: @tr("Done");
+                            font-size: 14px; font-weight: 600;
+                            color: Theme.current.accent_soft;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                        done_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.kb_active = false; root.closed(); }
+                        }
                     }
-
-                    KbMark { on: root.kb_zone == 1; active: root.kb_active; }
                 }
 
-                Text {
-                    text: root.selected_title;
-                    font-size: 11px;
-                    color: Theme.current.text_muted;
-                    overflow: elide;
+                // A gap keeps the selected title clear of Done's touch target.
+                Rectangle { height: 8px; }
+                HorizontalLayout {
+                    padding-left: 10px; padding-right: 10px;
+                    Text {
+                        height: 18px;
+                        text: root.selected_title;
+                        font-size: 12px;
+                        color: Theme.current.text_muted;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        accessible-role: text;
+                        accessible-label: root.selected_title;
+                    }
                 }
 
-                Rectangle { height: 1px; background: Theme.current.popup_divider; }
+                Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
 
                 if root.category_rows.length == 0: Text {
+                    height: 52px;
                     text: @tr("No categories yet — add them in Settings → Categories, then come back to tag this item.");
                     color: Theme.current.text_muted;
                     font-size: 13px;
                     wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
 
                 if root.category_rows.length > 0: ScrollView {
@@ -169,17 +204,18 @@ export component CategoryPickerPopup {
                     // drag-pan by default, so opt in explicitly.
                     mouse-drag-pan-enabled: true;
 
-                    GridLayout {
-                        spacing: 6px;
+                    VerticalLayout {
+                        spacing: 0px;
+                        alignment: start;
 
+                        // Reader's category rows: a checkbox, the name, and a
+                        // tinted row while ticked.
                         for cat[i] in root.category_rows: Rectangle {
-                            row: Math.floor(i / root.chip_cols);
-                            col: Math.mod(i, root.chip_cols);
-                            height: root.width < 430px ? 44px : 30px;
-                            border-radius: root.width < 430px ? 22px : 15px;
+                            height: 44px;
+                            border-radius: 10px;
                             // Reassigning the animated value on a master-switch change evaluates
                             // the current duration: 0ms cancels motion before it can resume later.
-                            private property <color> target-background: chip_touch.has-hover ? (root.modal_category_flags[i] ? Theme.current.accent_pressed : Theme.current.control_hover) : (root.modal_category_flags[i] ? Theme.current.accent : Theme.current.control);
+                            private property <color> target-background: chip_touch.has-hover ? Theme.current.control_hover : (root.modal_category_flags[i] ? Theme.current.selection_wash : transparent);
                             private property <color> state-background: self.target-background;
                             private property <bool> motion-enabled: Anim.enabled;
                             animate state-background { duration: Anim.control_state; easing: ease-in-out; }
@@ -187,51 +223,40 @@ export component CategoryPickerPopup {
                             changed motion-enabled => { self.state-background = self.target-background; }
                             background: Anim.enabled ? self.state-background : self.target-background;
                             border-width: root.kb_active && root.kb_zone == 0 && root.kb_idx == i ? 2px : 0px;
-                            border-color: Theme.current.text_bright;
+                            border-color: Theme.current.focus_ring;
+                            accessible-role: checkbox; accessible-label: cat.name;
+                            accessible-checkable: true; accessible-checked: root.modal_category_flags[i];
+                            accessible-action-default => { root.toggle_entry_category(cat.name); }
 
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 5px;
-
-                                Rectangle {
-                                    width: 14px;
-
-                                    VerticalLayout {
-                                        width: 100%;
-                                        alignment: center;
-
-                                        category_check := IcCheck {
-                                            private property <float> target-opacity: root.modal_category_flags[i] ? 1 : 0;
-                                            private property <float> state-opacity: self.target-opacity;
-                                            private property <bool> motion-enabled: Anim.enabled;
-                                            animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
-                                            changed target-opacity => { self.state-opacity = self.target-opacity; }
-                                            changed motion-enabled => { self.state-opacity = self.target-opacity; }
-                                            opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
-                                            x: (parent.width - self.width) / 2;
-                                            width: 12px;
-                                            height: 12px;
-                                            fill: Theme.current.text_bright;
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    text: cat.name;
-                                    private property <color> target-color: root.modal_category_flags[i] ? Theme.current.on_accent : Theme.current.text_primary;
-                                    private property <color> state-color: self.target-color;
+                            Rectangle {
+                                x: 12px; y: 12px; width: 20px; height: 20px; border-radius: 5px;
+                                border-width: 2px;
+                                border-color: root.modal_category_flags[i] ? Theme.current.accent : Theme.current.border_strong;
+                                background: root.modal_category_flags[i] ? Theme.current.accent : transparent;
+                                category_check := IcCheck {
+                                    private property <float> target-opacity: root.modal_category_flags[i] ? 1 : 0;
+                                    private property <float> state-opacity: self.target-opacity;
                                     private property <bool> motion-enabled: Anim.enabled;
-                                    animate state-color { duration: Anim.control_state; easing: ease-in-out; }
-                                    changed target-color => { self.state-color = self.target-color; }
-                                    changed motion-enabled => { self.state-color = self.target-color; }
-                                    color: Anim.enabled ? self.state-color : self.target-color;
-                                    font-size: 12px;
-                                    font-weight: root.modal_category_flags[i] ? 600 : 400;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 1;
-                                    overflow: elide;
+                                    animate state-opacity { duration: Anim.control_state; easing: ease-in-out; }
+                                    changed target-opacity => { self.state-opacity = self.target-opacity; }
+                                    changed motion-enabled => { self.state-opacity = self.target-opacity; }
+                                    opacity: Anim.enabled ? self.state-opacity : self.target-opacity;
+                                    x: 3px; y: 3px;
+                                    width: 14px;
+                                    height: 14px;
+                                    fill: Theme.current.on_accent;
                                 }
+                            }
+
+                            Text {
+                                x: 44px; width: parent.width - 56px; height: 100%;
+                                text: cat.name;
+                                color: Theme.current.text_bright;
+                                font-size: 14px;
+                                font-weight: root.modal_category_flags[i] ? 600 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                accessible-role: none;
                             }
 
                             chip_touch := TouchArea {
