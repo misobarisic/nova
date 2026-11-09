@@ -437,7 +437,7 @@ export component DownloadsPage inherits Rectangle {
     downloads_clip := Rectangle {
     x: root.content_x; width: root.width - self.x; height: 100%; clip: true;
     downloads_layer := Rectangle {
-    x: -root.content_x - 0.28 * (root.width - root.content_x) * smart_downloads.push_progress;
+    x: -root.content_x - 24px * smart_downloads.push_progress;
     opacity: 1.0 - smart_downloads.fade_progress;
     width: root.width; height: 100%;
     // Portrait and desktop retain a pinned heading. Touch landscape expands

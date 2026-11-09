@@ -96,7 +96,7 @@ export component SmartDownloads inherits Rectangle {
         }
     }
     panel := Rectangle {
-    x: (1.0 - root.push_progress) * root.width; y: 0px;
+    x: (1.0 - root.push_progress) * 48px; y: 0px;
     width: root.width; height: root.height;
     opacity: root.motion ? root.alpha : 1.0;
     background: Theme.current.artwork_canvas;

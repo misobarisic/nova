@@ -265,7 +265,7 @@ export component BookmarksPage inherits Rectangle {
             scroll-event(e) => { accept }
         }
         scene_layer := Rectangle {
-            x: (1.0 - root.scene_slide) * root.width * 0.1; y: 0px;
+            x: (1.0 - root.scene_slide) * 48px; y: 0px;
             width: 100%; height: 100%; background: Theme.current.artwork_canvas;
             visible: root.detail; opacity: root.scene_alpha;
             archive_scroll := ScrollView {

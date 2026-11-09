@@ -2868,7 +2868,9 @@ export component AppWindow inherits Window {
         viewport_width: self.width; viewport_height: self.height;
         width: more_content_host.width; height: more_content_host.height;
         // Keep this layer behind every subpage, including Settings/About.
-        x: root.more_open ? 0px : -0.28 * more_content_host.width * (1.0 - root.more_subpage_offset);
+        // Reader's page motion: the parent eases 24px left and fades while the
+        // child slides in 48px and fades in, like a Browse catalogue opening.
+        x: root.more_open ? 0px : -24px * (1.0 - root.more_subpage_offset);
         opacity: root.more_open ? 1.0 : 1.0 - root.more_subpage_alpha;
         external_navigation: true;
         active: root.more_open;
@@ -2885,8 +2887,8 @@ export component AppWindow inherits Window {
     if root.settings_page_mounted: SettingsHost {
         viewport_width: self.width; viewport_height: self.height;
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset
-            - (root.backup_motion && root.backup_visual_retained ? 0.28 * more_content_host.width * root.backup_slide : 0px);
+        x: 48px * root.more_subpage_offset
+            - (root.backup_motion && root.backup_visual_retained ? 24px * root.backup_slide : 0px);
         opacity: root.more_subpage_alpha * (root.backup_motion && root.backup_visual_retained ? 1.0 - root.backup_alpha : 1.0);
         external_navigation: true;
         active: !root.more_return_pending && !root.backup_visual_retained;
@@ -2928,7 +2930,7 @@ export component AppWindow inherits Window {
     if root.about_page_mounted: AboutHost {
         viewport_width: self.width; viewport_height: self.height;
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
+        x: 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         external_navigation: true;
         active: !root.more_return_pending;
@@ -2949,7 +2951,7 @@ export component AppWindow inherits Window {
         artwork-active: root.page_artwork_allowed;
         nav-viewport-width: root.width;
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
+        x: 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         external_navigation: true;
         active: !root.more_return_pending;
@@ -2965,7 +2967,7 @@ export component AppWindow inherits Window {
         artwork-active: root.page_artwork_allowed;
         nav-viewport-width: root.width;
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
+        x: 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         external_navigation: true;
         active: !root.more_return_pending;
@@ -2976,7 +2978,7 @@ export component AppWindow inherits Window {
 
     if root.more_service_route == 9 && root.party_page_open: PartyPage {
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
+        x: 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         active: !root.more_return_pending;
         safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
@@ -2985,7 +2987,7 @@ export component AppWindow inherits Window {
     }
     if root.more_service_route == 8 && root.remote_devices_open: RemoteDevicesPage {
         width: more_content_host.width; height: more_content_host.height;
-        x: more_content_host.width * root.more_subpage_offset;
+        x: 48px * root.more_subpage_offset;
         opacity: root.more_subpage_alpha;
         active: !root.more_return_pending;
         safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
@@ -3115,7 +3117,7 @@ export component AppWindow inherits Window {
         // The fixed host blocks the exposed edge during both slide directions.
         TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
         remote_controls_page := RemoteControlsPage {
-            x: (1.0 - root.remote_controls_slide) * root.width * 0.10;
+            x: (1.0 - root.remote_controls_slide) * 48px;
             opacity: root.remote_controls_alpha;
             active: root.remote_controls_open;
             width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
@@ -3161,13 +3163,13 @@ export component AppWindow inherits Window {
     }
     if root.backup_open || root.backup_visual_retained: backup_host := Rectangle {
         x: 0px; y: 0px; width: root.width; height: root.height; clip: true;
-        // The animated page can expose either edge. Keep its canvas at the
-        // viewport, independent of the content's slide/fade and safe insets.
-        background: Theme.current.artwork_canvas;
+        // The page fades in over Settings (which eases back and fades), so
+        // its viewport canvas fades with it rather than covering at once.
+        Rectangle { width: 100%; height: 100%; background: Theme.current.artwork_canvas; opacity: root.backup_alpha; }
         // Cover the exposed edge throughout both directions of the push/pop.
         TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
         backup_page := BackupPanel {
-            x: (1.0 - root.backup_slide) * root.width;
+            x: (1.0 - root.backup_slide) * 48px;
             opacity: root.backup_alpha;
             active: root.backup_open;
             focus-request: root.backup_focus_request;

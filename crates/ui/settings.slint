@@ -2266,7 +2266,7 @@ export component SettingsPage {
                     height: 100%;
                     // Push transition: slides left and dims while a subpage
                     // slides in over it; reverses on back.
-                    x: root.sub_open && !root.two_pane ? -0.28 * content_host.width : 0px;
+                    x: root.sub_open && !root.two_pane ? -24px : 0px;
                     opacity: root.sub_open && !root.two_pane ? 0.0 : 1.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
                     animate opacity { duration: Anim.transition_fade; }
@@ -2436,8 +2436,10 @@ export component SettingsPage {
                 sub_layer := Rectangle {
                     width: root.detail_width;
                     height: 100%;
-                    x: root.sub_open ? (root.two_pane ? 364px : 0px) : content_host.width;
+                    // A short slide and fade, like a Browse catalogue opening.
+                    x: (root.two_pane ? 364px : 0px) + (root.sub_open ? 0px : 48px);
                     opacity: root.sub_open ? 1.0 : 0.0;
+                    visible: root.sub_open || self.opacity > 0.0;
                     animate x { duration: root.standalone_sync ? 0ms : Anim.transition_slide; easing: ease-out; }
                     animate opacity { duration: root.standalone_sync ? 0ms : Anim.transition_fade; }
 

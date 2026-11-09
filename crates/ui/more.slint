@@ -202,7 +202,7 @@ export component MorePage inherits Rectangle {
     // Profiles subpage owns input, just as More's other children retain it.
     landing := Rectangle {
         visible: !root.profiles_require_selection && (!root.local-open || (root.profile-motion && (root.local-slide < 1.0 || root.local-alpha < 1.0)));
-        x: root.profile-motion ? -0.28 * root.width * root.local-slide : 0px;
+        x: root.profile-motion ? -24px * root.local-slide : 0px;
         opacity: root.profile-motion ? 1.0 - root.local-alpha : 1.0;
         width: 100%; height: 100%;
     VerticalLayout {
@@ -299,7 +299,7 @@ export component MorePage inherits Rectangle {
     }
     profiles_page := ProfilesPage {
         visible: root.profiles_open || (root.profile-motion && (root.profile-slide > 0.0 || root.profile-alpha > 0.0));
-        x: root.profile-motion ? root.width * (1.0 - root.profile-slide) : 0px;
+        x: root.profile-motion ? 48px * (1.0 - root.profile-slide) : 0px;
         opacity: root.profile-motion ? root.profile-alpha : 1.0;
         active: root.active && root.profiles_open;
         width: 100%; height: 100%;
@@ -311,7 +311,7 @@ export component MorePage inherits Rectangle {
     }
     journal_page := ViewingJournalPage {
         visible: !root.profiles_require_selection && (JournalBridge.open || (root.profile-motion && (root.journal-slide > 0.0 || root.journal-alpha > 0.0)));
-        x: root.profile-motion ? root.width * (1.0 - root.journal-slide) : 0px;
+        x: root.profile-motion ? 48px * (1.0 - root.journal-slide) : 0px;
         opacity: root.profile-motion ? root.journal-alpha : 1.0;
         active: root.active && JournalBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
@@ -323,7 +323,7 @@ export component MorePage inherits Rectangle {
     }
     queue_page := WatchQueuePage {
         visible: !root.profiles_require_selection && (QueueBridge.open || (root.profile-motion && (root.queue-slide > 0.0 || root.queue-alpha > 0.0)));
-        x: root.profile-motion ? root.width * (1.0 - root.queue-slide) : 0px;
+        x: root.profile-motion ? 48px * (1.0 - root.queue-slide) : 0px;
         opacity: root.profile-motion ? root.queue-alpha : 1.0;
         active: root.active && QueueBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
@@ -335,7 +335,7 @@ export component MorePage inherits Rectangle {
     }
     bookmarks_page := BookmarksPage {
         visible: !root.profiles_require_selection && (BookmarksBridge.open || (root.profile-motion && (root.bookmarks-slide > 0.0 || root.bookmarks-alpha > 0.0)));
-        x: root.profile-motion ? root.width * (1.0 - root.bookmarks-slide) : 0px;
+        x: root.profile-motion ? 48px * (1.0 - root.bookmarks-slide) : 0px;
         opacity: root.profile-motion ? root.bookmarks-alpha : 1.0;
         active: root.active && BookmarksBridge.open && !root.profiles_require_selection;
         width: 100%; height: 100%; narrow: root.narrow;
