@@ -867,17 +867,19 @@ impl Bridge {
                 let artwork_url = entries
                     .iter()
                     .find(|entry| entry.id == first.media_id && entry.type_ == first.media_type)
+                    // The card shows a 2:3 poster thumbnail (Reader's layout);
+                    // the backdrop is only a fallback for posterless entries.
                     .map(|entry| {
-                        if entry.background_url.is_empty() {
-                            entry.poster_url.clone()
-                        } else {
+                        if entry.poster_url.is_empty() {
                             entry.background_url.clone()
+                        } else {
+                            entry.poster_url.clone()
                         }
                     })
                     .unwrap_or_default();
                 let identity = super::page_artwork::Identity::new(
                     artwork_url,
-                    ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)),
+                    ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
                 );
                 let artwork = if retained.contains(&id) {
                     decoded_cache_get(&identity.cache_key)
