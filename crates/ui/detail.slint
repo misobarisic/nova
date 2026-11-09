@@ -840,10 +840,8 @@ export component DetailPage {
     }
 
     function request_stream_action(id: string) {
+        // The backend fills the shared model and opens the action menu.
         root.stream_action_requested(id);
-        // The backend fills the shared model and opens the touch sheet.
-        // Desktop consumes the same model in the row's native popup instead.
-        if (!root.touch_menus && !InterfaceStyle.tv) { root.stream_action_open = false; }
     }
 
     function close_menu() {

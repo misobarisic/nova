@@ -2923,26 +2923,43 @@ impl Bridge {
                 }]))
                 .into(),
             );
+            set_stream_action_rows(&app, &[STREAM_ICON_DOWNLOAD], &[]);
             app.set_stream_action_open(true);
             return;
         }
+        // Icons and destructive flags ride alongside the items for the popup
+        // menu's rows.
+        let mut icons: Vec<&'static str> = Vec::new();
+        let mut danger: Vec<bool> = Vec::new();
         let (title, items) = match &stream.download {
             Some(job) => {
                 let mut items = vec![SheetItem {
                     label: SharedString::from(DownloadCoordinator::action_label(job)),
                     enabled: true,
                 }];
+                icons.push(match job.phase {
+                    DownloadPhase::Queued | DownloadPhase::Resolving | DownloadPhase::Downloading => {
+                        STREAM_ICON_PAUSE
+                    }
+                    DownloadPhase::Failed => STREAM_ICON_RETRY,
+                    DownloadPhase::Paused | DownloadPhase::Completed => STREAM_ICON_PLAY,
+                });
                 if job.phase == DownloadPhase::Failed {
                     items.push(SheetItem {
                         label: text::tr("Choose another stream").into(),
                         enabled: true,
                     });
+                    icons.push(STREAM_ICON_SWAP);
                 }
                 items.push(SheetItem {
                     label: SharedString::from(text::tr("Remove download")),
                     enabled: true,
                 });
+                danger.resize(icons.len(), false);
+                icons.push(STREAM_ICON_REMOVE);
+                danger.push(true);
                 if job.phase == DownloadPhase::Completed {
+                    icons.push(STREAM_ICON_PIN);
                     items.push(SheetItem {
                         label: text::tr(if job.offline.pinned {
                             "Unpin downloaded file"
@@ -2969,21 +2986,22 @@ impl Bridge {
                     | StreamSource::ExternalUrl(_)
                     | StreamSource::Downloaded { .. } => false,
                 };
+                let external = matches!(stream.source, StreamSource::ExternalUrl(_));
                 let mut items = vec![SheetItem {
-                    label: SharedString::from(text::tr(
-                        if matches!(stream.source, StreamSource::ExternalUrl(_)) {
-                            "Open in browser"
-                        } else {
-                            "Play stream"
-                        },
-                    )),
+                    label: SharedString::from(text::tr(if external {
+                        "Open in browser"
+                    } else {
+                        "Play stream"
+                    })),
                     enabled: true,
                 }];
+                icons.push(if external { STREAM_ICON_EXTERNAL } else { STREAM_ICON_PLAY });
                 if downloadable {
                     items.push(SheetItem {
                         label: SharedString::from(text::tr("Download")),
                         enabled: true,
                     });
+                    icons.push(STREAM_ICON_DOWNLOAD);
                     let owner = profiles::ProfileStore::capture();
                     if self
                         .shared
@@ -2999,6 +3017,7 @@ impl Bridge {
                             )),
                             enabled: true,
                         });
+                        icons.push(STREAM_ICON_SMART);
                     }
                 }
                 (SharedString::from(first_line(&stream.display)), items)
@@ -3007,6 +3026,7 @@ impl Bridge {
         app.set_stream_action_id(SharedString::from(stream_id));
         app.set_stream_action_title(title);
         app.set_stream_action_items(Rc::new(VecModel::from(items)).into());
+        set_stream_action_rows(&app, &icons, &danger);
         app.set_stream_action_open(true);
     }
 
@@ -3565,6 +3585,31 @@ fn fallback_episode_label(request_id: &str) -> String {
         (u32::MAX, _) => String::new(),
         (season, episode) => format!("S{season} E{episode}"),
     }
+}
+
+
+// Stream action menu row icons: SVG path commands on a 24×24 viewbox, drawn
+// by the popup menu beside each action label.
+const STREAM_ICON_PLAY: &str = "M8 5v14l11-7z";
+const STREAM_ICON_PAUSE: &str = "M8 5v14M16 5v14";
+const STREAM_ICON_RETRY: &str = "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7";
+const STREAM_ICON_SWAP: &str = "M4 7h13l-3-3M20 17H7l3 3";
+const STREAM_ICON_REMOVE: &str = "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7";
+const STREAM_ICON_PIN: &str = "M12 17v5M9 3h6l-1 6 4 4v2H6v-2l4-4z";
+const STREAM_ICON_EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6";
+const STREAM_ICON_DOWNLOAD: &str = "M12 3v12M7 10l5 5 5-5M5 16v5h14v-5";
+const STREAM_ICON_SMART: &str = "M12 3l2.6 5.6 6.1.6-4.6 4.1 1.3 6-5.4-3.1-5.4 3.1 1.3-6-4.6-4.1 6.1-.6z";
+
+/// Publishes the stream action rows' icons and destructive flags by index;
+/// a missing flag means an ordinary row.
+fn set_stream_action_rows(app: &AppWindow, icons: &[&str], danger: &[bool]) {
+    app.set_stream_action_icons(
+        Rc::new(VecModel::from(
+            icons.iter().map(|icon| SharedString::from(*icon)).collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_stream_action_danger(Rc::new(VecModel::from(danger.to_vec())).into());
 }
 
 #[cfg(test)]

@@ -247,6 +247,12 @@ export component CardMenu inherits Rectangle {
     in property <string> summary;
     in property <[CardMenuAction]> tiles;
     in property <[CardMenuAction]> rows;
+    // Backend-built actions (e.g. a stream's), picked by index, with
+    // optional icons by index.
+    in property <[SheetItem]> items;
+    in property <[string]> item-icons;
+    // Destructive items by index: drawn red below a divider.
+    in property <[bool]> item-danger;
     // Coordinates of the panel's top-right corner, local to this overlay.
     in property <length> anchor-right;
     in property <length> anchor-bottom;
@@ -327,6 +333,15 @@ export component CardMenu inherits Rectangle {
                         live: root.shown && action.enabled; label: action.label; icon: action.icon; danger: action.danger;
                         opacity: action.enabled ? 1 : 0.45;
                         activated => { root.dismiss(action.id); }
+                    }
+                }
+                for item[index] in root.items: VerticalLayout {
+                    if root.item-danger[index] && index > 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                    MenuItem {
+                        live: root.shown && item.enabled; label: item.label; icon: root.item-icons[index];
+                        danger: root.item-danger[index];
+                        opacity: item.enabled ? 1 : 0.45;
+                        activated => { root.dismiss("" + index); }
                     }
                 }
             }

@@ -617,6 +617,8 @@ export component AppWindow inherits Window {
         stream_action_id <=> root.stream_action_id;
         stream_action_title <=> root.stream_action_title;
         stream_action_items <=> root.stream_action_items;
+        stream_action_icons <=> root.stream_action_icons;
+        stream_action_danger <=> root.stream_action_danger;
         modal_episodes <=> root.modal_episodes;
         season_download_active <=> root.season_download_active;
         season_download_review <=> root.season_download_review;
@@ -1205,6 +1207,8 @@ export component AppWindow inherits Window {
     in-out property <string> stream_action_id: "";
     in-out property <string> stream_action_title: "";
     in-out property <[SheetItem]> stream_action_items: [];
+    in-out property <[string]> stream_action_icons: [];
+    in-out property <[bool]> stream_action_danger: [];
     in-out property <string> searchable_hint: "";
     // --- Library (own collection, Stremio-style) -----------------------
     in-out property <[MediaCard]> library: [];

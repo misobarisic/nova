@@ -4,6 +4,7 @@ import { InterfaceStyle, PartyBridge, RemoteBridge, Theme, Anim, StreamRow, Shee
 import { Spinner } from "std-widgets.slint";
 import { PillButton } from "settings-controls.slint";
 import { MenuSheet } from "menusheet.slint";
+import { CardMenu } from "title-menu.slint";
 import { IcMoreHoriz, IcChevronLeft } from "icons.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
@@ -662,6 +663,8 @@ export component StreamSelector inherits Rectangle {
     in property <string> action_title;
     in property <string> action_id;
     in property <[SheetItem]> action_items;
+    in property <[string]> action_icons;
+    in property <[bool]> action_danger;
     callback back();
     callback picked(int);
     callback page_picked(int);
@@ -1141,8 +1144,26 @@ export component StreamSelector inherits Rectangle {
         }
     }
 
+    // Desktop and touch: the title-menu panel, grown from the pointer or the
+    // ⋯ button and centred on a hold. TV keeps the sheet below.
+    if root.action_open && !InterfaceStyle.tv: CardMenu {
+        width: 100%; height: 100%;
+        property <length> local-x: root.action_anchored ? root.action_anchor_x - self.absolute-position.x : self.width / 2 - 144px;
+        property <length> local-y: root.action_anchored ? root.action_anchor_y - self.absolute-position.y : self.height / 2 - 120px;
+        anchor-right: self.local-x + 288px;
+        anchor-bottom: self.local-y - 4px;
+        origin-x: root.action_anchored ? self.local-x : self.width / 2;
+        safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+        title: root.action_title;
+        summary: "";
+        items: root.action_items;
+        item-icons: root.action_icons;
+        item-danger: root.action_danger;
+        picked(id) => { root.action_open = false; root.action_selected(root.action_id, id.to-float()); }
+        closed => { root.action_open = false; selector_scope.focus(); }
+    }
     MenuSheet {
-        open: root.action_open;
+        open: root.action_open && InterfaceStyle.tv;
         anchored: root.action_anchored; anchor_x: root.action_anchor_x; anchor_y: root.action_anchor_y;
         width: 100%; height: 100%;
         safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;

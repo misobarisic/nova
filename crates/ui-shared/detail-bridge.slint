@@ -87,6 +87,10 @@ export global DetailBridge {
     in-out property <string> stream_action_id;
     in-out property <string> stream_action_title;
     in-out property <[SheetItem]> stream_action_items;
+    // Row icons for the stream action menu (SVG path commands), by index.
+    in-out property <[string]> stream_action_icons;
+    // Destructive stream actions (drawn red), by index.
+    in-out property <[bool]> stream_action_danger;
     in-out property <bool> modal_episodes;
     in-out property <[string]> season_names;
     in-out property <int> season_combo_idx;
