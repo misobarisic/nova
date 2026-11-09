@@ -809,11 +809,17 @@ export component SettingsPage {
     function save_addon_config() {
         root.addon_capabilities_changed(root.addon_config_url, root.addon_config_streams, root.addon_config_metadata);
     }
+    // A pointer Back in two-pane Settings leaves Settings in one click: the
+    // overview is already beside the subpage, so returning focus to it would
+    // look like nothing happened. Nested pages and editors still step back.
+    private property <bool> pointer_back: false;
     function submenu_back() {
         // A pointer Back belongs to the visible submenu even when keyboard
         // focus last rested on the desktop overview alongside it.
         if root.two_pane && root.kb_zone == 8 { root.kb_zone = root.page_first_zone(); }
+        root.pointer_back = true;
         root.system_back();
+        root.pointer_back = false;
     }
     function system_back() {
         if SmartCollectionsBridge.editor_open { smart_editor.go_back(); return; }
@@ -850,7 +856,7 @@ export component SettingsPage {
             root.back_picked();
         } else if (root.two_pane && root.kb_zone == 8) {
             root.back_picked();
-        } else if (root.sub_open) {
+        } else if (root.sub_open && !(root.pointer_back && root.two_pane && root.sel != 9)) {
             root.close_page();
         } else {
             root.back_picked();
