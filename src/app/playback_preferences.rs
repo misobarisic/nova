@@ -25,7 +25,11 @@ impl TitlePicture {
         Self {
             scale: scale.clamp(0, 3) as u8,
             aspect: aspect.clamp(0, 6) as u8,
-            zoom: if zoom.is_finite() { zoom.clamp(0.5, 3.0) } else { 1.0 },
+            zoom: if zoom.is_finite() {
+                zoom.clamp(0.5, 3.0)
+            } else {
+                1.0
+            },
             rotate: rotate.rem_euclid(4) as u8,
         }
     }
@@ -90,7 +94,12 @@ impl Bridge {
         let picture = saved.unwrap_or_else(|| {
             let state = self.shared.lock().unwrap();
             let settings = &state.cache_settings;
-            TitlePicture::new(settings.picture_scale.into(), settings.picture_aspect.into(), 1.0, 0)
+            TitlePicture::new(
+                settings.picture_scale.into(),
+                settings.picture_aspect.into(),
+                1.0,
+                0,
+            )
         });
         self.publish_picture(picture, saved.is_some());
     }

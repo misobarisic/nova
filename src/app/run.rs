@@ -1454,11 +1454,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_offer_clearance_changed(move |fraction| p.set_offer_clearance(fraction));
     let b = bridge.clone();
-    app.global::<crate::PlayerOsdBridge>().on_picture_changed(move |scale, aspect, zoom, rotate| {
-        b.change_picture(scale, aspect, zoom, rotate)
-    });
+    app.global::<crate::PlayerOsdBridge>().on_picture_changed(
+        move |scale, aspect, zoom, rotate| b.change_picture(scale, aspect, zoom, rotate),
+    );
     let b = bridge.clone();
-    app.global::<crate::PlayerOsdBridge>().on_picture_reset(move || b.reset_picture());
+    app.global::<crate::PlayerOsdBridge>()
+        .on_picture_reset(move || b.reset_picture());
 
     bridge.install_casting();
 

@@ -22,7 +22,12 @@ pub(crate) struct Picture {
 
 impl Default for Picture {
     fn default() -> Self {
-        Self { scale: 0, aspect: 0, zoom: 1.0, rotate: 0 }
+        Self {
+            scale: 0,
+            aspect: 0,
+            zoom: 1.0,
+            rotate: 0,
+        }
     }
 }
 
@@ -31,7 +36,11 @@ impl Picture {
         Self {
             scale: scale.clamp(0, 3) as u8,
             aspect: aspect.clamp(0, ASPECTS.len() as i32 - 1) as u8,
-            zoom: if zoom.is_finite() { zoom.clamp(0.5, 3.0) } else { 1.0 },
+            zoom: if zoom.is_finite() {
+                zoom.clamp(0.5, 3.0)
+            } else {
+                1.0
+            },
             rotate: rotate.rem_euclid(4) as u8,
         }
     }
@@ -56,7 +65,15 @@ mod tests {
     #[test]
     fn menu_values_are_clamped_into_supported_options() {
         let picture = Picture::new(9, -2, f32::NAN, -1);
-        assert_eq!(picture, Picture { scale: 3, aspect: 0, zoom: 1.0, rotate: 3 });
+        assert_eq!(
+            picture,
+            Picture {
+                scale: 3,
+                aspect: 0,
+                zoom: 1.0,
+                rotate: 3
+            }
+        );
         assert_eq!(Picture::new(1, 4, 5.0, 6).zoom, 3.0);
         assert_eq!(Picture::new(1, 4, 5.0, 6).rotate, 2);
     }

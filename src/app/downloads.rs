@@ -2938,9 +2938,9 @@ impl Bridge {
                     enabled: true,
                 }];
                 icons.push(match job.phase {
-                    DownloadPhase::Queued | DownloadPhase::Resolving | DownloadPhase::Downloading => {
-                        STREAM_ICON_PAUSE
-                    }
+                    DownloadPhase::Queued
+                    | DownloadPhase::Resolving
+                    | DownloadPhase::Downloading => STREAM_ICON_PAUSE,
                     DownloadPhase::Failed => STREAM_ICON_RETRY,
                     DownloadPhase::Paused | DownloadPhase::Completed => STREAM_ICON_PLAY,
                 });
@@ -2995,7 +2995,11 @@ impl Bridge {
                     })),
                     enabled: true,
                 }];
-                icons.push(if external { STREAM_ICON_EXTERNAL } else { STREAM_ICON_PLAY });
+                icons.push(if external {
+                    STREAM_ICON_EXTERNAL
+                } else {
+                    STREAM_ICON_PLAY
+                });
                 if downloadable {
                     items.push(SheetItem {
                         label: SharedString::from(text::tr("Download")),
@@ -3587,7 +3591,6 @@ fn fallback_episode_label(request_id: &str) -> String {
     }
 }
 
-
 // Stream action menu row icons: SVG path commands on a 24×24 viewbox, drawn
 // by the popup menu beside each action label.
 const STREAM_ICON_PLAY: &str = "M8 5v14l11-7z";
@@ -3598,14 +3601,18 @@ const STREAM_ICON_REMOVE: &str = "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 
 const STREAM_ICON_PIN: &str = "M12 17v5M9 3h6l-1 6 4 4v2H6v-2l4-4z";
 const STREAM_ICON_EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6";
 const STREAM_ICON_DOWNLOAD: &str = "M12 3v12M7 10l5 5 5-5M5 16v5h14v-5";
-const STREAM_ICON_SMART: &str = "M12 3l2.6 5.6 6.1.6-4.6 4.1 1.3 6-5.4-3.1-5.4 3.1 1.3-6-4.6-4.1 6.1-.6z";
+const STREAM_ICON_SMART: &str =
+    "M12 3l2.6 5.6 6.1.6-4.6 4.1 1.3 6-5.4-3.1-5.4 3.1 1.3-6-4.6-4.1 6.1-.6z";
 
 /// Publishes the stream action rows' icons and destructive flags by index;
 /// a missing flag means an ordinary row.
 fn set_stream_action_rows(app: &AppWindow, icons: &[&str], danger: &[bool]) {
     app.set_stream_action_icons(
         Rc::new(VecModel::from(
-            icons.iter().map(|icon| SharedString::from(*icon)).collect::<Vec<_>>(),
+            icons
+                .iter()
+                .map(|icon| SharedString::from(*icon))
+                .collect::<Vec<_>>(),
         ))
         .into(),
     );
