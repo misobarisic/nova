@@ -290,34 +290,12 @@ export component DetailEpisodesModule inherits Window {
                                 }
                             }
 
-                            // Card menu: desktop right-click opens the
-                            // native popup at the cursor; touch hold
-                            // opens the bottom sheet (see below).
-                            season_ctx := ContextMenuArea {
+                            // Card menu: desktop right-click opens the popup
+                            // menu grown from the cursor; touch hold opens it
+                            // centred (see below).
+                            Rectangle {
                                 width: 100%;
                                 height: 100%;
-
-                                Menu {
-                                    MenuItem {
-                                        title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
-                                        activated => { DetailBridge.season_watch_action(i, s.watched ? 2 : 1); }
-                                    }
-                                    MenuItem { title: @tr("Download season"); activated => { DetailBridge.season_download_menu = i; } }
-                                    for action in DetailBridge.progress_include_specials ? [s.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress")] : []: MenuItem {
-                                        title: action;
-                                        activated => { DetailBridge.season_watch_action(i, 3); }
-                                    }
-                                    MenuSeparator {}
-                                    MenuItem {
-                                        title: @tr("Select season");
-                                        activated => {
-                                            DetailBridge.kb_active = false;
-                                            DetailBridge.kb_zone = 3;
-                                            DetailBridge.kb_ci = 0;
-                                            DetailBridge.season_picked(i);
-                                        }
-                                    }
-                                }
 
                             touch_season := TouchArea {
                                 property <bool> lp_suppress: false;
@@ -354,7 +332,10 @@ export component DetailEpisodesModule inherits Window {
                                         if (DetailBridge.touch_menus) {
                                             DetailContent.open_season_menu(i, s.watched);
                                         } else {
-                                            season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
+                                            DetailContent.open_season_menu(i, s.watched);
+                                            DetailContent.menu_anchor_x = touch_season.absolute-position.x + touch_season.mouse-x;
+                                            DetailContent.menu_anchor_y = touch_season.absolute-position.y + touch_season.mouse-y;
+                                            DetailContent.menu_anchored = true;
                                         }
                                     } else if (ev.kind == PointerEventKind.down) {
                                         DetailBridge.kb_active = false;
@@ -537,38 +518,9 @@ export component DetailEpisodesModule inherits Window {
                     // The TouchArea owns all presses (see
                     // upstream slint#12354), both paths open
                     // explicitly from its handlers.
-                    ep_ctx := ContextMenuArea {
+                    Rectangle {
                         width: 100%;
                         height: 100%;
-
-                        Menu {
-                            MenuItem {
-                                title: e.watched ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched");
-                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, e.watched ? 2 : 1); }
-                            }
-                            MenuItem {
-                                title: @tr("Mark episode and previous as watched");
-                                enabled: !e.watched;
-                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 3); }
-                            }
-                            MenuItem {
-                                title: @tr("Clear resume position");
-                                enabled: !e.watched && e.progress > 0;
-                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 4); }
-                            }
-                            MenuSeparator {}
-                            MenuItem {
-                                title: @tr("Open episode");
-                                activated => {
-                                    DetailBridge.kb_active = false;
-                                    DetailBridge.episode_picked(DetailBridge.episode_page_start + i);
-                                }
-                            }
-                            for action in DetailBridge.progress_include_specials ? [e.progress_excluded ? @tr("Include in progress") : @tr("Exclude from progress")] : []: MenuItem {
-                                title: action;
-                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 6); }
-                            }
-                        }
 
                     touch_ep := TouchArea {
                         property <bool> lp_suppress: false;
@@ -589,7 +541,10 @@ export component DetailEpisodesModule inherits Window {
                                 if (DetailBridge.touch_menus) {
                                     DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
                                 } else {
-                                    ep_ctx.show({ x: touch_ep.mouse-x, y: touch_ep.mouse-y });
+                                    DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
+                                    DetailContent.menu_anchor_x = touch_ep.absolute-position.x + touch_ep.mouse-x;
+                                    DetailContent.menu_anchor_y = touch_ep.absolute-position.y + touch_ep.mouse-y;
+                                    DetailContent.menu_anchored = true;
                                 }
                             } else if (ev.kind == PointerEventKind.down) {
                                 touch_ep.lp_suppress = false;

@@ -242,6 +242,8 @@ component StreamList {
     in property <[SheetItem]> action_items;
     callback picked(int);
     callback action_requested(string);
+    // Where a pointer opened the actions menu (window coordinates).
+    callback anchor_requested(length, length);
     callback action_selected(string, int);
     callback focused_row(length, length);
     private property <bool> stagger: Anim.enabled && Anim.transitions;
@@ -485,21 +487,6 @@ component StreamList {
                     }
                 }
 
-                // Populate the backend-owned actions before explicitly showing
-                // the desktop popup; a ContextMenuArea's automatic right-click
-                // would otherwise open before this row's actions are prepared.
-                stream_ctx := ContextMenuArea {
-                    x: 0px; y: 0px;
-                    width: 0px; height: 0px;
-                    Menu {
-                        for action[a] in root.action_items: MenuItem {
-                            title: action.label;
-                            enabled: action.enabled;
-                            activated => { root.action_selected(st.id, a); }
-                        }
-                    }
-                }
-
                 touch_st := TouchArea {
                     property <bool> lp_suppress: false;
                     width: 100%;
@@ -520,7 +507,7 @@ component StreamList {
                             touch_st.lp_suppress = true;
                             if (RemoteBridge.target_id == "" || PartyBridge.active) {
                                 root.action_requested(st.id);
-                                if (!root.touch_menus) { stream_ctx.show({ x: self.mouse-x, y: self.mouse-y }); }
+                                if (!root.touch_menus) { root.anchor_requested(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
                             }
                         } else if (ev.kind == PointerEventKind.down) {
                             touch_st.lp_suppress = false;
@@ -560,7 +547,7 @@ component StreamList {
                         mouse-cursor: pointer;
                         clicked => {
                             root.action_requested(st.id);
-                            if (!root.touch_menus) { stream_ctx.show({ x: stream_actions.x, y: stream_actions.y + stream_actions.height }); }
+                            if (!root.touch_menus) { root.anchor_requested(stream_actions.absolute-position.x + stream_actions.width, stream_actions.absolute-position.y + stream_actions.height); }
                         }
                     }
                 }
@@ -635,6 +622,7 @@ export component StreamSelector inherits Rectangle {
     function tv_context() -> bool {
         let index = root.kb_index - root.page_start;
         if (root.focus_zone == 2 && index >= 0 && index < root.rows.length) {
+            root.action_anchored = false;
             root.action_requested(root.rows[index].id);
             return true;
         }
@@ -666,6 +654,11 @@ export component StreamSelector inherits Rectangle {
     }
 
     in-out property <bool> action_open;
+    // A pointer anchors the actions menu where it was opened; holds, the TV
+    // remote and keyboard keep the centred popup.
+    property <bool> action_anchored: false;
+    property <length> action_anchor_x: 0px;
+    property <length> action_anchor_y: 0px;
     in property <string> action_title;
     in property <string> action_id;
     in property <[SheetItem]> action_items;
@@ -973,10 +966,11 @@ export component StreamSelector inherits Rectangle {
                         action_items: root.action_items;
                         picked(i) => { root.kb_active = false; root.kb_index = i; if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(i); } else { root.picked(i); } }
                         action_requested(id) => {
+                            root.action_anchored = false;
                             root.action_requested(id);
-                            // Pointer actions on desktop TV retain the native popup.
-                            // Remote Menu/held OK call the page callback directly.
-                            if (InterfaceStyle.tv && !root.touch_menus) { root.action_open = false; }
+                        }
+                        anchor_requested(x, y) => {
+                            root.action_anchor_x = x; root.action_anchor_y = y; root.action_anchored = true;
                         }
                         action_selected(id, a) => { root.action_selected(id, a); }
                         focused_row(y, h) => { root.reveal_row(y, h); }
@@ -1148,7 +1142,8 @@ export component StreamSelector inherits Rectangle {
     }
 
     MenuSheet {
-        open: (root.touch_menus || InterfaceStyle.tv) && root.action_open;
+        open: root.action_open;
+        anchored: root.action_anchored; anchor_x: root.action_anchor_x; anchor_y: root.action_anchor_y;
         width: 100%; height: 100%;
         safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
         max_h: root.height * 0.85;

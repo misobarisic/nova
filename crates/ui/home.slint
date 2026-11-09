@@ -106,11 +106,10 @@ component ContinueCard inherits Rectangle {
     // Open the card menu (page-level sheet): a touch hold, or — on touch
     // platforms — a right-click, mirroring the Library cards.
     callback menu_requested();
-    // Capture the painted target before a native popup opens; row delegates
-    // can receive new data while the popup is still on screen.
-    property <ContinueRow> popup_entry;
+    // A desktop right-click: the page opens the same popup menu at the
+    // pointer (window coordinates).
+    callback context_requested(length, length);
     in property <bool> new_episode: false;
-    property <bool> popup_new;
     callback action_requested(bool, ContinueRow, int);
     in property <string> removal_label: @tr("Remove from Continue Watching");
 
@@ -118,38 +117,6 @@ component ContinueCard inherits Rectangle {
     // True 2:3 posters reserve a taller caption in TV mode for readable labels.
     // The progress rail keeps its own space so cards never clip.
     height: card-width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px) + (root.entry.last_time && !root.new_episode ? (InterfaceStyle.tv ? 64px : 48px) : 0px);
-
-    // Each card owns its native desktop popup (landing rail and subpage).
-    // On touch the same press/hold opens the page-level sheet instead.
-    cont_ctx := ContextMenuArea {
-        width: 100%;
-        height: 100%;
-
-        Menu {
-            MenuItem {
-                title: @tr("Play");
-                activated => { root.action_requested(root.popup_new, root.popup_entry, 0); }
-            }
-            MenuItem {
-                title: @tr("Enter series");
-                activated => { root.action_requested(root.popup_new, root.popup_entry, 1); }
-            }
-            MenuItem {
-                title: @tr("Reveal episode spoilers");
-                activated => { root.action_requested(root.popup_new, root.popup_entry, 3); }
-            }
-            MenuItem {
-                title: @tr("Last time");
-                enabled: !root.popup_new && root.popup_entry.media_type != "movie";
-                activated => { root.action_requested(root.popup_new, root.popup_entry, 4); }
-            }
-            MenuSeparator {}
-            MenuItem {
-                title: root.removal_label;
-                activated => { root.action_requested(root.popup_new, root.popup_entry, 2); }
-            }
-        }
-    }
 
     reveal_layer := Rectangle {
         width: 100%;
@@ -202,15 +169,11 @@ component ContinueCard inherits Rectangle {
                     if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                     // Card menu, exactly like a Library card: on touch the
                     // page-level sheet (same menu the hold opens), on desktop
-                    // the native popup at the cursor (the ContextMenuArea
-                    // alone never sees the press while this TouchArea sits on
-                    // top of it).
+                    // the same popup menu grown from the cursor.
                         if (root.touch_menus) {
                             root.menu_requested();
                         } else {
-                            root.popup_entry = root.entry;
-                            root.popup_new = root.new_episode;
-                            cont_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                            root.context_requested(touch.absolute-position.x + touch.mouse-x, touch.absolute-position.y + touch.mouse-y);
                         }
                     }
                 } else if (ev.kind == PointerEventKind.move && root.rail-gesture) {
@@ -375,11 +338,6 @@ component UpcomingCard inherits Rectangle {
     // TV mode grows that caption with the type.
     height: card-width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px);
 
-    up_ctx := ContextMenuArea {
-        width: 100%; height: 100%;
-        Menu { MenuItem { title: @tr("Enter series"); activated => { root.picked(); } } }
-    }
-
     reveal_layer := Rectangle {
         width: 100%;
         height: 100%;
@@ -519,32 +477,14 @@ component HomeCatalogPosterCard inherits Rectangle {
     callback picked();
     callback menu_requested();
     callback action_requested(string, string, int);
-    property <string> popup_type;
-    property <string> popup_id;
+    // A desktop right-click: the page opens the card menu at the pointer
+    // (window coordinates).
+    callback context_requested(length, length);
     callback pan_hint();
     callback pan_release();
 
     width: card-width;
     height: card-width * 3 / 2 + (root.entry.history_date != "" ? (InterfaceStyle.tv ? 116px : 72px) : (InterfaceStyle.tv ? 88px : 54px));
-    history_ctx := ContextMenuArea {
-        width: root.entry.history_action != "" && !root.entry.recommendation ? root.width : 0px;
-        height: 100%;
-        Menu {
-            MenuItem { title: @tr("Play"); activated => { root.action_requested(root.popup_type, root.popup_id, 0); } }
-            MenuItem { title: @tr("Enter series"); activated => { root.action_requested(root.popup_type, root.popup_id, 1); } }
-            MenuSeparator {}
-            MenuItem { title: @tr("Remove from watch history"); activated => { root.action_requested(root.popup_type, root.popup_id, 2); } }
-        }
-    }
-    recommendation_ctx := ContextMenuArea {
-        width: root.entry.recommendation ? root.width : 0px;
-        height: 100%;
-        Menu {
-            MenuItem { title: @tr("Open"); activated => { root.action_requested(root.popup_type, root.popup_id, 1); } }
-            MenuSeparator {}
-            MenuItem { title: @tr("Hide recommendation"); activated => { root.action_requested(root.popup_type, root.popup_id, 3); } }
-        }
-    }
     reveal_layer := Rectangle {
         width: 100%;
         height: 100%;
@@ -688,19 +628,11 @@ component HomeCatalogPosterCard inherits Rectangle {
                     if ((root.entry.history_action != "" || root.entry.recommendation) && ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                     // Card menu, exactly like a Library card: on touch the
                     // page-level sheet (same menu the hold opens), on desktop
-                    // the native popup at the cursor (the ContextMenuArea
-                    // alone never sees the press while this TouchArea sits on
-                    // top of it).
+                    // the same popup menu grown from the cursor.
                         if (root.touch_menus) {
                             root.menu_requested();
                         } else {
-                            root.popup_type = root.entry.media_type;
-                            root.popup_id = root.entry.id;
-                            if (root.entry.recommendation) {
-                                recommendation_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
-                            } else {
-                                history_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
-                            }
+                            root.context_requested(touch.absolute-position.x + touch.mouse-x, touch.absolute-position.y + touch.mouse-y);
                         }
                     }
                 } else if (ev.kind == PointerEventKind.move) {
@@ -1595,6 +1527,11 @@ export component HomePage {
     // row index. Upcoming keeps its separate calendar/index action path.
     out property <bool> card_menu_open: root.menu_open;
     property <bool> menu_open: false;
+    // A desktop right-click anchors the card menu at the pointer (window
+    // coordinates); holds and keyboard opens keep the centred popup.
+    property <bool> menu_anchored: false;
+    property <length> menu_anchor_x: 0px;
+    property <length> menu_anchor_y: 0px;
     property <int> menu_idx: 0;
     property <ContinueRow> menu_episode;
     property <bool> menu_upcoming: false;
@@ -1606,6 +1543,7 @@ export component HomePage {
     property <string> menu_history_title;
 
     function open_history_menu(entry: HomeCatalogCard) {
+        root.menu_anchored = false;
         root.menu_upcoming = false;
         root.menu_new = false;
         root.menu_history = true;
@@ -1623,6 +1561,7 @@ export component HomePage {
             return;
         }
         if (idx < 0 || idx >= root.continue_rows.length) { return; }
+        root.menu_anchored = false;
         root.menu_upcoming = false;
         root.menu_new = false;
         root.menu_episode = root.continue_rows[idx];
@@ -1647,6 +1586,7 @@ export component HomePage {
     function open_new_episode_menu(idx: int) {
         if (idx < 0 || idx >= root.new_episode_rows.length) { return; }
         root.menu_episode = root.new_episode_rows[idx];
+        root.menu_anchored = false;
         root.menu_history = false;
         root.menu_upcoming = false;
         root.menu_new = true;
@@ -1655,6 +1595,7 @@ export component HomePage {
     }
 
     function open_upcoming_menu(idx: int) {
+        root.menu_anchored = false;
         root.menu_history = false;
         root.menu_new = false;
         root.menu_upcoming = true;
@@ -2426,6 +2367,10 @@ export component HomePage {
                                                             menu_requested => {
                                                                 if (root.touch_menus) { root.open_continue_menu(i); }
                                                             }
+                                                            context_requested(x, y) => {
+                                                                root.open_continue_menu(i);
+                                                                root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true;
+                                                            }
                                                             action_requested(new_row, target, a) => { root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a); }
                                                             pan_hint => {
                                                                 root.kb_active = false;
@@ -2506,6 +2451,10 @@ export component HomePage {
                                                             }
                                                             menu_requested => {
                                                                 if (root.touch_menus) { root.open_new_episode_menu(i); }
+                                                            }
+                                                            context_requested(x, y) => {
+                                                                root.open_new_episode_menu(i);
+                                                                root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true;
                                                             }
                                                             action_requested(new_row, target, a) => { root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a); }
                                                             pan_hint => {
@@ -2699,6 +2648,7 @@ export component HomePage {
                                                         for i in section.card_count: HomeCatalogPosterCard {
                                                             entry: root.catalog_cards[section.first_card + i];
                                                 menu_requested => { root.open_history_menu(root.catalog_cards[section.first_card + i]); }
+                                                context_requested(x, y) => { root.open_history_menu(root.catalog_cards[section.first_card + i]); root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true; }
                                                 action_requested(type, id, action) => { root.history_action(type, id, action); }
                                                             tappable: root.view == 0;
                                                             touch_menus: root.touch_menus;
@@ -2914,6 +2864,10 @@ export component HomePage {
                                                             if (root.view == -3) { root.open_new_episode_menu(i); } else { root.open_continue_menu(i); }
                                                         }
                                                     }
+                                                    context_requested(x, y) => {
+                                                        if (root.view == -3) { root.open_new_episode_menu(i); } else { root.open_continue_menu(i); }
+                                                        root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true;
+                                                    }
                                                     action_requested(new_row, target, a) => {
                                                         root.home_episode_action(new_row, target.media_type, target.id, target.episode_id, a);
                                                     }
@@ -2974,6 +2928,7 @@ export component HomePage {
                                                 col: Math.mod(i, root.grid_cols);
                                                 entry: root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i];
                                                 menu_requested => { root.open_history_menu(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i]); }
+                                                context_requested(x, y) => { root.open_history_menu(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i]); root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true; }
                                                 action_requested(type, id, action) => { root.history_action(type, id, action); }
                                                 card-width: root.grid_item_width;
                                                 touch_menus: root.touch_menus;
@@ -3016,6 +2971,7 @@ export component HomePage {
                                                 pointer_pressed => { root.kb_active = false; }
                                                 picked => { root.kb_active = false; root.history_action(entry.media_type, entry.id, 0); }
                                                 menu_requested => { root.open_history_menu(entry); }
+                                                context_requested(x, y) => { root.open_history_menu(entry); root.menu_anchor_x = x; root.menu_anchor_y = y; root.menu_anchored = true; }
                                                 action_requested(type, id, action) => { root.history_action(type, id, action); }
                                             }
                                         }
@@ -3248,6 +3204,7 @@ export component HomePage {
         // History captures typed identity so live refreshes cannot retarget it.
         cont_sheet := MenuSheet {
             open: root.menu_open;
+            anchored: root.menu_anchored; anchor_x: root.menu_anchor_x; anchor_y: root.menu_anchor_y;
             width: 100%;
             height: 100%;
             safe-bottom: root.safe-bottom;

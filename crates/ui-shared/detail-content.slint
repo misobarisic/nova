@@ -8,6 +8,11 @@ export global DetailContent {
     in-out property <component-factory> episodes_factory;
     in-out property <component-factory> entry_factory;
     in-out property <length> shell_width;
+    // A desktop right-click on an episode or season opens its menu at the
+    // pointer (window coordinates); holds and keyboard opens stay centred.
+    in-out property <bool> menu_anchored;
+    in-out property <length> menu_anchor_x;
+    in-out property <length> menu_anchor_y;
     in-out property <length> episodes_slot_width;
     in-out property <length> episodes_slot_height;
     // Absolute top of the retained shell viewport for section-local sticky controls.
