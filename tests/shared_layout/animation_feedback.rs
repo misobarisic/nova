@@ -59,6 +59,8 @@ fn long_action_sheet_titles_stay_inside_the_panel() {
     let app = nova::AppWindow::new().unwrap();
     app.global::<nova::Anim>().set_enabled(false);
     app.set_touch_menus(true);
+    // Only TV still shows stream actions in the bottom sheet.
+    app.global::<nova::InterfaceStyle>().set_tv(true);
     app.set_modal_visible(true);
     app.set_stream_selector_open(true);
     let title = "A very long release name with provider details, resolution, language and edition information";
@@ -104,6 +106,8 @@ fn sheet_and_player_feedback_respect_animation_switches() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.set_touch_menus(true);
+    // Only TV still shows stream actions in the bottom sheet.
+    app.global::<nova::InterfaceStyle>().set_tv(true);
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_modal_visible(true);
@@ -202,6 +206,7 @@ fn sheet_and_player_feedback_respect_animation_switches() {
 
     // The gesture readout uses the player category, independently of page
     // transitions. Seeking still happens immediately, before its reveal.
+    app.global::<nova::InterfaceStyle>().set_tv(false);
     anim.set_enabled(true);
     anim.set_player(true);
     app.set_player_open(true);

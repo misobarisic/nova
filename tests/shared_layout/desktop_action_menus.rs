@@ -191,7 +191,14 @@ fn desktop_stream_right_click_prepares_actions_without_opening_a_sheet_or_playin
                         "stream-1"
                     })
                 );
-                assert!(!app.get_stream_action_open());
+                // The actions open in the card menu panel at the pointer,
+                // never in the TV bottom sheet.
+                assert!(app.get_stream_action_open());
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "CardMenu").count(),
+                    1,
+                    "desktop stream menu at {width}px must open the card menu"
+                );
                 assert_eq!(
                     ElementHandle::find_by_element_type_name(&app, "MenuSheet").count(),
                     0,
