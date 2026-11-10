@@ -153,9 +153,14 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
                 let failures3 = failures2.clone();
                 after(400, move || {
                     let app = app3.upgrade().unwrap();
-                    // Resolve Sync independently of the overview ordering.
-                    let Some(sync) =
-                        ({ app.set_more_open(true); destinations::find(&app, "more:sync").next() })
+                    // Resolve Sync independently of the overview ordering. The
+                    // search query is shared with the More index, so clear the
+                    // earlier Categories filter before listing its rows.
+                    let Some(sync) = ({
+                        app.set_settings_search_query("".into());
+                        app.set_more_open(true);
+                        destinations::find(&app, "more:sync").next()
+                    })
                     else {
                         fail(&failures3, false, "DIAG: no Sync landing entry");
                         slint::quit_event_loop().unwrap();

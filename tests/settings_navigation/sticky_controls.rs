@@ -271,23 +271,28 @@ fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
             .unwrap();
         back.mock_single_click(slint::platform::PointerEventButton::Left);
         settle(&app);
-        assert!(
-            app.get_show_settings(),
-            "{width}: submenu Back must stay inside Settings"
-        );
         if width < 680 {
-            assert!(!app.get_settings_detail_open());
-        } else {
             assert!(
-                app.get_settings_detail_open(),
-                "desktop retains its selected pane"
+                app.get_show_settings(),
+                "{width}: submenu Back must stay inside Settings"
             );
+            assert!(!app.get_settings_detail_open());
+            assert_eq!(
+                app.global::<nova::SettingsBridge>().get_kb_zone(),
+                8,
+                "{width}: Back returns keyboard focus to the Settings menu"
+            );
+        } else {
+            // The overview already sits beside the section on desktop, so a
+            // pointer Back leaves Settings in one click rather than only
+            // moving keyboard focus to the overview.
+            assert!(
+                !app.get_show_settings() && app.get_show_home(),
+                "{width}: pointer Back leaves two-pane Settings in one click"
+            );
+            app.set_show_home(false);
+            app.set_show_settings(true);
         }
-        assert_eq!(
-            app.global::<nova::SettingsBridge>().get_kb_zone(),
-            8,
-            "{width}: Back returns keyboard focus to the Settings menu"
-        );
         app.set_settings_selected_id(0);
         app.set_settings_detail_open(true);
     }
