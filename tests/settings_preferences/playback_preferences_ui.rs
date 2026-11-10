@@ -195,8 +195,9 @@ fn playback_defaults_reset_and_player_settings_fit() {
         slint::spawn_local(async move {
             let app = app_weak.upgrade().unwrap();
             // Desktop player controls are indexed close, pause, volume, seek
-            // back/forward, subtitles, audio, gear. Open the gear by keyboard.
-            for _ in 0..6 {
+            // back/forward, picture, subtitles, audio, gear. Open the gear by
+            // keyboard.
+            for _ in 0..7 {
                 key(&app, slint::platform::Key::Tab);
             }
             key(&app, slint::platform::Key::Return);

@@ -124,7 +124,8 @@ fn tv_remote_moves_between_buttons_and_timeline_and_commits_one_held_seek() {
         &[-10.0],
         "bottom-row navigation skips hidden volume"
     );
-    for _ in 0..4 {
+    // Seek forward, Picture, subtitles, audio, then the gear.
+    for _ in 0..5 {
         key(&app, slint::platform::Key::RightArrow);
     }
     key(&app, slint::platform::Key::Return);

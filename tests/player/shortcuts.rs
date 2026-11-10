@@ -160,7 +160,8 @@ fn playback_shortcuts_and_popup_navigation_are_independent() {
     assert!(!app.get_osd_visible());
     app.set_screenshot_notice("".into());
     // Seek keys never alter the selected control: Tab still starts at pause.
-    for _ in 0..8 {
+    // The Picture button sits in the lane before the utility group.
+    for _ in 0..9 {
         key(&app, slint::platform::Key::Tab, false);
     }
     assert!(app.get_osd_visible(), "control navigation reveals focus");
