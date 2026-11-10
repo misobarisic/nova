@@ -177,7 +177,8 @@ component DownloadSeriesCard inherits Rectangle {
     changed motion => { if !root.motion { self.shown-height = self.target-height; root.rows-retained = false; release-rows.stop(); } }
     property <bool> collapsed-now: root.group.collapsed;
     changed collapsed-now => {
-        if root.collapsed-now && root.motion { root.rows-retained = true; release-rows.restart(); }
+        // restart() only re-arms a running timer, so stop and start it.
+        if root.collapsed-now && root.motion { root.rows-retained = true; release-rows.stop(); release-rows.start(); }
         else { root.rows-retained = false; release-rows.stop(); }
     }
     release-rows := Timer { interval: Anim.transition_slide; running: false; triggered => { self.stop(); root.rows-retained = false; } }
