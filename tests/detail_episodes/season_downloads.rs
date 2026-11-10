@@ -58,37 +58,11 @@ fn season_card_menu_downloads_the_clicked_season() {
                 .unwrap()
                 .mock_single_click(slint::platform::PointerEventButton::Right);
             settle(&app);
-            if touch {
-                ElementHandle::find_by_accessible_label(&app, "Download season")
-                    .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
-                    .unwrap()
-                    .mock_single_click(slint::platform::PointerEventButton::Left);
-            } else {
-                assert!(
-                    !i_slint_core::window::WindowInner::from_pub(app.window())
-                        .active_popups()
-                        .is_empty(),
-                    "desktop right-click opens a popup"
-                );
-                // Native menu entries are not accessible buttons. From the
-                // initial entry, Up wraps to Select season; Up again skips
-                // the separator and selects Download season.
-                for key in [
-                    slint::platform::Key::UpArrow,
-                    slint::platform::Key::UpArrow,
-                    slint::platform::Key::Return,
-                ] {
-                    app.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                            text: key.into(),
-                        });
-                    app.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
-                            text: key.into(),
-                        });
-                    settle(&app);
-                }
-            }
+            // Touch and desktop share the card menu, grown from the pointer.
+            ElementHandle::find_by_accessible_label(&app, "Download season")
+                .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap()
+                .mock_single_click(slint::platform::PointerEventButton::Left);
             settle(&app);
             assert_eq!(
                 app.global::<nova::DetailBridge>()

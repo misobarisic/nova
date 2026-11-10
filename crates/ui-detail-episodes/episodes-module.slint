@@ -329,14 +329,10 @@ export component DetailEpisodesModule inherits Window {
                                 pointer-event(ev) => {
                                     if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                                         season_lp_timer.stop();
-                                        if (DetailBridge.touch_menus) {
-                                            DetailContent.open_season_menu(i, s.watched);
-                                        } else {
-                                            DetailContent.open_season_menu(i, s.watched);
-                                            DetailContent.menu_anchor_x = touch_season.absolute-position.x + touch_season.mouse-x;
-                                            DetailContent.menu_anchor_y = touch_season.absolute-position.y + touch_season.mouse-y;
-                                            DetailContent.menu_anchored = true;
-                                        }
+                                        DetailContent.open_season_menu(i, s.watched);
+                                        DetailContent.menu_anchor_x = touch_season.absolute-position.x + touch_season.mouse-x;
+                                        DetailContent.menu_anchor_y = touch_season.absolute-position.y + touch_season.mouse-y;
+                                        DetailContent.menu_anchored = true;
                                     } else if (ev.kind == PointerEventKind.down) {
                                         DetailBridge.kb_active = false;
                                         touch_season.lp_suppress = false;
@@ -392,6 +388,10 @@ export component DetailEpisodesModule inherits Window {
                                     self.stop();
                                     touch_season.lp_suppress = true;
                                     DetailContent.open_season_menu(i, s.watched);
+                                    // The menu grows out of the held point.
+                                    DetailContent.menu_anchor_x = touch_season.absolute-position.x + touch_season.pressed-x;
+                                    DetailContent.menu_anchor_y = touch_season.absolute-position.y + touch_season.pressed-y;
+                                    DetailContent.menu_anchored = true;
                                 }
                             }
                         }
@@ -538,14 +538,10 @@ export component DetailEpisodesModule inherits Window {
                         pointer-event(ev) => {
                             if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                                 ep_lp_timer.stop();
-                                if (DetailBridge.touch_menus) {
-                                    DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
-                                } else {
-                                    DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
-                                    DetailContent.menu_anchor_x = touch_ep.absolute-position.x + touch_ep.mouse-x;
-                                    DetailContent.menu_anchor_y = touch_ep.absolute-position.y + touch_ep.mouse-y;
-                                    DetailContent.menu_anchored = true;
-                                }
+                                DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
+                                DetailContent.menu_anchor_x = touch_ep.absolute-position.x + touch_ep.mouse-x;
+                                DetailContent.menu_anchor_y = touch_ep.absolute-position.y + touch_ep.mouse-y;
+                                DetailContent.menu_anchored = true;
                             } else if (ev.kind == PointerEventKind.down) {
                                 touch_ep.lp_suppress = false;
                                 // Hold-to-sheet is a touch flow;
@@ -581,6 +577,10 @@ export component DetailEpisodesModule inherits Window {
                             self.stop();
                             touch_ep.lp_suppress = true;
                             DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
+                            // The menu grows out of the held point.
+                            DetailContent.menu_anchor_x = touch_ep.absolute-position.x + touch_ep.pressed-x;
+                            DetailContent.menu_anchor_y = touch_ep.absolute-position.y + touch_ep.pressed-y;
+                            DetailContent.menu_anchored = true;
                         }
                     }
 

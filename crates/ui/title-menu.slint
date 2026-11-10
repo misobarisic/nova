@@ -77,7 +77,9 @@ export component TitleMenu inherits Rectangle {
     private property <bool> motion: Anim.enabled && Anim.player;
     private property <float> scale-progress: 0;
     private property <float> fade-progress: 0;
-    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_slide : Anim.player_fast) : 0ms; easing: ease-out; }
+    // Grows well out of its origin (the finger, pointer or button) and settles
+    // softly; closing collapses back into it faster.
+    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_fade : Anim.player_fast) : 0ms; easing: cubic-bezier(0.2, 0.85, 0.3, 1); }
     animate fade-progress { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
     // Page switches: the content fades out, the page changes, it fades in.
     private property <float> content-fade: 1;
@@ -144,7 +146,7 @@ export component TitleMenu inherits Rectangle {
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
             clip: true;
             opacity: root.fade-progress;
-            transform-scale: 0.86 + 0.14 * root.scale-progress;
+            transform-scale: 0.4 + 0.6 * root.scale-progress;
             transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: Math.clamp(self.anchor-y - self.y, 0px, self.target-height) };
             accessible-role: groupbox; accessible-label: @tr("Library options");
             TouchArea { enabled: root.shown; }
@@ -281,7 +283,9 @@ export component CardMenu inherits Rectangle {
     private property <bool> motion: Anim.enabled && Anim.player;
     private property <float> scale-progress: 0;
     private property <float> fade-progress: 0;
-    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_slide : Anim.player_fast) : 0ms; easing: ease-out; }
+    // Grows well out of its origin (the finger, pointer or button) and settles
+    // softly; closing collapses back into it faster.
+    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_fade : Anim.player_fast) : 0ms; easing: cubic-bezier(0.2, 0.85, 0.3, 1); }
     animate fade-progress { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
     changed motion => {
         root.scale-progress = root.shown ? 1 : 0; root.fade-progress = root.shown ? 1 : 0;
@@ -331,7 +335,7 @@ export component CardMenu inherits Rectangle {
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
             clip: true;
             opacity: root.fade-progress;
-            transform-scale: 0.86 + 0.14 * root.scale-progress;
+            transform-scale: 0.4 + 0.6 * root.scale-progress;
             transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: Math.clamp(self.anchor-y - self.y, 0px, self.target-height) };
             accessible-role: groupbox; accessible-label: root.title;
             TouchArea { enabled: root.shown; }

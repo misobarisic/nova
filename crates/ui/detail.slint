@@ -762,8 +762,8 @@ export component DetailPage {
     ];
 
     function open_library_menu() {
-        // Touch and TV open it centred; a desktop pointer grows it from
-        // below the options button (window coordinates).
+        // Hangs from below the options button (window coordinates); TV
+        // opens the centred sheet.
         // The Reader-style title menu always hangs from the button.
         DetailContent.menu_anchor_x = root.absolute-position.x + root.width - root.safe-right - (root.narrow ? 10px : 16px);
         DetailContent.menu_anchor_y = root.absolute-position.y + root.safe-top + (root.narrow ? 10px + 44px : 16px + 48px);
@@ -1515,7 +1515,8 @@ export component DetailPage {
         // Card bottom sheets (single instance per kind): the dim
         // backdrop eats outside taps (dismiss only, never forwarded).
         // Desktop and touch: the title-menu panel, grown from the pointer on
-        // a right-click and centred otherwise. TV keeps the sheets below.
+        // a right-click, from the finger on a hold and centred from the
+        // keyboard. TV keeps the sheets below.
         if root.menu_kind == 0 && !InterfaceStyle.tv: CardMenu {
             width: 100%; height: 100%;
             property <EpisodeRow> ep: root.episode_rows[root.menu_idx - root.episode_page_start];
