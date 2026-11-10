@@ -151,7 +151,8 @@ fn title_override_and_episode_exclusion_actions_follow_effective_specials_prefer
     click(&app, "Include in progress");
     assert_eq!(actions.borrow().len(), 2);
 
-    // The separately hosted desktop popup uses the same gate and backend action.
+    // The desktop right-click opens the same title-menu panel at the pointer,
+    // gated the same way and routed to the same backend actions.
     app.set_touch_menus(false);
     let opened = Rc::new(RefCell::new(Vec::new()));
     let recorded = opened.clone();
@@ -164,12 +165,15 @@ fn title_override_and_episode_exclusion_actions_follow_effective_specials_prefer
             .mock_single_click(PointerEventButton::Right);
         settle(&app);
         let before = actions.borrow().len();
-        key(&app, Key::UpArrow);
-        key(&app, Key::Return);
+        let inclusion = ElementHandle::find_by_accessible_label(&app, "Include in progress")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button));
+        assert_eq!(inclusion.is_some(), enabled);
         if enabled {
+            click(&app, "Include in progress");
             assert_eq!(actions.borrow().len(), before + 1);
             assert_eq!(actions.borrow().last(), Some(&(0, 6)));
         } else {
+            click(&app, "Open episode");
             assert_eq!(actions.borrow().len(), before);
             assert_eq!(*opened.borrow(), vec![0]);
         }
