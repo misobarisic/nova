@@ -122,112 +122,127 @@ export component TitleMenu inherits Rectangle {
         TouchArea { enabled: root.shown; clicked => { root.dismiss(""); } }
         panel := Rectangle {
             width: min(288px, max(1px, root.width - 16px));
-            // Near the bottom of the window the panel opens above the pointer.
-            private property <length> room-below: root.height - root.anchor-bottom - root.safe-bottom - 12px;
-            private property <length> room-above: root.anchor-bottom - root.safe-top - 12px;
+            // The whole panel always stays on screen. Near the bottom it opens
+            // above the pointer; when neither side has room it slides over the
+            // anchor instead of shrinking or running off the window (an anchor
+            // outside this overlay is pulled inside first). Only a panel taller
+            // than the whole window scrolls.
+            private property <length> top-limit: root.safe-top + 8px;
+            private property <length> bottom-limit: max(self.top-limit + 1px, root.height - root.safe-bottom - 8px);
+            private property <length> anchor-y: Math.clamp(root.anchor-bottom, self.top-limit, self.bottom-limit);
+            private property <length> room-below: self.bottom-limit - self.anchor-y - 4px;
+            private property <length> room-above: self.anchor-y - 4px - self.top-limit;
             private property <bool> upward: content.preferred-height > self.room-below && self.room-above > self.room-below;
-            private property <length> target-height: min(content.preferred-height, max(1px, self.upward ? self.room-above : self.room-below));
+            private property <length> target-height: min(content.preferred-height, self.bottom-limit - self.top-limit);
             height: self.target-height;
             animate height { duration: root.motion ? Anim.player_slide : 0ms; easing: ease-out; }
             x: Math.clamp(root.anchor-right - self.width, 8px, max(8px, root.width - self.width - 8px));
-            y: self.upward ? root.anchor-bottom - 4px - self.target-height : root.anchor-bottom + 4px;
+            y: Math.clamp(self.upward ? self.anchor-y - 4px - self.target-height : self.anchor-y + 4px,
+                self.top-limit, max(self.top-limit, self.bottom-limit - self.target-height));
             background: Theme.current.popup;
             border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
             clip: true;
             opacity: root.fade-progress;
             transform-scale: 0.86 + 0.14 * root.scale-progress;
-            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: self.upward ? self.target-height : 0px };
+            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: Math.clamp(self.anchor-y - self.y, 0px, self.target-height) };
             accessible-role: groupbox; accessible-label: @tr("Library options");
             TouchArea { enabled: root.shown; }
-            content := VerticalLayout {
-                padding: 6px; spacing: 0px;
-                opacity: root.content-fade;
-                if root.page == 0: VerticalLayout {
-                    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
-                    Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
-                    if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
-                }
-                if root.page == 0: HorizontalLayout {
-                    spacing: 4px; padding-bottom: 4px;
-                    if !root.on-detail: IconTile {
-                        live: root.shown; label: @tr("Open"); icon: "M8 5v14l11-7z";
-                        activated => { root.dismiss("open"); }
+            Flickable {
+                width: 100%; height: 100%;
+                content-width: self.width;
+                content-height: content.preferred-height;
+                interactive: content.preferred-height > self.height;
+                content := VerticalLayout {
+                    width: parent.width; height: self.preferred-height;
+                    padding: 6px; spacing: 0px;
+                    opacity: root.content-fade;
+                    if root.page == 0: VerticalLayout {
+                        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
+                        Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
+                        if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
                     }
-                    IconTile {
-                        live: root.shown; label: @tr("Status"); icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6";
+                    if root.page == 0: HorizontalLayout {
+                        spacing: 4px; padding-bottom: 4px;
+                        if !root.on-detail: IconTile {
+                            live: root.shown; label: @tr("Open"); icon: "M8 5v14l11-7z";
+                            activated => { root.dismiss("open"); }
+                        }
+                        IconTile {
+                            live: root.shown; label: @tr("Status"); icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6";
+                            activated => { root.go(2); }
+                        }
+                        if root.on-detail: IconTile {
+                            live: root.shown && root.categories-enabled; label: @tr("Categories"); icon: "M4 6h7v5H4zM13 6h7v5h-7zM4 13h7v5H4zM13 13h7v5h-7z";
+                            opacity: root.categories-enabled ? 1 : 0.45;
+                            activated => { root.dismiss("categories"); }
+                        }
+                        IconTile {
+                            live: root.shown; label: @tr("Watched"); on: root.watched;
+                            icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z";
+                            activated => { root.dismiss(root.watched ? "unwatched" : "watched"); }
+                        }
+                    }
+                    if root.page == 0: MenuItem {
+                        live: root.shown; label: @tr("Change status"); trailing: "›";
+                        icon: "M4 6h16M4 12h10M4 18h7";
                         activated => { root.go(2); }
                     }
-                    if root.on-detail: IconTile {
-                        live: root.shown && root.categories-enabled; label: @tr("Categories"); icon: "M4 6h7v5H4zM13 6h7v5h-7zM4 13h7v5H4zM13 13h7v5h-7z";
-                        opacity: root.categories-enabled ? 1 : 0.45;
-                        activated => { root.dismiss("categories"); }
+                    if root.page == 0 && root.activity-action > 0: MenuItem {
+                        live: root.shown;
+                        label: root.activity-action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes");
+                        icon: root.activity-action == 4 ? "M3 12a9 9 0 1 0 3-6.7M3 4v5h5" : "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 8v4l3 2";
+                        activated => { root.dismiss("activity"); }
                     }
-                    IconTile {
-                        live: root.shown; label: @tr("Watched"); on: root.watched;
-                        icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z";
-                        activated => { root.dismiss(root.watched ? "unwatched" : "watched"); }
+                    if root.page == 0 && root.on-detail && root.series: MenuItem {
+                        live: root.shown; label: @tr("Release reminders"); trailing: "›";
+                        icon: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4";
+                        activated => { root.dismiss("reminders"); }
                     }
-                }
-                if root.page == 0: MenuItem {
-                    live: root.shown; label: @tr("Change status"); trailing: "›";
-                    icon: "M4 6h16M4 12h10M4 18h7";
-                    activated => { root.go(2); }
-                }
-                if root.page == 0 && root.activity-action > 0: MenuItem {
-                    live: root.shown;
-                    label: root.activity-action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes");
-                    icon: root.activity-action == 4 ? "M3 12a9 9 0 1 0 3-6.7M3 4v5h5" : "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 8v4l3 2";
-                    activated => { root.dismiss("activity"); }
-                }
-                if root.page == 0 && root.on-detail && root.series: MenuItem {
-                    live: root.shown; label: @tr("Release reminders"); trailing: "›";
-                    icon: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4";
-                    activated => { root.dismiss("reminders"); }
-                }
-                if root.page == 0 && root.on-detail && root.series: MenuItem {
-                    live: root.shown; label: @tr("Progress options"); trailing: "›";
-                    icon: "M4 20V10M10 20V4M16 20v-7M22 20H2";
-                    activated => { root.dismiss("progress"); }
-                }
-                if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
-                if root.page == 0: MenuItem {
-                    live: root.shown; label: @tr("Mark watched");
-                    icon: "M21 12a9 9 0 1 1-3-6.7M7 12l3 3 9-10";
-                    activated => { root.dismiss("watched"); }
-                }
-                if root.page == 0: MenuItem {
-                    live: root.shown; label: @tr("Mark unwatched");
-                    icon: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
-                    activated => { root.dismiss("unwatched"); }
-                }
-                if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
-                if root.page == 0: MenuItem {
-                    live: root.shown;
-                    label: @tr("Remove from library");
-                    danger: true;
-                    icon: "M5 12h14";
-                    activated => { root.dismiss("remove"); }
-                }
-                // Status: the manual statuses, then back to automatic.
-                if root.page == 2: MenuItem {
-                    live: root.shown; label: @tr("Status"); icon: "M15 18l-6-6 6-6";
-                    activated => { root.go(0); }
-                }
-                for choice in [
-                    { label: @tr("Watching"), code: 6, icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" },
-                    { label: @tr("Plan to Watch"), code: 5, icon: "M6 3h12v18l-6-4-6 4z" },
-                    { label: @tr("Completed"), code: 7, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6" },
-                    { label: @tr("New episodes"), code: 8, icon: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" },
-                    { label: @tr("On hold"), code: 1, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6" },
-                    { label: @tr("Dropped"), code: 2, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6" },
-                    { label: @tr("Automatic"), code: 0, icon: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" },
-                ]: MenuItem {
-                    visible: root.page == 2; height: root.page == 2 ? 44px : 0px;
-                    live: root.shown && root.page == 2; label: choice.label;
-                    selected: root.status == choice.code;
-                    icon: choice.icon;
-                    activated => { root.dismiss("status:" + choice.code); }
+                    if root.page == 0 && root.on-detail && root.series: MenuItem {
+                        live: root.shown; label: @tr("Progress options"); trailing: "›";
+                        icon: "M4 20V10M10 20V4M16 20v-7M22 20H2";
+                        activated => { root.dismiss("progress"); }
+                    }
+                    if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                    if root.page == 0: MenuItem {
+                        live: root.shown; label: @tr("Mark watched");
+                        icon: "M21 12a9 9 0 1 1-3-6.7M7 12l3 3 9-10";
+                        activated => { root.dismiss("watched"); }
+                    }
+                    if root.page == 0: MenuItem {
+                        live: root.shown; label: @tr("Mark unwatched");
+                        icon: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
+                        activated => { root.dismiss("unwatched"); }
+                    }
+                    if root.page == 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                    if root.page == 0: MenuItem {
+                        live: root.shown;
+                        label: @tr("Remove from library");
+                        danger: true;
+                        icon: "M5 12h14";
+                        activated => { root.dismiss("remove"); }
+                    }
+                    // Status: the manual statuses, then back to automatic.
+                    if root.page == 2: MenuItem {
+                        live: root.shown; label: @tr("Status"); icon: "M15 18l-6-6 6-6";
+                        activated => { root.go(0); }
+                    }
+                    for choice in [
+                        { label: @tr("Watching"), code: 6, icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" },
+                        { label: @tr("Plan to Watch"), code: 5, icon: "M6 3h12v18l-6-4-6 4z" },
+                        { label: @tr("Completed"), code: 7, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6" },
+                        { label: @tr("New episodes"), code: 8, icon: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" },
+                        { label: @tr("On hold"), code: 1, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 9v6M14 9v6" },
+                        { label: @tr("Dropped"), code: 2, icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6" },
+                        { label: @tr("Automatic"), code: 0, icon: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" },
+                    ]: MenuItem {
+                        visible: root.page == 2; height: root.page == 2 ? 44px : 0px;
+                        live: root.shown && root.page == 2; label: choice.label;
+                        selected: root.status == choice.code;
+                        icon: choice.icon;
+                        activated => { root.dismiss("status:" + choice.code); }
+                    }
                 }
             }
         }
@@ -295,53 +310,68 @@ export component CardMenu inherits Rectangle {
         TouchArea { enabled: root.shown; clicked => { root.dismiss(""); } }
         panel := Rectangle {
             width: min(288px, max(1px, root.width - 16px));
-            // Near the bottom of the window the panel opens above the pointer.
-            private property <length> room-below: root.height - root.anchor-bottom - root.safe-bottom - 12px;
-            private property <length> room-above: root.anchor-bottom - root.safe-top - 12px;
+            // The whole panel always stays on screen. Near the bottom it opens
+            // above the pointer; when neither side has room it slides over the
+            // anchor instead of shrinking or running off the window (an anchor
+            // outside this overlay is pulled inside first). Only a panel taller
+            // than the whole window scrolls.
+            private property <length> top-limit: root.safe-top + 8px;
+            private property <length> bottom-limit: max(self.top-limit + 1px, root.height - root.safe-bottom - 8px);
+            private property <length> anchor-y: Math.clamp(root.anchor-bottom, self.top-limit, self.bottom-limit);
+            private property <length> room-below: self.bottom-limit - self.anchor-y - 4px;
+            private property <length> room-above: self.anchor-y - 4px - self.top-limit;
             private property <bool> upward: content.preferred-height > self.room-below && self.room-above > self.room-below;
-            private property <length> target-height: min(content.preferred-height, max(1px, self.upward ? self.room-above : self.room-below));
+            private property <length> target-height: min(content.preferred-height, self.bottom-limit - self.top-limit);
             height: self.target-height;
             x: Math.clamp(root.anchor-right - self.width, 8px, max(8px, root.width - self.width - 8px));
-            y: self.upward ? root.anchor-bottom - 4px - self.target-height : root.anchor-bottom + 4px;
+            y: Math.clamp(self.upward ? self.anchor-y - 4px - self.target-height : self.anchor-y + 4px,
+                self.top-limit, max(self.top-limit, self.bottom-limit - self.target-height));
             background: Theme.current.popup;
             border-radius: 14px; border-width: 1px; border-color: Theme.current.border_soft;
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: #00000070;
             clip: true;
             opacity: root.fade-progress;
             transform-scale: 0.86 + 0.14 * root.scale-progress;
-            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: self.upward ? self.target-height : 0px };
+            transform-origin: { x: Math.clamp(root.origin-x - self.x, 0px, self.width), y: Math.clamp(self.anchor-y - self.y, 0px, self.target-height) };
             accessible-role: groupbox; accessible-label: root.title;
             TouchArea { enabled: root.shown; }
-            content := VerticalLayout {
-                padding: 6px; spacing: 0px;
-                VerticalLayout {
-                    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
-                    Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
-                    if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
-                }
-                if root.tiles.length > 0: HorizontalLayout {
-                    spacing: 4px; padding-bottom: 4px;
-                    for tile in root.tiles: IconTile {
-                        live: root.shown && tile.enabled; label: tile.label; icon: tile.icon;
-                        opacity: tile.enabled ? 1 : 0.45;
-                        activated => { root.dismiss(tile.id); }
+            Flickable {
+                width: 100%; height: 100%;
+                content-width: self.width;
+                content-height: content.preferred-height;
+                interactive: content.preferred-height > self.height;
+                content := VerticalLayout {
+                    width: parent.width; height: self.preferred-height;
+                    padding: 6px; spacing: 0px;
+                    VerticalLayout {
+                        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 2px;
+                        Text { text: root.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
+                        if root.summary != "": Text { text: root.summary; color: Theme.current.text_muted; font-size: 12px; overflow: elide; }
                     }
-                }
-                for action[index] in root.rows: VerticalLayout {
-                    if action.danger || (index == 0 && root.tiles.length > 0): Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
-                    MenuItem {
-                        live: root.shown && action.enabled; label: action.label; icon: action.icon; danger: action.danger;
-                        opacity: action.enabled ? 1 : 0.45;
-                        activated => { root.dismiss(action.id); }
+                    if root.tiles.length > 0: HorizontalLayout {
+                        spacing: 4px; padding-bottom: 4px;
+                        for tile in root.tiles: IconTile {
+                            live: root.shown && tile.enabled; label: tile.label; icon: tile.icon;
+                            opacity: tile.enabled ? 1 : 0.45;
+                            activated => { root.dismiss(tile.id); }
+                        }
                     }
-                }
-                for item[index] in root.items: VerticalLayout {
-                    if root.item-danger[index] && index > 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
-                    MenuItem {
-                        live: root.shown && item.enabled; label: item.label; icon: root.item-icons[index];
-                        danger: root.item-danger[index];
-                        opacity: item.enabled ? 1 : 0.45;
-                        activated => { root.dismiss("" + index); }
+                    for action[index] in root.rows: VerticalLayout {
+                        if action.danger || (index == 0 && root.tiles.length > 0): Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                        MenuItem {
+                            live: root.shown && action.enabled; label: action.label; icon: action.icon; danger: action.danger;
+                            opacity: action.enabled ? 1 : 0.45;
+                            activated => { root.dismiss(action.id); }
+                        }
+                    }
+                    for item[index] in root.items: VerticalLayout {
+                        if root.item-danger[index] && index > 0: Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_soft; } }
+                        MenuItem {
+                            live: root.shown && item.enabled; label: item.label; icon: root.item-icons[index];
+                            danger: root.item-danger[index];
+                            opacity: item.enabled ? 1 : 0.45;
+                            activated => { root.dismiss("" + index); }
+                        }
                     }
                 }
             }
