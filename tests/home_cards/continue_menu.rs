@@ -315,7 +315,7 @@ fn continue_menu_matches_the_library_card_menu() {
             release(&app, c);
 
             let sheets: Vec<_> =
-                ElementHandle::find_by_element_type_name(&app, "MenuSheet").collect();
+                ElementHandle::find_by_element_type_name(&app, "CardMenu").collect();
             fail(
                 &failures2,
                 !sheets.is_empty(),
@@ -444,7 +444,7 @@ fn continue_menu_matches_the_library_card_menu() {
                                 release(&app, c);
                                 let sheets: Vec<_> = ElementHandle::find_by_element_type_name(
                                     &app,
-                                    "MenuSheet",
+                                    "CardMenu",
                                 )
                                 .collect();
                                 fail(
@@ -464,7 +464,7 @@ fn continue_menu_matches_the_library_card_menu() {
                                 after(200, move || {
                                     let app = app8.upgrade().unwrap();
                                     let sheets: Vec<_> =
-                                        ElementHandle::find_by_element_type_name(&app, "MenuSheet")
+                                        ElementHandle::find_by_element_type_name(&app, "CardMenu")
                                             .collect();
                                     fail(
                                         &failures8,

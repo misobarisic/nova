@@ -3261,6 +3261,9 @@ export component HomePage {
                 { id: "remove", label: @tr("Remove from Continue Watching"), icon: "M18 6L6 18M6 6l12 12", danger: true, enabled: true },
             ];
             picked(id) => { root.card_menu_action(id); }
+            // The menu took keyboard focus; take it back so Back and the
+            // arrow keys keep working while it closes and once it is gone.
+            dismissing => { nav_scope.focus(); }
             closed => { root.close_menu(); }
         }
         cont_sheet := MenuSheet {
