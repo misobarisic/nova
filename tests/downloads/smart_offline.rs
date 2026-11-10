@@ -78,9 +78,12 @@ fn smart_downloads_animates_both_directions_with_header_back() {
             if enabled && transitions {
                 assert!(start.0 > middle.0 && middle.0 > end.0, "entry slide");
                 assert!(start.1 < middle.1 && middle.1 < end.1, "entry fade");
+                // Reader's short push: the page slides in over 48px, sampled
+                // one frame into the animation.
                 assert!(
-                    start.0 - end.0 > panel.size().width * 0.8,
-                    "the submenu enters from a full screen width"
+                    start.0 - end.0 > 40. && start.0 - end.0 <= 48.5,
+                    "the submenu slides in over 48px, moved {}",
+                    start.0 - end.0
                 );
                 assert!(
                     start.2 > middle.2 && middle.2 > end.2,
@@ -91,8 +94,8 @@ fn smart_downloads_animates_both_directions_with_header_back() {
                     "Downloads fades out"
                 );
                 assert!(
-                    (end.2 - underlay_origin + panel.size().width * 0.28).abs() < 0.5,
-                    "Downloads uses the standard 28% push distance"
+                    (end.2 - underlay_origin + 24.).abs() < 0.5,
+                    "Downloads eases back by the standard 24px"
                 );
             } else {
                 assert!(
