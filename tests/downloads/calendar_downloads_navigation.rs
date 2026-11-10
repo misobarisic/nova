@@ -7,12 +7,25 @@ use slint::{
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 fn visible(app: &nova::AppWindow, label: &str) -> ElementHandle {
-    let element = ElementHandle::find_by_accessible_label(app, label)
-        .next()
-        .expect(label);
+    let window = app.window().size();
+    // The More index stays mounted, eased back, behind a pushed page, so a
+    // label such as Back can match there too. Prefer the on-screen match.
+    let on_screen = |element: &ElementHandle| {
+        let pos = element.absolute_position();
+        let size = element.size();
+        size.width > 0.0
+            && size.height > 0.0
+            && pos.x >= 0.0
+            && pos.y >= 0.0
+            && pos.x + size.width <= window.width as f32 + 1.0
+            && pos.y + size.height <= window.height as f32 + 1.0
+    };
+    let mut matches = ElementHandle::find_by_accessible_label(app, label).collect::<Vec<_>>();
+    let index = matches.iter().position(on_screen).unwrap_or(0);
+    assert!(!matches.is_empty(), "{label}");
+    let element = matches.swap_remove(index);
     let pos = element.absolute_position();
     let size = element.size();
-    let window = app.window().size();
     assert!(
         size.width > 0.0 && size.height > 0.0,
         "{label} must have a visible hit area"
@@ -122,8 +135,13 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
                     "More Downloads must route"
                 );
             } else if step == 2 {
-                let input = ElementHandle::find_by_element_type_name(&app, "SearchField")
+                // The More index behind Calendar has its own search field.
+                let input = ElementHandle::find_by_element_type_name(&app, "CalendarPage")
                     .next()
+                    .unwrap()
+                    .query_descendants()
+                    .match_type_name("SearchField")
+                    .find_first()
                     .unwrap();
                 tap(&app, input);
                 key(&app, "abc".into());
