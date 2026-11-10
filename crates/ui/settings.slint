@@ -29,17 +29,6 @@ export component SettingsPage {
         SettingsContent.detail_width = root.detail_width;
     }
     public function focus_shell() { if SmartCollectionsBridge.editor_open { smart_editor.focus_shell(); } else { nav_scope.focus(); } }
-    public function choose_settings_view(advanced: bool) {
-        // Reclaim focus before a two-pane technical editor disappears. This
-        // changes presentation only; normal setting values are never saved here.
-        nav_scope.focus();
-        root.input_focused = false;
-        root.kb_active = SettingsStyle.keyboard-mode;
-        root.kb_zone = 20;
-        SettingsContent.clear_search_target();
-        SettingsBridge.advanced = advanced;
-        SettingsBridge.view_changed(advanced);
-    }
 
     in property <bool> standalone_sync: false;
     // Mounted by AppWindow as one section beside or over the More index: the
@@ -51,6 +40,10 @@ export component SettingsPage {
     // its sections are listed under the group's title until a search widens it.
     private property <int> landing_group: -1;
     private property <string> landing_title: root.landing_group == 0 ? @tr("Experience") : root.landing_group == 1 ? @tr("Library and services") : root.landing_group == 2 ? @tr("Storage and network") : @tr("Settings");
+    // A group page is a plain list under its title, like Reader's settings
+    // pages: no intro, view selector, search or repeated group heading.
+    private property <bool> group_page: root.landing_group >= 0;
+    private property <length> landing_hero_h: root.group_page ? Math.max(72px, 24px + landing_heading_measure.preferred-height + 12px) : 104px;
     function apply_page_mode() {
         if root.standalone_sync { root.open_page(7); }
         else if root.embedded {
@@ -65,6 +58,8 @@ export component SettingsPage {
         }
         if !root.embedded && !root.standalone_sync && SettingsContent.landing_group_request >= 0 {
             root.landing_group = SettingsContent.landing_group_request;
+            // The group page has no search field to clear a stale query.
+            root.search_query = "";
             SettingsContent.landing_group_request = -1;
             root.kb_land = root.land_first();
             land_scroll.content-y = 0px;
@@ -641,8 +636,8 @@ export component SettingsPage {
     // Collapse the landing hero visually while keeping its layout slots
     // fixed. Resizing the hero from the Flickable offset also resizes its
     // viewport, which feeds back into touch scrolling and causes jitter.
-    property <length> landing_header_shift: Math.max(-184px, Math.min(0px, root.land_scroll_y));
-    property <float> landing_compact_progress: Math.clamp((-root.land_scroll_y - 144px) / 40px, 0, 1);
+    property <length> landing_header_shift: Math.max(-root.landing_hero_h, Math.min(0px, root.land_scroll_y));
+    property <float> landing_compact_progress: Math.clamp((-root.land_scroll_y - (root.landing_hero_h - 40px)) / 40px, 0, 1);
     property <length> landing_pinned_offset: root.landing_compact_progress
         * Math.max(0px, root.absolute-position.y + root.safe-top + 68px - content_host.absolute-position.y);
 
@@ -1037,7 +1032,7 @@ export component SettingsPage {
     function navigation_top_inset() -> length {
         // Once the hero has collapsed, the search field and shortcut row stay
         // pinned above the list and cover this part of the scroll viewport.
-        return root.land_scroll_y <= -184px ? 124px + root.landing_pinned_offset : 0px;
+        return !root.group_page && root.land_scroll_y <= -root.landing_hero_h ? 124px + root.landing_pinned_offset : 0px;
     }
     function reveal_navigation(y: length, h: length) {
         let top = root.navigation_top_inset();
@@ -1158,7 +1153,6 @@ export component SettingsPage {
     function kb_up() {
         // Keep a Simple-view search reveal alive while navigating its editor.
         if SettingsBridge.advanced { SettingsContent.clear_search_target(); }
-        if root.kb_zone == 20 { root.kb_zone = 0; return; }
         if root.kb_zone == 18 { root.kb_zone = 0; return; }
         if root.kb_zone == 19 {
             let control = SettingsBridge.addon_browser_control;
@@ -1184,7 +1178,7 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 8) {
             let previous = root.land_prev(root.kb_land);
-            if (previous == root.kb_land) { root.kb_zone = 20; land_scroll.content-y = 0px; } else { root.kb_land = previous; }
+            if (previous == root.kb_land) { root.kb_zone = 0; land_scroll.content-y = 0px; } else { root.kb_land = previous; }
         } else if (root.kb_zone == 12) {
             if (root.kb_dl > 0) {
                 root.kb_dl -= 1;
@@ -1269,7 +1263,6 @@ export component SettingsPage {
 
     function kb_down() {
         if SettingsBridge.advanced { SettingsContent.clear_search_target(); }
-        if root.kb_zone == 20 { root.kb_zone = 8; root.kb_land = root.land_first(); root.reveal_request += 1; return; }
         if root.kb_zone == 18 {
             root.kb_zone = SettingsBridge.addon_browser_tab == 1 ? 19 : 1;
             SettingsBridge.addon_browser_control = 0;
@@ -1821,7 +1814,6 @@ export component SettingsPage {
     }
 
     function kb_left() {
-        if root.kb_zone == 20 { root.choose_settings_view(false); return; }
         if !SettingsContent.advanced_visible && ((root.kb_zone == 6 && (root.kb_dr == 0 || root.kb_dr == 1 || root.kb_dr == 6 || root.kb_dr >= 8)) || (root.kb_zone == 10 && root.kb_anr > 0) || (root.kb_zone == 17 && root.kb_theme > 1)) { return; }
         if root.kb_zone == 18 { SettingsBridge.addon_browser_tab = 0; return; }
         if root.kb_zone == 19 {
@@ -1896,7 +1888,6 @@ export component SettingsPage {
     }
 
     function kb_right() {
-        if root.kb_zone == 20 { root.choose_settings_view(true); return; }
         if !SettingsContent.advanced_visible && ((root.kb_zone == 6 && (root.kb_dr == 0 || root.kb_dr == 1 || root.kb_dr == 6 || root.kb_dr >= 8)) || (root.kb_zone == 10 && root.kb_anr > 0) || (root.kb_zone == 17 && root.kb_theme > 1)) { return; }
         if root.kb_zone == 18 { SettingsBridge.addon_browser_tab = 1; SettingsBridge.addon_browser_load(false); return; }
         if root.kb_zone == 19 {
@@ -1971,7 +1962,6 @@ export component SettingsPage {
     }
 
     function kb_enter() {
-        if root.kb_zone == 20 { root.choose_settings_view(!SettingsBridge.advanced); return; }
         if !SettingsContent.advanced_visible && ((root.kb_zone == 6 && (root.kb_dr == 0 || root.kb_dr == 1 || root.kb_dr == 6 || root.kb_dr >= 8)) || (root.kb_zone == 9 && !root.kb_player_visible(root.kb_pr)) || (root.kb_zone == 10 && root.kb_anr > 0) || (root.kb_zone == 17 && root.kb_theme > 1)) { return; }
         if root.kb_zone == 18 {
             if SettingsBridge.addon_browser_tab == 1 { SettingsBridge.addon_browser_load(false); }
@@ -2321,7 +2311,7 @@ export component SettingsPage {
                     // One stable viewport scrolls the whole landing column.
                     // Placeholder slots retain the initial title/search/chip
                     // spacing; the live controls float over them and stick
-                    // below the hero once its 184px slot has scrolled away.
+                    // below the hero once its slot has scrolled away.
                     land_scroll := ScrollView {
                         x: 0px;
                         y: 0px;
@@ -2335,9 +2325,9 @@ export component SettingsPage {
                             width: 100%;
                             spacing: 12px;
 
-                            Rectangle { width: 100%; height: 184px; }
-                            Rectangle { width: 100%; height: 44px; }
-                            Rectangle { width: 100%; height: 44px; }
+                            Rectangle { width: 100%; height: root.landing_hero_h; }
+                            if !root.group_page: Rectangle { width: 100%; height: 44px; }
+                            if !root.group_page: Rectangle { width: 100%; height: 44px; }
 
                             VerticalLayout {
                                 width: 100%;
@@ -2346,7 +2336,7 @@ export component SettingsPage {
 
                                 for group[g] in [@tr("Experience"), @tr("Library and services"), @tr("Storage and network")]: group_section := VerticalLayout {
                                     vertical-stretch: 0; spacing: 8px;
-                                    if root.group_available(g): Text { text: group; color: Theme.current.text_settings; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                    if root.group_available(g) && (!root.group_page || root.search_active): Text { text: group; color: Theme.current.text_settings; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
                                     if root.group_available(g): SettingsCard {
                                         for entry in SettingsDestinations.entries: VerticalLayout {
                                             vertical-stretch: 0;
@@ -2388,11 +2378,12 @@ export component SettingsPage {
                         // hero collapses. Keep the scroll viewport unchanged.
                         landing_controls_canvas := Rectangle {
                             x: 0px;
-                            y: 184px + root.landing_header_shift + root.landing_pinned_offset;
+                            y: root.landing_hero_h + root.landing_header_shift + root.landing_pinned_offset;
                             width: 100%;
                             // Fade within the 12px gap below the shortcuts,
                             // leaving the first group heading fully clear.
                             height: 112px;
+                            visible: !root.group_page;
                             clip: true;
                             background: Theme.current.artwork_canvas;
                             TouchArea { width: 100%; height: 100%; clicked => {} }
@@ -2400,6 +2391,7 @@ export component SettingsPage {
                         landing_controls_fade := Rectangle {
                             y: landing_controls_canvas.y + landing_controls_canvas.height;
                             width: 100%; height: 8px;
+                            visible: !root.group_page;
                             background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
                             TouchArea { width: 100%; height: 100%; clicked => {} }
                         }
@@ -2408,7 +2400,7 @@ export component SettingsPage {
                             x: 0px;
                             y: 0px;
                             width: 100%;
-                            height: 184px;
+                            height: root.landing_hero_h;
                             clip: true;
                             SettingsBackButton {
                                 x: 16px; y: 24px + root.landing_header_shift;
@@ -2434,28 +2426,16 @@ export component SettingsPage {
                             Text {
                                 x: 16px; y: 24px + landing_heading_measure.preferred-height + 8px + root.landing_header_shift;
                                 width: parent.width - 32px; height: landing_intro_measure.preferred-height;
+                                visible: !root.group_page;
                                 text: @tr("Make Nova yours"); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap;
-                            }
-                            Text {
-                                x: 16px; y: 100px + root.landing_header_shift;
-                                width: parent.width - 32px; height: 20px;
-                                text: @tr("Settings view"); color: Theme.current.text_settings; font-size: 13px;
-                            }
-                            settings_view_selector := Segmented {
-                                x: 16px; y: 124px + root.landing_header_shift;
-                                width: parent.width - 32px;
-                                labels: [@tr("Simple"), @tr("Advanced")];
-                                current_index: SettingsBridge.advanced ? 1 : 0;
-                                enabled: !root.sub_open || root.two_pane;
-                                focused: root.kb_zone == 20 && root.kb_active;
-                                picked(index) => { root.choose_settings_view(index == 1); }
                             }
                         }
 
                         settings_search := SearchField {
                             x: 0px;
-                            y: Math.max(12px, 196px + root.landing_header_shift + root.landing_pinned_offset);
+                            y: Math.max(12px, root.landing_hero_h + 12px + root.landing_header_shift + root.landing_pinned_offset);
                             width: 100%;
+                            visible: !root.group_page;
                             show-pointer-focus: false; keyboard-mode: root.kb_active;
                             roomy: true; search-icon: true; text <=> root.search_query;
                             search-icon-image: @image-url("../../assets/icons/menus/search.svg");
@@ -2468,12 +2448,12 @@ export component SettingsPage {
 
                         HorizontalLayout {
                             x: 0px;
-                            y: Math.max(68px, 252px + root.landing_header_shift + root.landing_pinned_offset);
+                            y: Math.max(68px, root.landing_hero_h + 68px + root.landing_header_shift + root.landing_pinned_offset);
                             width: 100%;
                             height: 44px;
                             spacing: 4px;
                             for group[i] in [@tr("Experience"), @tr("Services"), @tr("Storage")]: PillButton {
-                                label: group; compact: true; visible: root.landing_group < 0 || root.search_active; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
+                                label: group; compact: true; visible: !root.group_page; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
                                 clicked => { root.jump_section(i); }
                             }
                         }

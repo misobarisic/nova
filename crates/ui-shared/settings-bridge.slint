@@ -3,7 +3,8 @@
 import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, AddonBrowserRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SyncInspectorRow, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
-    // Device-local presentation only; backend settings values remain intact.
+    // Always on: Settings has a single view. The Simple-view branches keyed
+    // on this are dormant.
     in-out property <bool> advanced: true;
     callback view_changed(bool);
     in-out property <[string]> list_services_account: ["", "", ""];

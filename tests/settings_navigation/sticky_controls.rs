@@ -306,13 +306,13 @@ fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
                 .next()
                 .is_none()
         );
-        // The 184px hero includes the Settings-view selector. Its compact
+        // The overview hero is 104px. Its compact
         // title fades over the final 40px, while controls keep their own slots.
-        app.set_settings_navigation_scroll(-164.0);
+        app.set_settings_navigation_scroll(-84.0);
         settle(&app);
         assert!(
-            app.get_settings_navigation_scroll() < -144.0
-                && app.get_settings_navigation_scroll() > -184.0,
+            app.get_settings_navigation_scroll() < -64.0
+                && app.get_settings_navigation_scroll() > -104.0,
             "{width}: overview scroll is {}",
             app.get_settings_navigation_scroll()
         );

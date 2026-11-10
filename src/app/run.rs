@@ -173,7 +173,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(true);
     storage::init_at(&app_data_dir());
     profiles::install_record_policy();
-    settings::initialize_settings_view(database_existed);
     #[cfg(feature = "update-check")]
     let _updates_timer = updates::install(&app);
     let onboarding_visible = onboarding::begin(database_existed);
