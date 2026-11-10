@@ -265,8 +265,14 @@ fn recovery_preserves_download_search_input() {
     open(&app, "Downloads");
     downloads(&app);
     idle();
-    let search = ElementHandle::find_by_element_type_name(&app, "SearchField")
+    // The More index behind Downloads has its own search field; use the
+    // Downloads page's field.
+    let search = ElementHandle::find_by_element_type_name(&app, "DownloadsPage")
         .next()
+        .unwrap()
+        .query_descendants()
+        .match_type_name("SearchField")
+        .find_first()
         .unwrap();
     let p = search.absolute_position();
     let s = search.size();
