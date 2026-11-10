@@ -133,12 +133,12 @@ fn chapter_display_toggle_and_title_shortcut_preserve_menu_navigation() {
         app.set_show_chapters(true);
         settle(&app);
     }
-    // Shift-Tab from Settings reaches tracks, transport, then the chapter
-    // shortcut without changing established control indices.
+    // Shift-Tab from Settings reaches tracks, Picture, transport, then the
+    // chapter shortcut without changing established control indices.
     app.window().dispatch_event(WindowEvent::KeyPressed {
         text: slint::platform::Key::Shift.into(),
     });
-    for _ in 0..6 {
+    for _ in 0..7 {
         key(&app, slint::platform::Key::Tab);
     }
     app.window().dispatch_event(WindowEvent::KeyReleased {

@@ -352,10 +352,18 @@ fn gesture_titles_fade_without_unmounting_or_revealing_hidden_controls() {
             "gesture captions fade out: {fading}"
         );
         assert_eq!(episode.computed_opacity(), fading);
-        assert_eq!(
-            (episode.absolute_position(), title.absolute_position()),
-            geometry
-        );
+        // Hidden captions ease 10px toward the footer while fading; they
+        // never shift sideways or jump.
+        for (now, before) in [
+            (episode.absolute_position(), geometry.0),
+            (title.absolute_position(), geometry.1),
+        ] {
+            assert_eq!(now.x, before.x);
+            assert!(
+                now.y >= before.y && now.y - before.y <= 10.0,
+                "caption lift stays within 10px: {now:?} from {before:?}"
+            );
+        }
         settle(&app);
         assert_eq!(title.computed_opacity(), 0.0);
         app.window()

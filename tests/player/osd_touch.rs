@@ -168,12 +168,13 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         // middle of the screen. Its hidden hit area must not toggle playback.
         let play_pause = ElementHandle::find_by_element_type_name(&app, "IconBtn")
             .find(|element| is_size(element, 72.0, 72.0));
-        // Top-left close hit area. It must only wake the OSD while hidden.
+        // Top-left close hit area. It must only wake the OSD while hidden;
+        // hidden controls lift 12px, so it rests at y = 4 here.
         let close = ElementHandle::find_by_element_type_name(&app, "TouchArea").find(|element| {
             let position = element.absolute_position();
             is_size(element, 40.0, 40.0)
                 && (12.0..24.0).contains(&position.x)
-                && (12.0..24.0).contains(&position.y)
+                && (0.0..24.0).contains(&position.y)
         });
         // Bottom OSD hover strip. While hidden, tapping it must wake the OSD
         // instead of painting a hover-only flash.
