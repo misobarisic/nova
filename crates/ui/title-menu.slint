@@ -72,6 +72,9 @@ export component TitleMenu inherits Rectangle {
     in property <length> safe-bottom;
     callback picked(string);
     callback closed;
+    // Fired as the menu stops taking input, before `picked`: the host takes
+    // keyboard focus back here, so a page the action opens can still claim it.
+    callback dismissing;
     private property <int> page: 0;
     private property <bool> shown: false;
     private property <bool> motion: Anim.enabled && Anim.player;
@@ -97,6 +100,7 @@ export component TitleMenu inherits Rectangle {
         if !root.shown { return; }
         root.shown = false;
         root.scale-progress = 0; root.fade-progress = 0;
+        root.dismissing();
         if action != "" { root.picked(action); }
         finish.start();
     }

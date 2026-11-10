@@ -148,13 +148,13 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
 
     for (label, action) in [
         ("Mark watched", 0),
-        ("Mark as Plan to Watch", 7),
-        ("Mark as watching", 8),
-        ("Mark as completed", 9),
-        ("Mark as new episodes", 10),
-        ("Mark on hold", 1),
-        ("Mark dropped", 2),
-        ("Back to automatic", 3),
+        ("Plan to Watch", 7),
+        ("Watching", 8),
+        ("Completed", 9),
+        ("New episodes", 10),
+        ("On hold", 1),
+        ("Dropped", 2),
+        ("Automatic", 3),
     ] {
         click(&app, element(&app, "DetailPage::library_options_button"));
         if label != "Mark watched" {
@@ -488,7 +488,11 @@ fn release_reminders_live_in_options_with_explicit_modes_and_safe_back() {
         );
         app.set_detail_is_movie(true);
         click(&app, element(&app, "DetailPage::library_options_button"));
-        click_label(&app, "Release reminders");
+        // The title menu drops the row for movies; the TV sheet keeps it inert.
+        if let Some(row) = ElementHandle::find_by_accessible_label(&app, "Release reminders").last()
+        {
+            click(&app, row);
+        }
         assert!(
             ElementHandle::find_by_accessible_label(&app, "Each new episode")
                 .next()

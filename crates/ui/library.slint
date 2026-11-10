@@ -1221,6 +1221,8 @@ export component LibraryPage {
             origin-x: root.menu_anchored ? root.menu_anchor_x - self.absolute-position.x : self.width / 2;
             safe-top: root.safe-top; safe-bottom: root.safe-bottom;
             picked(action) => { root.lib_menu_action(action); }
+            // Take keyboard focus back from the menu as it closes.
+            dismissing => { nav_scope.focus(); }
             closed => { root.close_menu(); }
         }
         MenuSheet {

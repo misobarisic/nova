@@ -1546,6 +1546,8 @@ export component DetailPage {
                 { id: "5", label: @tr("Reveal episode spoilers"), icon: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", enabled: true },
             ];
             picked(id) => { root.episode_menu_picked(id.to-float()); }
+            // Take keyboard focus back from the menu as it closes.
+            dismissing => { nav_scope.focus(); }
             closed => { root.close_menu(); }
         }
         MenuSheet {
@@ -1609,6 +1611,8 @@ export component DetailPage {
                 { id: "2", label: @tr("Download season"), icon: "M12 3v12M7 10l5 5 5-5M5 16v5h14v-5", enabled: true },
             ];
             picked(id) => { root.season_menu_picked(id.to-float()); }
+            // Take keyboard focus back from the menu as it closes.
+            dismissing => { nav_scope.focus(); }
             closed => { root.close_menu(); }
         }
         MenuSheet {
@@ -1696,6 +1700,8 @@ export component DetailPage {
             origin-x: DetailContent.menu_anchor_x - self.absolute-position.x;
             safe-top: root.safe-top; safe-bottom: root.safe-bottom;
             picked(action) => { root.title_menu_picked(action); }
+            // Take keyboard focus back from the menu as it closes.
+            dismissing => { nav_scope.focus(); }
             closed => { root.close_menu(); }
         }
         library_options_sheet := MenuSheet {
