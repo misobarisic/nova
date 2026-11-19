@@ -1038,6 +1038,30 @@ fn rejected_values_remain_paused_until_an_explicit_replacement() {
 }
 
 #[test]
+fn a_later_watch_replaces_a_rejected_automatic_patch() {
+    let storage = MemoryStorage::default();
+    let mut store = delivery_store(&storage);
+    watch(&mut store, 8);
+    let target = store.state().targets[0].key.clone();
+    let attempt = store.begin_delivery(&target, 0).unwrap().unwrap();
+    store
+        .finish_delivery(
+            &attempt,
+            DeliveryOutcome::Failed(DeliveryFailure::Rejected),
+            0,
+        )
+        .unwrap();
+    // The rejected values are not resent by themselves...
+    assert!(store.begin_delivery(&target, 100).unwrap().is_none());
+    // ...but new watches are not queued behind them forever.
+    watch(&mut store, 12);
+    let mut store = Store::load(storage).unwrap();
+    let next = store.begin_delivery(&target, 100).unwrap().unwrap();
+    assert_eq!(next.patch().progress, 12);
+    assert_eq!(store.state().outbox.pending().len(), 1);
+}
+
+#[test]
 fn failed_acknowledgment_commit_retains_the_exact_attempt_for_recovery() {
     let storage = MemoryStorage::default();
     let mut store = delivery_store(&storage);

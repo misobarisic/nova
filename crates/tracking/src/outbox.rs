@@ -242,6 +242,29 @@ impl Outbox {
         let revision =
             NonZeroU64::new(self.next_revision).ok_or(TrackingError::RevisionOverflow)?;
         patch.intent_revision = revision;
+        if patch.intent == ProgressIntent::AutomaticForward {
+            // Delivery always takes a target's first patch, so an automatic
+            // patch stuck in a terminal state would hold every later watch
+            // behind it forever. The new patch describes the current
+            // projection and supersedes it.
+            let terminal = |old: &PendingProgress| {
+                old.target == patch.target
+                    && old.intent == ProgressIntent::AutomaticForward
+                    && matches!(
+                        old.state,
+                        DeliveryState::Rejected
+                            | DeliveryState::NeedsAlignment
+                            | DeliveryState::StaleAccount
+                    )
+            };
+            for old in self.pending.iter().filter(|old| terminal(old)) {
+                if old.account_generation == patch.account_generation {
+                    patch.progress = patch.progress.max(old.progress);
+                    patch.remote_baseline = patch.remote_baseline.max(old.remote_baseline);
+                }
+            }
+            self.pending.retain(|old| !terminal(old));
+        }
         if patch.intent == ProgressIntent::ExplicitReplacement {
             // An already transmitted write must finish before the replacement.
             // All unsent progress for this target is superseded by the edit.
