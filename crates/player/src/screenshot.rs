@@ -338,24 +338,27 @@ impl Player {
         let image = temporary.0.join("frame.png");
         let output = temporary.0.join(format!("saved.{}", format.extension()));
         let (job, position_seconds) = {
-            // Rendering consumes pending before taking mpv; retain that lock order.
-            let pending = self
-                .state
-                .pending
-                .lock()
-                .map_err(|_| ScreenshotError::Unavailable)?;
+            // Lock order is mpv, then pending: UI inventory readers hold mpv
+            // while they check pending, and rendering drains pending before it
+            // takes mpv. Holding pending while waiting for mpv could deadlock.
             let mpv = self
                 .state
                 .mpv
                 .lock()
                 .map_err(|_| ScreenshotError::Unavailable)?;
+            let queued = self
+                .state
+                .pending
+                .lock()
+                .map_err(|_| ScreenshotError::Unavailable)?
+                .is_some();
             check_session(
                 expected_session,
                 self.screenshot_session(),
                 self.state.started.load(Ordering::SeqCst),
             )?;
             let mpv = mpv.as_ref().ok_or(ScreenshotError::Unavailable)?;
-            if pending.is_some()
+            if queued
                 || mpv.get_property::<bool>("idle-active").unwrap_or(true)
                 || mpv.get_property::<bool>("eof-reached").unwrap_or(true)
             {
