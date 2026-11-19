@@ -176,7 +176,8 @@ fn frontier(
         .filter(|v| {
             !v.id.is_empty()
                 && v.episode_number().is_some_and(|e| e > 0)
-                && (specials || v.season.is_some_and(|s| s > 0))
+                // `None` is absolute numbering, a regular episode.
+                && (specials || v.season != Some(0))
                 && episode_has_air_date(v)
                 && episode_is_out(v, today)
                 && !progress
@@ -187,6 +188,7 @@ fn frontier(
         .collect();
     eligible.sort_by_key(|v| {
         (
+            v.season.is_none(),
             v.season.unwrap_or(0),
             v.episode_number().unwrap_or(0),
             v.id.clone(),

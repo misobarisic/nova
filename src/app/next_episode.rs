@@ -30,10 +30,15 @@ pub(super) fn successor<'a>(
     today: i64,
 ) -> Option<&'a Video> {
     let policy = nova_config::progress::active_progress_policy(series_id);
+    // Absolute-numbered episodes (no season) form their own bucket after the
+    // numbered seasons, so such shows still get a successor.
+    let mut unseasoned: Vec<&Video> = videos.iter().filter(|v| v.season.is_none()).collect();
+    unseasoned.sort_by_key(|v| v.episode_number().unwrap_or(u32::MAX));
     let ordered: Vec<_> = ordered_seasons(videos)
         .into_iter()
         .flat_map(|season| season_episodes(videos, season))
-        .filter(|v| v.episode_number().is_some_and(|n| n > 0))
+        .chain(unseasoned)
+        .filter(|v| v.id == current || v.episode_number().is_some_and(|n| n > 0))
         .collect();
     let index = ordered.iter().position(|v| v.id == current)?;
     let next = *ordered
@@ -410,6 +415,19 @@ mod tests {
         for id in ["s2e1", "special", "missing"] {
             assert!(successor("test", &videos, id, 0).is_none());
         }
+    }
+
+    #[test]
+    fn absolute_numbered_episodes_without_a_season_have_a_successor() {
+        let unseasoned = |id: &str, number| Video {
+            id: id.into(),
+            episode: Some(number),
+            ..Default::default()
+        };
+        let videos = vec![unseasoned("e2", 2), unseasoned("e1", 1), unseasoned("e3", 3)];
+        assert_eq!(successor("test", &videos, "e1", 0).unwrap().id, "e2");
+        assert_eq!(successor("test", &videos, "e2", 0).unwrap().id, "e3");
+        assert!(successor("test", &videos, "e3", 0).is_none());
     }
 
     #[test]
