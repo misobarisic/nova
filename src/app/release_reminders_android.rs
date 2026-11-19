@@ -120,10 +120,20 @@ pub extern "system" fn Java_dev_misob_nova_NovaReleaseJobService_nativeRun(
                 break;
             }
             let owner = profiles::ProfileStore::for_profile(&profile.id);
-            sync::project_headless_profile(&owner).map_err(|e| e.to_string())?;
-            release_reminders::refresh_owner_metadata(&owner, &CANCEL, started);
-            if !CANCEL.load(Ordering::Acquire) {
-                release_reminders::reconcile_owner(&owner)?;
+            // One profile's unreadable data must not stop the others' alerts.
+            let delivered = (|| -> Result<(), String> {
+                sync::project_headless_profile(&owner).map_err(|e| e.to_string())?;
+                release_reminders::refresh_owner_metadata(&owner, &CANCEL, started);
+                if !CANCEL.load(Ordering::Acquire) {
+                    release_reminders::reconcile_owner(&owner)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = delivered {
+                storage::report(storage::Error::new(
+                    storage::ErrorKind::Transaction,
+                    format!("release reminders for one profile: {error}"),
+                ));
             }
         }
         Ok(())
