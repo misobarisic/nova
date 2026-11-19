@@ -1852,6 +1852,23 @@ impl Bridge {
                     && context.request_id == job.request_id
             })
             .unwrap_or_default();
+        let prior_history = explicit_context.history.clone().or_else(|| {
+            let record = state
+                .progress
+                .get(&progress_map_key(&job.media_id, &job.request_id))?;
+            let history = record.history.as_ref()?;
+            Some(PlaybackHistory {
+                played_at_secs: history.played_at_secs,
+                engaged_secs: Some(if playback_can_resume(record) {
+                    history
+                        .engaged_secs
+                        .unwrap_or(watch_history::MEANINGFUL_PLAYBACK_SECS)
+                } else {
+                    0.0
+                }),
+                ..Default::default()
+            })
+        });
         if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
                 policy_revision: profile_policy::revision(&profiles::ProfileStore::capture()),
@@ -1902,6 +1919,16 @@ impl Bridge {
                         .and_then(Video::episode_number)
                         .or(saved_coordinates.map(|(_, episode)| episode)),
                     rewatch,
+                    // Keep the engagement baseline the request already built: a
+                    // `None` here would mark the row as a legacy record, so a
+                    // two-second offline open would jump to the top of History.
+                    played_at_secs: prior_history.as_ref().map_or(0, |h| h.played_at_secs),
+                    engaged_secs: Some(
+                        prior_history
+                            .as_ref()
+                            .and_then(|h| h.engaged_secs)
+                            .unwrap_or(0.0),
+                    ),
                     ..Default::default()
                 }),
                 ..Default::default()
