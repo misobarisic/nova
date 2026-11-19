@@ -1714,6 +1714,19 @@ impl Bridge {
 }
 
 pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), String> {
+    // Notification text speaks the notified profile's language, also in the
+    // job-only Android process where no bridge ever applied one.
+    let language = owner
+        .read("settings")
+        .ok()
+        .flatten()
+        .and_then(|raw| settings::settings_from_str(&raw))
+        .map(|settings| settings.language)
+        .unwrap_or_default();
+    text::with_thread_language(language, || reconcile_owner_in_language(owner))
+}
+
+fn reconcile_owner_in_language(owner: &profiles::ProfileStore) -> Result<(), String> {
     let _serial = DELIVERY_SERIAL.lock().unwrap();
     if owner.retired().map_err(|e| e.to_string())? {
         return Ok(());

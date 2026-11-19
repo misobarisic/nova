@@ -68,9 +68,30 @@ pub fn screenshot_saved(path: &str) -> String {
     }
 }
 
-/// Is the UI showing Croatian?
+thread_local! {
+    static THREAD_LANGUAGE: std::cell::Cell<Option<Language>> = const { std::cell::Cell::new(None) };
+}
+
+/// Is the UI (or this thread's override) showing Croatian?
 fn croatian() -> bool {
-    *LANGUAGE.lock().unwrap() == Language::Croatian
+    THREAD_LANGUAGE
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| *LANGUAGE.lock().unwrap())
+        == Language::Croatian
+}
+
+/// Run `f` with `language` on this thread only, leaving the UI's language
+/// untouched. Background work that speaks for a specific profile (reminder
+/// notifications) uses this instead of the foreground profile's language.
+pub fn with_thread_language<T>(language: Language, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Language>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            THREAD_LANGUAGE.with(|cell| cell.set(self.0));
+        }
+    }
+    let _restore = Restore(THREAD_LANGUAGE.with(|cell| cell.replace(Some(language))));
+    f()
 }
 
 /// Run `f` with a language selected and restore the previous value. Useful for
