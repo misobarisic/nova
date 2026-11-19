@@ -907,10 +907,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_clear_torrent_cache(move || {
-        if let Some(engine) = crate::torrent::engine() {
-            engine.clear_cache();
-        }
-        b.refresh_torrent_disk_usage();
+        // Deleting every cached torrent waits for running torrent work and
+        // removes whole directories; keep it off the UI thread.
+        let b = b.clone();
+        let _ = std::thread::Builder::new()
+            .name("torrent-clear".into())
+            .spawn(move || {
+                if let Some(engine) = crate::torrent::engine() {
+                    engine.clear_cache();
+                }
+                let _ = crate::app::profiles::invoke_from_event_loop(move || {
+                    b.refresh_torrent_disk_usage();
+                });
+            });
     });
 
     // Cross-device sync callbacks (Settings → Sync).

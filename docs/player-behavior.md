@@ -796,6 +796,11 @@ the player cancels that identity. Late success and error callbacks cannot open
 a stale stream or update the current hint. Engine activation and cleanup share
 an operation lock; cancellation is checked after discovery and initialization,
 before committing ownership or evicting other cached torrents.
+After a restart, librqbit re-hashes an adopted cached torrent before it plays.
+Initialization fails only after 30 seconds without checking another byte, so a
+large cached file finishes its check instead of restarting it on every attempt.
+Settings changes and Clear torrent cache run on worker threads, so they never
+block the UI while a torrent operation holds the lock.
 
 Settings → P2P → No caching uses an isolated RAM-only torrent session. It never
 writes torrent payload, metainfo, resume state or DHT state to disk, and does not

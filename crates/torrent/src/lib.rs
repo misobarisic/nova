@@ -982,25 +982,50 @@ impl EngineInner {
     }
 
     fn clean_ram_children(&self, settings: &TorrentSettings) {
-        self.ram_children.lock().unwrap().retain(|child| {
-            let _operation = child.operations.lock().unwrap();
-            child.stop_cancelled_playback(settings);
-            let resolving = child.ram_resolving.load(Ordering::Acquire)
-                && child
-                    .playback_requests
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter_map(std::sync::Weak::upgrade)
-                    .any(|r| !r.load(Ordering::Acquire));
-            let keep = resolving
-                || !child.active.lock().unwrap().is_empty()
-                || !child.read_leases.lock().unwrap().is_empty();
-            if !keep {
-                child.session.cancellation_token().cancel();
-            }
-            keep
-        });
+        // Decide on a snapshot: stopping a child blocks on its session, and
+        // `stats()` reads this list from the playback tick. Children are never
+        // reused, so one judged finished here stays finished.
+        let children = self.ram_children.lock().unwrap().clone();
+        let finished: Vec<_> = children
+            .iter()
+            .filter(|child| !Self::keep_ram_child(child, settings))
+            .map(Arc::as_ptr)
+            .collect();
+        drop(children);
+        if finished.is_empty() {
+            return;
+        }
+        let removed: Vec<_> = {
+            let mut list = self.ram_children.lock().unwrap();
+            let (removed, kept) = list
+                .drain(..)
+                .partition(|child| finished.contains(&Arc::as_ptr(child)));
+            *list = kept;
+            removed
+        };
+        // The last handle may drop a child's runtime, which waits for its
+        // blocking tasks; do that without holding the list.
+        drop(removed);
+    }
+
+    fn keep_ram_child(child: &Arc<EngineInner>, settings: &TorrentSettings) -> bool {
+        let _operation = child.operations.lock().unwrap();
+        child.stop_cancelled_playback(settings);
+        let resolving = child.ram_resolving.load(Ordering::Acquire)
+            && child
+                .playback_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .any(|r| !r.load(Ordering::Acquire));
+        let keep = resolving
+            || !child.active.lock().unwrap().is_empty()
+            || !child.read_leases.lock().unwrap().is_empty();
+        if !keep {
+            child.session.cancellation_token().cancel();
+        }
+        keep
     }
 
     fn rollback_activation(&self, hash: &str, request: &PlaybackRequest, previous: Option<Entry>) {

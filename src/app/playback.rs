@@ -3239,7 +3239,25 @@ pub(crate) fn sync_torrent_engine(settings: &TorrentSettings) {
         return;
     }
     match crate::torrent::engine() {
-        Some(engine) => engine.apply_settings(settings),
+        Some(engine) => {
+            // Applying waits for any running torrent operation (adding a
+            // torrent, trimming the cache) and may purge the cache, so keep
+            // the caller (usually the UI thread) free. A newer change that
+            // lands first wins; an older one never overwrites it.
+            static REQUESTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            static APPLIED: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+            let generation = REQUESTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let settings = settings.clone();
+            let _ = std::thread::Builder::new()
+                .name("torrent-settings".into())
+                .spawn(move || {
+                    let mut applied = APPLIED.lock().unwrap_or_else(|e| e.into_inner());
+                    if generation > *applied {
+                        engine.apply_settings(&settings);
+                        *applied = generation;
+                    }
+                });
+        }
         None => {
             let engine = crate::torrent::TorrentEngine::setup(torrent_cache_dir(), settings);
             engine.restore_downloads(downloads::persisted_torrent_owners());
