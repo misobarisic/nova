@@ -50,6 +50,10 @@ pub(crate) struct HostRoom {
     pub created: u64,
     pub members: BTreeMap<String, Member>,
     revoked: BTreeSet<String>,
+    /// Capabilities replaced after a kick. They still authenticate members
+    /// already in the room, but never admit a new endpoint: a kicked guest's
+    /// copy of the invite cannot rejoin under a fresh identity.
+    retired_capabilities: Vec<[u8; 32]>,
     intended_paused: bool,
     held: bool,
     admissions: usize,
@@ -291,6 +295,7 @@ impl HostRoom {
             created: now,
             members: BTreeMap::from([(host_id, host)]),
             revoked: BTreeSet::new(),
+            retired_capabilities: Vec::new(),
             intended_paused: false,
             held: false,
             admissions: 1,
@@ -347,13 +352,18 @@ impl HostRoom {
         peer: &str,
         now: u64,
     ) -> Result<()> {
-        let different = self
-            .capability
-            .iter()
-            .zip(capability)
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        let matches = |expected: &[u8; 32]| {
+            expected
+                .iter()
+                .zip(capability)
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+        };
+        let current = matches(&self.capability);
+        let retired = self.retired_capabilities.iter().any(matches);
         ensure!(
-            different == 0 && room_id == self.snapshot.room_id,
+            (current || (retired && self.members.contains_key(peer)))
+                && room_id == self.snapshot.room_id,
             "invalid party capability"
         );
         ensure!(
@@ -625,6 +635,12 @@ impl HostRoom {
         }
         self.tick(now);
         Ok(())
+    }
+
+    /// Replace the invite capability; the old one keeps current members in.
+    pub fn rotate_capability(&mut self, fresh: [u8; 32]) {
+        let old = std::mem::replace(&mut self.capability, fresh);
+        self.retired_capabilities.push(old);
     }
 
     pub fn remove(&mut self, id: &str, now: u64) -> Result<()> {
@@ -1214,6 +1230,22 @@ pub(crate) mod tests {
             room.authorize(&"a".repeat(32), &[7; 32], "new", ROOM_IDLE_MS)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_kick_re_keys_the_invite_without_dropping_other_members() {
+        let mut room = room();
+        let id = "a".repeat(32);
+        room.join("stays", "Stays".into(), 1, 1).unwrap();
+        room.join("kicked", "Kicked".into(), 1, 1).unwrap();
+        room.remove("kicked", 2).unwrap();
+        room.rotate_capability([9; 32]);
+        // Remaining members keep using the capability they joined with.
+        room.authorize(&id, &[7; 32], "stays", 3).unwrap();
+        // The kicked guest's invite cannot admit it under a new endpoint id.
+        assert!(room.authorize(&id, &[7; 32], "kicked-again", 3).is_err());
+        // A freshly issued invite still admits newcomers.
+        room.authorize(&id, &[9; 32], "newcomer", 3).unwrap();
     }
 
     #[test]

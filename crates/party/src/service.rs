@@ -269,7 +269,8 @@ impl PartyService {
     }
 
     /// Issue a fresh copy of the host's invite. The capability and room stay
-    /// the same, so copies already shared remain valid until their own expiry.
+    /// the same (until a kick re-keys it), so copies already shared remain
+    /// valid until their own expiry.
     pub fn renew_invite(&self) -> Result<String> {
         let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let mut ticket = session
@@ -511,8 +512,23 @@ impl PartyService {
         self.with_host(|room| room.clear_media(local_now_ms()))
     }
 
+    /// Remove a member and re-key the invite. Joining binds a fresh endpoint
+    /// each time, so revoking the endpoint alone would let the kicked guest
+    /// paste the same invite again. Members already in the room keep working;
+    /// invites issued from now on (see [`Self::renew_invite`]) carry the new
+    /// capability.
     pub fn kick(&self, member_id: &str) -> Result<()> {
-        self.with_host(|room| room.remove(member_id, local_now_ms()))
+        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = iroh::SecretKey::generate().to_bytes();
+        self.with_host(|room| {
+            room.remove(member_id, local_now_ms())?;
+            room.rotate_capability(fresh);
+            Ok(())
+        })?;
+        if let Some(ticket) = session.host_ticket.as_mut() {
+            ticket.capability = fresh;
+        }
+        Ok(())
     }
 
     pub fn continue_without_waiting(&self) -> Result<()> {

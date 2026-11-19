@@ -76,6 +76,12 @@ a version supporting that protocol. The
 `NVP2` invite-ticket envelope is unchanged because its address/capability shape
 has not changed.
 
+Removing a member revokes its endpoint and re-keys the invite: the host
+generates a new capability and re-issues the invite. Members already in the room
+keep authenticating with the capability they joined with, but no new endpoint
+is admitted with an older one, so a removed guest cannot paste its old invite
+again under a fresh endpoint identity.
+
 The deterministic host state machine and bounded transport tests live in
 `crates/party`. Exact asset matching is in `src/app/party_source.rs`; the UI
 coordinator and in-place repaint are in `src/app/party.rs`. Coordinator regressions

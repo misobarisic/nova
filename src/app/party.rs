@@ -2206,7 +2206,12 @@ impl Bridge {
                                 Ok(())
                             })
                     }
-                    Operation::Kick(id) => service.kick(&id),
+                    // A kick re-keys the invite; show the new one at once.
+                    Operation::Kick(id) => service.kick(&id).and_then(|()| {
+                        service.renew_invite().map(|invite| {
+                            renewed_invite = Some(invite);
+                        })
+                    }),
                     Operation::Wait(enabled) => service.set_wait_for_guests(enabled),
                     Operation::Continue => service.continue_without_waiting(),
                     Operation::RenewInvite => service.renew_invite().map(|invite| {
