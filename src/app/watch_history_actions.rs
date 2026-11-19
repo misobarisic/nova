@@ -5,6 +5,9 @@ use super::*;
 pub(super) struct HistorySelection {
     pub(super) modal_token: Arc<()>,
     pub(super) entry: watch_history::HistoryEntry,
+    /// The card's saved position applies to the first pick only; later picks
+    /// in the same detail opening use the progress saved since.
+    pub(super) resume_spent: bool,
 }
 
 impl HistorySelection {
@@ -101,6 +104,7 @@ impl Bridge {
             state.history_selection = Some(HistorySelection {
                 modal_token: token,
                 entry: entry.clone(),
+                resume_spent: false,
             });
             video
         };

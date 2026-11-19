@@ -848,14 +848,15 @@ impl Bridge {
                 .get(&progress_map_key(&context.media_id, &context.request_id))
                 .is_some_and(|p| p.watched),
         });
+        let fields = &mut *state;
         context.history_resume = (!detached)
             .then(|| {
-                state
-                    .history_selection
-                    .as_ref()
-                    .zip(state.modal_item.as_ref())
-                    .filter(|(selection, modal)| selection.matches(modal))
-                    .map(|(selection, _)| selection.resume_position())
+                let selection = fields.history_selection.as_mut()?;
+                let modal = fields.modal_item.as_ref()?;
+                (selection.matches(modal) && !selection.resume_spent).then(|| {
+                    selection.resume_spent = true;
+                    selection.resume_position()
+                })
             })
             .flatten();
         if state.playback.as_ref().is_some_and(|target| {
