@@ -203,7 +203,14 @@ pub(super) fn episodes<'a>(state: &Shared, modal: &'a ModalItem, season: u32) ->
                     .is_some_and(|b| b.allowed.contains(&v.id))
             })
             .collect();
-        visible.sort_by_key(|video| video.episode_number().unwrap_or(u32::MAX));
+        // Native season first: a canonical season made of several owner
+        // seasons restarts its numbers, which must not interleave.
+        visible.sort_by_key(|video| {
+            (
+                video.season.unwrap_or(u32::MAX),
+                video.episode_number().unwrap_or(u32::MAX),
+            )
+        });
         visible
     } else {
         season_episodes(&modal.videos, season)
