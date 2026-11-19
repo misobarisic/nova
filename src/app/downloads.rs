@@ -65,6 +65,14 @@ fn is_resolver_download(job: &DownloadJob) -> bool {
         .is_some_and(|url| url.starts_with(RESOLVER_DOWNLOAD_PREFIX))
 }
 
+/// Resolver-backed transfers restart from byte 0 on every resume (their
+/// resolved URLs are private and short-lived) and the resolver lives only in
+/// the process that looked it up. A headless Android window lasts 90 s, so it
+/// could only discard partial work each time: these wait for the app.
+fn headless_deferred(foreground: bool, job: &DownloadJob) -> bool {
+    !foreground && job.offline.automatic() && is_resolver_download(job)
+}
+
 /// UI identities carry a request generation to reject stale clicks. Download
 /// identities must survive a reload; the provider's hash already incorporates
 /// its owner, request and result. Accept only that internal identity format.
@@ -1011,6 +1019,10 @@ impl DownloadCoordinator {
         if let Some(reason) = device.environmental_pause(smart_offline::environment()) {
             return Err(reason);
         }
+        // See `headless_deferred`.
+        if resolver.is_some() && !self.inner.foreground.load(Ordering::Acquire) {
+            return Err(PauseReason::Background);
+        }
         let mut state = self.inner.state();
         if state.active.as_ref().is_some_and(|active| {
             state.manifest.jobs.iter().any(|job| {
@@ -1263,6 +1275,7 @@ impl DownloadCoordinator {
         let mut state = self.inner.state();
         let before = state.manifest.clone();
         let mut remove = HashSet::new();
+        let foreground = self.inner.foreground.load(Ordering::Acquire);
         for job in &mut state.manifest.jobs {
             if job.phase == DownloadPhase::Completed
                 && job
@@ -1296,7 +1309,9 @@ impl DownloadCoordinator {
                     remove.insert(job.id.clone());
                 }
             } else if job.offline.automatic() {
-                let reason = smart_offline::job_pause(job);
+                let reason = smart_offline::job_pause(job).or_else(|| {
+                    headless_deferred(foreground, job).then_some(PauseReason::Background)
+                });
                 if let Some(reason) = reason {
                     if !matches!(job.phase, DownloadPhase::Completed | DownloadPhase::Failed)
                         && job.offline.pause_reason != Some(PauseReason::User)
@@ -1637,6 +1652,9 @@ impl DownloadCoordinator {
                     self.inner.foreground.load(Ordering::Acquire) || job.offline.automatic()
                 })
                 .filter(|job| !job.offline.automatic() || smart_offline::job_pause(job).is_none())
+                .filter(|job| {
+                    !headless_deferred(self.inner.foreground.load(Ordering::Acquire), job)
+                })
                 .min_by_key(|job| (!job.offline.manual_keep, job.created_at))
                 .cloned()
             else {
@@ -2823,13 +2841,14 @@ impl DownloadCoordinator {
     /// Android foreground service: active work keeps the process alive.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn has_active_work(&self) -> bool {
+        let foreground = self.inner.foreground.load(Ordering::Acquire);
         let state = self.inner.state();
         state.active.is_some()
             || state.manifest.jobs.iter().any(|job| {
                 matches!(
                     job.phase,
                     DownloadPhase::Queued | DownloadPhase::Resolving | DownloadPhase::Downloading
-                )
+                ) && !headless_deferred(foreground, job)
             })
     }
 
@@ -5555,6 +5574,33 @@ mod tests {
         }
         assert!(resolver_download_source("1:https://private.example/?token=secret").is_none());
         assert!(resolver_download_source("invalid:stream-short").is_none());
+    }
+
+    #[test]
+    fn headless_windows_leave_resolver_smart_downloads_for_the_app() {
+        let owner = crate::download::offline::Owner {
+            profile: "default".into(),
+            policy: "rule".into(),
+        };
+        let mut resolver = DownloadJob::new(
+            "resolver",
+            JobSource::http(format!("{RESOLVER_DOWNLOAD_PREFIX}stream-id")),
+        );
+        // New jobs default to manual keep; a smart owner makes them automatic.
+        resolver.offline.manual_keep = false;
+        resolver.offline.owners.insert(owner.clone());
+        let mut plain = DownloadJob::new("plain", JobSource::http("https://example.com/a.mkv"));
+        plain.offline.manual_keep = false;
+        plain.offline.owners.insert(owner);
+        let mut manual = resolver.clone();
+        manual.offline.manual_keep = true;
+        assert!(headless_deferred(false, &resolver));
+        assert!(!headless_deferred(true, &resolver), "the app runs them");
+        assert!(!headless_deferred(false, &plain), "ordinary HTTP resumes");
+        assert!(
+            !headless_deferred(false, &manual),
+            "manual jobs are not smart work"
+        );
     }
 
     #[test]

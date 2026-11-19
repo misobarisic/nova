@@ -67,7 +67,10 @@ without an Activity, Slint, Bridge or foreground-service start. It initializes
 paths/storage before reads, materializes merged profile records, and reuses the
 same process coordinator when one exists. A headless-only coordinator starts
 only automatic jobs. `onStopJob` and the 90-second window cancel/checkpoint
-workers; later OS windows resume opportunistically. The UI says **Pending
+workers; later OS windows resume opportunistically. Bundled-provider (resolver)
+sources restart from byte 0 on every resume and their resolver lives only in the
+app process, so headless windows neither admit nor start them; they stay paused
+until the app runs. The UI says **Pending
 background opportunity** rather than promising a completion time.
 
 Personal intent is an object snapshot at `offline_policies:v1`, decomposed into
