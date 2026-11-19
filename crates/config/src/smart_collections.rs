@@ -97,7 +97,9 @@ impl SmartCollection {
         let type_matches = match self.media_type {
             SmartMediaType::Any => true,
             SmartMediaType::Movies => media_type == "movie",
-            SmartMediaType::Series => media_type == "series",
+            // Everything that is not a movie is episodic (`anime`, `tv`, ...),
+            // as in the library's "TV" badge.
+            SmartMediaType::Series => media_type != "movie",
         };
         let watch_matches = match self.watch_state {
             SmartWatchState::Any => true,
