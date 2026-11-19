@@ -618,6 +618,21 @@ impl State {
         });
     }
 
+    /// Background the controller without leaving it: stale responses are
+    /// dropped by the generation bump, and nothing stays marked in flight, so
+    /// the first poll after returning starts afresh. Returns the target.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn suspend_controller(&mut self) -> String {
+        self.generation = self.generation.wrapping_add(1);
+        self.in_flight = false;
+        self.lookup_in_flight = false;
+        self.queued.clear();
+        self.scene_resume = None;
+        self.interacting_until = None;
+        self.control_poll = PeerPoll::default();
+        self.target.clone()
+    }
+
     pub(super) fn can_play_locally(&self) -> bool {
         self.role != Role::Remote
     }
@@ -1064,16 +1079,28 @@ impl Bridge {
         }
     }
 
+    /// The app went to the background (screen off, another app). Keep the
+    /// remote controls and their target open so returning resumes them: drop
+    /// only the connection, transient holds and requests in flight. Polling
+    /// pauses with the UI timer and restarts on its own when Nova returns.
     #[cfg(target_os = "android")]
     pub(super) fn remote_suspend(&self) {
         self.suspend_profile_management();
         let _ = self.execute_playback_action(PlaybackAction::EndSpeedPreview);
-        {
+        let target = {
             let mut state = self.shared.lock().unwrap();
             state.remote_playback.preview_owner = None;
             state.remote_playback.preview_seen = None;
+            state.remote_playback.suspend_controller()
+        };
+        if let Some(app) = self.app() {
+            app.set_remote_loading(false);
         }
-        self.remote_disconnect();
+        if !target.is_empty()
+            && let Some(engine) = nova_sync::engine()
+        {
+            engine.disconnect_playback(&target);
+        }
     }
 
     pub(super) fn playback_closed(&self) {
@@ -4320,6 +4347,24 @@ mod polling_tests;
 #[cfg(test)]
 mod offer_hint_tests {
     use super::*;
+
+    #[test]
+    fn backgrounding_keeps_the_remote_target_and_clears_work_in_flight() {
+        let mut state = State {
+            target: "receiver".into(),
+            in_flight: true,
+            lookup_in_flight: true,
+            generation: 7,
+            ..State::default()
+        };
+        state.queued.push_back(Request::Snapshot);
+        state.interacting_until = Some(Instant::now());
+        assert_eq!(state.suspend_controller(), "receiver");
+        assert_eq!(state.target, "receiver");
+        assert!(!state.in_flight && !state.lookup_in_flight);
+        assert!(state.queued.is_empty() && state.interacting_until.is_none());
+        assert_ne!(state.generation, 7, "late responses must be dropped");
+    }
 
     #[test]
     fn offer_hints_round_trip_inside_bounded_opaque_ids() {

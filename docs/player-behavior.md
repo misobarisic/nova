@@ -73,7 +73,10 @@ With Play on set to a paired device, the receiver lists its own sources and
 marks its Last used or Recommended source through a suffix of the opaque offer
 ID (the playback wire schema is unchanged; older peers show no badge). Choosing
 a source from the remote controls' next-episode prompt continues that session
-without a separate Replace playback confirmation.
+without a separate Replace playback confirmation. On Android, backgrounding
+Nova (screen off, another app) keeps the remote controls and their device open;
+only the connection and requests in flight are dropped, and polling resumes on
+return.
 Titles whose addons cannot provide an episode list retain their direct stream
 fallback through the same primary action.
 
