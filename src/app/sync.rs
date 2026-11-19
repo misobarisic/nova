@@ -4598,6 +4598,7 @@ impl ProjectionWork {
         let mut refreshes = Vec::new();
         let mut written = BTreeSet::new();
         let mut written_rows = Vec::new();
+        let mut model_marks = Vec::new();
         let attempt = (|| -> nova_sync::Result<()> {
             // An idle replay still validates policy/owner receipts but has no
             // transaction candidate. Avoid copying the entire history again.
@@ -4638,6 +4639,15 @@ impl ProjectionWork {
                         true,
                         false,
                     )?;
+                    // Whole-model snapshots queued before this projection is
+                    // published must rebase on the model they were taken from.
+                    if row.owner.id() == self.input.owner.id()
+                        && matches!(key.as_str(), "library" | EPISODE_PROGRESS_KEY)
+                    {
+                        let storage_key = row.owner.key(key);
+                        let previous = staged.extra_value(&storage_key)?;
+                        model_marks.push((storage_key, previous));
+                    }
                     staged.queue_extra(&row.owner.key(key), Some(raw.clone()));
                     if written.insert((
                         row.owner.id().to_owned(),
@@ -4652,6 +4662,9 @@ impl ProjectionWork {
             }
             if changed {
                 nova_sync::publish(&mut live, staged, |staged| staged.save())?;
+                for (storage_key, previous) in model_marks.drain(..) {
+                    persistence::projection_committed(storage_key, previous);
+                }
                 for row in &written_rows {
                     let (key, _) = row.snapshot.as_ref().unwrap();
                     if let Some(semantic) = row.semantic.as_ref()
@@ -5246,6 +5259,12 @@ impl Bridge {
         }
         if let Some(progress) = live.progress.take() {
             state.progress = progress;
+        }
+        if publish {
+            // Still under the writer serialization: later local snapshots are
+            // taken from these models and need no rebase.
+            persistence::projection_published(&work.input.owner.key("library"));
+            persistence::projection_published(&work.input.owner.key(EPISODE_PROGRESS_KEY));
         }
         if let Some(settings) = &live.settings {
             state.cache_settings = settings.clone();

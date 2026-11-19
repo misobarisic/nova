@@ -153,8 +153,10 @@ fn register_for(owner: &profiles::ProfileStore) {
 
 #[derive(Clone)]
 enum Snapshot {
-    Library(Vec<LibraryEntry>),
-    Progress(HashMap<String, EpisodeProgress>, bool),
+    /// The model and the projection mark it was captured against (see
+    /// [`projection_published`]).
+    Library(Vec<LibraryEntry>, u64),
+    Progress(HashMap<String, EpisodeProgress>, bool, u64),
     External(Box<ExternalPatch>, mpsc::Sender<Result<(), String>>, bool),
     Transition(Arc<profile_actions::OutgoingTransition>),
     Operation(Arc<dyn OrderedOperation>),
@@ -309,7 +311,7 @@ impl ExternalLibraryEdit {
 
 impl Snapshot {
     fn periodic(&self) -> bool {
-        matches!(self, Self::Progress(_, true))
+        matches!(self, Self::Progress(_, true, _))
     }
     fn save(&self, owner: &profiles::ProfileStore) -> Result<(), String> {
         #[cfg(test)]
@@ -319,24 +321,84 @@ impl Snapshot {
                 gate.wait();
             }
         }
-        let (key, raw) = match self {
-            Self::Library(entries) => ("library", serde_json::to_string(entries)),
-            Self::Progress(map, _) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map)),
+        let (key, raw, tag) = match self {
+            Self::Library(entries, tag) => ("library", serde_json::to_string(entries), *tag),
+            Self::Progress(map, _, tag) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map), *tag),
             Self::External(patch, _, projection) => return patch.save(owner, *projection),
             Self::Transition(capture) => return capture.save(owner),
             Self::Operation(operation) => return operation.save(),
         };
         let raw = raw.map_err(|error| error.to_string())?;
+        let storage_key = owner.key(key);
+        let rebase = stale_projection_base(&storage_key, tag);
+        let merged = match &rebase {
+            Some(base) => {
+                let current = owner.read(key).map_err(|error| error.to_string())?;
+                self.rebase(base.as_deref(), current.as_deref())?
+            }
+            None => raw.clone(),
+        };
         let save = || {
             owner
-                .persist_snapshot(key, &raw, false)
+                .persist_snapshot(key, &merged, false)
                 .map_err(|error| format!("{error:#}"))
         };
         if self.periodic() {
-            nova_sync::playback_checkpoint(save)
+            nova_sync::playback_checkpoint(save)?;
         } else {
-            save()
+            save()?;
         }
+        if rebase.is_some() {
+            // The UI model still lacks the projection: the next stale
+            // snapshot derives from this one, not from the original base.
+            stale_snapshot_saved(&storage_key, raw);
+        }
+        Ok(())
+    }
+
+    /// Three-way merge of a snapshot captured before a committed projection
+    /// reached the UI. `base` is the model it was derived from, `current` the
+    /// persisted value including the projection. Entries this snapshot left as
+    /// they were in `base` take the current value (remote additions and edits
+    /// survive); entries it changed, added or removed keep its value.
+    fn rebase(&self, base: Option<&str>, current: Option<&str>) -> Result<String, String> {
+        fn parse<T: serde::de::DeserializeOwned + Default>(raw: Option<&str>) -> Result<T, String> {
+            raw.map(serde_json::from_str)
+                .transpose()
+                .map(Option::unwrap_or_default)
+                .map_err(|error| error.to_string())
+        }
+        match self {
+            Self::Library(ours, _) => {
+                let keyed = |entries: Vec<LibraryEntry>| -> Vec<((String, String), LibraryEntry)> {
+                    entries
+                        .into_iter()
+                        .map(|entry| ((entry.type_.clone(), entry.id.clone()), entry))
+                        .collect()
+                };
+                let base = keyed(parse(base)?);
+                let theirs = keyed(parse(current)?);
+                let merged = three_way(&base, &theirs, keyed(ours.clone()));
+                serde_json::to_string(
+                    &merged
+                        .into_iter()
+                        .map(|(_, entry)| entry)
+                        .collect::<Vec<_>>(),
+                )
+            }
+            Self::Progress(ours, _, _) => {
+                let base: HashMap<String, EpisodeProgress> = parse(base)?;
+                let theirs: HashMap<String, EpisodeProgress> = parse(current)?;
+                let merged = three_way(
+                    &base.into_iter().collect::<Vec<_>>(),
+                    &theirs.into_iter().collect::<Vec<_>>(),
+                    ours.clone().into_iter().collect(),
+                );
+                serde_json::to_string(&merged.into_iter().collect::<HashMap<_, _>>())
+            }
+            _ => unreachable!("only whole-model snapshots rebase"),
+        }
+        .map_err(|error| error.to_string())
     }
 }
 #[derive(Default)]
@@ -866,11 +928,109 @@ fn enqueue(snapshot: Snapshot) -> Result<bool, String> {
         Err("persistence worker closing; edit not accepted".into())
     }
 }
+// ---- Local snapshots captured before a projection reached the UI ----------
+//
+// A sync projection commits its Library/progress view (and the deletion
+// baseline) on the writer, but the UI model is replaced only later, when the
+// projection publishes. A whole-model snapshot captured in between lacks the
+// remote additions and would tombstone them. Each commit opens a window
+// holding the model's previous value; snapshots captured before the UI
+// installed the projection are rebased against it (`Snapshot::rebase`).
+
+#[derive(Default)]
+struct ProjectionMark {
+    committed: u64,
+    published: u64,
+    /// The value the UI model was derived from while a window is open
+    /// (`Some(None)`: no snapshot existed yet).
+    base: Option<Option<String>>,
+}
+
+static PROJECTION_MARKS: std::sync::LazyLock<Mutex<HashMap<String, ProjectionMark>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Writer: a projection committed `storage_key`, replacing `previous`.
+pub(super) fn projection_committed(storage_key: String, previous: Option<String>) {
+    let mut marks = PROJECTION_MARKS.lock().unwrap();
+    let mark = marks.entry(storage_key).or_default();
+    mark.committed += 1;
+    if mark.base.is_none() {
+        mark.base = Some(previous);
+    }
+}
+
+/// UI thread, under the writer serialization: the projected model for
+/// `storage_key` is now installed, so later snapshots include it.
+pub(super) fn projection_published(storage_key: &str) {
+    if let Some(mark) = PROJECTION_MARKS.lock().unwrap().get_mut(storage_key) {
+        mark.published = mark.committed;
+    }
+}
+
+fn projection_tag(logical: &str) -> u64 {
+    let key = profiles::ProfileStore::capture().key(logical);
+    PROJECTION_MARKS
+        .lock()
+        .unwrap()
+        .get(&key)
+        .map_or(0, |mark| mark.published)
+}
+
+/// The base to rebase a snapshot tagged `tag` on, if it predates a commit.
+fn stale_projection_base(storage_key: &str, tag: u64) -> Option<Option<String>> {
+    let mut marks = PROJECTION_MARKS.lock().unwrap();
+    let mark = marks.get_mut(storage_key)?;
+    if tag >= mark.committed {
+        mark.base = None;
+        return None;
+    }
+    mark.base.clone()
+}
+
+fn stale_snapshot_saved(storage_key: &str, raw: String) {
+    if let Some(mark) = PROJECTION_MARKS.lock().unwrap().get_mut(storage_key)
+        && mark.base.is_some()
+    {
+        mark.base = Some(Some(raw));
+    }
+}
+
+/// Per key: unchanged from `base` → `theirs` (including absence); otherwise
+/// `ours`. Keeps `ours` order, then appends keys only `theirs` has.
+fn three_way<K: Eq + std::hash::Hash + Clone, V: PartialEq + Clone>(
+    base: &[(K, V)],
+    theirs: &[(K, V)],
+    ours: Vec<(K, V)>,
+) -> Vec<(K, V)> {
+    let base: HashMap<&K, &V> = base.iter().map(|(k, v)| (k, v)).collect();
+    let theirs_map: HashMap<&K, &V> = theirs.iter().map(|(k, v)| (k, v)).collect();
+    let ours_keys: HashSet<K> = ours.iter().map(|(k, _)| k.clone()).collect();
+    let mut merged = Vec::with_capacity(ours.len().max(theirs.len()));
+    for (key, value) in ours {
+        if base.get(&key) == Some(&&value) {
+            if let Some(current) = theirs_map.get(&key) {
+                merged.push((key, (*current).clone()));
+            }
+        } else {
+            merged.push((key, value));
+        }
+    }
+    for (key, value) in theirs {
+        // Absent from ours but not from its base: added by the projection.
+        // Absent from both ours and base-present keys are local removals.
+        if !ours_keys.contains(key) && !base.contains_key(key) {
+            merged.push((key.clone(), value.clone()));
+        }
+    }
+    merged
+}
+
 pub(super) fn write_library(entries: &[LibraryEntry]) {
     // Callers reserve capacity before touching Shared. Invalidate projections
     // before the admitted snapshot can become visible to other readers.
     progress_projection::invalidate();
-    match enqueue(Snapshot::Library(entries.to_vec())) {
+    let tag = projection_tag("library");
+    match enqueue(Snapshot::Library(entries.to_vec(), tag)) {
         Ok(true) => {}
         Ok(false) => write_json("library", entries),
         Err(error) => {
@@ -880,9 +1040,11 @@ pub(super) fn write_library(entries: &[LibraryEntry]) {
 }
 pub(super) fn write_progress(map: &HashMap<String, EpisodeProgress>) {
     progress_projection::invalidate();
+    let tag = projection_tag(EPISODE_PROGRESS_KEY);
     match enqueue(Snapshot::Progress(
         map.clone(),
         nova_sync::is_playback_checkpoint(),
+        tag,
     )) {
         Ok(true) => unified_search::progress_admitted(&profiles::ProfileStore::capture(), map),
         Ok(false) => write_json(EPISODE_PROGRESS_KEY, map),
@@ -906,7 +1068,7 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
                 continue;
             }
             match snapshot.as_ref() {
-                Snapshot::Library(_) => {
+                Snapshot::Library(..) => {
                     base = Some(snapshot.clone());
                     break;
                 }
@@ -926,7 +1088,7 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
     let mut entries = base.map_or_else(
         || read_json("library").unwrap_or_default(),
         |snapshot| match snapshot.as_ref() {
-            Snapshot::Library(entries) => entries.clone(),
+            Snapshot::Library(entries, _) => entries.clone(),
             _ => unreachable!(),
         },
     );
@@ -954,7 +1116,7 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
                 continue;
             }
             match snapshot.as_ref() {
-                Snapshot::Progress(_, _) => {
+                Snapshot::Progress(..) => {
                     base = Some(snapshot.clone());
                     break;
                 }
@@ -975,7 +1137,7 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
     let mut progress = base.map_or_else(
         || read_json(EPISODE_PROGRESS_KEY).unwrap_or_default(),
         |snapshot| match snapshot.as_ref() {
-            Snapshot::Progress(map, _) => map.clone(),
+            Snapshot::Progress(map, _, _) => map.clone(),
             _ => unreachable!(),
         },
     );
@@ -993,6 +1155,92 @@ pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watched(series: &str) -> EpisodeProgress {
+        EpisodeProgress {
+            series_id: series.into(),
+            watched: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stale_progress_snapshot_keeps_remote_additions_and_local_edits() {
+        // The model knew e1 and e2; the projection added e5 and edited e2;
+        // the stale local snapshot moved e1 and removed nothing else.
+        let base = HashMap::from([
+            ("e1".to_string(), EpisodeProgress::default()),
+            ("e2".to_string(), EpisodeProgress::default()),
+            ("gone".to_string(), EpisodeProgress::default()),
+        ]);
+        let theirs = HashMap::from([
+            ("e1".to_string(), EpisodeProgress::default()),
+            ("e2".to_string(), watched("remote")),
+            ("e5".to_string(), watched("remote")),
+            ("gone".to_string(), EpisodeProgress::default()),
+        ]);
+        let mut ours = base.clone();
+        ours.get_mut("e1").unwrap().position_secs = 42.0;
+        ours.remove("gone");
+        let snapshot = Snapshot::Progress(ours, true, 0);
+        let merged: HashMap<String, EpisodeProgress> = serde_json::from_str(
+            &snapshot
+                .rebase(
+                    Some(&serde_json::to_string(&base).unwrap()),
+                    Some(&serde_json::to_string(&theirs).unwrap()),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(merged["e1"].position_secs, 42.0, "local edit kept");
+        assert!(merged["e2"].watched, "remote edit kept");
+        assert!(merged["e5"].watched, "remote addition not tombstoned");
+        assert!(!merged.contains_key("gone"), "local removal kept");
+    }
+
+    #[test]
+    fn stale_library_snapshot_keeps_remote_additions() {
+        let entry = |id: &str, name: &str| -> LibraryEntry {
+            serde_json::from_value(serde_json::json!({"id":id,"type_":"series","name":name}))
+                .unwrap()
+        };
+        let base = vec![entry("a", "A")];
+        let theirs = vec![entry("a", "A"), entry("remote", "Remote")];
+        let ours = vec![entry("a", "A renamed"), entry("local", "Local")];
+        let merged: Vec<LibraryEntry> = serde_json::from_str(
+            &Snapshot::Library(ours, 0)
+                .rebase(
+                    Some(&serde_json::to_string(&base).unwrap()),
+                    Some(&serde_json::to_string(&theirs).unwrap()),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let ids: Vec<_> = merged
+            .iter()
+            .map(|e| (e.id.as_str(), e.name.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [("a", "A renamed"), ("local", "Local"), ("remote", "Remote")]
+        );
+    }
+
+    #[test]
+    fn projection_marks_open_until_published() {
+        let key = "test:projection-marks:library".to_string();
+        assert_eq!(stale_projection_base(&key, 0), None);
+        projection_committed(key.clone(), Some("[1]".into()));
+        // A snapshot taken before publication rebases on the old model, and
+        // the next stale one on that snapshot.
+        assert_eq!(stale_projection_base(&key, 0), Some(Some("[1]".into())));
+        stale_snapshot_saved(&key, "[2]".into());
+        assert_eq!(stale_projection_base(&key, 0), Some(Some("[2]".into())));
+        projection_published(&key);
+        let published = PROJECTION_MARKS.lock().unwrap()[&key].published;
+        assert_eq!(stale_projection_base(&key, published), None);
+        assert!(PROJECTION_MARKS.lock().unwrap()[&key].base.is_none());
+    }
 
     #[test]
     fn import_closes_before_watermark_and_rejects_delayed_old_context_admissions() {
@@ -1034,7 +1282,7 @@ mod tests {
                                     },
                                     || match mode {
                                         0 => reserve(1).is_some(),
-                                        1 => enqueue(Snapshot::Library(vec![stale.clone()]))
+                                        1 => enqueue(Snapshot::Library(vec![stale.clone()], 0))
                                             .is_ok_and(|queued| queued),
                                         _ => try_external(ExternalPatch {
                                             library: Some(ExternalLibraryEdit {
@@ -1442,11 +1690,12 @@ mod tests {
                 },
             )]),
             periodic,
+            0,
         )
     }
     fn position(snapshot: &Snapshot) -> f64 {
         match snapshot {
-            Snapshot::Progress(map, _) => map["episode"].position_secs,
+            Snapshot::Progress(map, _, _) => map["episode"].position_secs,
             _ => unreachable!(),
         }
     }
@@ -1574,7 +1823,7 @@ mod tests {
         // Hold the head in flight so exactly 64 nonperiodic saves are admitted.
         for n in 1..=MAX_PENDING {
             let _reservation = reserve(1).unwrap();
-            let Snapshot::Progress(map, _) = progress(n as f64, false) else {
+            let Snapshot::Progress(map, _, _) = progress(n as f64, false) else {
                 unreachable!()
             };
             write_progress(&map);
@@ -1629,7 +1878,7 @@ mod tests {
         let tail = snapshots[snapshots.len() - 2..]
             .iter()
             .map(|snapshot| {
-                let Snapshot::Progress(map, _) = snapshot else {
+                let Snapshot::Progress(map, _, _) = snapshot else {
                     unreachable!()
                 };
                 map[&progress_map_key("source", "episode")].clone()

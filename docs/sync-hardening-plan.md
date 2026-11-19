@@ -137,7 +137,7 @@ mutation paths, not only the generic record store.
 | Remote refresh during a pending local edit | Unrelated remote fields apply without erasing local intent, including device-local controls. |
 | Fresh/default peer joins customized mesh | Untouched defaults do not win; deliberately selected defaults still sync. |
 | Sync off: add/edit/delete, then restart/re-enable | Mutations survive and reconcile with remote/headless changes. |
-| Remote apply paused before UI callback; local write occurs | Unseen additions are not tombstoned and stale fields are not republished. |
+| Remote apply paused before UI callback; local write occurs | Unseen additions are not tombstoned and stale fields are not republished: a projection's Library/progress commit keeps the model's previous value until the UI installs it, and whole-model snapshots captured before that are three-way rebased on it (`persistence::projection_committed`). |
 | Uncached addon fetches fail or complete out of order | Desired set/order survives; removal and newer flags supersede old callbacks. |
 | Remote hide/progress tombstone with stale local mirror | No accidental resurrection; explicit newer local edits remain possible. |
 | Same-second watch/unwatch/rewind across three peers | Stable converged result regardless of exchange direction and order. |
