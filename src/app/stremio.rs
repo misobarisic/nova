@@ -736,7 +736,15 @@ impl<T: nova_stremio::Transport> Worker<T> {
         }
         self.poll_login()?;
         self.phase = "Restoring Stremio connection…";
-        self.restore_connection()?;
+        if let Err(error) = self.restore_connection() {
+            // An unreadable record (for example from a newer build) fails the
+            // same way every tick; honour the back-off instead of reporting
+            // twice a second. A valid record still restores immediately.
+            if Instant::now() < self.retry_at {
+                return Ok(());
+            }
+            return Err(error);
+        }
         if Instant::now() < self.retry_at {
             return Ok(());
         }
