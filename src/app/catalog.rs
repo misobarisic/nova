@@ -4653,18 +4653,49 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
         .into_iter()
         .filter_map(|type_| {
             let cats = by_type.get(&type_)?;
+            // Picking resolves a label back to its catalog, so every label
+            // must be unique: equal names (or two addons with one label)
+            // would otherwise all select the first match.
+            let base: Vec<String> = cats
+                .iter()
+                .map(|(_, name, _, _, addon, _)| format!("{addon} — {name}"))
+                .collect();
+            let count = |labels: &[String], label: &String| {
+                labels.iter().filter(|other| *other == label).count()
+            };
+            let with_id: Vec<String> = base
+                .iter()
+                .zip(cats)
+                .map(|(label, (id, ..))| {
+                    if count(&base, label) > 1 {
+                        format!("{label} ({id})")
+                    } else {
+                        label.clone()
+                    }
+                })
+                .collect();
+            let labels: Vec<String> = with_id
+                .iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    if count(&with_id, label) > 1 {
+                        let nth = with_id[..=index].iter().filter(|o| *o == label).count();
+                        format!("{label} #{nth}")
+                    } else {
+                        label.clone()
+                    }
+                })
+                .collect();
             let catalogs: Vec<CatDef> = cats
                 .iter()
-                .map(|(id, name, skip, genres, addon, owner)| {
-                    let label = format!("{addon} — {name}");
-                    CatDef {
-                        id: id.clone(),
-                        addon_url: owner.clone(),
-                        supports_skip: *skip,
-                        genre_options: genres.clone(),
-                        label,
-                        addon_label: addon.clone(),
-                    }
+                .zip(labels)
+                .map(|((id, _name, skip, genres, addon, owner), label)| CatDef {
+                    id: id.clone(),
+                    addon_url: owner.clone(),
+                    supports_skip: *skip,
+                    genre_options: genres.clone(),
+                    label,
+                    addon_label: addon.clone(),
                 })
                 .collect();
             Some(TypeDef {
@@ -8344,6 +8375,26 @@ mod tests {
         addons[0].manifest.resources = vec![addons::Resource::Plain("stream".into())];
         addons[5].manifest.resources = vec![addons::Resource::Plain("meta".into())];
         addons
+    }
+
+    #[test]
+    fn merged_catalogs_with_equal_names_stay_individually_selectable() {
+        let mut top = catalog("series", "top", vec![]);
+        top.name = "Popular".into();
+        let mut rated = catalog("series", "imdbRating", vec![]);
+        rated.name = "Popular".into();
+        let mut first = installed(true, vec![top, rated]);
+        first.url = "http://127.0.0.1:1/a".into();
+        // A second install with the same label and catalog.
+        let mut twin_cat = catalog("series", "top", vec![]);
+        twin_cat.name = "Popular".into();
+        let mut twin = installed(true, vec![twin_cat]);
+        twin.url = "http://127.0.0.1:1/b".into();
+        let merged = build_merged_type_defs(&[first, twin]);
+        let labels: Vec<_> = merged[0].catalogs.iter().map(|c| c.label.clone()).collect();
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), labels.len(), "{labels:?}");
+        assert!(labels.contains(&"Catalog addon — Popular (imdbRating)".to_string()));
     }
 
     #[test]
