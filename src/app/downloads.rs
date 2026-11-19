@@ -1217,42 +1217,80 @@ impl DownloadCoordinator {
     }
 
     fn smart_write_admission(&self, id: &str, next: u64, incoming: u64) -> bool {
+        self.write_admission(id, next, incoming, true)
+    }
+
+    /// Per-chunk admission for an automatic transfer. The reservation check is
+    /// cheap and runs on every chunk; ownership, policy, directory sizes and
+    /// free space are re-read at most once a second or every 8 MiB, since
+    /// they cost storage reads, JSON parsing and directory walks under the
+    /// coordinator lock the UI also takes.
+    fn throttled_write_admission(
+        &self,
+        id: &str,
+        next: u64,
+        incoming: u64,
+        last_full: &Mutex<Option<(Instant, u64)>>,
+    ) -> bool {
+        const FULL_EVERY: Duration = Duration::from_secs(1);
+        const FULL_EVERY_BYTES: u64 = 8 * 1024 * 1024;
+        let full = {
+            let mut last = last_full.lock().unwrap_or_else(|e| e.into_inner());
+            let due = last.is_none_or(|(at, bytes)| {
+                at.elapsed() >= FULL_EVERY || next.saturating_sub(bytes) >= FULL_EVERY_BYTES
+            });
+            if due {
+                *last = Some((Instant::now(), next));
+            }
+            due
+        };
+        self.write_admission(id, next, incoming, full)
+    }
+
+    fn write_admission(&self, id: &str, next: u64, incoming: u64, full: bool) -> bool {
         use crate::download::offline::{GIB, Ledger, PauseReason};
         let mut state = self.inner.state();
         let Some(index) = state.manifest.jobs.iter().position(|j| j.id == id) else {
             return false;
         };
-        let changes = refresh_physical_accounting(&mut state.manifest.jobs);
-        self.publish_accounting(&mut state, changes);
+        if full {
+            let changes = refresh_physical_accounting(&mut state.manifest.jobs);
+            self.publish_accounting(&mut state, changes);
+        }
         let job = &state.manifest.jobs[index];
         if job.offline.manual_keep {
             return true;
         }
         let next = projected_write_bytes(job.bytes_downloaded, next, incoming);
-        let mut reason = smart_offline::job_pause(job);
+        let mut reason = None;
         if next > job.offline.reserved_bytes {
             reason = Some(PauseReason::Budget);
         }
-        if let (Ok(device), Some((free, capacity))) = (
-            smart_offline::read_device(),
-            crate::download::filesystem_capacity(&self.inner.root),
-        ) {
-            let ledger = Ledger::from_jobs(&state.manifest.jobs);
-            if ledger
-                .automatic_bytes
-                .saturating_sub(job.bytes_downloaded)
-                .saturating_add(next)
-                > device.allowance_bytes
-            {
-                reason = Some(PauseReason::Budget);
+        if full {
+            if reason.is_none() {
+                reason = smart_offline::job_pause(job);
             }
-            if free.saturating_sub(next.saturating_sub(job.bytes_downloaded))
-                < GIB.max(capacity / 20)
-            {
+            if let (Ok(device), Some((free, capacity))) = (
+                smart_offline::read_device(),
+                crate::download::filesystem_capacity(&self.inner.root),
+            ) {
+                let ledger = Ledger::from_jobs(&state.manifest.jobs);
+                if ledger
+                    .automatic_bytes
+                    .saturating_sub(job.bytes_downloaded)
+                    .saturating_add(next)
+                    > device.allowance_bytes
+                {
+                    reason = Some(PauseReason::Budget);
+                }
+                if free.saturating_sub(next.saturating_sub(job.bytes_downloaded))
+                    < GIB.max(capacity / 20)
+                {
+                    reason = Some(PauseReason::FreeSpace);
+                }
+            } else {
                 reason = Some(PauseReason::FreeSpace);
             }
-        } else {
-            reason = Some(PauseReason::FreeSpace);
         }
         if let Some(reason) = reason {
             let job = &mut state.manifest.jobs[index];
@@ -1693,11 +1731,12 @@ impl DownloadCoordinator {
         if job.offline.automatic() {
             let coordinator = self.clone();
             let id = job.id.clone();
-            active
-                .cancel
-                .set_write_admission(Arc::new(move |bytes, incoming| {
-                    coordinator.smart_write_admission(&id, bytes, incoming)
-                }));
+            active.cancel.set_write_admission({
+                let last_full = Mutex::new(None);
+                Arc::new(move |bytes, incoming| {
+                    coordinator.throttled_write_admission(&id, bytes, incoming, &last_full)
+                })
+            });
         }
         let coordinator = self.clone();
         let job_id = job.id.clone();
