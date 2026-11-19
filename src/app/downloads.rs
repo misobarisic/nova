@@ -1949,7 +1949,9 @@ impl DownloadCoordinator {
         // that never finds metadata/peers (or stops making progress) must not
         // pin the one download slot forever. Track the last time *real*
         // progress arrived, not merely that the engine ticked.
-        let last_activity = Arc::new(AtomicU64::new(crate::download::unix_timestamp()));
+        // A counter, not a timestamp: idle time is accumulated below from
+        // bounded steps so a suspend does not count as ten minutes of stall.
+        let last_activity = Arc::new(AtomicU64::new(0));
         let best_progress = Arc::new(AtomicU64::new(0f64.to_bits()));
         let progress_activity = last_activity.clone();
         let progress_best = best_progress.clone();
@@ -1983,9 +1985,9 @@ impl DownloadCoordinator {
                 let bits = (stats.progress as f64).max(0.0).to_bits();
                 if bits > progress_best.load(Ordering::Relaxed) {
                     progress_best.store(bits, Ordering::Relaxed);
-                    progress_activity.store(crate::download::unix_timestamp(), Ordering::Release);
+                    progress_activity.fetch_add(1, Ordering::Release);
                 } else if stats.down_bps > 0 {
-                    progress_activity.store(crate::download::unix_timestamp(), Ordering::Release);
+                    progress_activity.fetch_add(1, Ordering::Release);
                 }
                 coordinator.update_torrent_progress(&id, stats);
             },
@@ -1993,6 +1995,9 @@ impl DownloadCoordinator {
                 let _ = sender.send(result);
             },
         );
+        let mut seen_activity = 0;
+        let mut idle = Duration::ZERO;
+        let mut checked_at = Instant::now();
         let result = loop {
             match receiver.recv_timeout(Duration::from_secs(30)) {
                 Ok(Ok(ready)) => {
@@ -2012,9 +2017,18 @@ impl DownloadCoordinator {
                     break Err("torrent worker stopped".into());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let idle = crate::download::unix_timestamp()
-                        .saturating_sub(last_activity.load(Ordering::Acquire));
-                    if idle >= TORRENT_STALL_SECS {
+                    let activity = last_activity.load(Ordering::Acquire);
+                    let now = Instant::now();
+                    if activity != seen_activity {
+                        seen_activity = activity;
+                        idle = Duration::ZERO;
+                    } else {
+                        // Cap each step: after sleep or a frozen process one
+                        // wake-up must not count as the whole gap.
+                        idle += now.saturating_duration_since(checked_at).min(Duration::from_secs(60));
+                    }
+                    checked_at = now;
+                    if idle >= Duration::from_secs(TORRENT_STALL_SECS) {
                         active.torrent_cancel.store(true, Ordering::Release);
                         break Err(format!(
                             "torrent stalled: no progress for {} min",
