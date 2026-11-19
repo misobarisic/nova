@@ -96,16 +96,22 @@ public final class DocumentActivity extends Activity {
                         if (input == null) throw new java.io.IOException("Missing document input");
                         ByteArrayOutputStream output = new ByteArrayOutputStream();
                         byte[] buffer = new byte[16384];
+                        // The growing buffer plus the final copy need about twice
+                        // the document on the Java heap. Fail with a message
+                        // well before the heap runs out instead of crashing.
+                        long heapLimit = Runtime.getRuntime().maxMemory() / 3;
                         int count;
                         while ((count = input.read(buffer)) != -1) {
                             if (pending.get() != request) return;
                             if (count > MAX_BYTES - output.size()) throw new java.io.IOException("Document exceeds the size limit");
+                            if (output.size() + count > heapLimit) throw new java.io.IOException("Document is too large to import on this device");
                             output.write(buffer, 0, count);
                         }
                         complete(request, output.toByteArray(), 1, "");
                     }
                 }
             } catch (Exception error) { complete(request, null, 2, error.toString()); }
+            catch (OutOfMemoryError error) { complete(request, null, 2, "Document is too large to import on this device"); }
         }, "NovaDocument").start();
     }
     private static void complete(Request request, byte[] bytes, int outcome, String message) {
