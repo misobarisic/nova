@@ -159,7 +159,9 @@ pub(super) fn commit_session(
     assert_eq!(prepared.device.active_profile, session.id);
     let mut runtime = RUNTIME.write().unwrap();
     runtime.context = session.context();
-    runtime.device = prepared.device;
+    // Only the selection: the startup toggle may have changed since the
+    // activation worker read the preferences.
+    runtime.device.active_profile = prepared.device.active_profile;
 }
 
 pub(super) fn current_id() -> String {
@@ -524,12 +526,7 @@ pub(super) fn restore_activation_selection(selected: &str, source: &Context) -> 
     if active_context() != *source {
         return Ok(());
     }
-    let durable: DevicePreferences = nova_storage::try_get_str(DEVICE_KEY)
-        .map_err(|error| error.to_string())?
-        .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
-        .transpose()?
-        .unwrap_or_default();
-    if durable.active_profile == selected {
+    if durable_device()?.active_profile == selected {
         write_selection(&source.id)?;
     }
     Ok(())
@@ -545,8 +542,20 @@ pub(super) fn prepare_activation(id: &str) -> Result<PreparedActivation, String>
     write_selection(id)
 }
 
+/// The stored device preferences. Writers change only their own field of
+/// this, under `WRITE_SERIAL`: a copy of the runtime value can be stale while
+/// an activation is in flight, and writing it back would undo the other field.
+fn durable_device() -> Result<DevicePreferences, String> {
+    Ok(nova_storage::try_get_str(DEVICE_KEY)
+        .map_err(|error| error.to_string())?
+        .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+        .transpose()?
+        .unwrap_or_else(|| RUNTIME.read().unwrap().device.clone()))
+}
+
+/// Callers hold `WRITE_SERIAL`.
 fn write_selection(id: &str) -> Result<PreparedActivation, String> {
-    let mut device = RUNTIME.read().unwrap().device.clone();
+    let mut device = durable_device()?;
     device.active_profile = id.into();
     nova_storage::try_set_str(
         DEVICE_KEY,
@@ -560,15 +569,15 @@ fn write_selection(id: &str) -> Result<PreparedActivation, String> {
 }
 
 pub(super) fn set_open_last_profile_on_startup(enabled: bool) -> Result<(), String> {
-    let mut state = RUNTIME.write().unwrap();
-    let mut device = state.device.clone();
+    let _serial = WRITE_SERIAL.lock().unwrap();
+    let mut device = durable_device()?;
     device.open_last_profile_on_startup = enabled;
     nova_storage::try_set_str(
         DEVICE_KEY,
         &serde_json::to_string(&device).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    state.device = device;
+    RUNTIME.write().unwrap().device.open_last_profile_on_startup = enabled;
     Ok(())
 }
 pub(super) fn create(name: &str) -> Result<String, String> {
