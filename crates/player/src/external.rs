@@ -870,7 +870,7 @@ bind_java_type! {
 // code): the active `Network` handle is read on a timer and changes are
 // forwarded to iroh via `Endpoint::network_change` (see [`network_changed`]).
 bind_java_type! {
-    NovaConnectivityManager => "android.content.ConnectivityManager",
+    NovaConnectivityManager => "android.net.ConnectivityManager",
     type_map = {
         NovaNetwork => "android.net.Network",
     },
