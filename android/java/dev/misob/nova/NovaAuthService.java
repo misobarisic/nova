@@ -94,7 +94,7 @@ public class NovaAuthService extends Service {
         if (request == null) {
             // A timed-out start must not leave an orphan foreground service.
             if (!foreground) {
-                stopSelf(startId);
+                promoteThenStop(intent, startId);
             }
             return START_NOT_STICKY;
         }
@@ -114,7 +114,11 @@ public class NovaAuthService extends Service {
             handler.postDelayed(expire, MAX_LIFETIME_MS);
             request.success = true;
         } catch (RuntimeException error) {
-            stopSelf(startId);
+            if (!foreground) {
+                promoteThenStop(intent, startId);
+            } else {
+                stopSelf(startId);
+            }
         } finally {
             request.ready.countDown();
         }
@@ -141,6 +145,32 @@ public class NovaAuthService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    /**
+     * Stop a start that will not be used. Android crashes the app when a
+     * service started with startForegroundService stops before calling
+     * startForeground, so promote it briefly first; if promotion is refused
+     * there is nothing more this service can do.
+     */
+    private void promoteThenStop(Intent intent, int startId) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                Notification notification = notification(
+                        intent == null ? null : intent.getStringExtra("title"),
+                        intent == null ? null : intent.getStringExtra("text"));
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION, notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                } else {
+                    startForeground(NOTIFICATION, notification);
+                }
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } catch (RuntimeException ignored) {
+                // Refused promotion: stopping is still the only option.
+            }
+        }
+        stopSelf(startId);
     }
 
     private Notification notification(String title, String text) {
