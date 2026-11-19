@@ -1027,6 +1027,10 @@ fn parse_titles(
     status: ListStatus,
     simkl: bool,
 ) -> Result<Vec<RemoteTitle>, ApiError> {
+    // Simkl answers an empty category or an unchanged delta with `null`.
+    if simkl && value.is_null() {
+        return Ok(Vec::new());
+    }
     if !value.is_object() {
         return Err(ApiError::InvalidResponse);
     }
@@ -1174,6 +1178,16 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn simkl_null_is_an_empty_result_but_mdblist_null_is_invalid() {
+        assert!(
+            parse_titles(&Value::Null, ListStatus::Planning, true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(parse_titles(&Value::Null, ListStatus::Planning, false).is_err());
+    }
+
     #[test]
     fn trakt_verifies_immutable_uuid_and_sends_registered_client_headers() {
         let fake = Arc::new(Fake::default());
