@@ -26,6 +26,12 @@ public final class NovaReleaseJobService extends JobService {
     private static final String TAP = "nova.release.tap";
     private static final String ACK_PROFILE = "nova.release.profile";
     private static final String ACK_KEYS = "nova.release.keys";
+    /**
+     * The launcher Activity is exported, so any app could start it with these
+     * extras. Taps carry a per-install random token that only Nova's own
+     * immutable PendingIntents know.
+     */
+    private static final String TOKEN = "nova.release.token";
     private static final AtomicBoolean RUNNING = new AtomicBoolean();
     private volatile boolean stopped;
     private static String pendingTap;
@@ -66,7 +72,7 @@ public final class NovaReleaseJobService extends JobService {
         int id = 0x54000000 ^ profile.hashCode();
         if (body.isEmpty()) { manager.cancel(profile,id); return; }
         String target = new JSONArray().put(profile).put(event).toString();
-        Intent intent = new Intent(context,NovaActivity.class).putExtra(TAP,target).putExtra(ACK_PROFILE,profile).putExtra(ACK_KEYS,keys).setAction("nova.release."+profile)
+        Intent intent = new Intent(context,NovaActivity.class).putExtra(TAP,target).putExtra(ACK_PROFILE,profile).putExtra(ACK_KEYS,keys).putExtra(TOKEN,tapToken(context)).setAction("nova.release."+profile)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pending = PendingIntent.getActivity(context,id,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         Intent dismissed = new Intent(context,NovaReleaseDismissReceiver.class).setAction("nova.release.dismiss."+profile).putExtra(ACK_PROFILE,profile).putExtra(ACK_KEYS,keys);
@@ -81,11 +87,31 @@ public final class NovaReleaseJobService extends JobService {
         if (!alert) builder.setGroup("nova-release-silent").setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY).setSound(null).setVibrate(null);
         manager.notify(profile,id,builder.build());
     }
-    public static synchronized void captureTap(Context context,Intent intent) {
-        if (intent != null && intent.hasExtra(TAP)) {
-            pendingTap=intent.getStringExtra(TAP); intent.removeExtra(TAP);
-            new Thread(() -> acknowledge(context,intent),"nova-release-open").start();
+    /**
+     * {@code restored}: the Activity is being recreated (saved state, or a
+     * relaunch from Recents after process death). Android then redelivers
+     * the original launch intent, extras included; that tap was handled.
+     */
+    public static synchronized void captureTap(Context context,Intent intent,boolean restored) {
+        if (intent == null || !intent.hasExtra(TAP)) return;
+        String tap=intent.getStringExtra(TAP), token=intent.getStringExtra(TOKEN);
+        intent.removeExtra(TAP); intent.removeExtra(TOKEN);
+        boolean replayed=restored || (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
+        if (replayed || token == null || !java.security.MessageDigest.isEqual(token.getBytes(),tapToken(context).getBytes())) return;
+        pendingTap=tap;
+        new Thread(() -> acknowledge(context,intent),"nova-release-open").start();
+    }
+    private static synchronized String tapToken(Context context) {
+        android.content.SharedPreferences preferences=context.getApplicationContext().getSharedPreferences("nova.release",Context.MODE_PRIVATE);
+        String token=preferences.getString("tap_token",null);
+        if (token == null) {
+            byte[] bytes=new byte[16]; new java.security.SecureRandom().nextBytes(bytes);
+            StringBuilder hex=new StringBuilder();
+            for (byte value : bytes) hex.append(String.format("%02x",value));
+            token=hex.toString();
+            preferences.edit().putString("tap_token",token).commit();
         }
+        return token;
     }
     public static void acknowledge(Context context,Intent intent) {
         String profile=intent.getStringExtra(ACK_PROFILE),keys=intent.getStringExtra(ACK_KEYS);

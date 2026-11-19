@@ -109,7 +109,7 @@ public final class NovaActivity extends NativeActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        NovaReleaseJobService.captureTap(this,getIntent());
+        NovaReleaseJobService.captureTap(this,getIntent(),state != null);
         NovaCastService.captureTap(getIntent());
         IntentFilter filter = new IntentFilter(TRANSPORT);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -128,7 +128,7 @@ public final class NovaActivity extends NativeActivity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        NovaReleaseJobService.captureTap(this,intent);
+        NovaReleaseJobService.captureTap(this,intent,false);
         NovaCastService.captureTap(intent);
     }
 
