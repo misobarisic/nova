@@ -90,6 +90,21 @@ fn watched_anchor_shifts_after_new_earlier_video() {
 }
 
 #[test]
+fn watched_bits_survive_earlier_videos_disappearing() {
+    // Saved with ten episodes, all watched; the addon later drops the first
+    // five, so the anchor moves left and old indices exceed today's count.
+    let old = videos(10);
+    let watched: std::collections::BTreeMap<String, bool> =
+        old.iter().map(|v| (v.id.clone(), true)).collect();
+    let encoded = encode_watched(&watched, &old).unwrap();
+    let new: Vec<Video> = old[5..].to_vec();
+    let decoded = decode_watched(&encoded, &new).unwrap();
+    for n in 6..=10 {
+        assert!(decoded[&format!("tt2934286:1:{n}")], "episode {n}");
+    }
+}
+
+#[test]
 fn official_empty_watched_inventory_keeps_membership_and_resume_importable() {
     let videos = videos(9);
     let item: LibraryItem = serde_json::from_value(json!({

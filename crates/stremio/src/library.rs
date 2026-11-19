@@ -245,9 +245,10 @@ pub fn decode_watched(encoded: &str, videos: &[Video]) -> Result<BTreeMap<String
         .enumerate()
         .map(|(i, v)| {
             let old = i as i64 + offset;
+            // `old` indexes the saved bitmap, which may describe a longer
+            // inventory than today's; only the bitmap itself bounds it.
             let watched = usize::try_from(old)
                 .ok()
-                .filter(|old| *old < videos.len())
                 .and_then(|old| bytes.get(old / 8).map(|byte| byte & (1 << (old % 8)) != 0))
                 .unwrap_or(false);
             (v.id.clone(), watched)
