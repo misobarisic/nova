@@ -1,0 +1,140 @@
+// Library sort button and menu, adapted from Nova Reader's library page so both
+// apps share one look: a pill with a single sort icon (flipped for ascending)
+// opening a menu that grows from the button.
+import { Theme, SettingsStyle, Anim, InterfaceStyle } from "@NovaUiShared";
+import { ControlTouchArea } from "control-input.slint";
+
+export struct LibrarySortChoice { label: string, code: int }
+
+// One sort icon; ascending flips it vertically.
+export component LibrarySortGlyph inherits Path {
+    in property <bool> descending: true;
+    viewbox-width: 24; viewbox-height: 24; fill: transparent; stroke-width: 1.8px;
+    commands: root.descending ? "M4 6h10M4 12h7M4 18h4M18 5v14M15 16l3 3 3-3" : "M4 18h10M4 12h7M4 6h4M18 19V5M15 8l3-3 3 3";
+}
+
+component SortMenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    in property <bool> focused;
+    in property <bool> live: true;
+    callback activated;
+    height: InterfaceStyle.tv ? 56px : 44px;
+    border-radius: min(Theme.button_corner_radius, 10px);
+    background: (touch.has-hover || root.focused) && root.live ? Theme.current.control_hover : transparent;
+    border-width: root.focused && SettingsStyle.keyboard-mode ? 2px : 0px; border-color: Theme.current.focus_ring;
+    accessible-role: radio-button; accessible-label: root.label;
+    accessible-checkable: true; accessible-checked: root.checked; accessible-enabled: root.live;
+    accessible-action-default => { if root.live { root.activated(); } }
+    Text {
+        x: 12px; width: parent.width - 48px; height: 100%; text: root.label; overflow: elide;
+        font-size: 14px; vertical-alignment: center;
+        color: root.checked ? Theme.current.text_selected : Theme.current.text_bright;
+    }
+    if root.checked: Path {
+        x: parent.width - 32px; y: (parent.height - 20px) / 2; width: 20px; height: 20px;
+        viewbox-width: 24; viewbox-height: 24; fill: transparent; stroke-width: 2px;
+        stroke: Theme.current.accent_soft; commands: "M5 12.5l4.5 4.5L19 7.5";
+    }
+    touch := ControlTouchArea { enabled: root.live; mouse-cursor: pointer; clicked => { root.activated(); } }
+}
+
+// Picking applies and closes; Escape, Back or a tap outside close unchanged.
+export component LibrarySortMenu inherits Rectangle {
+    in property <int> sort;
+    in property <bool> descending;
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    callback picked-sort(int);
+    callback picked-direction(bool);
+    callback closed;
+    private property <[LibrarySortChoice]> choices: [
+        { label: @tr("Last watched"), code: 3 },
+        { label: @tr("Recently added"), code: 0 },
+        { label: @tr("Title"), code: 1 },
+        { label: @tr("Release year"), code: 2 },
+    ];
+    private property <bool> shown: false;
+    private property <bool> motion: Anim.enabled && Anim.player;
+    private property <float> scale-progress: 0;
+    private property <float> fade-progress: 0;
+    // Grows out of the button and settles softly; closing collapses faster.
+    animate scale-progress { duration: root.motion ? (root.shown ? Anim.player_fade : Anim.player_fast) : 0ms; easing: cubic-bezier(0.2, 0.85, 0.3, 1); }
+    animate fade-progress { duration: root.motion ? Anim.player_fast : 0ms; easing: ease-out; }
+    changed motion => { root.scale-progress = root.shown ? 1 : 0; root.fade-progress = root.shown ? 1 : 0; }
+    // Keyboard selection over the four sorts and two directions.
+    private property <int> focus-index: 0;
+    init => { reveal.start(); }
+    reveal := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); root.shown = true; root.scale-progress = 1; root.fade-progress = 1; key.focus(); }
+    }
+    public function dismiss() {
+        if !root.shown { return; }
+        root.shown = false; root.scale-progress = 0; root.fade-progress = 0;
+        finish.start();
+    }
+    finish := Timer {
+        interval: root.motion ? max(1ms, Anim.player_fast) : 1ms; running: false;
+        triggered => { self.stop(); root.closed(); }
+    }
+    function activate(index: int) {
+        if index < 4 { root.picked-sort(root.choices[index].code); }
+        else { root.picked-direction(index == 4); }
+        root.dismiss();
+    }
+    key := FocusScope {
+        key-pressed(e) => {
+            if !root.shown { return reject; }
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace { root.dismiss(); return accept; }
+            if e.text == Key.DownArrow || e.text == Key.UpArrow || e.text == Key.Tab || e.text == Key.Backtab {
+                SettingsStyle.keyboard-mode = true;
+                root.focus-index = Math.mod(root.focus-index + (e.text == Key.UpArrow || e.text == Key.Backtab ? 5 : 1), 6);
+                return accept;
+            }
+            if (e.text == Key.Return || e.text == " ") && !e.repeat { root.activate(root.focus-index); return accept; }
+            return accept;
+        }
+        TouchArea { enabled: root.shown; clicked => { root.dismiss(); } }
+        panel := Rectangle {
+            width: min(240px, max(1px, root.width - 16px));
+            height: content.preferred-height;
+            x: Math.clamp(root.anchor-x, 8px, max(8px, root.width - self.width - 8px));
+            y: Math.clamp(root.anchor-y, 8px, max(8px, root.height - self.height - 8px));
+            background: Theme.current.popup;
+            border-radius: Theme.card_corner_radius;
+            border-width: 1px; border-color: Theme.current.border_medium;
+            drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: Theme.current.scrim_shadow;
+            clip: true;
+            opacity: root.fade-progress;
+            transform-scale: 0.4 + 0.6 * root.scale-progress;
+            // From the button corner, even when the panel is pushed inward.
+            transform-origin: { x: Math.clamp(root.anchor-x - self.x, 0px, self.width), y: Math.clamp(root.anchor-y - self.y, 0px, self.height) };
+            accessible-role: groupbox; accessible-label: @tr("Sort library");
+            TouchArea { enabled: root.shown; }
+            content := VerticalLayout {
+                padding: 6px; spacing: 0px;
+                Text {
+                    text: @tr("Sort by"); color: Theme.current.text_muted; font-size: 12px; font-weight: 600;
+                    height: 28px; vertical-alignment: center;
+                }
+                for choice[i] in root.choices: SortMenuItem {
+                    label: choice.label; checked: root.sort == choice.code;
+                    focused: root.focus-index == i && key.has-focus; live: root.shown;
+                    activated => { root.activate(i); }
+                }
+                Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.current.border_medium; } }
+                SortMenuItem {
+                    label: @tr("Descending"); checked: root.descending;
+                    focused: root.focus-index == 4 && key.has-focus; live: root.shown;
+                    activated => { root.activate(4); }
+                }
+                SortMenuItem {
+                    label: @tr("Ascending"); checked: !root.descending;
+                    focused: root.focus-index == 5 && key.has-focus; live: root.shown;
+                    activated => { root.activate(5); }
+                }
+            }
+        }
+    }
+}

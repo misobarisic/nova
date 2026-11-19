@@ -149,19 +149,17 @@ fn library_selection_and_search_animate_without_delaying_actions_or_replaying_di
     tick(&app, 180);
     assert!(close.computed_opacity() > 0.99);
 
-    // Shared dropdowns still open, select and close immediately during motion.
+    // The sort menu still opens, selects and closes during motion.
     click(&app, &element(&app, "LibraryPage::library_sort"));
     tick(&app, 20);
     let title = ElementHandle::find_by_accessible_label(&app, "Title")
         .last()
         .unwrap();
-    // Popups can use a distinct testing window; dispatch through the row's
-    // adapter rather than interpreting its coordinates in the parent window.
     title.mock_single_click(PointerEventButton::Left);
     assert_eq!(app.get_library_sort(), 1);
-    tick(&app, 20);
+    tick(&app, 200);
     assert!(
-        ElementHandle::find_by_element_id(&app, "Dropdown::popup_scope")
+        ElementHandle::find_by_element_type_name(&app, "LibrarySortMenu")
             .next()
             .is_none()
     );

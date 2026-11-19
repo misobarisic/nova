@@ -454,6 +454,7 @@ export component AppWindow inherits Window {
         library_filter_category <=> root.library_filter_category;
         query <=> root.library_query;
         sort_index <=> root.library_sort;
+        sort_reversed <=> root.library_sort_reversed;
         list_view <=> root.library_list_view;
         search_open <=> root.library_search_open;
         library_empty_hint <=> root.library_empty_hint;
@@ -1796,6 +1797,7 @@ export component AppWindow inherits Window {
     in-out property <int> library_sort: 0;
     in-out property <bool> library_list_view: false;
     in-out property <bool> library_search_open: false;
+    in-out property <bool> library_sort_reversed: false;
     // Category names for the library filter dropdown.
     in-out property <[string]> library_category_names: [];
     // Display text for `library_category_names` (see library.slint): the

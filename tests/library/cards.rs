@@ -429,8 +429,17 @@ fn desktop_keyboard_reaches_library_toolbar_and_search_without_entry_autofocus()
         for _ in 0..3 {
             key(Key::LeftArrow.into());
         }
+        app.set_library_sort(0);
         let before = *changes.borrow();
+        // Return opens the sort menu; Return again picks its first sort.
         key(Key::Return.into());
+        assert_eq!(
+            *changes.borrow(),
+            before,
+            "opening the menu changes nothing"
+        );
+        key(Key::Return.into());
+        assert_eq!(app.get_library_sort(), 3);
         assert_eq!(*changes.borrow(), before + 1, "sort refreshes its view");
         key(Key::RightArrow.into());
         key(Key::Return.into());
@@ -561,9 +570,37 @@ fn library_search_shortcut_works_while_smart_collections_owns_focus() {
         key("x".into());
         assert!(!app.get_library_search_open());
         assert!(app.get_library_query().is_empty());
-        let previous_sort = app.get_library_sort();
+        // Return opens the sort menu: Last watched, Recently added, Title,
+        // Release year, then the two directions.
+        app.set_library_sort(0);
         key(Key::Return.into());
-        assert_eq!(app.get_library_sort(), (previous_sort + 1) % 3);
+        assert!(
+            ElementHandle::find_by_element_type_name(&app, "LibrarySortMenu")
+                .next()
+                .is_some()
+        );
+        key(Key::DownArrow.into());
+        key(Key::DownArrow.into());
+        key(Key::Return.into());
+        assert_eq!(app.get_library_sort(), 1);
+        assert!(
+            ElementHandle::find_by_element_type_name(&app, "LibrarySortMenu")
+                .next()
+                .is_none()
+        );
+        // Title's natural order is A→Z, so Descending reverses it.
+        key(Key::Return.into());
+        for _ in 0..4 {
+            key(Key::DownArrow.into());
+        }
+        key(Key::Return.into());
+        assert!(app.get_library_sort_reversed());
+        key(Key::Return.into());
+        for _ in 0..5 {
+            key(Key::DownArrow.into());
+        }
+        key(Key::Return.into());
+        assert!(!app.get_library_sort_reversed());
         key(Key::UpArrow.into());
         key(Key::DownArrow.into());
         assert_eq!(app.get_library_kb_zone(), 4);

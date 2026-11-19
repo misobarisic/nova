@@ -45,23 +45,29 @@ evidence; stale or ambiguous alias links are ignored.
   timestamp, categories and status pin; progress-derived badges
   come back on their own. An open detail modal of that entry flips its
   bookmark off.
-- **Order**: Recently Added (newest first) by default, with Title and Release
-  year alternatives. Title search combines with the category filter. Actions
-  resolve against this same filtered/sorted view.
+- **Order**: Recently added (newest first) by default, with Last watched,
+  Title and Release year alternatives, chosen from the sort pill's menu (as in
+  Nova Reader). Each sort has a natural direction (Title A→Z, the others newest
+  first) and Descending/Ascending flips it; under Last watched, titles never
+  played stay last in both directions. Last watched uses the newest playback
+  history time of the title's episodes (or a record's last edit when it has no
+  history). Sort and direction are in-session view state, like before. Title
+  search combines with the category filter. Actions resolve against this same
+  filtered/sorted view.
 - **Storage**: JSON `library` key in redb, synced per entry (`library`
   domain). Missing/corrupt reads as empty.
-- **Opening** an entry shows the detail modal; reopening the same entry
-  restores its tab/season/filter choices, starting at the top without
-  restoring keyboard focus or scroll position. Entering the page always
-  prefetches episode metadata (not gated by the Discover prefetch toggle).
-
-## Automatic buckets (the filter bar)
 - **Repair**: entries saved without a media type (older imports) match no meta
   resource and rendered as blank cards. Opening My Library asks meta addons for
   such an ID as a movie, then as a series; the first response naming that exact
   ID supplies the type and fills only empty fields. If the typed entry already
   exists, the untyped duplicate is removed. Metadata responses also fill an
   entry's empty name or poster, never replacing saved text.
+- **Opening** an entry shows the detail modal; reopening the same entry
+  restores its tab/season/filter choices, starting at the top without
+  restoring keyboard focus or scroll position. Entering the page always
+  prefetches episode metadata (not gated by the Discover prefetch toggle).
+
+## Automatic buckets (the filter bar)
 
 Specials (explicit season 0 metadata) are excluded from viewing progress by
 default, including existing installations. Settings → Display → Include specials

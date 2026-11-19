@@ -1706,8 +1706,6 @@ msgstr "Vaši spremljeni naslovi, nastavak gledanja i preuzimanja."
 msgid "Search library"
 msgstr "Pretraži biblioteku"
 
-msgid "Recently Added"
-msgstr "Nedavno dodano"
 
 msgid "Title"
 msgstr "Naslov"
@@ -5883,3 +5881,30 @@ msgstr "Vratiti zadanu temu? To će je promijeniti i na vašim uparenim uređaji
 
 msgid "Restore defaults"
 msgstr "Vrati zadano"
+
+msgid "Last watched"
+msgstr "Posljednje gledano"
+
+msgid "Recently added"
+msgstr "Nedavno dodano"
+
+msgid "Sort library"
+msgstr "Sortiraj biblioteku"
+
+msgid "Sort by"
+msgstr "Sortiraj po"
+
+msgid "Descending"
+msgstr "Silazno"
+
+msgid "Ascending"
+msgstr "Uzlazno"
+
+msgid "Sort: {0}, {1}"
+msgstr "Sortiranje: {0}, {1}"
+
+msgid "descending"
+msgstr "silazno"
+
+msgid "ascending"
+msgstr "uzlazno"

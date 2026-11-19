@@ -67,6 +67,7 @@ pub(super) struct View {
     pub filter: String,
     pub query: String,
     pub sort: i32,
+    pub reversed: bool,
     pub smart: Option<nova_config::SmartCollection>,
 }
 
@@ -77,6 +78,7 @@ impl View {
             filter: app.get_library_filter_category().to_string(),
             query: app.get_library_query().to_string(),
             sort: app.get_library_sort(),
+            reversed: app.get_library_sort_reversed(),
             smart: bridge.selected_smart_collection(),
         })
     }

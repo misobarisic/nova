@@ -7,7 +7,7 @@ import { PillButton } from "settings-controls.slint";
 import { Spinner } from "std-widgets.slint";
 
 import { KbMark } from "kbnav.slint";
-import { Dropdown } from "dropdown.slint";
+import { LibrarySortGlyph, LibrarySortMenu } from "library-sort.slint";
 import { MenuSheet } from "menusheet.slint";
 import { TitleMenu } from "title-menu.slint";
 import { SideNav } from "sidenav.slint";
@@ -65,6 +65,20 @@ export component LibraryPage {
     in-out property <int> category_index: -1;
     in-out property <string> query: "";
     in-out property <int> sort_index: 0;
+    // Reverses each sort's natural order (Title A→Z, the others newest first).
+    in-out property <bool> sort_reversed: false;
+    private property <bool> sort_descending: root.sort_index == 1 ? root.sort_reversed : !root.sort_reversed;
+    private property <string> sort_name: root.sort_index == 3 ? @tr("Last watched") : root.sort_index == 1 ? @tr("Title")
+        : root.sort_index == 2 ? @tr("Release year") : @tr("Recently added");
+    private property <bool> sort_menu_open: false;
+    private property <length> sort_menu_x;
+    private property <length> sort_menu_y;
+    function open_sort_menu() {
+        // The menu grows from the button's lower-left corner.
+        root.sort_menu_x = library_sort.absolute-position.x - page_canvas.absolute-position.x;
+        root.sort_menu_y = library_sort.absolute-position.y - page_canvas.absolute-position.y + library_sort.height + 4px;
+        root.sort_menu_open = true;
+    }
     in-out property <bool> list_view: false;
     in-out property <bool> search_open: false;
     callback view_changed();
@@ -378,7 +392,7 @@ export component LibraryPage {
 
     function kb_enter() {
         if (root.kb_zone == 3) {
-            if (root.toolbar_control == 0) { root.sort_index = root.sort_index == 2 ? 0 : root.sort_index + 1; root.view_changed(); }
+            if (root.toolbar_control == 0) { root.open_sort_menu(); }
             else if (root.toolbar_control == 3) { root.toggle_search(); }
             else { root.list_view = root.toolbar_control == 2; }
             return;
@@ -511,7 +525,7 @@ export component LibraryPage {
         }
     }
 
-    Rectangle {
+    page_canvas := Rectangle {
         width: 100%;
         height: 100%;
         background: Theme.current.artwork_canvas;
@@ -1028,17 +1042,30 @@ export component LibraryPage {
                                     height: InterfaceStyle.tv ? 56px : 44px;
                                     vertical-stretch: 0;
                                     spacing: 10px;
-                                    library_sort := Dropdown {
-                                        border-width: root.kb_active && root.kb_zone == 3 && root.toolbar_control == 0 ? 3px : 1px;
-                                        border-color: root.kb_active && root.kb_zone == 3 && root.toolbar_control == 0 ? Theme.current.focus_ring : Theme.current.control_border;
-                                        model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
-                                        current-index <=> root.sort_index;
-                                        roomy: true;
-                                        pill: true;
-                                        min-width: 0px;
-                                        max-width: 190px;
-                                        horizontal-stretch: 1;
-                                        selected(_) => { root.view_changed(); }
+                                    library_sort := Rectangle {
+                                        property <bool> kb_focused: root.kb_active && root.kb_zone == 3 && root.toolbar_control == 0;
+                                        // Shrinks (eliding its label) so narrow phones keep
+                                        // the view switch and search button on screen.
+                                        preferred-width: Math.min(sort_label.preferred-width + 56px, 220px);
+                                        min-width: 48px;
+                                        horizontal-stretch: 0;
+                                        border-radius: Math.min(Theme.button_corner_radius, self.height / 2);
+                                        border-width: self.kb_focused ? 3px : 1px;
+                                        border-color: self.kb_focused ? Theme.current.focus_ring : Theme.current.border_medium;
+                                        background: sort_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
+                                        accessible-role: button;
+                                        accessible-label: @tr("Sort: {0}, {1}", root.sort_name, root.sort_descending ? @tr("descending") : @tr("ascending"));
+                                        accessible-action-default => { root.open_sort_menu(); }
+                                        LibrarySortGlyph {
+                                            x: 14px; y: (parent.height - 20px) / 2; width: 20px; height: 20px;
+                                            descending: root.sort_descending; stroke: Theme.current.text_secondary;
+                                        }
+                                        sort_label := Text {
+                                            x: 42px; width: parent.width - 56px; height: 100%;
+                                            text: root.sort_name; color: Theme.current.text_primary; font-size: 15px;
+                                            vertical-alignment: center; overflow: elide;
+                                        }
+                                        sort_touch := TouchArea { mouse-cursor: pointer; clicked => { root.open_sort_menu(); } }
                                     }
                                     Rectangle { horizontal-stretch: 1; min-width: 0px; }
                                     Rectangle {
@@ -1283,6 +1310,19 @@ export component LibraryPage {
             current_status: root.menu_summary;
             status-picked(code) => { if root.menu_valid { root.library_status_action(root.menu_idx,code); } root.close_menu(); }
             closed => { root.close_menu(); }
+        }
+        if root.sort_menu_open: LibrarySortMenu {
+            width: 100%; height: 100%;
+            sort: root.sort_index; descending: root.sort_descending;
+            anchor-x: root.sort_menu_x; anchor-y: root.sort_menu_y;
+            picked-sort(code) => {
+                if code != root.sort_index { root.sort_index = code; root.view_changed(); }
+            }
+            picked-direction(descending) => {
+                let reversed = root.sort_index == 1 ? descending : !descending;
+                if reversed != root.sort_reversed { root.sort_reversed = reversed; root.view_changed(); }
+            }
+            closed => { root.sort_menu_open = false; nav_scope.focus(); }
         }
 
     }

@@ -326,13 +326,14 @@ impl Bridge {
     fn current_library_candidates(&self) -> Vec<LibraryCandidate> {
         let context = profiles::capture();
         let version = progress_projection::revision();
-        let (filter, query, sort) = self
+        let (filter, query, sort, reversed) = self
             .app()
             .map(|a| {
                 (
                     a.get_library_filter_category().to_string(),
                     a.get_library_query().to_string(),
                     a.get_library_sort(),
+                    a.get_library_sort_reversed(),
                 )
             })
             .unwrap_or_default();
@@ -428,9 +429,16 @@ impl Bridge {
         if !profiles::is_current(&context) || progress_projection::revision() != version {
             return Vec::new();
         }
+        let last_watched = if options.sort == 3 {
+            last_watched_by_title(&self.shared.lock().unwrap().progress)
+        } else {
+            HashMap::new()
+        };
         order_library_candidates(
             groups.project_candidates(candidates, &all_candidates),
             options.sort,
+            reversed,
+            &last_watched,
         )
     }
 
@@ -1785,6 +1793,8 @@ pub(super) struct CachedView {
 
 struct ViewIndex {
     all: Vec<LibraryCandidate>,
+    /// Progress-derived, so it shares the cache's revision stamp.
+    last_watched: HashMap<String, u64>,
     cards: HashMap<TitleKey, LibraryCardSnapshot>,
     eligible: HashSet<TitleKey>,
     groups: LibraryDisplayGroups,
@@ -1820,6 +1830,8 @@ impl CachedView {
         order_library_candidates(
             index.groups.project_candidates(candidates, &index.all),
             view.sort,
+            view.reversed,
+            &index.last_watched,
         )
         .into_iter()
         .filter_map(|entry| index.cards.get(&(entry.type_, entry.id)).cloned())
@@ -1893,6 +1905,7 @@ pub(super) fn prepare_cached_view_with_policy(
         stamp,
         index: Arc::new(ViewIndex {
             all,
+            last_watched: last_watched_by_title(&state.progress),
             cards,
             eligible,
             groups: groups.clone(),
@@ -2105,20 +2118,25 @@ pub(super) fn prepare_progress_cards(
             )
         })
         .collect();
-    order_library_candidates(groups.project_candidates(candidates, &all), options.sort)
-        .iter()
-        .filter_map(|candidate| {
-            project_library_card(
-                &state.entries[candidate.entry_index],
-                candidate,
-                metadata
-                    .episodes(&candidate.type_, &candidate.id)
-                    .as_slice(),
-                &state.progress,
-                activity,
-            )
-        })
-        .collect()
+    order_library_candidates(
+        groups.project_candidates(candidates, &all),
+        options.sort,
+        view.reversed,
+        &last_watched_by_title(&state.progress),
+    )
+    .iter()
+    .filter_map(|candidate| {
+        project_library_card(
+            &state.entries[candidate.entry_index],
+            candidate,
+            metadata
+                .episodes(&candidate.type_, &candidate.id)
+                .as_slice(),
+            &state.progress,
+            activity,
+        )
+    })
+    .collect()
 }
 
 impl Bridge {
@@ -2247,16 +2265,57 @@ fn candidates_match_entry(candidate: &LibraryCandidate, entry: &LibraryEntry) ->
         && candidate.added_at_secs == entry.added_at_secs
 }
 
+/// Latest actual playback per saved title (its episodes and movie record),
+/// falling back to the record's last edit for entries without history.
+pub(super) fn last_watched_by_title(
+    progress: &HashMap<String, EpisodeProgress>,
+) -> HashMap<String, u64> {
+    let mut latest = HashMap::<String, u64>::new();
+    for (key, value) in progress {
+        let Some((title, _)) = key.split_once('\u{1}') else {
+            continue;
+        };
+        let at = value
+            .history
+            .as_ref()
+            .map_or(value.updated_at_secs, |history| history.played_at_secs);
+        if at == 0 {
+            continue;
+        }
+        let slot = latest.entry(title.to_owned()).or_default();
+        *slot = (*slot).max(at);
+    }
+    latest
+}
+
+/// Sort codes: 0 Recently added, 1 Title, 2 Release year, 3 Last watched.
+/// Each has a natural direction (Title A→Z, the others newest first);
+/// `reversed` flips it. Titles never watched stay last under Last watched.
 fn order_library_candidates(
     mut entries: Vec<LibraryCandidate>,
     sort: i32,
+    reversed: bool,
+    last_watched: &HashMap<String, u64>,
 ) -> Vec<LibraryCandidate> {
     // Newer insertions win ties, including older entries with no timestamp.
     entries.reverse();
     match sort {
         1 => entries.sort_by_cached_key(|e| e.name.to_lowercase()),
         2 => entries.sort_by_cached_key(|e| std::cmp::Reverse(e.year.clone())),
+        3 => entries.sort_by_key(|e| std::cmp::Reverse(last_watched.get(&e.id).copied())),
         _ => entries.sort_by_key(|e| std::cmp::Reverse(e.added_at_secs)),
+    }
+    if reversed {
+        if sort == 3 {
+            // Reverse only the watched run; unwatched titles keep their place.
+            let watched = entries
+                .iter()
+                .take_while(|e| last_watched.contains_key(&e.id))
+                .count();
+            entries[..watched].reverse();
+        } else {
+            entries.reverse();
+        }
     }
     entries
 }
@@ -3054,6 +3113,8 @@ mod tests {
                     })
                     .collect(),
                 sort,
+                false,
+                &HashMap::new(),
             )
         };
         fn labels(rows: &[LibraryCandidate]) -> Vec<(&str, &str)> {
@@ -3258,6 +3319,8 @@ mod tests {
                 })
                 .collect(),
             options.sort,
+            false,
+            &HashMap::new(),
         );
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].type_, "series");
@@ -3682,5 +3745,79 @@ mod imported_status_projection_tests {
                     == (label == "Watching")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod sort_order_tests {
+    use super::*;
+
+    fn candidate(id: &str, name: &str, year: &str, added: u64) -> LibraryCandidate {
+        let entry: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id": id, "type_": "series", "name": name, "year": year, "added_at_secs": added
+        }))
+        .unwrap();
+        LibraryCandidate::from_entry(&entry, 0)
+    }
+
+    fn ids(rows: &[LibraryCandidate]) -> Vec<&str> {
+        rows.iter().map(|row| row.id.as_str()).collect()
+    }
+
+    #[test]
+    fn last_watched_uses_playback_history_and_keeps_unwatched_titles_last() {
+        let mut progress = HashMap::new();
+        let mut record = |title: &str, episode: &str, played: Option<u64>, updated: u64| {
+            let value = EpisodeProgress {
+                updated_at_secs: updated,
+                history: played.map(|at| PlaybackHistory {
+                    played_at_secs: at,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            progress.insert(progress_map_key(title, episode), value);
+        };
+        record("a", "a:1", Some(100), 900);
+        record("a", "a:2", Some(300), 300);
+        record("b", "b:1", Some(200), 200);
+        // A manual mark without history still counts by its edit time.
+        record("c", "c:1", None, 250);
+        let latest = last_watched_by_title(&progress);
+        assert_eq!(latest.get("a"), Some(&300));
+        assert_eq!(latest.get("c"), Some(&250));
+        let rows = || {
+            vec![
+                candidate("a", "Alpha", "2020", 1),
+                candidate("b", "Beta", "2021", 2),
+                candidate("c", "Gamma", "2022", 3),
+                candidate("d", "Delta", "2023", 4),
+            ]
+        };
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 3, false, &latest)),
+            ["a", "c", "b", "d"]
+        );
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 3, true, &latest)),
+            ["b", "c", "a", "d"]
+        );
+        // Other sorts simply flip their natural order.
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 1, false, &latest)),
+            ["a", "b", "d", "c"]
+        );
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 1, true, &latest)),
+            ["c", "d", "b", "a"]
+        );
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 0, false, &latest)),
+            ["d", "c", "b", "a"]
+        );
+        assert_eq!(
+            ids(&order_library_candidates(rows(), 0, true, &latest)),
+            ["a", "b", "c", "d"]
+        );
     }
 }
