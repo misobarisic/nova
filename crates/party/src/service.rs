@@ -628,7 +628,12 @@ async fn exchange(
     {
         guest.connection = None;
     }
-    let budget = if matches!(request.operation, Operation::Join { .. }) {
+    // A heartbeat that must first reconnect gets the join budget: a path that
+    // needs more than the exchange budget to set up (relay only) would
+    // otherwise restart from scratch every time and never recover.
+    let budget = if matches!(request.operation, Operation::Join { .. })
+        || guest.connection.is_none()
+    {
         JOIN_TIMEOUT
     } else {
         EXCHANGE_TIMEOUT
@@ -642,6 +647,9 @@ async fn exchange(
             connection.remote_id() == guest.ticket.host.id,
             "wrong party host"
         );
+        // Time the exchange only: connection setup in the round trip would
+        // skew the clock offset by half of it.
+        let started = local_now_ms();
         let (mut send, mut recv) = connection.open_bi().await?;
         wire::write(&mut send, &request).await?;
         let response: Response = wire::read(&mut recv).await?;
