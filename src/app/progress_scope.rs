@@ -211,7 +211,14 @@ mod tests {
         let mut unfinished = progress.clone();
         unfinished.remove(&progress_map_key("show", "two"));
         assert!(!library_badge_for("show", &videos, &unfinished).contains("special"));
-        assert_eq!(library_badge_for("show", &videos, &progress), "2 specials");
+        // Only released specials still to watch are offered.
+        assert_eq!(library_badge_for("show", &videos, &progress), "1 special");
+        let mut extras_done = progress.clone();
+        extras_done
+            .get_mut(&progress_map_key("show", "special"))
+            .unwrap()
+            .watched = true;
+        assert_eq!(library_badge_for("show", &videos, &extras_done), "");
         assert!(next_episode_to_watch("show", &videos, &progress).is_none());
         assert!(next_episode::successor("show", &videos, "two", today_days()).is_none());
         assert!(watch_now_episode("show", &videos, &progress).is_none());

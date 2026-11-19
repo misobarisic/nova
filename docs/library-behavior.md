@@ -83,7 +83,9 @@ automatic Continue Watching and next-episode targets, Upcoming, Calendar and
 release reminders/exports. Excluded episodes remain visible and manually
 playable, with their real watched/resume history intact. Their presence never
 creates synthetic watched records or tracker progress. Ignored specials have a
-separate “1 special” / “3 specials” caption. New regular episodes still reopen a
+separate “1 special” / “3 specials” caption once the main show is caught up; it
+counts released specials not yet watched and disappears when they all are. New
+regular episodes still reopen a
 completed show. Unknown seasons are not inferred to be specials from their ID,
 title or missing date. Per-show exclusions use source episode IDs and explicit
 season numbers; an explicitly included episode may override an excluded season.

@@ -110,12 +110,22 @@ pub(crate) fn library_badge_for(
 ) -> String {
     let badge = library_badge_in_scope(series_id, episodes, map);
     let policy = nova_config::progress::active_progress_policy(series_id);
-    let specials = episodes.iter().filter(|v| v.season == Some(0)).count();
+    // Released specials still to watch: a show watched including its extras
+    // has nothing left to point at, and unaired ones cannot be played yet.
+    let today = today_days();
+    let specials = episodes
+        .iter()
+        .filter(|v| v.season == Some(0) && episode_is_out(v, today))
+        .filter(|v| {
+            !map.get(&progress_map_key(series_id, &v.id))
+                .is_some_and(|p| p.watched)
+        })
+        .count();
     // Extras become useful after the main show is caught up. Keep fresh and
     // partly watched cards focused on their regular-episode progress.
     if !policy.include_specials
         && specials > 0
-        && available_completed(series_id, episodes, map, today_days())
+        && available_completed(series_id, episodes, map, today)
     {
         if badge.is_empty() {
             text::specials(specials)
