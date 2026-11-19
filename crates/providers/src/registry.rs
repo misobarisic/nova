@@ -209,14 +209,34 @@ fn manifest_with_capabilities(
     source: &crate::AddonPackage,
     config: ProviderCapabilities,
 ) -> Option<Manifest> {
+    // Each call runs the package's script (up to its time budget), and
+    // addon-management paths call this repeatedly, some on the UI thread. The
+    // answer depends only on the package bytes and the configuration.
+    type Key = (String, bool, bool);
+    static MANIFESTS: OnceLock<Mutex<HashMap<Key, Option<Manifest>>>> = OnceLock::new();
+    let key = (source.digest.clone(), config.streams, config.metadata);
+    if let Some(cached) = MANIFESTS.get_or_init(Default::default).lock().unwrap().get(&key) {
+        return cached.clone();
+    }
     let runtime = PluginRuntime::new(source.plugin.clone(), source.source.clone());
-    let result = runtime
+    let manifest = runtime
         .invoke(
             crate::MemoryProviderHost::new(),
             &json!({"op":"manifest", "manifest":source.addon, "config":config}),
         )
-        .ok()?;
-    serde_json::from_value(result).ok()
+        .ok()
+        .and_then(|result| serde_json::from_value::<Manifest>(result).ok())
+        // The script may filter what the package offers, never change which
+        // addon it is: identity was validated when the package was parsed.
+        .filter(|manifest| {
+            manifest.id == source.addon.id && manifest.version == source.addon.version
+        });
+    MANIFESTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(key, manifest.clone());
+    manifest
 }
 
 #[cfg(test)]
