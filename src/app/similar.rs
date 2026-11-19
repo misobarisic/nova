@@ -195,7 +195,19 @@ fn inventory_key(installed: &[Installed], tmdb: &tmdb::Settings) -> String {
         &installed
             .iter()
             .filter(|addon| addon.enabled && addon.available)
-            .map(|addon| (&addon.url, addon.generation, &addon.manifest))
+            // Only what decides which addons can answer: the full manifest
+            // (catalog genre lists especially) can be hundreds of KB, and this
+            // key is built on the UI thread under the Shared lock.
+            .map(|addon| {
+                (
+                    &addon.url,
+                    addon.generation,
+                    &addon.manifest.id,
+                    &addon.manifest.version,
+                    &addon.manifest.resources,
+                    &addon.manifest.types,
+                )
+            })
             .collect::<Vec<_>>(),
         tmdb.authority(),
     ))
