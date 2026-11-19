@@ -437,6 +437,10 @@ pub(super) fn activation_basis(id: &str) -> Result<Vec<(String, String)>, String
 
 /// Only a sealed UI request reaches this worker-side write. Keep validation
 /// and selected-profile persistence in the existing Store -> serializer order.
+/// Activation validation found the store or the target's data changed since
+/// preparation. Retryable: the caller prepares again.
+pub(super) const ACTIVATION_DRIFT: &str = "Profile data or authorization changed";
+
 pub(super) fn prepare_activation_checked(
     id: &str,
     source: &Context,
@@ -475,8 +479,7 @@ fn validate_activation_locked(
     source_policy: &str,
     target_policy: &str,
 ) -> Result<ActivationValidation, String> {
-    if store.clock() != basis.clock
-        || active_context() != *source
+    if active_context() != *source
         || !store
             .record(DOMAIN, id)
             .is_some_and(|record| !record.is_deleted())
@@ -485,6 +488,11 @@ fn validate_activation_locked(
             .is_some_and(|record| !record.is_deleted())
     {
         return Err("This profile is unavailable.".into());
+    }
+    // Any record applied since preparation (a peer's progress checkpoint)
+    // moves the clock: prepare again rather than report a missing profile.
+    if store.clock() != basis.clock {
+        return Err(ACTIVATION_DRIFT.into());
     }
     if writable(&source.id)
         && store
@@ -500,7 +508,7 @@ fn validate_activation_locked(
         || super::profile_policy::revision(&ProfileStore::for_profile(&source.id)) != source_policy
         || super::profile_policy::revision(&ProfileStore::for_profile(id)) != target_policy
     {
-        return Err("Profile data or authorization changed".into());
+        return Err(ACTIVATION_DRIFT.into());
     }
     Ok(ActivationValidation {
         source: ProfileStore::for_profile(&source.id)

@@ -697,13 +697,35 @@ impl Bridge {
         self.profile_activation.lock().unwrap().sealed = true;
         let bridge = self.clone();
         self.enqueue_activation_phase(move || {
-            let receipt = profiles::prepare_activation_checked(
-                &request.selection.target,
-                &request.source,
-                &basis,
-                &request.source_policy,
-                &request.target_policy,
-            );
+            let (mut data, mut basis) = (data, basis);
+            let check = |basis: &profiles::ActivationBasis| {
+                profiles::prepare_activation_checked(
+                    &request.selection.target,
+                    &request.source,
+                    basis,
+                    &request.source_policy,
+                    &request.target_policy,
+                )
+            };
+            let mut receipt = check(&basis);
+            // A record applied between preparation and this check (another
+            // device's checkpoint) is not a failure: prepare again, a few
+            // times, before giving up.
+            for _ in 0..3 {
+                if !matches!(&receipt, Err(error) if error == profiles::ACTIVATION_DRIFT) {
+                    break;
+                }
+                match request.prepare_data() {
+                    Ok((fresh, fresh_basis)) => {
+                        (data, basis) = (fresh, fresh_basis);
+                        receipt = check(&basis);
+                    }
+                    Err(error) => {
+                        receipt = Err(error);
+                        break;
+                    }
+                }
+            }
             let _ = profiles::invoke_account(move || {
                 bridge.profile_activation_committed(request, data, receipt)
             });
