@@ -2322,7 +2322,7 @@ impl Bridge {
         if !engine.peers().iter().any(|id| id == target) {
             return;
         }
-        {
+        let already_connected = {
             let state = self.shared.lock().unwrap();
             if state.remote_playback.role == Role::Local
                 || state
@@ -2333,9 +2333,16 @@ impl Bridge {
             {
                 return;
             }
+            state.remote_playback.role == Role::Remote && state.remote_playback.target == target
+        };
+        // Starting a stream on the selected device opens its controls: tearing
+        // that session down first would drop the connection about to be used
+        // and, with the stream selector open and no target, start a local
+        // stream search across this device's addons.
+        if !already_connected {
+            self.remote_disconnect();
+            self.reconcile_remote_polling_engine(&engine);
         }
-        self.remote_disconnect();
-        self.reconcile_remote_polling_engine(&engine);
         {
             let mut state = self.shared.lock().unwrap();
             state.remote_playback.role = Role::Remote;
