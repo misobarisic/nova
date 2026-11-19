@@ -1427,6 +1427,16 @@ fn retain_migrated_home_layout(settings: &mut CacheSettings, records: &[(String,
 /// A group record replaces every field it carries, so the group moves as one
 /// LWW value. Device-specific fields always keep the local value; unknown
 /// fields are ignored by serde, so a newer peer can add settings safely.
+/// Category membership is synced, but the order is this device's: keep the
+/// local order, drop removed categories and append new ones. Rebuilding the
+/// list from the (sorted) records would alphabetize the user's tabs.
+fn merge_category_order(categories: &mut Vec<String>, members: impl IntoIterator<Item = String>) {
+    let members: BTreeSet<String> = members.into_iter().collect();
+    categories.retain(|name| members.contains(name));
+    let retained: BTreeSet<String> = categories.iter().cloned().collect();
+    categories.extend(members.into_iter().filter(|name| !retained.contains(name)));
+}
+
 fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> CacheSettings {
     let mut migrated = base.clone();
     stream_filters::migrate_overrides(&mut migrated);
@@ -2133,11 +2143,13 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
                     &local,
                     &store.records(&nova_sync::profile_domain(id, DOMAIN_SETTINGS)),
                 );
-                settings.categories = store
-                    .records(&nova_sync::profile_domain(id, DOMAIN_CATEGORY))
-                    .into_iter()
-                    .map(|(key, _)| key)
-                    .collect();
+                merge_category_order(
+                    &mut settings.categories,
+                    store
+                        .records(&nova_sync::profile_domain(id, DOMAIN_CATEGORY))
+                        .into_iter()
+                        .map(|(key, _)| key),
+                );
                 Some((
                     "settings",
                     preserve_settings_snapshot(raw.as_deref(), &serde_json::to_string(&settings)?),
@@ -3163,12 +3175,10 @@ impl Bridge {
             .ok_or_else(|| invalid_projection_record(DOMAIN_SETTINGS, "store"))?;
         let local = self.shared.lock().unwrap().cache_settings.clone();
         let mut settings = merge_settings_fields(&local, &engine.records(DOMAIN_SETTINGS));
-        let categories: BTreeSet<String> = engine
-            .records(DOMAIN_CATEGORY)
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        settings.categories = categories.into_iter().collect();
+        merge_category_order(
+            &mut settings.categories,
+            engine.records(DOMAIN_CATEGORY).into_iter().map(|(name, _)| name),
+        );
 
         persist_projection_snapshot(
             DOMAIN_SETTINGS,
