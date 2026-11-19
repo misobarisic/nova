@@ -87,8 +87,9 @@ and retained-connection power measurements remain outstanding. See
   play count uses max. The operation is commutative/associative/idempotent.
   A synthesized merged record gets a local envelope version but does not invent
   a new action. Legacy records initialize candidates from record versions. Receive
-  rejects clocks beyond one hour; reload quarantines poisoned rows/HLC and
-  reconciles unaffected records. Action clocks must not exceed the envelope.
+  rejects clocks beyond one hour; reload never judges stored rows against the
+  wall clock (a device booting with its clock behind keeps its store), only
+  quarantines corrupt rows/HLC past 2100-01-01, and reconciles the rest. Action clocks must not exceed the envelope.
 - **Completion/trust:** dirty outgoing state is committed before taking the
   digest/ack basis. EOF before Done, truncated headers, unexpected trailing
   frames, and writer failure cannot count as full success. Durable apply is

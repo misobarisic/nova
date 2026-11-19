@@ -1043,6 +1043,7 @@ than reusing an epoch. Keys used by the app:
 | `sync:projection:pending` | Durable set of remotely changed domains awaiting projection; replayed on attachment, the UI poll, and restart. |
 | `sync:library_keys_v2`, `sync:library_legacy_removals:<domain>` | Startup-only typed-key migration marker and local legacy bare-ID deletion Versions. Barriers materialize canonical tombstones when matching older records arrive, then ordinary sync propagates them. |
 | `sync:self_authorized_at` | Local explicit participation-grant Version, committed atomically by either pairing role or manual add; rejects older forwarded self-removals. |
+| `sync:severed` | Local-only JSON array of peer ids this device severed after they removed or refused it; filtered from the allowlist, cleared by explicit re-pair or a live peer's inbound dial. Never replicated. |
 | `sync:peer_acks` | Per-peer ack HLC map (local only; gates tombstone GC). |
 | `sync:invites` / `sync:pending_join` | Outstanding invites / in-flight join. |
 
@@ -1315,9 +1316,10 @@ the app ignores unknown domains. Restricted-profile enforcement uses semantic sy
 - The `peers` domain holds one record per peer endpoint id: value `{name, added_at, authorized_at}`; `authorized_at` is the explicit grant Version and routine name refreshes preserve it. Legacy JSON without the grant uses original `added_at` conservatively; deletion = tombstone.
 - The **live allowlist** (`SyncEngine.peers`) is derived from the store (`reconcile_peers`) and is the trust boundary (`Handler::is_peer`).
 - **Additions** happen only via explicit pairing / manual add (`peers_add`, may resurrect a tombstoned peer). A routine sync only refreshes an existing live peer's name (`peers_refresh`) and never inserts/resurrects.
-- **Removals** are tombstones (`peers_remove`). Removal is made symmetric:
-  - `SyncEngine::remove_peer` sends a best-effort `nova/remove/1` notice so the removed device drops the remover and shows a UI notice.
-  - If the notice is missed, a structured QUIC application-close code (`REVOKED_CODE`) triggers mutual removal. An unknown/not-yet-authorized peer does not get that code. Authorization is rechecked for every stream and under the store lock before apply; cached dialed connections close on removal.
+- **Removals** are tombstones (`peers_remove`), written only by the user's explicit removal. The removed side answers with a local-only severance (`peers_sever`, `sync:severed`), never a replicated tombstone, so a removed (or stale-rejected) device cannot evict its remover from the rest of the mesh:
+  - `SyncEngine::remove_peer` sends a best-effort `nova/remove/1` notice so the removed device severs the remover and shows a UI notice.
+  - If the notice is missed, a structured QUIC application-close code (`REVOKED_CODE`) or a tombstone of ourselves in the remover's frames severs it the same way. An unknown/not-yet-authorized peer does not get that code. Authorization is rechecked for every stream and under the store lock before apply; cached dialed connections close on removal.
+  - Severed peers leave the allowlist. Explicit re-pair lifts the severance, and so does an inbound dial from a severed peer whose membership record is still live (a refusal can be stale while a new grant spreads).
 - **Membership merge** compares explicit grants against removals before name-update versions. A later sync ack or rename cannot override removal; unequal peer versions are exchanged even when the winning membership action has an older transport version. A newer explicit grant can restore trust.
 - **Presence (last-seen):** the engine-owned `presence` domain holds one record per `{observer}\x01{peer}` sighting (value = unix secs), written after each completed exchange and throttled to one rewrite per 15 min per peer. Each device writes only its own observer keys (no merge conflicts); readers take the max across observers plus the local ack clock (`SyncEngine::peer_last_seen`, shown as `SyncPeer.last_seen`). `peers_remove` tombstones sightings involving the removed peer.
 - **Self-records** are never applied (you never add yourself). A tombstone keyed by your own id sets a "removed us" signal only if newer than the local `sync:self_authorized_at` grant. Incoming-host, outgoing and manual pairing queue that local grant atomically with peer trust; routine sync does not renew it.
