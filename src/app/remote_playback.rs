@@ -691,6 +691,37 @@ fn remote_phase_text(snapshot: &PlaybackSnapshot) -> &'static str {
     })
 }
 
+/// Receiver display hint carried inside an otherwise opaque offer ID. The
+/// playback wire schema has no field for it, and older peers treat the ID as
+/// opaque, so the suffix stays compatible in both directions. It only labels
+/// a row; the receiver still validates the whole ID when starting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfferHint {
+    None,
+    LastUsed,
+    Recommended,
+}
+
+impl OfferHint {
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::LastUsed => ":last",
+            Self::Recommended => ":rec",
+        }
+    }
+}
+
+fn offer_hint(id: &str) -> OfferHint {
+    if id.ends_with(OfferHint::LastUsed.suffix()) {
+        OfferHint::LastUsed
+    } else if id.ends_with(OfferHint::Recommended.suffix()) {
+        OfferHint::Recommended
+    } else {
+        OfferHint::None
+    }
+}
+
 fn remote_prompt_text(snapshot: &PlaybackSnapshot) -> &'static str {
     text::tr(if snapshot.resume_prompt {
         "Resume playback?"
@@ -1838,6 +1869,32 @@ impl Bridge {
                     || rules.accepts(&row.card.filter_facts)
             })
             .collect::<Vec<_>>();
+        // The same last-used/recommendation policy as this device's own stream
+        // selector. The chosen row leads the addon rows and its offer ID carries
+        // a display hint for the controller (see `offer_hint`).
+        let now = nova_config::now_secs();
+        let last_used = self.last_stream.identity(now).filter(|id| {
+            rows.iter().any(|(row, _)| {
+                stream_recommendation_usable(row) && row.choice_id.as_deref() == Some(id)
+            })
+        });
+        let recommended = if last_used.is_some() {
+            None
+        } else {
+            let streams = rows.iter().map(|(row, _)| row.clone()).collect::<Vec<_>>();
+            stream_series_scope(&media.media_type, &media.title_id)
+                .and_then(|id| self.last_stream.series_preference(&id, now))
+                .and_then(|preference| recommended_stream(&streams, None, &preference))
+                .and_then(|index| streams[index].choice_id.clone())
+        };
+        let hinted = last_used.clone().or_else(|| recommended.clone());
+        if let Some(index) = hinted.as_deref().and_then(|id| {
+            rows.iter()
+                .position(|(row, _)| row.choice_id.as_deref() == Some(id))
+        }) {
+            let row = rows.remove(index);
+            rows.insert(0, row);
+        }
         if rules.enabled {
             rows.sort_by(|(a, _), (b, _)| {
                 usize::from(!matches!(a.source, StreamSource::Downloaded { .. }))
@@ -1883,6 +1940,7 @@ impl Bridge {
                     stream,
                     0,
                     settings_generation,
+                    OfferHint::None,
                 ));
             }
         }
@@ -1890,12 +1948,21 @@ impl Bridge {
             .into_iter()
             .take(REMOTE_OFFER_LIMIT.saturating_sub(offers.len()))
         {
+            let choice = stream.choice_id.as_deref();
+            let hint = if choice.is_some() && choice == last_used.as_deref() {
+                OfferHint::LastUsed
+            } else if choice.is_some() && choice == recommended.as_deref() {
+                OfferHint::Recommended
+            } else {
+                OfferHint::None
+            };
             offers.push(self.retain_remote_offer(
                 &peer.peer_id,
                 &media,
                 stream,
                 generation,
                 settings_generation,
+                hint,
             ));
         }
         done(Response::Offers(offers));
@@ -1908,6 +1975,7 @@ impl Bridge {
         stream: StreamUi,
         addon_generation: u64,
         settings_generation: u64,
+        hint: OfferHint,
     ) -> PlaybackOffer {
         let mut state = self.shared.lock().unwrap();
         let remote = &mut state.remote_playback;
@@ -1924,7 +1992,7 @@ impl Bridge {
             remote.offers.remove(&oldest);
         }
         remote.offer_sequence = remote.offer_sequence.wrapping_add(1);
-        let id = format!("{}:{}", *BOOT, remote.offer_sequence);
+        let id = format!("{}:{}{}", *BOOT, remote.offer_sequence, hint.suffix());
         let offer = PlaybackOffer {
             id: id.clone(),
             name: remote_display_text(&stream.addon, 128),
@@ -2473,6 +2541,8 @@ impl Bridge {
                 .iter()
                 .map(|o| StreamRow {
                     id: o.id.clone().into(),
+                    last_used: offer_hint(&o.id) == OfferHint::LastUsed,
+                    recommended: offer_hint(&o.id) == OfferHint::Recommended,
                     metadata: o.name.clone().into(),
                     text: o.description.clone().into(),
                     title: o.description.clone().into(),
@@ -3385,6 +3455,10 @@ impl Bridge {
                     }
                 );
             let current_offers = matches!(&request, Request::CurrentOffers { .. });
+            // Queued lookups only come from accepting the receiver's
+            // next-episode prompt. Their offers continue that same session, so
+            // a pick replaces it without a separate confirmation.
+            let next_episode_offers = matches!(&request, Request::Lookup(_));
             let semantic = semantic_request(&request);
             let started_offer = match &request {
                 Request::Start {
@@ -3536,7 +3610,11 @@ impl Bridge {
                             let mut state = b.shared.lock().unwrap();
                             state.remote_playback.remote_offers = offers;
                             state.remote_playback.current_offers_session =
-                                if current_offers { lookup_session } else { None };
+                                if current_offers || next_episode_offers {
+                                    lookup_session
+                                } else {
+                                    None
+                                };
                         }
                         Ok(Response::Accepted) => {}
                         Ok(Response::Error(error)) => {
@@ -4238,3 +4316,19 @@ mod integration_tests;
 #[cfg(test)]
 #[path = "remote_polling_tests.rs"]
 mod polling_tests;
+
+#[cfg(test)]
+mod offer_hint_tests {
+    use super::*;
+
+    #[test]
+    fn offer_hints_round_trip_inside_bounded_opaque_ids() {
+        for hint in [OfferHint::None, OfferHint::LastUsed, OfferHint::Recommended] {
+            let id = format!("{}:{}{}", u64::MAX, u64::MAX, hint.suffix());
+            assert!(id.len() <= 64, "controllers reject longer offer IDs");
+            assert_eq!(offer_hint(&id), hint);
+        }
+        // Older receivers send bare IDs.
+        assert_eq!(offer_hint("1700000000:12"), OfferHint::None);
+    }
+}

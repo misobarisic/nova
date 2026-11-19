@@ -109,6 +109,7 @@ fn retain_offer(bridge: &Bridge) -> PlaybackOffer {
         },
         0,
         nova_providers::plugin_settings::settings_generation(),
+        OfferHint::None,
     )
 }
 
@@ -1111,6 +1112,7 @@ fn receiver_sizes_survive_offers_and_controller_stream_rows() {
                 stream.clone(),
                 0,
                 nova_providers::plugin_settings::settings_generation(),
+                OfferHint::None,
             );
             assert_eq!(bounded.size.len(), 32, "size uses a UTF-8-safe byte bound");
             stream.card.size = "https://example.invalid/private-size?token=secret".into();
@@ -1121,7 +1123,8 @@ fn receiver_sizes_survive_offers_and_controller_stream_rows() {
                         &alias_media("tt100:1:1"),
                         stream,
                         0,
-                        nova_providers::plugin_settings::settings_generation()
+                        nova_providers::plugin_settings::settings_generation(),
+                        OfferHint::None,
                     )
                     .size
                     .is_empty()

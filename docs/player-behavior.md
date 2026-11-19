@@ -69,6 +69,11 @@ selector with its episode context. Provider results arrive incrementally, and
 request-specific downloads stay pinned before the remote results.
 Titles whose addons cannot provide an episode list retain their direct stream
 fallback through the same primary action.
+With Play on set to a paired device, the receiver lists its own sources and
+marks its Last used or Recommended source through a suffix of the opaque offer
+ID (the playback wire schema is unchanged; older peers show no badge). Choosing
+a source from the remote controls' next-episode prompt continues that session
+without a separate Replace playback confirmation.
 
 The selector uses the phone layout below 700 logical pixels, a compact full-width
 list from 700 to 1199 pixels, and a shaded artwork/context column from 1200 pixels

@@ -1069,3 +1069,58 @@ fn tv_long_stream_description_pages_before_leaving_its_visible_action() {
         );
     }
 }
+
+#[test]
+fn replacement_prompt_over_stream_offers_keeps_both_actions_reachable() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::replacement_prompt_over_stream_offers_keeps_both_actions_reachable"
+    )) {
+        return;
+    }
+    use slint::VecModel;
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(360, 720));
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_remote_controls_open(true);
+    app.set_remote_target_name("Living room".into());
+    app.set_remote_connected(true);
+    app.set_remote_session("next-session".into());
+    app.set_remote_offers(
+        Rc::new(VecModel::from(
+            (0..3)
+                .map(|index| nova::RemoteOfferRow {
+                    id: format!("offer-{index}").into(),
+                    title: format!("Stream offer {index}").into(),
+                    description: "1080p".into(),
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    let record = answers.clone();
+    app.on_remote_replacement_confirmed(move |token, accept| {
+        record.borrow_mut().push((token.to_string(), accept))
+    });
+    app.window().show().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    app.set_remote_replacement_title("Show · S1 E2".into());
+    app.set_remote_replacement_token("token".into());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    // Both answers stay on screen above the offers the controller just chose from.
+    for label in ["Replace playback", "Cancel"] {
+        let item = ElementHandle::find_by_accessible_label(&app, label)
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap_or_else(|| panic!("missing {label}"));
+        let (p, size) = (item.absolute_position(), item.size());
+        assert!(size.width > 0.0 && size.height > 0.0, "{label} has no size");
+        assert!(
+            p.y >= 0.0 && p.y + size.height <= 720.0,
+            "{label} is off screen"
+        );
+    }
+    click(&app, "Replace playback");
+    assert_eq!(&*answers.borrow(), &[("token".into(), true)]);
+}

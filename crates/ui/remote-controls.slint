@@ -1091,6 +1091,9 @@ export component RemoteReplacementDialog inherits Rectangle {
             x: 18px + root.safe-left;
             y: Math.max(18px + root.safe-top, (root.height - self.preferred-height - root.safe-bottom + root.safe-top) / 2);
             width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px); spacing: 16px;
+            // Without an explicit height the layout fills the window and the
+            // centring offset above pushes both answers below the screen.
+            height: self.preferred-height; alignment: start;
             Text { text: @tr("Replace playback on device?"); font-size: 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; }
             Text { text: RemoteBridge.replacement_title; color: Theme.current.text_primary; wrap: word-wrap; }
             PillButton { label: @tr("Replace playback"); primary: true; focused: SettingsStyle.keyboard-mode && !root.cancel_selected; clicked => { RemoteBridge.replacement_confirmed(RemoteBridge.replacement_token, true); } }
