@@ -99,6 +99,11 @@ pub(crate) fn read_json_result<T: serde::de::DeserializeOwned>(
 pub(crate) fn read_json<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
     match read_json_result(key) {
         Ok(value) => value,
+        // A rebuildable cache that no longer decodes (or briefly failed to
+        // read) is simply absent: blocking it would stop the next fetch from
+        // ever repairing it. User data stays blocked so defaults built from a
+        // failed read can never overwrite it.
+        Err(_) if metadata_cache_key(key) => None,
         Err(e) => {
             block_unreadable(key);
             storage::report(e);
