@@ -1126,7 +1126,7 @@ impl Bridge {
                     entry.series_id.clone(),
                     entry.poster_url.clone(),
                 ));
-                let (year, month, day) = civil_from_days((entry.played_at_secs / 86400) as i64);
+                let (year, month, day) = civil_from_days(calendar::calendar_day_of_secs(entry.played_at_secs));
                 let date = text::absolute_date(day, month, year);
                 let caption = entry.caption();
                 HomeCatalogCard {

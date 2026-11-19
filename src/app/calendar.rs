@@ -17,6 +17,17 @@ pub(super) fn calendar_today_days() -> i64 {
     calendar_day_at(chrono::Local::now())
 }
 
+/// The device's civil day of a Unix timestamp, for displayed dates.
+pub(super) fn calendar_day_of_secs(secs: u64) -> i64 {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_opt(i64::try_from(secs).unwrap_or(i64::MAX), 0) {
+        chrono::LocalResult::Single(at) | chrono::LocalResult::Ambiguous(at, _) => {
+            calendar_day_at(at)
+        }
+        chrono::LocalResult::None => (secs / 86_400) as i64,
+    }
+}
+
 type CalendarKey = (String, String);
 type OwnerKey = (String, bool);
 
