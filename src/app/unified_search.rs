@@ -567,7 +567,7 @@ pub(super) fn prepare_snapshot_change(key: &str, raw: &str) -> Option<PreparedSn
         let rows = serde_json::from_str::<HashMap<String, EpisodeProgress>>(raw).ok()?;
         PreparedSnapshotFacts::Progress(Arc::new(ProgressFacts::capture(&rows)))
     } else if key == "settings" {
-        let settings = serde_json::from_str::<CacheSettings>(raw).ok()?;
+        let settings = settings::settings_from_str(raw)?;
         PreparedSnapshotFacts::Visibility((settings.language, settings.spoiler_protection))
     } else if key == "library" {
         let entries = serde_json::from_str::<Vec<LibraryEntry>>(raw).ok()?;

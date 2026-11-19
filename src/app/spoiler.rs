@@ -217,7 +217,7 @@ pub(super) fn owner_enabled(owner: &profiles::ProfileStore) -> bool {
     pending_enable
         || match owner.read("settings") {
             Ok(None) => false,
-            Ok(Some(raw)) => serde_json::from_str::<CacheSettings>(&raw)
+            Ok(Some(raw)) => settings::settings_from_str(&raw)
                 .map(|settings| settings.spoiler_protection)
                 .unwrap_or(true),
             Err(_) => true,

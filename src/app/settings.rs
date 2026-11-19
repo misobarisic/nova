@@ -231,6 +231,16 @@ pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings
 pub(super) fn effective_settings(value: serde_json::Value) -> Option<CacheSettings> {
     recover_settings_with_protection(value, |_| false)
 }
+/// Read a stored settings blob for a value inside it. A field this build
+/// cannot read (a newer build's language, accent or format variant) falls
+/// back to its default instead of failing the whole blob.
+pub(super) fn settings_from_str(raw: &str) -> Option<CacheSettings> {
+    serde_json::from_str(raw).ok().or_else(|| {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(effective_settings)
+    })
+}
 pub(super) fn recover_settings_for_patch(
     value: serde_json::Value,
     patch: &field_edits::SettingsPatch,
