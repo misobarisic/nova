@@ -928,10 +928,10 @@ impl Bridge {
         }
         let removed_url = {
             let mut state = self.shared.lock().unwrap();
-            if state.installed.is_empty() {
+            // A stale index must never uninstall a different addon.
+            if idx >= state.installed.len() {
                 return;
             }
-            let idx = idx.min(state.installed.len() - 1);
             let removed = state.installed.remove(idx);
             state.refreshing.remove(&removed.url);
             if state.chosen_addon != usize::MAX {
