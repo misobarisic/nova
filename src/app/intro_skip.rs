@@ -112,8 +112,10 @@ impl Session {
         if self.seek_floor == 0.0 {
             self.seek_floor = f64::MAX;
         }
+        // Strictly before: a segment that begins exactly where the seek landed
+        // (an intro right after a skipped recap) has not been passed yet.
         for segment in &mut self.segments {
-            if segment.start <= self.seek_floor {
+            if segment.start < self.seek_floor {
                 segment.consumed = true;
             }
         }
@@ -786,6 +788,25 @@ mod tests {
         assert!(session.segments[0].consumed);
         assert_eq!(session.active(20.0), Some(0)); // manual skip remains available
         assert_eq!(session.active(90.0), None);
+    }
+    #[test]
+    fn skipping_a_recap_leaves_the_back_to_back_intro_armed() {
+        let segment = |start, end| Segment {
+            kind: 1,
+            start,
+            end,
+            consumed: false,
+            dismissed: false,
+            confidence_percent: None,
+        };
+        let mut session = Session {
+            observed: 5.0,
+            segments: vec![segment(0.0, 60.0), segment(60.0, 150.0)],
+            ..Session::default()
+        };
+        session.seek(5.0, 60.0);
+        assert!(session.segments[0].consumed);
+        assert!(!session.segments[1].consumed);
     }
     #[test]
     fn dragging_ui_thumb_back_before_delayed_lookup_keeps_replay_manual() {
