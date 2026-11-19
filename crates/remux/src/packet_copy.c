@@ -238,7 +238,10 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
     if(!out->pb){av_free(write_buffer);ret=AVERROR(ENOMEM);goto cleanup;}
     out->flags|=AVFMT_FLAG_CUSTOM_IO;
     AVDictionary *opts=NULL; av_dict_set(&opts,"movflags","+faststart",0);
-    out->avoid_negative_ts=AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
+    /* Start the output at zero, as the streaming copy does. Keeping a source
+       origin (a broadcast capture starting at 9 h) made the MP4 muxer write a
+       leading empty edit as long as that origin. */
+    out->avoid_negative_ts=AVFMT_AVOID_NEG_TS_MAKE_ZERO;
     ret=avformat_write_header(out,&opts); av_dict_free(&opts); if(ret<0)goto cleanup;
     packet=av_packet_alloc(); if(!packet){ret=AVERROR(ENOMEM);goto cleanup;}
     while(1) {
