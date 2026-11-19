@@ -531,6 +531,24 @@ pub fn audio_language(value: &str) -> Option<String> {
         .or_else(|| NAMES.get(&value.trim().to_lowercase()).cloned())
 }
 
+/// A language named by a word on an "Audio:"/"Subtitles:" line. Those lines
+/// also carry codecs, channels and containers, and ISO 639-3 names thousands
+/// of rare languages with such codes (`aac` is Ari, `dts` Toro So Dogon), so a
+/// short code counts only for a language that has a two-letter code. Full
+/// names ("English") are always accepted.
+fn labelled_language(token: &str) -> Option<String> {
+    const TECHNICAL: &[&str] = &[
+        "aa", "ac", "ch", "dd", "hd", "ma", "ts", "aac", "dts", "ddp", "eac", "mka", "dub",
+        "sub", "and", "the",
+    ];
+    let lower = token.to_ascii_lowercase();
+    if TECHNICAL.contains(&lower.as_str()) {
+        return None;
+    }
+    let language = audio_language(&lower)?;
+    (lower.len() > 3 || language.len() == 2).then_some(language)
+}
+
 /// Parse only unambiguous advertised technical tokens. Conflicting resolution,
 /// codec or size claims remain unknown. Bare language words in titles, flags and
 /// the stream's subtitle list do not establish an audio language.
@@ -612,7 +630,7 @@ pub fn advertised(text: &str) -> StreamFacts {
             .filter(|token| !token.is_empty())
             .take(32)
         {
-            if let Some(language) = audio_language(token)
+            if let Some(language) = labelled_language(token)
                 && !languages.contains(&language)
             {
                 languages.push(language);
@@ -951,6 +969,12 @@ mod tests {
         assert_eq!(facts.codec, None);
         assert_eq!(facts.bytes, None);
         assert!(facts.audio_languages.is_empty());
+        // Codec, channel and container words are not languages.
+        let facts = advertised("Release\nAudio: AAC 5.1 ch / DTS-HD MA\nSubtitles: SUB MKA");
+        assert!(facts.audio_languages.is_empty());
+        assert!(facts.subtitle_languages.is_empty());
+        let facts = advertised("Audio: English, ger");
+        assert_eq!(facts.audio_languages, ["en", "de"]);
     }
     #[test]
     fn ordered_audio_preferences_rank_without_hiding_other_languages() {
