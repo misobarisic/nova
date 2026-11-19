@@ -371,7 +371,22 @@ pub struct SettingsCapability {
     owner: ServiceOwner,
     revision: u64,
     provider: Option<(String, u64, String)>,
+    /// Last durable provider check, shared by clones.
+    durable_checked: Arc<Mutex<DurableCheck>>,
 }
+
+#[derive(Clone, Copy)]
+enum DurableCheck {
+    Unchecked,
+    CurrentAt(std::time::Instant),
+    /// Final: a stale capability never becomes current again.
+    Stale,
+}
+
+/// How long a confirmed durable provider record stays trusted. The check
+/// reads and parses the addon inventory, and it runs from the script
+/// interrupt handler, per body chunk and at 40 Hz in the HLS relay.
+const DURABLE_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
 impl SettingsCapability {
     pub fn is_current(&self) -> bool {
         let state = self.owner.lock().unwrap();
@@ -386,11 +401,23 @@ impl SettingsCapability {
         }
         let backend = state.backend.clone();
         drop(state);
-        backend.is_some_and(|backend| {
+        let mut checked = self.durable_checked.lock().unwrap();
+        match *checked {
+            DurableCheck::Stale => return false,
+            DurableCheck::CurrentAt(at) if at.elapsed() < DURABLE_RECHECK => return true,
+            DurableCheck::CurrentAt(_) | DurableCheck::Unchecked => {}
+        }
+        let current = backend.is_some_and(|backend| {
             backend
                 .provider_revision(url)
                 .is_ok_and(|current| current.as_deref() == Some(durable_revision))
-        })
+        });
+        *checked = if current {
+            DurableCheck::CurrentAt(std::time::Instant::now())
+        } else {
+            DurableCheck::Stale
+        };
+        current
     }
     pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
         with_scoped_service(Some(self.owner.clone()), f)
@@ -428,6 +455,7 @@ pub fn capture_settings_capability() -> SettingsCapability {
         owner,
         revision,
         provider: None,
+        durable_checked: Arc::new(Mutex::new(DurableCheck::Unchecked)),
     }
 }
 pub(crate) fn capture_provider_settings(
@@ -608,6 +636,7 @@ pub fn owned_settings_capability(prepared: PreparedPluginSettings) -> SettingsCa
         owner,
         revision,
         provider: None,
+        durable_checked: Arc::new(Mutex::new(DurableCheck::Unchecked)),
     }
 }
 
