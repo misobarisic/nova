@@ -624,31 +624,61 @@ fn dismiss_native(state: &mut Delivery, keys: &[String]) {
     );
 }
 fn notification_summary(owner: &profiles::ProfileStore, event: &Event) -> String {
-    if !spoiler::owner_enabled(owner) {
-        return event.summary.clone();
+    SpoilerSummaries::new(owner).summary(event)
+}
+
+/// Spoiler-safe summaries for many events: progress and library are loaded
+/// once and episode lists once per title, instead of per event.
+struct SpoilerSummaries<'a> {
+    owner: &'a profiles::ProfileStore,
+    enabled: bool,
+    progress: Option<HashMap<String, EpisodeProgress>>,
+    titles: Option<Vec<LibraryEntry>>,
+    videos: HashMap<(String, String), Vec<Video>>,
+}
+
+impl<'a> SpoilerSummaries<'a> {
+    fn new(owner: &'a profiles::ProfileStore) -> Self {
+        Self {
+            owner,
+            enabled: spoiler::owner_enabled(owner),
+            progress: None,
+            titles: None,
+            videos: HashMap::new(),
+        }
     }
-    let progress: HashMap<String, EpisodeProgress> =
-        load(owner, EPISODE_PROGRESS_KEY).unwrap_or_default();
-    if progress
-        .get(&progress_map_key(&event.title_id, &event.episode_id))
-        .is_some_and(|p| p.watched)
-    {
-        return event.summary.clone();
+
+    fn summary(&mut self, event: &Event) -> String {
+        if !self.enabled {
+            return event.summary.clone();
+        }
+        let owner = self.owner;
+        if self
+            .progress
+            .get_or_insert_with(|| load(owner, EPISODE_PROGRESS_KEY).unwrap_or_default())
+            .get(&progress_map_key(&event.title_id, &event.episode_id))
+            .is_some_and(|p| p.watched)
+        {
+            return event.summary.clone();
+        }
+        let title = self
+            .titles
+            .get_or_insert_with(|| load(owner, "library").unwrap_or_default())
+            .iter()
+            .find(|title| title.id == event.title_id && title.type_ == event.type_)
+            .map_or_else(|| "Nova".to_owned(), |title| title.name.clone());
+        let number = self
+            .videos
+            .entry((event.type_.clone(), event.title_id.clone()))
+            .or_insert_with(|| {
+                load(owner, &episodes_key(&event.type_, &event.title_id)).unwrap_or_default()
+            })
+            .iter()
+            .find(|v| v.id == event.episode_id)
+            .map(episode_se_label)
+            .unwrap_or_else(|| text::tr("Episode").into());
+        format!("{title} — {number}")
     }
-    let titles: Vec<LibraryEntry> = load(owner, "library").unwrap_or_default();
-    let title = titles
-        .iter()
-        .find(|title| title.id == event.title_id && title.type_ == event.type_)
-        .map(|title| title.name.as_str())
-        .unwrap_or("Nova");
-    let videos: Vec<Video> =
-        load(owner, &episodes_key(&event.type_, &event.title_id)).unwrap_or_default();
-    let number = videos
-        .iter()
-        .find(|v| v.id == event.episode_id)
-        .map(episode_se_label)
-        .unwrap_or_else(|| text::tr("Episode").into());
-    format!("{title} — {number}")
 }
 #[cfg(any(target_os = "android", test))]
 fn native_events(state: &Delivery) -> Vec<&Event> {
@@ -1577,6 +1607,8 @@ impl Bridge {
             if spoiler::owner_enabled(&owner) {
                 let progress: HashMap<String, EpisodeProgress> =
                     load(&owner, EPISODE_PROGRESS_KEY).unwrap_or_default();
+                let mut summaries = SpoilerSummaries::new(&owner);
+                summaries.progress = Some(progress.clone());
                 for entry in ledger.entries.values_mut() {
                     if !progress
                         .get(&progress_map_key(
@@ -1585,7 +1617,7 @@ impl Bridge {
                         ))
                         .is_some_and(|p| p.watched)
                     {
-                        entry.event.summary = notification_summary(&owner, &entry.event);
+                        entry.event.summary = summaries.summary(&entry.event);
                         entry.event.description.clear();
                     }
                 }
@@ -1752,12 +1784,13 @@ pub(super) fn reconcile_owner(owner: &profiles::ProfileStore) -> Result<(), Stri
         let body = if native.is_empty() {
             String::new()
         } else {
+            let mut summaries = SpoilerSummaries::new(owner);
             format!(
                 "{}\n{}",
                 text::tr("Released today"),
                 native
                     .iter()
-                    .map(|event| notification_summary(owner, event))
+                    .map(|event| summaries.summary(event))
                     .collect::<Vec<_>>()
                     .join("\n")
             )
