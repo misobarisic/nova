@@ -1506,60 +1506,67 @@ impl EngineInner {
             file_idx: candidate.idx,
         });
         drop(operation);
-        if let Err(error) = self.wait_initialized(&handle, &cancel) {
-            if cancel.load(Ordering::Acquire) {
-                self.stop_cancelled_transfer(&key, job_id, id);
-            }
-            return Err(error);
-        }
-        {
-            let _operation = self.operations.lock().unwrap();
-            if cancel.load(Ordering::Acquire) || !self.retained_job_is_current(&key, job_id) {
-                return Err("torrent download cancelled".into());
-            }
-            let only = self.only_files_for(id, &info_hash, candidate.idx);
-            self.rt
-                .block_on(self.session.update_only_files(&handle, &only))
-                .map_err(|e| format!("{e:#}"))?;
-        }
-        loop {
-            if cancel.load(Ordering::Acquire) {
-                self.stop_cancelled_transfer(&key, job_id, id);
-                return Err("torrent download cancelled".into());
-            }
-            if !self.retained_job_is_current(&key, job_id) {
-                return Err("torrent download was removed".into());
-            }
-            let Some(handle) = self.session.get(TorrentIdOrHash::Id(id)) else {
-                return Err("torrent download disappeared from the session".into());
-            };
-            let raw = handle.stats();
-            on_progress(to_torrent_stats(&raw, Some((candidate.idx, candidate.len))));
-            if let Some(error) = raw.error {
+        let result = (|| {
+            if let Err(error) = self.wait_initialized(&handle, &cancel) {
                 return Err(error);
             }
-            if selected_file_is_complete(&raw, candidate.idx, candidate.len) {
-                if !path.is_file() {
-                    return Err("completed torrent file is missing".into());
-                }
+            {
                 let _operation = self.operations.lock().unwrap();
-                if !self.mark_retained_complete(&key, job_id) {
+                if cancel.load(Ordering::Acquire) || !self.retained_job_is_current(&key, job_id) {
+                    return Err("torrent download cancelled".into());
+                }
+                let only = self.only_files_for(id, &info_hash, candidate.idx);
+                self.rt
+                    .block_on(self.session.update_only_files(&handle, &only))
+                    .map_err(|e| format!("{e:#}"))?;
+            }
+            loop {
+                if cancel.load(Ordering::Acquire) {
+                    return Err("torrent download cancelled".into());
+                }
+                if !self.retained_job_is_current(&key, job_id) {
                     return Err("torrent download was removed".into());
                 }
-                if !self.transfer_needs_running(&info_hash, id, &dir) {
-                    self.pause(id);
-                    if !handle.is_paused() {
-                        return Err("could not stop completed torrent".into());
-                    }
+                let Some(handle) = self.session.get(TorrentIdOrHash::Id(id)) else {
+                    return Err("torrent download disappeared from the session".into());
+                };
+                let raw = handle.stats();
+                on_progress(to_torrent_stats(&raw, Some((candidate.idx, candidate.len))));
+                if let Some(error) = raw.error {
+                    return Err(error);
                 }
-                return Ok(TorrentDownloadReady {
-                    path,
-                    file_name,
-                    file_len: candidate.len,
-                });
+                if selected_file_is_complete(&raw, candidate.idx, candidate.len) {
+                    if !path.is_file() {
+                        return Err("completed torrent file is missing".into());
+                    }
+                    let _operation = self.operations.lock().unwrap();
+                    if !self.mark_retained_complete(&key, job_id) {
+                        return Err("torrent download was removed".into());
+                    }
+                    if !self.transfer_needs_running(&info_hash, id, &dir) {
+                        self.pause(id);
+                        if !handle.is_paused() {
+                            return Err("could not stop completed torrent".into());
+                        }
+                    }
+                    return Ok(TorrentDownloadReady {
+                        path: path.clone(),
+                        file_name: file_name.clone(),
+                        file_len: candidate.len,
+                    });
+                }
+                std::thread::sleep(DOWNLOAD_PROGRESS_INTERVAL);
             }
-            std::thread::sleep(DOWNLOAD_PROGRESS_INTERVAL);
+        })();
+        // Every failure, not only a cancel, leaves the job failed and its write
+        // guard dropped. A transfer still running would keep downloading
+        // outside the quota and the downloads list (an initialization timeout
+        // on a resumed multi-GB file, say), so pause it unless a stream needs
+        // it. A removed job's transfer belongs to whoever replaced it.
+        if result.is_err() {
+            self.stop_cancelled_transfer(&key, job_id, id);
         }
+        result
     }
 
     fn install_retained_transfer(
@@ -1610,6 +1617,8 @@ impl EngineInner {
         true
     }
 
+    /// Pause a job's transfer after it stopped (cancel or failure), unless a
+    /// stream still needs it or the job was replaced.
     fn stop_cancelled_transfer(&self, key: &str, job_id: u64, id: TorrentId) {
         let _operation = self.operations.lock().unwrap();
         if !self.retained_job_is_current(key, job_id) {
