@@ -4344,7 +4344,11 @@ impl Player {
             }
         }
         let was_paused = app.get_is_paused();
-        if snapshot.dur > 0.0 || snapshot.pos > 0.0 {
+        // While a replacement load is still queued (it is submitted from the
+        // next rendered frame), mpv's position, duration and EOF belong to the
+        // previous file: publishing them would mark the new session started
+        // with the old timeline, or pause it for the old file's EOF.
+        if !pending_load && (snapshot.dur > 0.0 || snapshot.pos > 0.0) {
             // The startup wake chooses a playing/paused timeout. Publish the
             // live pause state first, rather than retaining loading's `true`.
             app.set_is_paused(snapshot.paused);
@@ -4395,7 +4399,10 @@ impl Player {
                     decode_label(current)
                 ));
             }
-        } else if !self.state.reported.load(Ordering::SeqCst)
+        } else if !pending_load
+            // The watchdog runs from the `loadfile` (which resets `opened_at`),
+            // not from `play`: an undrawn window has not submitted anything.
+            && !self.state.reported.load(Ordering::SeqCst)
             && self.state.opened_at.lock().unwrap().elapsed() > Duration::from_secs(20)
             && !(self.state.ram_torrent_source.lock().unwrap().as_deref()
                 == Some(buffer_source.as_str())
@@ -4442,7 +4449,8 @@ impl Player {
         // rewriting identical progress every save interval and lets a seek
         // back inspect a frame before the user explicitly presses Play.
         // Parties own their terminal reporting and pause/rate policy.
-        if self.state.started.load(Ordering::SeqCst)
+        if !pending_load
+            && self.state.started.load(Ordering::SeqCst)
             && snapshot.eof
             && self.state.party_playback_rate.lock().unwrap().is_none()
         {
