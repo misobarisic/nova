@@ -3061,7 +3061,8 @@ impl Bridge {
             for u in &state.upcoming_list {
                 *counts.entry(u.air_days).or_insert(0) += 1;
             }
-            let today = today_days();
+            // The highlighted "today" is the device's civil day.
+            let today = calendar::calendar_today_days();
             let cells = cal_cells(cal.first, &counts, cal.day, today);
             let (year, month, _) = civil_from_days(cal.first);
             (
@@ -3610,7 +3611,7 @@ pub(super) fn weekday_monday0(days: i64) -> u32 {
 /// including its month, so browsing another month survives rebuilds.
 fn heal_upcoming_cal(state: &mut Shared) {
     if state.upcoming_cal.first == 0 {
-        state.upcoming_cal.first = month_first(today_days());
+        state.upcoming_cal.first = month_first(calendar::calendar_today_days());
     }
     let valid = state
         .upcoming_cal
@@ -3619,7 +3620,7 @@ fn heal_upcoming_cal(state: &mut Shared) {
     if valid {
         return;
     }
-    let today = today_days();
+    let today = calendar::calendar_today_days();
     let today_live = state.upcoming_list.iter().any(|u| u.air_days == today);
     state.upcoming_cal.day = if state.upcoming_list.is_empty() {
         None
