@@ -929,6 +929,12 @@ pub(crate) fn domain_matches(host: &str, allowed: &str) -> bool {
 
 pub(crate) use nova_net::is_public_ip;
 
+const STORAGE_KEYS: usize = 512;
+const STORAGE_BYTES: usize = 2 * 1024 * 1024;
+/// Keys the metadata broker caches under; provider keys are `<id>:...` and
+/// `metadata` is a reserved package id.
+const BROKER_PREFIX: &str = "metadata:";
+
 #[derive(Default)]
 pub struct MemoryProviderHost {
     values: Mutex<BTreeMap<String, String>>,
@@ -958,7 +964,29 @@ impl ProviderHost for MemoryProviderHost {
             .values
             .lock()
             .map_err(|_| ProviderHostError("provider storage is unavailable".into()))?;
-        if !values.contains_key(key) && values.len() >= 512 {
+        // Metadata broker results are a cache (also kept on disk); they give
+        // way before provider state such as pagination cursors is refused.
+        let fits = |values: &BTreeMap<String, String>| {
+            let total = values
+                .iter()
+                .filter(|(stored_key, _)| stored_key.as_str() != key)
+                .map(|(stored_key, stored_value)| stored_key.len() + stored_value.len())
+                .sum::<usize>()
+                .saturating_add(key.len())
+                .saturating_add(value.len());
+            (values.contains_key(key) || values.len() < STORAGE_KEYS) && total <= STORAGE_BYTES
+        };
+        while !fits(&values) {
+            let Some(evict) = values
+                .keys()
+                .find(|stored| stored.starts_with(BROKER_PREFIX) && stored.as_str() != key)
+                .cloned()
+            else {
+                break;
+            };
+            values.remove(&evict);
+        }
+        if !values.contains_key(key) && values.len() >= STORAGE_KEYS {
             return Err(ProviderHostError(
                 "provider storage key limit reached".into(),
             ));
@@ -970,7 +998,7 @@ impl ProviderHost for MemoryProviderHost {
             .sum::<usize>()
             .saturating_add(key.len())
             .saturating_add(value.len());
-        if total > 2 * 1024 * 1024 {
+        if total > STORAGE_BYTES {
             return Err(ProviderHostError(
                 "provider storage size limit reached".into(),
             ));
@@ -992,6 +1020,26 @@ pub(crate) fn session_state() -> Arc<MemoryProviderHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broker_cache_gives_way_to_provider_state() {
+        let host = MemoryProviderHost::new();
+        let blob = "x".repeat(200 * 1024);
+        for n in 0..10 {
+            host.storage_set(&format!("metadata:v2:{n:02}"), &blob)
+                .unwrap();
+        }
+        // Full of broker results; provider state still fits by evicting some.
+        host.storage_set("anikoto:cursor", &"y".repeat(300 * 1024))
+            .unwrap();
+        assert!(host.storage_get("anikoto:cursor").is_some());
+        // Provider state alone is still capped.
+        let host = MemoryProviderHost::new();
+        host.storage_set("a:big", &"z".repeat(STORAGE_BYTES - 10))
+            .unwrap();
+        assert!(host.storage_set("a:more", &"z".repeat(100)).is_err());
+        assert!(host.storage_get("a:big").is_some());
+    }
 
     fn test_dns_pool() -> &'static DnsPool {
         Box::leak(Box::new(DnsPool::new()))
