@@ -205,10 +205,14 @@ struct Job {
 }
 
 impl Job {
+    /// The surface and profile this job was started for are still live.
+    fn surface_current(&self) -> bool {
+        self.scope.current(&self.bridge) && profiles::is_current(&self.profile)
+    }
+
     /// Runs only on the UI thread, immediately before a continuation or delivery.
     fn current(&self) -> bool {
-        self.scope.current(&self.bridge)
-            && profiles::is_current(&self.profile)
+        self.surface_current()
             && self
                 .bridge
                 .shared
@@ -278,6 +282,12 @@ fn request<F: FnOnce(Vec<home::HomeShowcaseBatch>) + Clone + Send + 'static>(
             .decide(job.mode, job.supports_skip, job.desired, visible);
         let _ = profiles::invoke_from_event_loop(move || {
             if !job.current() {
+                // Only this source's addon changed (replaced package, became
+                // unavailable): finish the join with a failed batch so the
+                // other sources' results are still applied.
+                if job.surface_current() {
+                    complete.deliver(job.index, (job.source, None));
+                }
                 return;
             }
             if more && job.allow_more() {
