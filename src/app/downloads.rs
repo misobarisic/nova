@@ -2702,6 +2702,7 @@ fn adopt_orphaned_artifacts(root: &Path, manifest: &mut DownloadManifest) {
         .collect();
     let known_ids: HashSet<String> = manifest.jobs.iter().map(|job| job.id.clone()).collect();
     let mut adopted = 0usize;
+    let mut swept = 0usize;
 
     if let Ok(entries) = std::fs::read_dir(root.join("http")) {
         for entry in entries.flatten() {
@@ -2712,6 +2713,16 @@ fn adopt_orphaned_artifacts(root: &Path, manifest: &mut DownloadManifest) {
                 continue;
             }
             let Some((path, len)) = directory_artifact(&entry.path()) else {
+                // Leftovers of a removed transfer whose worker never got to
+                // clean up (the app exited while it was unwinding). Nothing
+                // lists them, so reclaim the space here.
+                let dir = std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path());
+                if !known_ids.contains(id.as_str())
+                    && !known.iter().any(|artifact| artifact.starts_with(&dir))
+                    && std::fs::remove_dir_all(&dir).is_ok()
+                {
+                    swept += 1;
+                }
                 continue;
             };
             let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
@@ -2727,6 +2738,9 @@ fn adopt_orphaned_artifacts(root: &Path, manifest: &mut DownloadManifest) {
 
     if adopted > 0 {
         eprintln!("nova downloads: re-adopted {adopted} completed artifact(s) from disk");
+    }
+    if swept > 0 {
+        eprintln!("nova downloads: removed {swept} abandoned partial download(s)");
     }
 }
 
@@ -6171,6 +6185,26 @@ mod tests {
         assert_eq!(job.display, "movie.mp4");
         assert_eq!(job.artifact_path.as_deref(), Some(file.as_path()));
         assert!(job.media_type.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn abandoned_partial_directories_are_swept() {
+        let root = temp_root("sweep");
+        let orphan = root.join("http/download-gone/movie.mp4.part");
+        let owned = root.join("http/download-live/movie.mp4.part");
+        for part in [&orphan, &owned] {
+            std::fs::create_dir_all(part.parent().unwrap()).unwrap();
+            std::fs::write(part, b"partial").unwrap();
+        }
+        let mut manifest = DownloadManifest::new(vec![DownloadJob::new(
+            "download-live",
+            JobSource::http("http://x/movie.mp4"),
+        )]);
+        adopt_orphaned_artifacts(&root, &mut manifest);
+        assert!(!root.join("http/download-gone").exists());
+        assert!(owned.exists());
+        assert_eq!(manifest.jobs.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
