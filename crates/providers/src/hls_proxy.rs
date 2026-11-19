@@ -206,6 +206,12 @@ fn run_listener(session: Arc<Session>, listener: TcpListener) {
     while !(session.cancelled)() {
         match listener.accept() {
             Ok((mut socket, peer)) if peer.ip().is_loopback() => {
+                // Windows and BSD hand out accepted sockets with the listener's
+                // non-blocking flag, where timeouts do nothing and a full send
+                // buffer fails the write mid-segment.
+                if socket.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 if readers
                     .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                         (n < 4).then_some(n + 1)
