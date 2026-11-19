@@ -1415,6 +1415,33 @@ fn default_text() -> String {
     "text".to_owned()
 }
 
+/// Nodes `select_html` may visit for field lookups across one call.
+const SELECT_HTML_NODE_BUDGET: usize = 2_000_000;
+
+/// Call `each` for the elements under `root` (not `root` itself) that match
+/// `selector`, in document order, until it returns false. Every visited node
+/// is charged to `budget`; returns false if the budget ran out first.
+fn each_match<'a>(
+    root: scraper::ElementRef<'a>,
+    selector: &Selector,
+    budget: &mut usize,
+    mut each: impl FnMut(scraper::ElementRef<'a>) -> bool,
+) -> bool {
+    for node in root.descendants().skip(1) {
+        let Some(spent) = budget.checked_sub(1) else {
+            return false;
+        };
+        *budget = spent;
+        if let Some(element) = scraper::ElementRef::wrap(node)
+            && selector.matches_with_scope(&element, Some(root))
+            && !each(element)
+        {
+            return true;
+        }
+    }
+    true
+}
+
 fn select_html(raw_html: &str, query: &str, fields_json: &str) -> String {
     if raw_html.len() > MAX_PLUGIN_BODY || query.len() > 4096 || fields_json.len() > 16 * 1024 {
         return "[]".to_owned();
@@ -1428,37 +1455,67 @@ fn select_html(raw_html: &str, query: &str, fields_json: &str) -> String {
     let (Ok(query), document) = (Selector::parse(query), Html::parse_document(raw_html)) else {
         return "[]".to_owned();
     };
+    // Parse each field selector once. An unparsable selector matches nothing.
+    let fields: Vec<(String, FieldSpec, Option<Option<Selector>>)> = fields
+        .into_iter()
+        .map(|(name, spec)| {
+            let selector =
+                (!spec.selector.is_empty()).then(|| Selector::parse(&spec.selector).ok());
+            (name, spec, selector)
+        })
+        .collect();
+    // Field lookups rescan each row's subtree; with nested rows that is
+    // quadratic in the document, and native code here is outside the script's
+    // time limit and cancellation. Bound the total nodes visited instead.
+    let mut budget = SELECT_HTML_NODE_BUDGET;
     let mut rows = Vec::new();
     let mut output_bytes = 0usize;
     for element in document.select(&query).take(4096) {
         let mut row = BTreeMap::new();
-        for (name, spec) in &fields {
+        for (name, spec, selector) in &fields {
             let value = if spec.value == "texts" {
                 let mut value = String::new();
-                if let Ok(selector) = Selector::parse(&spec.selector) {
-                    for found in element.select(&selector) {
+                let mut overflow = false;
+                if let Some(Some(selector)) = selector {
+                    let complete = each_match(element, selector, &mut budget, |found| {
                         let text = found.text().collect::<String>();
                         let text = text.trim();
                         if text.is_empty() {
-                            continue;
+                            return true;
                         }
                         if output_bytes + value.len() + text.len() + 2 > MAX_PLUGIN_BODY {
-                            return "[]".to_owned();
+                            overflow = true;
+                            return false;
                         }
                         if !value.is_empty() {
                             value.push_str(", ");
                         }
                         value.push_str(text);
+                        true
+                    });
+                    if !complete && !overflow {
+                        return "[]".to_owned();
                     }
+                }
+                if overflow {
+                    return "[]".to_owned();
                 }
                 value
             } else {
-                let found = if spec.selector.is_empty() {
-                    Some(element)
-                } else {
-                    Selector::parse(&spec.selector)
-                        .ok()
-                        .and_then(|selector| element.select(&selector).next())
+                let found = match selector {
+                    None => Some(element),
+                    Some(None) => None,
+                    Some(Some(selector)) => {
+                        let mut first = None;
+                        let complete = each_match(element, selector, &mut budget, |found| {
+                            first = Some(found);
+                            false
+                        });
+                        if !complete && first.is_none() {
+                            return "[]".to_owned();
+                        }
+                        first
+                    }
                 };
                 found
                     .map(|found| match spec.value.as_str() {
@@ -2443,6 +2500,37 @@ mod tests {
             ),
             "[]"
         );
+    }
+
+    #[test]
+    fn nested_rows_with_unmatched_fields_stop_at_the_node_budget() {
+        // Every row rescans its subtree for a field that never matches:
+        // about 3 million visits, over the budget.
+        let nested = format!("{}{}", "<div>".repeat(2500), "</div>".repeat(2500));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            select_html(
+                &nested,
+                "div",
+                r#"{"t":{"selector":"span","value":"text"}}"#
+            ),
+            "[]"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        // The same shape within budget still answers.
+        let small = format!(
+            "{}<span>x</span>{}",
+            "<div>".repeat(20),
+            "</div>".repeat(20)
+        );
+        let rows: serde_json::Value = serde_json::from_str(&select_html(
+            &small,
+            "div",
+            r#"{"t":{"selector":"span","value":"text"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 20);
+        assert!(rows.as_array().unwrap().iter().all(|row| row["t"] == "x"));
     }
 
     #[test]

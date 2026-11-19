@@ -544,6 +544,8 @@ are installed by URL; this version does not integrate an external directory.
 
 CSS fields have `{ selector, value }`. An empty selector means the row itself;
 `value` is `text`, `texts` (joined descendant text), `html`, or an attribute name.
+Field lookups may visit at most 2,000,000 nodes per call (native work is outside
+the script budget); a call that exceeds it returns `[]`.
 
 ## Runtime limits
 
