@@ -538,8 +538,8 @@ pub fn audio_language(value: &str) -> Option<String> {
 /// names ("English") are always accepted.
 fn labelled_language(token: &str) -> Option<String> {
     const TECHNICAL: &[&str] = &[
-        "aa", "ac", "ch", "dd", "hd", "ma", "ts", "aac", "dts", "ddp", "eac", "mka", "dub",
-        "sub", "and", "the",
+        "aa", "ac", "ch", "dd", "hd", "ma", "ts", "aac", "dts", "ddp", "eac", "mka", "dub", "sub",
+        "and", "the",
     ];
     let lower = token.to_ascii_lowercase();
     if TECHNICAL.contains(&lower.as_str()) {

@@ -623,6 +623,7 @@ fn dismiss_native(state: &mut Delivery, keys: &[String]) {
             .cloned(),
     );
 }
+#[cfg(test)]
 fn notification_summary(owner: &profiles::ProfileStore, event: &Event) -> String {
     SpoilerSummaries::new(owner).summary(event)
 }

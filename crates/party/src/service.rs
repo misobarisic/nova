@@ -632,13 +632,12 @@ async fn exchange(
     // A heartbeat that must first reconnect gets the join budget: a path that
     // needs more than the exchange budget to set up (relay only) would
     // otherwise restart from scratch every time and never recover.
-    let budget = if matches!(request.operation, Operation::Join { .. })
-        || guest.connection.is_none()
-    {
-        JOIN_TIMEOUT
-    } else {
-        EXCHANGE_TIMEOUT
-    };
+    let budget =
+        if matches!(request.operation, Operation::Join { .. }) || guest.connection.is_none() {
+            JOIN_TIMEOUT
+        } else {
+            EXCHANGE_TIMEOUT
+        };
     let result = tokio::time::timeout(budget, async {
         if guest.connection.is_none() {
             guest.connection = Some(endpoint.connect(guest.ticket.host.clone(), ALPN).await?);

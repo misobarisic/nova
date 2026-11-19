@@ -519,9 +519,9 @@ fn compatible_media(local: &PartyMedia, expected: &PartyMedia, manual: bool) -> 
     // Two different ids from the same public catalog are different titles,
     // whatever the display titles say. Across catalogs only the explicit
     // manual choice below can match them.
-    if public_namespace(&local.identity.title_id).is_some_and(|namespace| {
-        public_namespace(&expected.identity.title_id) == Some(namespace)
-    }) {
+    if public_namespace(&local.identity.title_id)
+        .is_some_and(|namespace| public_namespace(&expected.identity.title_id) == Some(namespace))
+    {
         return false;
     }
     manual

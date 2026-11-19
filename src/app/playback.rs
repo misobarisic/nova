@@ -1929,7 +1929,6 @@ impl Bridge {
                             .and_then(|h| h.engaged_secs)
                             .unwrap_or(0.0),
                     ),
-                    ..Default::default()
                 }),
                 ..Default::default()
             };

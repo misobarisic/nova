@@ -3177,7 +3177,10 @@ impl Bridge {
         let mut settings = merge_settings_fields(&local, &engine.records(DOMAIN_SETTINGS));
         merge_category_order(
             &mut settings.categories,
-            engine.records(DOMAIN_CATEGORY).into_iter().map(|(name, _)| name),
+            engine
+                .records(DOMAIN_CATEGORY)
+                .into_iter()
+                .map(|(name, _)| name),
         );
 
         persist_projection_snapshot(

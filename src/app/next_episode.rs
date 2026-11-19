@@ -424,7 +424,11 @@ mod tests {
             episode: Some(number),
             ..Default::default()
         };
-        let videos = vec![unseasoned("e2", 2), unseasoned("e1", 1), unseasoned("e3", 3)];
+        let videos = vec![
+            unseasoned("e2", 2),
+            unseasoned("e1", 1),
+            unseasoned("e3", 3),
+        ];
         assert_eq!(successor("test", &videos, "e1", 0).unwrap().id, "e2");
         assert_eq!(successor("test", &videos, "e2", 0).unwrap().id, "e3");
         assert!(successor("test", &videos, "e3", 0).is_none());

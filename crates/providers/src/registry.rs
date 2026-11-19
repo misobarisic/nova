@@ -215,7 +215,12 @@ fn manifest_with_capabilities(
     type Key = (String, bool, bool);
     static MANIFESTS: OnceLock<Mutex<HashMap<Key, Option<Manifest>>>> = OnceLock::new();
     let key = (source.digest.clone(), config.streams, config.metadata);
-    if let Some(cached) = MANIFESTS.get_or_init(Default::default).lock().unwrap().get(&key) {
+    if let Some(cached) = MANIFESTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&key)
+    {
         return cached.clone();
     }
     let runtime = PluginRuntime::new(source.plugin.clone(), source.source.clone());

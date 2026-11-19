@@ -2025,7 +2025,9 @@ impl DownloadCoordinator {
                     } else {
                         // Cap each step: after sleep or a frozen process one
                         // wake-up must not count as the whole gap.
-                        idle += now.saturating_duration_since(checked_at).min(Duration::from_secs(60));
+                        idle += now
+                            .saturating_duration_since(checked_at)
+                            .min(Duration::from_secs(60));
                     }
                     checked_at = now;
                     if idle >= Duration::from_secs(TORRENT_STALL_SECS) {

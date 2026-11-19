@@ -1520,9 +1520,7 @@ impl EngineInner {
         });
         drop(operation);
         let result = (|| {
-            if let Err(error) = self.wait_initialized(&handle, &cancel) {
-                return Err(error);
-            }
+            self.wait_initialized(&handle, &cancel)?;
             {
                 let _operation = self.operations.lock().unwrap();
                 if cancel.load(Ordering::Acquire) || !self.retained_job_is_current(&key, job_id) {
@@ -3686,10 +3684,7 @@ mod tests {
         ]);
         assert_eq!(pick_video_file(&f, None, "").unwrap().idx, 1);
         // A small sample still loses to a feature named like the request.
-        let f = files(&[
-            (0, "movie.sample.mkv", 50),
-            (1, "movie.mkv", 9_000),
-        ]);
+        let f = files(&[(0, "movie.sample.mkv", 50), (1, "movie.mkv", 9_000)]);
         assert_eq!(pick_video_file(&f, None, "movie sample").unwrap().idx, 1);
     }
 

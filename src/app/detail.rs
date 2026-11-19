@@ -1067,9 +1067,8 @@ impl Bridge {
                             item.videos = if scoped {
                                 // Same transaction lock as the reconciled path,
                                 // so a concurrent refresh cannot interleave.
-                                let _guard = EPISODE_RECONCILE
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
+                                let _guard =
+                                    EPISODE_RECONCILE.lock().unwrap_or_else(|e| e.into_inner());
                                 write_episodes_cache_for(&modal_type, &id, &item.videos)
                             } else {
                                 write_episode_meta_cache_for(&modal_type, &id, &item)
