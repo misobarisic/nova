@@ -1582,7 +1582,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 {
                     let _section = perf::Timer::new("ui.reconcile_release_reminders");
-                    tick_bridge.reconcile_release_reminders();
+                    tick_bridge.reconcile_release_reminders_periodic();
                 }
             }
             let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());

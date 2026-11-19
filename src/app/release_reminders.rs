@@ -1632,7 +1632,21 @@ impl Bridge {
             Some((ledger, ics, profile_policy::revision(&owner), inputs));
     }
     pub(super) fn reconcile_release_reminders(&self) {
-        self.refresh_release_reminders();
+        self.reconcile_release_reminders_with(true);
+    }
+
+    /// The once-a-minute tick: deliver in the background, but rebuild the
+    /// reminder panel (library, subscriptions and delivery reads on the UI
+    /// thread) only while the Calendar is open. Opening it refreshes anyway.
+    pub(super) fn reconcile_release_reminders_periodic(&self) {
+        let visible = self.app().is_some_and(|app| app.get_show_calendar());
+        self.reconcile_release_reminders_with(visible);
+    }
+
+    fn reconcile_release_reminders_with(&self, refresh_ui: bool) {
+        if refresh_ui {
+            self.refresh_release_reminders();
+        }
         if DELIVERY_RUNNING.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -1657,7 +1671,9 @@ impl Bridge {
                 }
             }
             let _ = profiles::invoke_from_event_loop(move || {
-                if profiles::is_current(&session) {
+                if profiles::is_current(&session)
+                    && (refresh_ui || bridge.app().is_some_and(|app| app.get_show_calendar()))
+                {
                     bridge.refresh_release_reminders();
                 }
             });
