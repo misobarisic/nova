@@ -177,6 +177,7 @@ impl PartyService {
                 Handler {
                     shared: self.shared.clone(),
                     connections: Arc::new(Semaphore::new(16)),
+                    per_peer: Default::default(),
                 },
             )
             .spawn();
@@ -748,6 +749,29 @@ fn midpoint_offset(host_ms: u64, started: u64, finished: u64) -> f64 {
 struct Handler {
     shared: Arc<Shared>,
     connections: Arc<Semaphore>,
+    /// Open connections per remote endpoint, so one peer (a kicked guest
+    /// reconnecting in a loop) cannot hold every slot.
+    per_peer: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
+}
+
+/// Connections one remote endpoint may hold at once.
+const CONNECTIONS_PER_PEER: usize = 2;
+
+/// Releases a per-peer connection slot when the connection ends.
+struct PeerSlot {
+    counts: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
+    peer: String,
+}
+impl Drop for PeerSlot {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.peer) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.peer);
+            }
+        }
+    }
 }
 
 impl fmt::Debug for Handler {
@@ -853,6 +877,20 @@ impl ProtocolHandler for Handler {
             return Ok(());
         };
         let peer = connection.remote_id().to_string();
+        let _slot = {
+            let mut counts = self.per_peer.lock().unwrap_or_else(|e| e.into_inner());
+            let count = counts.entry(peer.clone()).or_default();
+            if *count >= CONNECTIONS_PER_PEER {
+                drop(counts);
+                connection.close(0u32.into(), b"party busy");
+                return Ok(());
+            }
+            *count += 1;
+            PeerSlot {
+                counts: self.per_peer.clone(),
+                peer: peer.clone(),
+            }
+        };
         loop {
             let streams =
                 tokio::time::timeout(Duration::from_secs(5), connection.accept_bi()).await;
@@ -862,11 +900,21 @@ impl ProtocolHandler for Handler {
             let result = tokio::time::timeout(EXCHANGE_TIMEOUT, async {
                 let request: Request = wire::read(&mut recv).await?;
                 let response = self.dispatch(&peer, request);
-                wire::write(&mut send, &response).await
+                wire::write(&mut send, &response).await?;
+                Ok::<_, anyhow::Error>(response.terminal)
             })
             .await;
-            if !matches!(result, Ok(Ok(()))) {
-                break;
+            match result {
+                Ok(Ok(false)) => {}
+                Ok(Ok(true)) => {
+                    // A terminal answer (invalid capability, revoked membership,
+                    // party ended) ends the connection so it stops holding a
+                    // slot. Let the guest read it and close first; dropping
+                    // the connection right away could lose the answer.
+                    let _ = tokio::time::timeout(Duration::from_secs(5), connection.closed()).await;
+                    break;
+                }
+                _ => break,
             }
         }
         connection.close(0u32.into(), b"party connection ended");
@@ -908,6 +956,7 @@ mod tests {
         let handler = Handler {
             shared,
             connections: Arc::new(Semaphore::new(16)),
+            per_peer: Default::default(),
         };
         let router = Router::builder(endpoint.clone())
             .accept(ALPN, handler.clone())
@@ -1016,6 +1065,7 @@ mod tests {
                     Handler {
                         shared,
                         connections: Arc::new(Semaphore::new(16)),
+                        per_peer: Default::default(),
                     },
                 )
                 .spawn();
