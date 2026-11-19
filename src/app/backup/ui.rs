@@ -827,13 +827,10 @@ pub(super) fn install(app: &crate::AppWindow) {
                         .and_then(|index| live.get(index + 1))
                 };
                 if let Some(target) = next {
-                    if !app::bridge::with_global_bridge(|bridge| {
-                        bridge.require_target_profile_management(&target.id)
-                    })
-                    .unwrap_or(false)
-                    {
-                        return;
-                    }
+                    // Selecting a target is not yet managing it: preview and
+                    // import ask for each target's PIN. Gating here stopped
+                    // the cycle at a protected profile, so every profile after
+                    // it was unreachable without that PIN.
                     choice.target = target.id.clone();
                     choice.create = false;
                 } else if let Some(archive) = state.archive.as_deref()
