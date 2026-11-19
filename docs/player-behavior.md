@@ -73,7 +73,10 @@ With Play on set to a paired device, the receiver lists its own sources and
 marks its Last used or Recommended source through a suffix of the opaque offer
 ID (the playback wire schema is unchanged; older peers show no badge). Choosing
 a source from the remote controls' next-episode prompt continues that session
-without a separate Replace playback confirmation. On Android, backgrounding
+without a separate Replace playback confirmation. While the receiver offers a
+segment skip, the remote controls show Skip intro (or Skip recap) under the
+transport buttons; TV keeps it under Playback tools → Intros and credits for
+D-pad navigation. On Android, backgrounding
 Nova (screen off, another app) keeps the remote controls and their device open;
 only the connection and requests in flight are dropped, and polling resumes on
 return.

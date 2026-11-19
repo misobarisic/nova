@@ -1124,3 +1124,64 @@ fn replacement_prompt_over_stream_offers_keeps_both_actions_reachable() {
     click(&app, "Replace playback");
     assert_eq!(&*answers.borrow(), &[("token".into(), true)]);
 }
+
+#[test]
+fn offered_segment_skip_is_on_the_main_controls() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::offered_segment_skip_is_on_the_main_controls"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(390, 1800));
+    app.set_remote_controls_open(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("receiver-a".into());
+    app.set_remote_can_intro_skip(true);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let recorded = calls.clone();
+    app.on_remote_semantic_action(move |name, value, id, text, session| {
+        recorded.borrow_mut().push((
+            name.to_string(),
+            value,
+            id.to_string(),
+            text.to_string(),
+            session.to_string(),
+        ));
+    });
+    app.show().unwrap();
+    settle_remote();
+    let skip_buttons = |label: &str| {
+        ElementHandle::find_by_accessible_label(&app, label)
+            .filter(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .count()
+    };
+    // Nothing to skip: no button outside Playback tools.
+    assert_eq!(skip_buttons("Skip intro"), 0);
+
+    app.set_remote_skip_token("segment-1".into());
+    app.set_remote_skip_segment_kind(1);
+    settle_remote();
+    click(&app, "Skip intro");
+    assert_eq!(
+        calls.borrow().last().unwrap(),
+        &(
+            "skip".into(),
+            0.0,
+            "segment-1".into(),
+            "".into(),
+            "receiver-a".into()
+        )
+    );
+
+    app.set_remote_skip_segment_kind(2);
+    settle_remote();
+    assert_eq!(skip_buttons("Skip recap"), 1);
+
+    app.set_remote_skip_token("".into());
+    settle_remote();
+    assert_eq!(skip_buttons("Skip recap") + skip_buttons("Skip intro"), 0);
+}

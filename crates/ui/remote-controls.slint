@@ -568,6 +568,17 @@ export component RemoteControlsPage inherits Rectangle {
                                     changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
                                     init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } caption: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 4; } root.action("seek_relative", 10); } }
                             }
+                            // The receiver is offering a skip right now: surface it beside the
+                            // transport, as the local player does, instead of only under
+                            // Playback tools. TV keeps the tools path for D-pad navigation.
+                            if !InterfaceStyle.tv && root.ready && RemoteBridge.can_intro_skip && RemoteBridge.skip_token != "": HorizontalLayout {
+                                alignment: center;
+                                skip_segment := PillButton {
+                                    label: RemoteBridge.skip_segment_kind == 2 ? @tr("Skip recap") : @tr("Skip intro");
+                                    primary: true; btn_min_width: 160px;
+                                    clicked => { RemoteBridge.semantic_action("skip", 0, RemoteBridge.skip_token, "", RemoteBridge.session); }
+                                }
+                            }
                             timeline := MiniSlider {
                                 property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 1;
                                 changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
