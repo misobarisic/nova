@@ -794,7 +794,23 @@ impl ProviderHost for ScopedHttpHost {
                     lower_name.as_str(),
                     "host" | "content-length" | "connection" | "proxy-authorization"
                 ) || (target.origin() != original_origin
-                    && matches!(lower_name.as_str(), "authorization" | "cookie"))
+                    && !matches!(
+                        lower_name.as_str(),
+                        // A redirect to another origin keeps only headers that
+                        // cannot carry a credential (an X-Api-Key would be
+                        // replayed to the new host).
+                        "accept"
+                            | "accept-language"
+                            | "user-agent"
+                            | "range"
+                            | "if-range"
+                            | "if-none-match"
+                            | "if-modified-since"
+                            | "cache-control"
+                            | "pragma"
+                            | "referer"
+                            | "origin"
+                    ))
                 {
                     continue;
                 }
@@ -927,7 +943,18 @@ pub(crate) fn domain_matches(host: &str, allowed: &str) -> bool {
         .trim_start_matches("*.")
         .trim_end_matches('.')
         .to_ascii_lowercase();
-    !allowed.is_empty() && (host == allowed || host.ends_with(&format!(".{allowed}")))
+    // A bare suffix ("com", "co.uk") would scope nothing while not looking
+    // like the wildcard a reviewer would notice: an entry needs a registrable
+    // name of its own.
+    let mut labels = allowed.rsplit('.');
+    let (Some(_suffix), Some(second)) = (labels.next(), labels.next()) else {
+        return false;
+    };
+    const SHARED_SECOND_LEVEL: &[&str] = &["ac", "co", "com", "edu", "gov", "net", "org"];
+    if labels.next().is_none() && SHARED_SECOND_LEVEL.contains(&second) {
+        return false;
+    }
+    host == allowed || host.ends_with(&format!(".{allowed}"))
 }
 
 pub(crate) use nova_net::is_public_ip;
@@ -1756,5 +1783,8 @@ mod tests {
         );
         assert!(domain_matches("cdn.example.com", "EXAMPLE.COM"));
         assert!(!domain_matches("evil-example.com", "example.com"));
+        assert!(!domain_matches("anything.com", "com"));
+        assert!(!domain_matches("anything.co.uk", "co.uk"));
+        assert!(domain_matches("cdn.example.co.uk", "example.co.uk"));
     }
 }
