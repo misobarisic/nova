@@ -75,6 +75,20 @@ async fn h_api_root(parts: Parts) -> impl IntoResponse {
     ([("Content-Type", "application/json")], axum::Json(json)).into_response()
 }
 
+/// Nova: only the streaming routes, for a loopback player source.
+pub fn make_stream_router(state: ApiState) -> Router {
+    Router::new()
+        .route(
+            "/torrents/{id}/stream/{file_id}",
+            get(streaming::h_torrent_stream_file),
+        )
+        .route(
+            "/torrents/{id}/stream/{file_id}/{*filename}",
+            get(streaming::h_torrent_stream_file),
+        )
+        .with_state(state)
+}
+
 pub fn make_api_router(state: ApiState) -> Router {
     let mut api_router = Router::new()
         .route("/", get(h_api_root))

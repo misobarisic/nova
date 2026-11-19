@@ -36,3 +36,9 @@ never require downloading the gap to a resumed position. Byte reads drive demand
 playback duration/bitrate only tune the bounded adaptive target. Tests alongside
 these modules exercise budget admission, adaptive clamping, seek/refetch,
 concurrent probes, and storage transfer lifetime.
+
+`http_api/mod.rs` adds `HttpApiOptions::stream_only_prefix`. When set, the server
+routes only `GET /{prefix}/torrents/{id}/stream/{file_id}[/{*filename}]`
+(`handlers::make_stream_router`): no state-changing or listing routes, web UI,
+metrics or CORS origins. Nova binds loopback with a random 128-bit prefix per
+session, since loopback is reachable by every local app and by browser pages.

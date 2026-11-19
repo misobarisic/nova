@@ -10,7 +10,7 @@
 //!    depend on DHT alone), picks the video file ([`pick_video_file`]), then
 //!    re-adds from the resolved metainfo bytes with just that file selected.
 //! 2. librqbit's HTTP API (bound to `127.0.0.1:<ephemeral>`) serves
-//!    `/torrents/{id}/stream/{file_idx}` with HTTP Range support, blocking on
+//!    `/<random prefix>/torrents/{id}/stream/{file_idx}` (and nothing else) with HTTP Range support, blocking on
 //!    missing pieces. That URL goes straight to `Player::play`.
 //!
 //! One engine lives for the whole process (like the mpv [`Player`]). It owns
@@ -338,6 +338,8 @@ struct EngineInner {
     cache_policy: Mutex<TorrentSettings>,
     /// Loopback port librqbit's HTTP API listens on.
     port: u16,
+    /// Random per-session path prefix; the server answers nothing else.
+    stream_prefix: String,
     active: Mutex<HashMap<String, Entry>>,
     retained: Mutex<HashMap<String, RetainedEntry>>,
     next_download_id: AtomicU64,
@@ -446,9 +448,21 @@ impl TorrentEngine {
                     Ok(listener) => {
                         let port = listener.bind_addr().port();
                         let api = librqbit::Api::new(session.clone(), None, None);
-                        let http = librqbit::http_api::HttpApi::new(api, None);
+                        // Loopback is not an authentication boundary: any local
+                        // app or a browser page could otherwise add, delete or
+                        // read torrents through librqbit's full API. Serve only
+                        // the stream route, under an unguessable prefix.
+                        let prefix = random_stream_prefix()?;
+                        let http = librqbit::http_api::HttpApi::new(
+                            api,
+                            Some(librqbit::http_api::HttpApiOptions {
+                                read_only: true,
+                                stream_only_prefix: Some(prefix.clone()),
+                                ..Default::default()
+                            }),
+                        );
                         tokio::spawn(http.make_http_api_and_run(listener, None));
-                        return Some((session, port));
+                        return Some((session, port, prefix));
                     }
                     Err(e) => {
                         eprintln!("nova torrent: cannot bind loopback API: {e}");
@@ -459,7 +473,7 @@ impl TorrentEngine {
         });
 
         match built {
-            Some((session, port)) => {
+            Some((session, port, stream_prefix)) => {
                 eprintln!("nova torrent: session ready (loopback API on port {port})");
                 let inner = Arc::new(EngineInner {
                     session,
@@ -476,6 +490,7 @@ impl TorrentEngine {
                     next_read_lease_id: AtomicU64::new(1),
                     cache_policy: Mutex::new(settings.clone()),
                     port,
+                    stream_prefix,
                     active: Mutex::new(HashMap::new()),
                     retained: Mutex::new(HashMap::new()),
                     next_download_id: AtomicU64::new(1),
@@ -739,16 +754,16 @@ impl TorrentEngine {
             return;
         };
         for child in inner.ram_children.lock().unwrap().iter() {
-            if let Some(entry) = child.active.lock().unwrap().values().find(|entry| {
-                source_url
-                    == format!(
-                        "http://127.0.0.1:{}/torrents/{}/stream/{}",
-                        child.port, entry.torrent_id, entry.file_idx
-                    )
-            }) && entry
-                .owner
-                .as_ref()
-                .is_some_and(PlaybackRequest::is_current)
+            if let Some(entry) = child
+                .active
+                .lock()
+                .unwrap()
+                .values()
+                .find(|entry| source_url == child.stream_url(entry.torrent_id, entry.file_idx))
+                && entry
+                    .owner
+                    .as_ref()
+                    .is_some_and(PlaybackRequest::is_current)
                 && let Some(memory) = &child.memory
             {
                 let rate = playback_byte_rate(entry.file_len, duration, playback_rate);
@@ -797,11 +812,7 @@ impl TorrentEngine {
                         .owner
                         .as_ref()
                         .is_some_and(|owner| owner.same_request(request))
-                    && loopback_url
-                        == format!(
-                            "http://127.0.0.1:{}/torrents/{}/stream/{}",
-                            inner.port, entry.torrent_id, entry.file_idx
-                        )
+                    && loopback_url == inner.stream_url(entry.torrent_id, entry.file_idx)
             })
             .ok_or("torrent source is not owned by this playback request")?;
         let id = inner.next_read_lease_id.fetch_add(1, Ordering::Relaxed);
@@ -958,6 +969,14 @@ impl TorrentEngine {
 }
 
 impl EngineInner {
+    /// The only URL shape this session's loopback server answers.
+    fn stream_url(&self, torrent_id: TorrentId, file_idx: usize) -> String {
+        format!(
+            "http://127.0.0.1:{}/{}/torrents/{}/stream/{}",
+            self.port, self.stream_prefix, torrent_id, file_idx
+        )
+    }
+
     fn clean_ram_children(&self, settings: &TorrentSettings) {
         self.ram_children.lock().unwrap().retain(|child| {
             let _operation = child.operations.lock().unwrap();
@@ -1817,10 +1836,7 @@ impl EngineInner {
         }
 
         Ok(StreamReady {
-            url: format!(
-                "http://127.0.0.1:{}/torrents/{}/stream/{}",
-                self.port, id, picked.idx
-            ),
+            url: self.stream_url(id, picked.idx),
             display_name,
             ram_only: self.memory.is_some(),
         })
@@ -2641,6 +2657,17 @@ pub fn engine() -> Option<Arc<TorrentEngine>> {
     ENGINE.lock().unwrap().clone()
 }
 
+/// 128 random bits, hex: the per-session stream path prefix. `None` (no
+/// session) rather than a guessable fallback when the OS has no randomness.
+fn random_stream_prefix() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    if let Err(e) = getrandom::getrandom(&mut bytes) {
+        eprintln!("nova torrent: no randomness for the loopback stream path: {e}");
+        return None;
+    }
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2703,6 +2730,7 @@ mod tests {
             next_read_lease_id: AtomicU64::new(1),
             cache_policy: Mutex::new(TorrentSettings::default()),
             port: 1,
+            stream_prefix: "test".into(),
             active: Mutex::new(HashMap::new()),
             retained: Mutex::new(HashMap::new()),
             next_download_id: AtomicU64::new(1),
@@ -3639,6 +3667,55 @@ mod tests {
         assert!(!should_delete_after_playback(&s));
         s.no_cache = true;
         assert!(should_delete_after_playback(&s));
+    }
+
+    #[test]
+    fn loopback_server_answers_only_the_prefixed_stream_route() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("nova-torrent-api-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = TorrentEngine::setup(dir.clone(), &TorrentSettings::default());
+        let inner = engine.inner.as_ref().expect("session");
+        assert_eq!(inner.stream_prefix.len(), 32);
+        let status = |method: &str, path: &str| {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", inner.port)).unwrap();
+            write!(
+                stream,
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = String::new();
+            let _ = stream.read_to_string(&mut response);
+            response
+                .split_whitespace()
+                .nth(1)
+                .and_then(|code| code.parse::<u16>().ok())
+                .unwrap()
+        };
+        // librqbit's general API is gone, read-only and state-changing alike.
+        assert_eq!(status("GET", "/torrents"), 404);
+        assert_eq!(status("POST", "/torrents"), 404);
+        assert_eq!(status("POST", "/torrents/0/delete"), 404);
+        assert_eq!(status("GET", "/torrents/0/stream/0"), 404);
+        let prefix = &inner.stream_prefix;
+        assert_eq!(status("GET", &format!("/{prefix}/torrents")), 404);
+        assert_eq!(status("POST", &format!("/{prefix}/torrents")), 404);
+        // The stream route itself is routed (a bad index is rejected by its
+        // extractor rather than by the router).
+        assert_eq!(
+            status("GET", &format!("/{prefix}/torrents/0/stream/x")),
+            400
+        );
+        assert_eq!(
+            inner.stream_url(3, 1),
+            format!(
+                "http://127.0.0.1:{}/{prefix}/torrents/3/stream/1",
+                inner.port
+            )
+        );
+        drop(engine);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

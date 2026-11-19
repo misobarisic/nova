@@ -39,6 +39,11 @@ pub struct HttpApiOptions {
     pub allow_create: bool,
     /// Maximum upload body size.
     pub max_upload_body_size: Option<usize>,
+    /// Nova: serve only `GET /{prefix}/torrents/{id}/stream/{file_id}[/name]`
+    /// and nothing else (no state-changing routes, web UI, metrics or CORS).
+    /// Loopback is not an authentication boundary; an unguessable per-process
+    /// prefix keeps other local apps and browser pages off the session.
+    pub stream_only_prefix: Option<String>,
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
 }
@@ -97,20 +102,29 @@ impl HttpApi {
         let mut prometheus_handle = self.opts.prometheus_handle.take();
 
         let state = Arc::new(self);
+        let stream_only = state.opts.stream_only_prefix.is_some();
 
-        let mut main_router = handlers::make_api_router(state.clone());
+        let mut main_router = match &state.opts.stream_only_prefix {
+            Some(prefix) => axum::Router::new().nest(
+                &format!("/{prefix}"),
+                handlers::make_stream_router(state.clone()),
+            ),
+            None => handlers::make_api_router(state.clone()),
+        };
 
         #[cfg(feature = "webui")]
         {
-            use axum::response::Redirect;
+            if !stream_only {
+                use axum::response::Redirect;
 
-            let webui_router = webui::make_webui_router();
-            main_router = main_router.nest("/web/", webui_router);
-            main_router = main_router.route("/web", get(|| async { Redirect::permanent("./web/") }))
+                let webui_router = webui::make_webui_router();
+                main_router = main_router.nest("/web/", webui_router);
+                main_router = main_router.route("/web", get(|| async { Redirect::permanent("./web/") }))
+            }
         }
 
         #[cfg(feature = "prometheus")]
-        if let Some(handle) = prometheus_handle.take() {
+        if let Some(handle) = prometheus_handle.take().filter(|_| !stream_only) {
             let session = state.api.session().clone();
             main_router = main_router.route(
                 "/metrics",
@@ -141,11 +155,12 @@ impl HttpApi {
 
             tower_http::cors::CorsLayer::default()
                 .allow_origin(AllowOrigin::predicate(move |v, _| {
-                    ALLOWED_ORIGINS.contains(&v.as_bytes())
+                    !stream_only
+                        && (ALLOWED_ORIGINS.contains(&v.as_bytes())
                         || allow_regex
                             .as_ref()
                             .map(move |r| r.is_match(v.as_bytes()))
-                            .unwrap_or(false)
+                            .unwrap_or(false))
                 }))
                 .allow_headers(AllowHeaders::any())
         };
