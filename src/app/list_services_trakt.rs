@@ -478,7 +478,10 @@ impl Worker {
             }
             Err(error) => return Err(error),
         };
-        self.live(2, generation)?;
+        // The old refresh token is spent now, whatever happens to this pass.
+        // Cancel, a profile switch or shutdown must not drop its replacement:
+        // save first (the durable check below still refuses a disconnected
+        // or replaced session), and only then honour the generation.
         let mut updated = old.clone();
         updated.credentials.token = tokens.access_token;
         updated.refresh = Some(Refresh {
@@ -509,7 +512,7 @@ impl Worker {
         nova_sync::request_local_sync();
         self.connections[2] = Some(updated);
         self.verified[2] = false;
-        Ok(())
+        self.live(2, generation)
     }
     pub(super) fn trakt_observation(
         &mut self,
