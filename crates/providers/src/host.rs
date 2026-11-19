@@ -818,7 +818,10 @@ impl ProviderHost for ScopedHttpHost {
                 ))
             })?;
             let status = response.status();
-            if status.is_redirection() {
+            // Only these carry a Location to follow. 304 Not Modified (a
+            // conditional request's answer) and 300/305/306 go back to the
+            // script as ordinary responses.
+            if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 if redirect == self.redirect_limit {
                     return Err(ProviderHostError(
                         "provider exceeded its redirect limit".into(),
