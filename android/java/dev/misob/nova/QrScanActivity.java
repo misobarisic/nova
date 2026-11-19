@@ -425,6 +425,8 @@ public class QrScanActivity extends Activity {
     }
 
     private void closeCamera() {
+        ImageReader reader;
+        Surface surface;
         synchronized (this) {
             cameraGeneration.incrementAndGet();
             opening.set(false);
@@ -436,13 +438,17 @@ public class QrScanActivity extends Activity {
                 camera.close();
                 camera = null;
             }
-            if (imageReader != null) {
-                imageReader.close();
-                imageReader = null;
-            }
-            if (previewSurface != null) { previewSurface.release(); previewSurface = null; }
+            reader = imageReader;
+            imageReader = null;
+            surface = previewSurface;
+            previewSurface = null;
         }
+        // Closing the reader closes every acquired Image, and the frame thread
+        // may be copying one: stop and join that thread first, or its read
+        // throws on a closed image and crashes the process.
         stopBackgroundThread();
+        if (reader != null) reader.close();
+        if (surface != null) surface.release();
     }
 
     /** Decode one frame in Rust; returns true when an invite ticket was found. */
