@@ -16,7 +16,10 @@ retired profile ID cannot be restored. Existing target names and the selected
 profile remain unchanged. Protected targets use their ordinary management PIN.
 
 Merge inserts missing records and keeps conflicting local values. Enable **Use
-backup for conflicts** for a component to choose its archived conflicts.
+backup for conflicts** for a component to choose its archived conflicts. Merge
+never deletes synced records this device has not materialized (fields written
+by a newer app version, rows not yet projected). Records identical to the
+archive, including progress, keep their versions rather than being restamped.
 Replace changes only selected components and deletes records missing from those
 components. Empty and omitted components are different. The preview reports
 archive/new/identical/conflicting/updated/preserved/deleted records and examples

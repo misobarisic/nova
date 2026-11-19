@@ -62,6 +62,10 @@ struct Preview {
     revisions: BTreeMap<String, String>,
     edits: BTreeMap<String, Option<String>>,
     domains: BTreeMap<String, Vec<(String, String, u64)>>,
+    /// Merge only: per domain, the keys the local snapshot held. A merge may
+    /// delete only those; records that exist only in the sync store (fields
+    /// from a newer app, unprojected rows) are not its to remove.
+    merge_local_keys: BTreeMap<String, BTreeSet<String>>,
     before: BTreeMap<(String, String), Payload>,
     after: BTreeMap<(String, String), Payload>,
     local_expected: BTreeMap<String, Option<String>>,
@@ -318,6 +322,7 @@ fn preview(archive: Shared<Archive>, choices: Vec<Choice>) -> Result<Preview, St
         revisions: BTreeMap::new(),
         edits: BTreeMap::new(),
         domains: BTreeMap::new(),
+        merge_local_keys: BTreeMap::new(),
         before: BTreeMap::new(),
         after: BTreeMap::new(),
         local_expected: BTreeMap::new(),
@@ -490,13 +495,14 @@ fn preview(archive: Shared<Archive>, choices: Vec<Choice>) -> Result<Preview, St
                 .after
                 .insert((choice.target.clone(), name.clone()), after);
         }
-        prepared.push((owner, rows));
+        let merged_from = (!choice.replace && !choice.create).then(|| before.clone());
+        prepared.push((owner, rows, merged_from));
     }
     drop(_serial);
     drop(store);
     // Snapshot decomposition can consult profile-aware settings defaults; do
     // this before the record-owner lock, then bind the result to its revision.
-    for (owner, rows) in prepared {
+    for (owner, rows, merged_from) in prepared {
         for (key, raw) in rows {
             if !result.edits.contains_key(&owner.key(&key)) {
                 continue;
@@ -506,6 +512,18 @@ fn preview(archive: Shared<Archive>, choices: Vec<Choice>) -> Result<Preview, St
                 .map_err(|e| e.to_string())?;
             for (domain, records) in domains {
                 result.domains.insert(owner.domain(domain), records);
+            }
+            if let Some(local) = merged_from.as_ref().and_then(|rows| rows.get(&key)) {
+                let domains = owner
+                    .run(|| app::sync::snapshot_domains(&key, local))
+                    .map_err(|e| e.to_string())?;
+                for (domain, records) in domains {
+                    result
+                        .merge_local_keys
+                        .entry(owner.domain(domain))
+                        .or_default()
+                        .extend(records.into_iter().map(|(key, _, _)| key));
+                }
             }
         }
         if choices
@@ -663,6 +681,36 @@ fn apply(preview: &Preview) -> Result<Vec<String>, String> {
                 .map(|(key, raw)| (key, raw, 0))
                 .chain(records.clone())
                 .collect::<Vec<_>>()
+        } else if let Some(local) = preview.merge_local_keys.get(domain) {
+            // Merge keeps every record it did not see locally.
+            let wanted: BTreeSet<_> = records.iter().map(|(key, _, _)| key.clone()).collect();
+            let kept: Vec<_> = staged
+                .records(domain)
+                .into_iter()
+                .filter(|(key, _)| !wanted.contains(key) && !local.contains(key))
+                .map(|(key, raw)| (key, raw, 0))
+                .collect();
+            let kept_keys: BTreeSet<_> = kept.iter().map(|(key, _, _)| key.clone()).collect();
+            let records: Vec<_> = records.iter().cloned().chain(kept).collect();
+            nova_sync::replace_domain(&mut staged, device, domain, &records)
+                .map_err(|e| e.to_string())?;
+            // The app never materializes the kept records, so they must not
+            // enter its baseline either: the next ordinary snapshot would
+            // read their absence as a deletion.
+            let baseline_key = format!("sync:baseline:{domain}");
+            let mut baseline: BTreeMap<String, String> = staged
+                .extra_value(&baseline_key)
+                .map_err(|e| e.to_string())?
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            baseline.retain(|key, _| !kept_keys.contains(key));
+            staged.queue_extra(
+                &baseline_key,
+                Some(serde_json::to_string(&baseline).map_err(|e| e.to_string())?),
+            );
+            continue;
         } else {
             // A restore, not an edit: records the backup omits are deleted.
             nova_sync::replace_domain(&mut staged, device, domain, records)

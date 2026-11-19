@@ -1163,6 +1163,7 @@ mod model_tests {
             before: BTreeMap::new(),
             after: BTreeMap::new(),
             local_expected: BTreeMap::new(),
+            merge_local_keys: BTreeMap::new(),
         })
     }
 
