@@ -1566,7 +1566,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
             // each title's native snapshot only after those requests complete.
             let (current_entries, current_progress) = {
                 let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
-                (state.entries.clone(), state.progress.clone())
+                title_slice(&title.mapping, &state.entries, &state.progress)
             };
             let local = local_projection(&title.mapping, &current_entries, &current_progress);
             let local_state = source_canonical(
@@ -1738,7 +1738,7 @@ impl<T: nova_stremio::Transport> Worker<T> {
                 }
                 let (entries, progress) = {
                     let state = self.bridge.personal_state().ok_or(ApiError::Rejected)?;
-                    (state.entries.clone(), state.progress.clone())
+                    title_slice(&title.mapping, &state.entries, &state.progress)
                 };
                 let native = local_projection(&title.mapping, &entries, &progress);
                 let source = source_canonical(connection, &title, &native, &entries, &progress)?;
@@ -2173,6 +2173,34 @@ fn millis(seconds: f64) -> u64 {
         0
     }
 }
+/// The library rows and progress checkpoints one title's projection reads.
+/// Copying only these under the UI lock replaces a full clone of the library
+/// and progress map for every title on every pass.
+fn title_slice(
+    mapping: &Mapping,
+    entries: &[LibraryEntry],
+    progress: &HashMap<String, EpisodeProgress>,
+) -> (Vec<LibraryEntry>, HashMap<String, EpisodeProgress>) {
+    let entries = entries
+        .iter()
+        .filter(|entry| entry.id == mapping.id)
+        .cloned()
+        .collect();
+    // Remote ids stand in for unmapped native ids (see `source_canonical`).
+    let progress = mapping
+        .episode_ids
+        .iter()
+        .flat_map(|(remote, native)| [remote, native])
+        .filter_map(|episode| {
+            let key = progress_map_key(&mapping.id, episode);
+            progress
+                .get(&key)
+                .map(|checkpoint| (key, checkpoint.clone()))
+        })
+        .collect();
+    (entries, progress)
+}
+
 fn local_projection(
     mapping: &Mapping,
     entries: &[LibraryEntry],
@@ -2540,6 +2568,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         field: &mut Stamped<T>,
         remote: Option<&Stamped<T>>,
         initial_union: bool,
+        changed: &mut bool,
     ) -> Result<(), ApiError> {
         let raw = serde_json::to_string(field).map_err(|_| ApiError::InvalidResponse)?;
         let rank = u32::from(remote.is_some_and(|r| r == field));
@@ -2549,7 +2578,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             nova_config::fnv1a(raw.as_bytes()),
             false,
         );
-        store.apply(
+        *changed |= store.apply(
             &crate::app::sync::profile_domain(DOMAIN),
             &key,
             nova_sync::Record {
@@ -2577,7 +2606,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
                     .record(&crate::app::sync::profile_domain(DOMAIN), &key)
                     .unwrap()
                     .version;
-                store.apply(
+                *changed |= store.apply(
                     &crate::app::sync::profile_domain(DOMAIN),
                     &key,
                     nova_sync::Record {
@@ -2605,6 +2634,9 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             .ok_or(ApiError::Rejected)?;
         Ok(())
     }
+    // Most passes change nothing; committing anyway rewrote storage and woke
+    // sync for every title, every minute.
+    let mut changed = false;
     let union_membership = !title.progress_merged && title.desired.saved.value;
     field(
         &mut store,
@@ -2612,6 +2644,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         &mut title.desired.saved,
         Some(&title.remote.saved),
         union_membership,
+        &mut changed,
     )?;
     field(
         &mut store,
@@ -2619,6 +2652,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         &mut title.desired.resume,
         Some(&title.remote.resume),
         false,
+        &mut changed,
     )?;
     for (id, value) in &mut title.desired.watched {
         if title.selection.as_ref().is_some_and(|s| {
@@ -2635,6 +2669,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             value,
             title.remote.watched.get(id),
             initial_union,
+            &mut changed,
         )?;
     }
     // Unknown local episode coverage must not hide independently received
@@ -2691,7 +2726,7 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             ])
             .filter(|changed_at| *changed_at > 0 && *changed_at < stamp)
             .count() as u32;
-        store.apply(
+        changed |= store.apply(
             &crate::app::sync::profile_domain(DOMAIN),
             &format!("{prefix}remote"),
             nova_sync::Record {
@@ -2705,13 +2740,20 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
             },
         );
     }
-    store.queue_extra(
-        &profiles::storage_key(&title_storage_key(&connection.account_id, title)),
-        Some(serde_json::to_string(title).map_err(|_| ApiError::InvalidResponse)?),
-    );
+    let title_key = profiles::storage_key(&title_storage_key(&connection.account_id, title));
+    let row = serde_json::to_string(title).map_err(|_| ApiError::InvalidResponse)?;
+    let persisted = store
+        .extra_value(&title_key)
+        .map_err(|_| ApiError::Rejected)?;
+    if !changed && persisted.as_deref() == Some(row.as_str()) {
+        return Ok(());
+    }
+    store.queue_extra(&title_key, Some(row));
     store.save().map_err(|_| ApiError::Rejected)?;
     drop(store);
-    nova_sync::request_local_sync();
+    if changed {
+        nova_sync::request_local_sync();
+    }
     Ok(())
 }
 
