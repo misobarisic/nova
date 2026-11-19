@@ -121,6 +121,37 @@ pub(super) fn materialize(saved: &mut SavedQueue) {
     }
 }
 
+/// Re-aim the cursor after a local edit changed the order from `previous`.
+///
+/// A removed cursor item resolves to its next surviving successor in the
+/// order the user saw; the saved order no longer contains the removed key,
+/// so `materialize` alone would finish the queue on the next load. A finished
+/// run resumes at items added after it ended.
+pub(super) fn retarget_cursor(saved: &mut SavedQueue, previous: &[String]) {
+    let live: Vec<String> = saved.entries.iter().map(Entry::key).collect();
+    if let Some(key) = saved.cursor.item_key.clone()
+        && !live.contains(&key)
+    {
+        let next = previous
+            .iter()
+            .position(|k| *k == key)
+            .and_then(|i| previous[i + 1..].iter().find(|k| live.contains(k)))
+            .cloned();
+        saved.cursor.phase = if next.is_some() {
+            Phase::Ready
+        } else {
+            Phase::Finished
+        };
+        saved.cursor.item_key = next;
+    }
+    if saved.cursor.phase == Phase::Finished
+        && let Some(added) = live.iter().find(|key| !previous.contains(key))
+    {
+        saved.cursor.item_key = Some(added.clone());
+        saved.cursor.phase = Phase::Ready;
+    }
+}
+
 pub(crate) fn records(raw: &str) -> nova_sync::Result<Vec<sync::SnapshotDomainRecords>> {
     let saved =
         decode(raw).map_err(|error| storage::Error::new(storage::ErrorKind::Schema, error))?;

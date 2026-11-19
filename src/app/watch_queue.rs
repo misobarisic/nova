@@ -1050,6 +1050,7 @@ impl Bridge {
         let next_order: Vec<_> = entries.iter().map(Entry::key).collect();
         if previous_order != next_order {
             saved.order = next_order;
+            model::retarget_cursor(&mut saved, &previous_order);
         }
         let value = serde_json::to_string(&saved).expect("queue JSON");
         if let Err(error) = sync::persist_sync_snapshot(KEY, &value, false) {
@@ -1690,6 +1691,38 @@ mod tests {
         let next = next_pending_entry(&saved, &progress).expect("pending entry");
         assert_eq!(next.key(), second.key());
         assert_ne!(next.key(), saved.entries[0].key());
+    }
+
+    #[test]
+    fn clearing_the_cursor_item_continues_with_the_next_survivor() {
+        let [a, b, c, d] = ["e1", "e2", "e3", "e4"].map(|e| entry("show", e));
+        let previous: Vec<_> = [&a, &b, &c, &d].iter().map(|e| e.key()).collect();
+        let mut saved = SavedQueue {
+            entries: vec![c.clone(), d.clone()],
+            order: vec![c.key(), d.key()],
+            ..Default::default()
+        };
+        saved.cursor.item_key = Some(b.key());
+        saved.cursor.phase = model::Phase::Completed;
+        model::retarget_cursor(&mut saved, &previous);
+        assert_eq!(saved.cursor.item_key, Some(c.key()));
+        assert_eq!(saved.cursor.phase, model::Phase::Ready);
+        // Reloading keeps it: the saved order no longer names the old key.
+        let raw = serde_json::to_string(&saved).unwrap();
+        let reloaded = model::decode(&raw).unwrap();
+        assert_eq!(reloaded.cursor.item_key, Some(c.key()));
+        assert_ne!(reloaded.cursor.phase, model::Phase::Finished);
+
+        // A finished run picks up items added afterwards.
+        let mut finished = SavedQueue {
+            entries: vec![c.clone(), d.clone(), a.clone()],
+            order: vec![c.key(), d.key(), a.key()],
+            ..Default::default()
+        };
+        finished.cursor.phase = model::Phase::Finished;
+        model::retarget_cursor(&mut finished, &[c.key(), d.key()]);
+        assert_eq!(finished.cursor.item_key, Some(a.key()));
+        assert_eq!(finished.cursor.phase, model::Phase::Ready);
     }
 
     #[test]
