@@ -612,6 +612,37 @@ fn persist_sync_snapshot_inner(
         // with an existing settings object conservatively retain all choices.
         let untouched =
             seed && domain == DOMAIN_SETTINGS && storage::try_get_str("settings")?.is_none();
+        // A first sync must not publish this device's addon order: it would be
+        // stamped now and, as whole-value LWW, override the order the user set
+        // long ago on the rest of the mesh (pairing a new device reshuffled
+        // every device's addons). Seed the addon rows, keep the order as
+        // baseline only, and publish it on the next real local change.
+        if seed && !projection && domain == DOMAIN_ADDONS {
+            let rows: Vec<_> = records
+                .iter()
+                .filter(|(key, _, _)| key != ADDON_ORDER_KEY)
+                .cloned()
+                .collect();
+            changed |= nova_sync::prepare_snapshot(
+                &mut store,
+                dev,
+                &profile_domain(domain),
+                &rows,
+                None,
+                false,
+                true,
+            )?;
+            nova_sync::prepare_snapshot(
+                &mut store,
+                dev,
+                &profile_domain(domain),
+                &records,
+                None,
+                true,
+                true,
+            )?;
+            continue;
+        }
         changed |= nova_sync::prepare_snapshot(
             &mut store,
             dev,
@@ -1006,6 +1037,68 @@ pub(crate) fn addon_order_record(addons: &[AddonStore]) -> (String, String, u64)
     let urls: Vec<&str> = addons.iter().map(|a| a.url.as_str()).collect();
     let json = serde_json::to_string(&urls).unwrap_or_else(|_| "[]".to_string());
     (ADDON_ORDER_KEY.to_string(), json, 0)
+}
+
+/// Convergent merge of two live addon `order` records (the record policy's
+/// `merge_value`). The newer list stays authoritative for every URL it names;
+/// URLs only the older list names are slotted in next to their neighbours
+/// there. Without this, a new device's shorter list (its defaults, or addons
+/// installed before pairing) won as whole-value LWW and every device lost the
+/// user's long-standing order. Removed addons may linger in the list; only
+/// installed URLs are ever ordered by it. `None` falls back to LWW.
+pub(crate) fn merge_addon_order_records(
+    local: &nova_sync::Record,
+    remote: &nova_sync::Record,
+) -> Option<String> {
+    let (newer, older) = if remote.version.newer_than(&local.version) {
+        (remote, local)
+    } else {
+        (local, remote)
+    };
+    let newer: Vec<String> = serde_json::from_str(newer.value.as_deref()?).ok()?;
+    let older: Vec<String> = serde_json::from_str(older.value.as_deref()?).ok()?;
+    serde_json::to_string(&merge_addon_order(&newer, &older)).ok()
+}
+
+pub(crate) fn merge_addon_order(newer: &[String], older: &[String]) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::with_capacity(newer.len() + older.len());
+    for url in newer {
+        if !merged.contains(url) {
+            merged.push(url.clone());
+        }
+    }
+    for (i, url) in older.iter().enumerate() {
+        if merged.contains(url) {
+            continue;
+        }
+        // After the nearest earlier neighbour already placed, else before the
+        // nearest later one, else at the end.
+        let after = older[..i]
+            .iter()
+            .rev()
+            .find_map(|prev| merged.iter().position(|m| m == prev))
+            .map(|at| at + 1);
+        let before = || {
+            older[i + 1..]
+                .iter()
+                .find_map(|next| merged.iter().position(|m| m == next))
+        };
+        let at = after.or_else(before).unwrap_or(merged.len());
+        merged.insert(at, url.clone());
+    }
+    merged
+}
+
+/// Order `current` urls by the synced `order`, placing URLs it does not list
+/// by this device's previous `local` order rather than by URL. A winning
+/// order written before an addon was installed elsewhere must not reshuffle
+/// the addons it does not mention.
+pub(crate) fn sort_by_synced_order(
+    current: Vec<String>,
+    local: &[String],
+    order: &[String],
+) -> Vec<String> {
+    sort_by_order(sort_by_order(current, local), order)
 }
 
 /// Order `current` urls by `order` (whole-value LWW): listed URLs first in
@@ -2010,8 +2103,16 @@ fn project_inactive_profile(id: &str, domain: &str, base: &str) -> nova_sync::Re
             }
             DOMAIN_ADDONS => {
                 let (mut addons, order) = decode_addon_inventory(&records)?;
-                let urls = sort_by_order(
+                let local: Vec<String> =
+                    nova_storage::try_get_str(&profiles::storage_key_for(id, "addons"))?
+                        .and_then(|raw| serde_json::from_str::<Vec<AddonStore>>(&raw).ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|addon| addon.url)
+                        .collect();
+                let urls = sort_by_synced_order(
                     addons.iter().map(|a| a.url.clone()).collect(),
+                    &local,
                     order.as_deref().unwrap_or_default(),
                 );
                 addons.sort_by_key(|a| urls.iter().position(|url| url == &a.url));
@@ -4234,8 +4335,14 @@ impl ProjectionWork {
                         }
                         DOMAIN_ADDONS => {
                             let (mut addons, order) = decode_addon_inventory(&records)?;
-                            let urls = sort_by_order(
+                            let local: Vec<String> =
+                                owned_value::<Vec<AddonStore>>(&owner, "addons")?
+                                    .into_iter()
+                                    .map(|addon| addon.url)
+                                    .collect();
+                            let urls = sort_by_synced_order(
                                 addons.iter().map(|addon| addon.url.clone()).collect(),
+                                &local,
                                 order.as_deref().unwrap_or_default(),
                             );
                             addons
@@ -7845,6 +7952,65 @@ mod tests {
         );
         // Empty order keeps everything as-is.
         assert_eq!(sort_by_order(current.clone(), &Vec::new()), current);
+    }
+
+    #[test]
+    fn pairing_a_device_with_a_shorter_addon_order_keeps_the_users_order() {
+        let v = |s: &[&str]| s.iter().map(|u| u.to_string()).collect::<Vec<_>>();
+        // The phone's long-standing order versus a new device's newer list
+        // that only knows Cinemeta, or plain Torrentio and Cinemeta.
+        let phone = v(&["tb-torrentio", "torrentio", "cinemeta"]);
+        assert_eq!(merge_addon_order(&v(&["cinemeta"]), &phone), phone);
+        assert_eq!(
+            merge_addon_order(&v(&["torrentio", "cinemeta"]), &phone),
+            phone
+        );
+        // A newer explicit reorder of every addon still wins outright.
+        let reordered = v(&["cinemeta", "torrentio", "tb-torrentio"]);
+        assert_eq!(merge_addon_order(&reordered, &phone), reordered);
+        // Addons only the older side has keep their neighbours.
+        assert_eq!(
+            merge_addon_order(&v(&["b", "d"]), &v(&["a", "b", "c", "d", "e"])),
+            v(&["a", "b", "c", "d", "e"])
+        );
+
+        // Commutative over record order: the newer version is authoritative.
+        let record = |urls: &[&str], ts: u64, dev: u64| nova_sync::Record {
+            value: Some(serde_json::to_string(urls).unwrap()),
+            version: nova_sync::Version::new(ts, 0, dev, false),
+        };
+        let old = record(&["tb-torrentio", "torrentio", "cinemeta"], 1_000, 1);
+        let new = record(&["cinemeta"], 2_000, 2);
+        let merged = merge_addon_order_records(&old, &new).unwrap();
+        assert_eq!(merge_addon_order_records(&new, &old).unwrap(), merged);
+        assert_eq!(serde_json::from_str::<Vec<String>>(&merged).unwrap(), phone);
+    }
+
+    #[test]
+    fn synced_order_leaves_unlisted_addons_in_local_order() {
+        let v = |s: &[&str]| s.iter().map(|u| u.to_string()).collect::<Vec<_>>();
+        // Records arrive sorted by URL; the local order must decide for any
+        // addon the winning order does not list.
+        assert_eq!(
+            sort_by_synced_order(
+                v(&[
+                    "https://a-torrentio",
+                    "https://b-tb-torrentio",
+                    "https://cinemeta"
+                ]),
+                &v(&[
+                    "https://b-tb-torrentio",
+                    "https://a-torrentio",
+                    "https://cinemeta"
+                ]),
+                &v(&["https://cinemeta"]),
+            ),
+            v(&[
+                "https://cinemeta",
+                "https://b-tb-torrentio",
+                "https://a-torrentio"
+            ])
+        );
     }
 
     #[test]

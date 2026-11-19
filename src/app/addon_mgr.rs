@@ -167,9 +167,10 @@ impl AddonProjectionInput {
             entry.label = label;
         }
         let local_order: Vec<_> = previous.iter().map(|a| a.url.clone()).collect();
-        let ordered = sync::sort_by_order(
+        let ordered = sync::sort_by_synced_order(
             installed.iter().map(|a| a.url.clone()).collect(),
-            order.as_deref().unwrap_or(&local_order),
+            &local_order,
+            order.as_deref().unwrap_or_default(),
         );
         installed.sort_by_key(|a| ordered.iter().position(|url| url == &a.url));
         snapshot.sort_by_key(|a| ordered.iter().position(|url| url == &a.url));

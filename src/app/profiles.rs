@@ -317,6 +317,20 @@ impl nova_sync::RecordPolicy for DirectoryPolicy {
     fn validate(&self, domain: &str, key: &str, record: &nova_sync::Record) -> bool {
         directory::validate_record(domain, key, record)
     }
+    fn merge_value(
+        &self,
+        domain: &str,
+        key: &str,
+        local: &nova_sync::Record,
+        remote: &nova_sync::Record,
+    ) -> Option<String> {
+        let addons = domain == super::sync::DOMAIN_ADDONS
+            || nova_sync::parse_profile_domain(domain)
+                .is_some_and(|(_, logical)| logical == super::sync::DOMAIN_ADDONS);
+        (addons && key == super::sync::ADDON_ORDER_KEY)
+            .then(|| super::sync::merge_addon_order_records(local, remote))
+            .flatten()
+    }
 }
 static POLICY: LazyLock<Arc<dyn nova_sync::RecordPolicy>> =
     LazyLock::new(|| Arc::new(DirectoryPolicy));

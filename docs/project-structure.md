@@ -1296,8 +1296,12 @@ requires sync/pair semantic versions 6/5 across paired devices.
 ### Domains (app side, `src/app/sync.rs`)
 Library records use collision-free JSON tuple keys `[type_, id]`. `migrate_library_keys` rekeys legacy records and materialized baselines without restamping actions; startup moves untyped legacy tombstones into durable local `sync:library_legacy_removals:<domain>` maps behind the `sync:library_keys_v2` marker. Those maps retain original deletion authority over older typed records without confusing opaque native IDs with current tuple keys. `Store::migrate_record_keys` captures all live sources before removing/rekeying legacy physical rows in the same save, including when a native ID equals another title's new typed key.
 
-`library`, `progress`, `addons` (one record per addon URL plus a whole-value
-LWW `order` record listing installed URLs, so reorder syncs mesh-wide), `addon_packages` (one `{id, version, sha256}` desired package descriptor per provider ID; raw archives transfer separately),
+`library`, `progress`, `addons` (one record per addon URL plus an `order`
+record listing installed URLs, so reorder syncs mesh-wide; concurrent `order`
+records merge through Nova's record policy: the newer list stays authoritative and URLs only the
+older one names keep their neighbours, so pairing a device with a shorter list
+cannot reshuffle the mesh. Unlisted installed URLs keep this device's previous order,
+and a first-sync seed publishes addon rows but not the order), `addon_packages` (one `{id, version, sha256}` desired package descriptor per provider ID; raw archives transfer separately),
 `last_stream` (one `selection` record containing only version, fingerprint and original selection time; LWW selection, seven-day expiry and guarded expiry tombstones),
 `settings`, `plugin_settings` (independent plugin/field values including unknown fields and explicit tombstones; no wire schema/ALPN change), `category` (per-name union), `continue_hidden` (one record per Home
 item the user removed, value = removal unix secs; tombstones carry the
