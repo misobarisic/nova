@@ -1026,6 +1026,16 @@ impl Bridge {
             .map(|(i, _)| i)
             .collect();
 
+        // Remember the selection by identity: background refreshes (synced
+        // addon edits, late manifests, package activation) rebuild these
+        // definitions and must not throw the user back to the first catalog.
+        let selected = state.type_defs.get(state.chosen_type).and_then(|t| {
+            t.catalogs
+                .get(state.chosen_catalog)
+                .map(|c| (t.type_.clone(), c.addon_url.clone(), c.id.clone()))
+        });
+        let selected_genre = state.chosen_genre.clone();
+
         // Rebuild type/catalog definitions from the active addon.
         state.type_defs.clear();
         if state.chosen_addon == usize::MAX && !browse_idxs.is_empty() {
@@ -1037,9 +1047,29 @@ impl Bridge {
             state.type_defs =
                 build_type_defs(manifest, &label, &state.installed[state.chosen_addon].url);
         }
-        state.chosen_type = 0;
-        state.chosen_catalog = 0;
-        state.chosen_genre.clear();
+        let restored = selected.and_then(|(type_, addon_url, id)| {
+            let type_index = state.type_defs.iter().position(|t| t.type_ == type_)?;
+            let catalog_index = state.type_defs[type_index]
+                .catalogs
+                .iter()
+                .position(|c| c.addon_url == addon_url && c.id == id)?;
+            Some((type_index, catalog_index))
+        });
+        let kept_selection = restored.is_some();
+        let (chosen_type, chosen_catalog) = restored.unwrap_or((0, 0));
+        state.chosen_type = chosen_type;
+        state.chosen_catalog = chosen_catalog;
+        state.chosen_genre = if kept_selection
+            && state.type_defs[chosen_type].catalogs[chosen_catalog]
+                .genre_options
+                .contains(&selected_genre)
+        {
+            selected_genre
+        } else {
+            String::new()
+        };
+        // Nothing to reload when the same catalog stays selected and loaded.
+        let keep_grid = kept_selection && !state.previews.is_empty();
         let has_grid_source = !state.type_defs.is_empty();
 
         // Collect the model contents while holding the lock.
@@ -1057,7 +1087,7 @@ impl Bridge {
             .collect();
         let catalog_names: Vec<SharedString> = state
             .type_defs
-            .first()
+            .get(chosen_type)
             .map(|t| {
                 t.catalogs
                     .iter()
@@ -1081,7 +1111,7 @@ impl Bridge {
         };
 
         let chosen_addon = state.chosen_addon;
-        if !load {
+        if !load && !keep_grid {
             state.previews.clear();
         }
         drop(state);
@@ -1111,8 +1141,8 @@ impl Bridge {
         } else {
             -1
         });
-        app.set_type_combo_idx(0);
-        app.set_catalog_combo_idx(0);
+        app.set_type_combo_idx(chosen_type as i32);
+        app.set_catalog_combo_idx(chosen_catalog as i32);
         self.apply_catalog_labels_to_ui();
         self.apply_genre_selection_to_ui();
         self.apply_search_support_to_ui();
@@ -1129,6 +1159,10 @@ impl Bridge {
             self.ensure_home_catalog_rows_loaded();
         }
 
+        // A selected catalog that survived the rebuild keeps its pages.
+        if keep_grid {
+            return;
+        }
         if load && has_grid_source {
             self.load_catalog();
         } else {
