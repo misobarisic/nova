@@ -293,7 +293,38 @@ fn provider() -> JsProvider {
 }
 
 fn request(url: &str) -> ProtocolRequest {
-    parse_protocol_request(&decoded_path_segments(&Url::parse(url).unwrap()), "anikoto").unwrap()
+    let url = Url::parse(url).unwrap();
+    parse_protocol_request(
+        &decoded_path_segments(&url),
+        &raw_path_segments(&url),
+        "anikoto",
+    )
+    .unwrap()
+}
+
+#[test]
+fn catalog_requests_keep_every_extra_and_encoded_separators() {
+    let addon = addons::Addon::new(ANIKOTO_PROVIDER_URL).unwrap();
+    let ProtocolRequest::Catalog { catalog_id, extra } = request(&addon.catalog_url(
+        "series",
+        "anikoto.search",
+        &[("search", "naruto & boruto=1"), ("skip", "24")],
+    )) else {
+        panic!("catalog request");
+    };
+    assert_eq!(catalog_id, "anikoto.search");
+    assert_eq!(extra.len(), 2);
+    assert_eq!(extra["search"], "naruto & boruto=1");
+    assert_eq!(extra["skip"], "24");
+    let ProtocolRequest::Catalog { extra, .. } = request(&addon.catalog_url(
+        "series",
+        "anikoto.popular",
+        &[("genre", "Action"), ("skip", "48")],
+    )) else {
+        panic!("catalog request");
+    };
+    assert_eq!(extra["genre"], "Action");
+    assert_eq!(extra["skip"], "48");
 }
 
 #[test]
@@ -1797,10 +1828,16 @@ fn contextual_movies_omit_episode_context_and_series_require_it() {
     assert!(validate_stream_lookup(&movie).is_ok());
     let data = format!("{}.json", serde_json::to_string(&movie).unwrap());
     assert!(matches!(
-        parse_protocol_request(&["resolve".into(), "movie".into(), data.clone()], "fixture"),
+        parse_protocol_request(
+            &["resolve".into(), "movie".into(), data.clone()],
+            &[],
+            "fixture"
+        ),
         Ok(ProtocolRequest::Lookup { .. })
     ));
-    assert!(parse_protocol_request(&["resolve".into(), "series".into(), data], "fixture").is_err());
+    assert!(
+        parse_protocol_request(&["resolve".into(), "series".into(), data], &[], "fixture").is_err()
+    );
     let mut invalid_movie = movie.clone();
     invalid_movie.episode = Some(1);
     assert!(validate_stream_lookup(&invalid_movie).is_err());

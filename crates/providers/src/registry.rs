@@ -401,7 +401,7 @@ fn fetch_builtin_addon_with_progress_and_timeout(
             .request_timeout_ms
             .min(timeout.as_millis().clamp(1, 60_000) as u64);
         let addon = definition.addon.clone();
-        let request = parse_protocol_request(&path, &manifest.id)?;
+        let request = parse_protocol_request(&path, &raw_path_segments(&url), &manifest.id)?;
         let config = provider_capabilities(&definition.url()).unwrap_or_default();
         match &request {
             ProtocolRequest::Catalog { .. } if !config.metadata => {
@@ -1706,18 +1706,25 @@ enum ProtocolRequest {
     },
 }
 
+/// `segments` are percent-decoded path segments; `raw` the same segments
+/// still encoded. Catalog extras (`search=a%26b&skip=24`) must be split on `&`
+/// and `=` before decoding, since a decoded value may itself contain either.
 fn parse_protocol_request(
     segments: &[String],
+    raw: &[String],
     provider_id: &str,
 ) -> Result<ProtocolRequest, ProviderHostError> {
     match segments.first().map(String::as_str) {
         Some("catalog") if segments.len() >= 3 => {
             let mut catalog_id = segments[2].clone();
             let mut extra = HashMap::new();
-            for segment in segments.iter().skip(3) {
+            let decode = |part: &str| percent_decode_str(part).decode_utf8_lossy().into_owned();
+            for segment in raw.iter().skip(3) {
                 let segment = segment.strip_suffix(".json").unwrap_or(segment);
-                if let Some((key, value)) = segment.split_once('=') {
-                    extra.insert(key.to_owned(), value.to_owned());
+                for pair in segment.split('&') {
+                    if let Some((key, value)) = pair.split_once('=') {
+                        extra.insert(decode(key), decode(value));
+                    }
                 }
             }
             if catalog_id.ends_with(".json") {
@@ -1764,6 +1771,15 @@ fn parse_protocol_request(
         }
         _ => Err(ProviderHostError("unknown provider endpoint".into())),
     }
+}
+
+fn raw_path_segments(url: &Url) -> Vec<String> {
+    url.path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn decoded_path_segments(url: &Url) -> Vec<String> {
