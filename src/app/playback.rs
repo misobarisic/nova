@@ -1881,7 +1881,7 @@ impl Bridge {
                 media_type: job.media_type.clone(),
                 media_id: job.media_id.clone(),
                 request_id: job.request_id.clone(),
-                is_episode: job.media_type == "series" || saved_coordinates.is_some(),
+                is_episode: downloads::episodic_download(&job) || saved_coordinates.is_some(),
                 is_movie: job.media_type == "movie",
                 history: Some(PlaybackHistory {
                     type_: job.media_type.clone(),

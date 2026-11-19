@@ -790,7 +790,7 @@ impl DownloadCoordinator {
             .iter()
             .filter(|job| {
                 job.phase == DownloadPhase::Completed
-                    && (job.media_type == "series" || job.media_type.is_empty())
+                    && (episodic_download(job) || job.media_type.is_empty())
             })
             .cloned()
             .collect();
@@ -6456,5 +6456,38 @@ mod physical_accounting_tests {
         fs::remove_dir_all(root).unwrap();
         refresh_physical_accounting(&mut jobs);
         assert!(jobs.iter().all(|job| job.bytes_downloaded == 0));
+    }
+}
+
+/// Whether a downloaded file is one episode of a title, matching streaming,
+/// which treats every non-movie title's episodes as episodic (anime and other
+/// addon types included, with or without season numbers).
+pub(crate) fn episodic_download(job: &DownloadJob) -> bool {
+    job.media_type == "series"
+        || (job.media_type != "movie"
+            && !job.media_type.is_empty()
+            && job.request_id != job.media_id)
+}
+
+#[cfg(test)]
+mod episodic_download_tests {
+    use super::*;
+
+    fn job(media_type: &str, media_id: &str, request_id: &str) -> DownloadJob {
+        DownloadJob {
+            media_type: media_type.into(),
+            media_id: media_id.into(),
+            request_id: request_id.into(),
+            ..DownloadJob::default()
+        }
+    }
+
+    #[test]
+    fn season_less_anime_episodes_are_episodic_like_streaming() {
+        assert!(episodic_download(&job("series", "tt1", "tt1:1:1")));
+        assert!(episodic_download(&job("anime", "kitsu:7", "kitsu:7:3")));
+        assert!(!episodic_download(&job("anime", "kitsu:7", "kitsu:7")));
+        assert!(!episodic_download(&job("movie", "tt2", "tt2")));
+        assert!(!episodic_download(&job("", "x", "x:1")));
     }
 }
