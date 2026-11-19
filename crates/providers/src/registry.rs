@@ -75,6 +75,38 @@ impl OwnedProviderSnapshot {
         crate::metadata::with_inventory(&self.metadata, f)
     }
 }
+/// Every provider scope of the calling thread. Host helpers that fan work out
+/// to other threads (`nova.http.batch`) re-enter it there; a bare thread would
+/// read the active profile's settings generation and the global inventory, so
+/// a scoped stream operation looked cancelled and used the wrong configs.
+pub(crate) struct ThreadScope {
+    settings: crate::plugin_settings::SettingsScope,
+    inventory: Option<OwnedProviderSnapshot>,
+    metadata: Option<crate::metadata::MetadataInventory>,
+}
+impl ThreadScope {
+    pub(crate) fn capture() -> Self {
+        Self {
+            settings: crate::plugin_settings::SettingsScope::capture(),
+            inventory: OWNED_INVENTORY.with(|inventory| inventory.borrow().clone()),
+            metadata: crate::metadata::scoped_inventory(),
+        }
+    }
+    pub(crate) fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.settings.with(|| {
+            // The inventory scope sets its own metadata; the captured one wins
+            // because nested enrichment may have narrowed it.
+            let metadata = || match &self.metadata {
+                Some(metadata) => crate::metadata::with_inventory(metadata, f),
+                None => f(),
+            };
+            match &self.inventory {
+                Some(inventory) => inventory.with(metadata),
+                None => metadata(),
+            }
+        })
+    }
+}
 fn selected_configs() -> HashMap<String, ProviderCapabilities> {
     OWNED_INVENTORY
         .with(|inventory| {

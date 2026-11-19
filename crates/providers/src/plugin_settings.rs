@@ -393,15 +393,30 @@ impl SettingsCapability {
         })
     }
     pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
-        struct Restore(Option<ServiceOwner>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                SCOPED_SERVICE.with(|owner| *owner.borrow_mut() = self.0.take());
-            }
+        with_scoped_service(Some(self.owner.clone()), f)
+    }
+}
+fn with_scoped_service<R>(scoped: Option<ServiceOwner>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ServiceOwner>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_SERVICE.with(|owner| *owner.borrow_mut() = self.0.take());
         }
-        let previous = SCOPED_SERVICE.with(|owner| owner.replace(Some(self.owner.clone())));
-        let _restore = Restore(previous);
-        f()
+    }
+    let previous = SCOPED_SERVICE.with(|owner| owner.replace(scoped));
+    let _restore = Restore(previous);
+    f()
+}
+/// The calling thread's settings scope, carried to provider helper threads so
+/// they answer for the same profile as the operation that started them.
+#[derive(Clone, Default)]
+pub(crate) struct SettingsScope(Option<ServiceOwner>);
+impl SettingsScope {
+    pub(crate) fn capture() -> Self {
+        Self(SCOPED_SERVICE.with(|owner| owner.borrow().clone()))
+    }
+    pub(crate) fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        with_scoped_service(self.0.clone(), f)
     }
 }
 pub fn capture_settings_capability() -> SettingsCapability {
@@ -1217,6 +1232,28 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn helper_threads_answer_for_the_captured_owner() {
+        let backend = Arc::new(Memory {
+            owner: Some("helper-thread-scope-fixture".into()),
+            ..Default::default()
+        });
+        let capability = owned_settings_capability(prepare_plugin_settings(backend).unwrap());
+        // A re-activated retained owner moves only its activation generation,
+        // so scoped work (revision) and the active view (generation) differ.
+        capability.owner.lock().unwrap().generation = next_generation();
+        capability.with(|| {
+            assert_eq!(settings_generation(), capability.revision);
+            let scope = SettingsScope::capture();
+            std::thread::scope(|threads| {
+                let carried = threads.spawn(|| scope.with(settings_generation));
+                let bare = threads.spawn(settings_generation);
+                assert_eq!(carried.join().unwrap(), capability.revision);
+                assert_ne!(bare.join().unwrap(), capability.revision);
+            });
+        });
+    }
+
     #[test]
     fn background_preparation_preserves_retained_owner_activation_generation() {
         let backend = Arc::new(Memory {

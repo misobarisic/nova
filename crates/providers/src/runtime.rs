@@ -774,17 +774,19 @@ fn install_capabilities<'js>(
         let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else { return serde_json::json!({"error":"invalid HTTP batch"}).to_string(); };
         if items.len() > 3 { return serde_json::json!({"error":"HTTP batch permits at most three GET requests"}).to_string(); }
         let started = Instant::now();
+        let carried = crate::registry::ThreadScope::capture();
         let mut results = std::thread::scope(|scope| {
             let tasks: Vec<_> = items.into_iter().map(|item| {
                 let host = &host_ref;
                 let domains = &domains;
-                scope.spawn(move || {
+                let carried = &carried;
+                scope.spawn(move || carried.with(|| {
                     match parse_http_request(&item.to_string(), domains) {
                         Ok(request) if request.method == "GET" => http_result(host.request(&request), request.response_type),
                         Ok(_) => serde_json::json!({"error":"HTTP batch supports GET only"}),
                         Err(error) => serde_json::json!({"error":error}),
                     }
-                })
+                }))
             }).collect();
             tasks.into_iter().map(|task| task.join().unwrap_or_else(|_| serde_json::json!({"error":"HTTP batch request failed"}))).collect::<Vec<_>>()
         });
@@ -805,6 +807,7 @@ fn install_capabilities<'js>(
         if raw.len() > MAX_PLUGIN_BODY { return Ok(serde_json::json!({"error":"HTTP batch is too large"}).to_string()); }
         let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else { return Ok(serde_json::json!({"error":"invalid HTTP batch"}).to_string()); };
         if items.len() > 3 { return Ok(serde_json::json!({"error":"HTTP batch permits at most three GET requests"}).to_string()); }
+        let carried = crate::registry::ThreadScope::capture();
         std::thread::scope(|scope| {
             let (sender, receiver) = std::sync::mpsc::channel();
             let count = items.len();
@@ -812,12 +815,13 @@ fn install_capabilities<'js>(
                 let sender = sender.clone();
                 let host = &host_ref;
                 let domains = &domains;
+                let carried = &carried;
                 scope.spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match parse_http_request(&item.to_string(),domains) {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| carried.with(|| match parse_http_request(&item.to_string(),domains) {
                         Ok(request) if request.method == "GET" => http_result(host.request(&request),request.response_type),
                         Ok(_) => serde_json::json!({"error":"HTTP batch supports GET only"}),
                         Err(error) => serde_json::json!({"error":error}),
-                    })).unwrap_or_else(|_| serde_json::json!({"error":"HTTP batch request failed"}));
+                    }))).unwrap_or_else(|_| serde_json::json!({"error":"HTTP batch request failed"}));
                     let _ = sender.send((index,result));
                 });
             }

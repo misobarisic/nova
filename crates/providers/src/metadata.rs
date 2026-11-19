@@ -61,6 +61,10 @@ pub(crate) fn owned_inventory(addons: Vec<MetadataAddon>) -> MetadataInventory {
 pub(crate) fn capture_inventory() -> MetadataInventory {
     MetadataInventory(Arc::new(Mutex::new(snapshot().lock().unwrap().clone())))
 }
+/// The inventory scoped on this thread, if any.
+pub(crate) fn scoped_inventory() -> Option<MetadataInventory> {
+    OWNED_INVENTORY.with(|inventory| inventory.borrow().clone().map(MetadataInventory))
+}
 pub(crate) fn with_inventory<R>(inventory: &MetadataInventory, f: impl FnOnce() -> R) -> R {
     struct Restore(Option<Arc<Mutex<Snapshot>>>);
     impl Drop for Restore {
