@@ -488,13 +488,19 @@ fn normalized_title(value: &str) -> String {
         .collect()
 }
 
-fn public_title_id(value: &str) -> bool {
-    value
+/// The public catalog a title id belongs to. Ids from different catalogs are
+/// not comparable: the same anime is `tt…` on one side and `kitsu:…` on the
+/// other.
+fn public_namespace(value: &str) -> Option<&'static str> {
+    if value
         .strip_prefix("tt")
         .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-        || ["tmdb:", "kitsu:", "anilist:"]
-            .iter()
-            .any(|prefix| value.starts_with(prefix))
+    {
+        return Some("tt");
+    }
+    ["tmdb:", "kitsu:", "anilist:"]
+        .into_iter()
+        .find(|prefix| value.starts_with(prefix))
 }
 
 /// Exact confirmed identities win. An explicit manual source choice may use
@@ -510,7 +516,12 @@ fn compatible_media(local: &PartyMedia, expected: &PartyMedia, manual: bool) -> 
     {
         return true;
     }
-    if public_title_id(&local.identity.title_id) && public_title_id(&expected.identity.title_id) {
+    // Two different ids from the same public catalog are different titles,
+    // whatever the display titles say. Across catalogs only the explicit
+    // manual choice below can match them.
+    if public_namespace(&local.identity.title_id).is_some_and(|namespace| {
+        public_namespace(&expected.identity.title_id) == Some(namespace)
+    }) {
         return false;
     }
     manual
@@ -2820,6 +2831,18 @@ mod tests {
             &media("tt456", 2),
             &media("tt123", 2),
             true
+        ));
+        // Different public catalogs: only an explicit choice with equal title
+        // and episode matches them.
+        assert!(compatible_media(
+            &media("kitsu:1234", 2),
+            &media("tt123", 2),
+            true
+        ));
+        assert!(!compatible_media(
+            &media("kitsu:1234", 2),
+            &media("tt123", 2),
+            false
         ));
         assert!(!compatible_media(
             &media("anikoto:box", 2),
