@@ -476,14 +476,21 @@ impl Bridge {
                     } else {
                         state.addon_subtitles.accepts(session, selection)
                     };
-                    if !accepts
-                        || !state.installed.iter().any(|addon| {
-                            addon.url == owner
-                                && addon.generation == generation
-                                && addon.enabled
-                                && addon.available
-                        })
-                    {
+                    if !accepts {
+                        // A newer request owns the status indicator now.
+                        return;
+                    }
+                    if !state.installed.iter().any(|addon| {
+                        addon.url == owner
+                            && addon.generation == generation
+                            && addon.enabled
+                            && addon.available
+                    }) {
+                        // This is still the current request, so clear its
+                        // downloading state; otherwise the OSD keeps showing it
+                        // and automatic loading stays blocked.
+                        drop(state);
+                        app.set_subtitle_addon_status(0);
                         return;
                     }
                 }
