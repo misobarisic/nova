@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Full-screen camera QR scanner for pairing invites.
@@ -57,6 +58,7 @@ public class QrScanActivity extends Activity {
 
     private TextureView previewView;
     private ImageReader imageReader;
+    private Surface previewSurface;
     private CameraDevice camera;
     private CameraCaptureSession session;
     private HandlerThread backgroundThread;
@@ -67,6 +69,9 @@ public class QrScanActivity extends Activity {
     private int sensorOrientation = 0;
     private final AtomicBoolean finished = new AtomicBoolean(false);
     private long lastFrameMs = 0L;
+    private volatile boolean resumed;
+    private final AtomicBoolean opening = new AtomicBoolean(false);
+    private final AtomicInteger cameraGeneration = new AtomicInteger();
 
     /** Launch the scanner. Called from Rust; always from the UI/Activity. */
     public static void start(Context context) {
@@ -183,17 +188,17 @@ public class QrScanActivity extends Activity {
         return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
-    private void openCamera() {
-        if (camera != null || finished.get() || !hasCameraPermission()) {
+    private synchronized void openCamera() {
+        if (camera != null || !resumed || finished.get() || !hasCameraPermission() || !opening.compareAndSet(false, true)) {
             return;
         }
+        final int generation = cameraGeneration.get();
         CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
             for (String id : manager.getCameraIdList()) {
                 CameraCharacteristics chars = manager.getCameraCharacteristics(id);
                 Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
                 if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
-                    cameraId = id;
                     Integer orientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION);
                     sensorOrientation = orientation == null ? 0 : orientation;
                     StreamConfigurationMap map = chars.get(
@@ -204,6 +209,7 @@ public class QrScanActivity extends Activity {
                     analysisSize = pickSize(map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888),
                             TARGET_ANALYSIS);
                     previewSize = pickSize(map.getOutputSizes(SurfaceTexture.class), TARGET_ANALYSIS);
+                    cameraId = id;
                     break;
                 }
             }
@@ -227,36 +233,52 @@ public class QrScanActivity extends Activity {
         try {
             manager.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice device) {
-                    camera = device;
-                    createSession();
+                    synchronized (QrScanActivity.this) {
+                        if (!resumed || finished.get() || generation != cameraGeneration.get()) {
+                            device.close(); return;
+                        }
+                        opening.set(false);
+                        camera = device;
+                        createSession();
+                    }
                 }
                 @Override public void onDisconnected(CameraDevice device) {
-                    device.close();
-                    camera = null;
+                    synchronized (QrScanActivity.this) {
+                        device.close();
+                        if (generation != cameraGeneration.get()) return;
+                        opening.set(false);
+                        camera = null;
+                    }
                 }
                 @Override public void onError(CameraDevice device, int error) {
-                    Log.e(TAG, "camera error " + error);
-                    device.close();
-                    camera = null;
-                    finish();
+                    synchronized (QrScanActivity.this) {
+                        Log.e(TAG, "camera error " + error);
+                        device.close();
+                        if (generation != cameraGeneration.get()) return;
+                        opening.set(false);
+                        camera = null;
+                        finish();
+                    }
                 }
             }, backgroundHandler);
         } catch (CameraAccessException | SecurityException e) {
+            opening.set(false);
             Log.e(TAG, "openCamera failed", e);
             finish();
         }
     }
 
-    private void createSession() {
-        if (camera == null || imageReader == null || !previewView.isAvailable()) {
+    private synchronized void createSession() {
+        if (camera == null || imageReader == null || previewSurface != null || !previewView.isAvailable()) {
             return;
         }
+        final int generation = cameraGeneration.get();
         SurfaceTexture texture = previewView.getSurfaceTexture();
         if (texture == null) {
             return;
         }
         texture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
-        Surface previewSurface = new Surface(texture);
+        previewSurface = new Surface(texture);
         try {
             CaptureRequest.Builder builder =
                     camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
@@ -274,34 +296,42 @@ public class QrScanActivity extends Activity {
             List<Surface> targets = new ArrayList<>(Arrays.asList(previewSurface, imageReader.getSurface()));
             camera.createCaptureSession(targets, new CameraCaptureSession.StateCallback() {
                 @Override public void onConfigured(CameraCaptureSession configured) {
-                    if (camera == null) {
-                        return;
-                    }
-                    session = configured;
-                    try {
-                        session.setRepeatingRequest(builder.build(), null, backgroundHandler);
-                    } catch (CameraAccessException e) {
-                        Log.e(TAG, "repeating request failed", e);
+                    synchronized (QrScanActivity.this) {
+                        if (camera == null || !resumed || generation != cameraGeneration.get()) {
+                            configured.close();
+                            return;
+                        }
+                        session = configured;
+                        try {
+                            configured.setRepeatingRequest(builder.build(), null, backgroundHandler);
+                        } catch (CameraAccessException | IllegalStateException e) {
+                            Log.e(TAG, "repeating request failed", e);
+                        }
                     }
                 }
                 @Override public void onConfigureFailed(CameraCaptureSession configured) {
+                    configured.close();
                     Log.e(TAG, "capture session config failed");
+                    if (generation == cameraGeneration.get() && resumed) runOnUiThread(QrScanActivity.this::finish);
                 }
             }, backgroundHandler);
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | IllegalStateException e) {
             Log.e(TAG, "createCaptureSession failed", e);
+            runOnUiThread(this::finish);
         }
-        configureTransform(previewView.getWidth(), previewView.getHeight());
+        runOnUiThread(() -> configureTransform(previewView.getWidth(), previewView.getHeight()));
     }
 
     /** Throttled frame handler: extract the luma plane and ask Rust to decode. */
     private void onFrame(ImageReader reader) {
-        Image image = reader.acquireLatestImage();
+        Image image;
+        try { image = reader.acquireLatestImage(); }
+        catch (IllegalStateException closed) { return; }
         if (image == null) {
             return;
         }
         try {
-            long now = System.currentTimeMillis();
+            long now = android.os.SystemClock.elapsedRealtime();
             if (finished.get() || now - lastFrameMs < FRAME_INTERVAL_MS) {
                 return;
             }
@@ -374,6 +404,7 @@ public class QrScanActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         if (previewView != null && previewView.isAvailable()) {
             openCamera();
         }
@@ -381,28 +412,35 @@ public class QrScanActivity extends Activity {
 
     @Override
     protected void onPause() {
+        resumed = false;
         closeCamera();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        resumed = false;
         closeCamera();
         super.onDestroy();
     }
 
     private void closeCamera() {
-        if (session != null) {
-            session.close();
-            session = null;
-        }
-        if (camera != null) {
-            camera.close();
-            camera = null;
-        }
-        if (imageReader != null) {
-            imageReader.close();
-            imageReader = null;
+        synchronized (this) {
+            cameraGeneration.incrementAndGet();
+            opening.set(false);
+            if (session != null) {
+                session.close();
+                session = null;
+            }
+            if (camera != null) {
+                camera.close();
+                camera = null;
+            }
+            if (imageReader != null) {
+                imageReader.close();
+                imageReader = null;
+            }
+            if (previewSurface != null) { previewSurface.release(); previewSurface = null; }
         }
         stopBackgroundThread();
     }
