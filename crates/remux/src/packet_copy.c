@@ -175,7 +175,11 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
     Job job = {cancel,opaque,limit,read,seek,io,NULL,av_gettime_relative()}; AVFormatContext *in = NULL, *out = NULL;
     AVPacket *packet = NULL; AVBSFContext **filters = NULL; int *map = NULL; Budget budget={0}; AVIOContext *backing=NULL;
     AVPacket *prelude[256]={0};int prelude_count=0,prelude_cursor=0;
-    int64_t *last_dts = NULL,*audio_anchor=NULL,*audio_samples=NULL; int ret = open_input(source, &job, &in), opened = 0;
+    int64_t *last_dts = NULL,*audio_anchor=NULL,*audio_samples=NULL;
+    /* Per-stream arrays are sized once. MPEG-TS and chained Ogg add streams
+       while packets are read, so in->nb_streams can outgrow them: index and
+       iterate with this count, and drop packets of later streams. */
+    unsigned streams=0; int ret = open_input(source, &job, &in), opened = 0;
     if (ret < 0) goto cleanup;
     int audio_index=selected_audio_index;
     if(audio_index<0)audio_index=default_audio(in);
@@ -193,13 +197,14 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
     }
     ret = avformat_alloc_output_context2(&out,NULL,"mp4",destination); if (ret < 0 || !out) goto cleanup;
     out->interrupt_callback.callback = interrupted; out->interrupt_callback.opaque = &job;
-    map = av_malloc_array(in->nb_streams,sizeof(*map));
-    filters = av_calloc(in->nb_streams,sizeof(*filters));
-    last_dts = av_malloc_array(in->nb_streams,sizeof(*last_dts));
-    audio_anchor=av_malloc_array(in->nb_streams,sizeof(*audio_anchor));audio_samples=av_calloc(in->nb_streams,sizeof(*audio_samples));
+    streams = in->nb_streams;
+    map = av_malloc_array(streams,sizeof(*map));
+    filters = av_calloc(streams,sizeof(*filters));
+    last_dts = av_malloc_array(streams,sizeof(*last_dts));
+    audio_anchor=av_malloc_array(streams,sizeof(*audio_anchor));audio_samples=av_calloc(streams,sizeof(*audio_samples));
     if (!map || !filters || !last_dts || !audio_anchor || !audio_samples) { ret = AVERROR(ENOMEM); goto cleanup; }
     int selected_video = 0, selected_audio = 0;
-    for(unsigned i=0;i<in->nb_streams;i++) {
+    for(unsigned i=0;i<streams;i++) {
         AVStream *s = in->streams[i]; AVCodecParameters *p = s->codecpar; map[i] = -1; last_dts[i] = AV_NOPTS_VALUE;audio_anchor[i]=AV_NOPTS_VALUE;
         if (p->codec_type == AVMEDIA_TYPE_VIDEO && !(s->disposition & AV_DISPOSITION_ATTACHED_PIC) && !selected_video) selected_video=1;
         else if (p->codec_type == AVMEDIA_TYPE_AUDIO && !selected_audio && (audio_index<0 || i==(unsigned)audio_index)) selected_audio=1;
@@ -241,7 +246,7 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
         if(ret<0)break;
         if(interrupted(&job)){ret=AVERROR_EXIT;goto cleanup;}
         unsigned idx=packet->stream_index;
-        if(map[idx]<0){av_packet_unref(packet);continue;}
+        if(idx>=streams||map[idx]<0){av_packet_unref(packet);continue;}
         AVStream *s=in->streams[idx],*d=out->streams[map[idx]];
 
         if(d->codecpar->codec_id==AV_CODEC_ID_AAC && filters[idx]){
@@ -279,7 +284,7 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
         if(avio_tell(out->pb)>limit){ret=AVERROR(ENOSPC);goto cleanup;}
     }
     if(ret!=AVERROR_EOF)goto cleanup;
-    for(unsigned i=0;i<in->nb_streams;i++) if(filters[i]) {
+    for(unsigned i=0;i<streams;i++) if(filters[i]) {
         ret=av_bsf_send_packet(filters[i],NULL);if(ret<0)goto cleanup;
         while((ret=av_bsf_receive_packet(filters[i],packet))>=0){AVStream *d=out->streams[map[i]];av_packet_rescale_ts(packet,filters[i]->time_base_out,d->time_base);packet->stream_index=d->index;packet->pos=-1;ret=av_interleaved_write_frame(out,packet);if(ret<0){goto cleanup;}}
         if(ret!=AVERROR_EOF&&ret!=AVERROR(EAGAIN))goto cleanup;
@@ -289,7 +294,7 @@ int nova_media_remux(const char *source, const char *destination, Cancel cancel,
 cleanup:
     for(int i=0;i<prelude_count;i++)av_packet_free(&prelude[i]);
     av_packet_free(&packet);
-    if(filters&&in){for(unsigned i=0;i<in->nb_streams;i++)av_bsf_free(&filters[i]);}
+    if(filters){for(unsigned i=0;i<streams;i++)av_bsf_free(&filters[i]);}
     av_free(filters);av_free(map);av_free(last_dts);av_free(audio_anchor);av_free(audio_samples);
     if(opened){
         if(out->pb){avio_flush(out->pb);if(ret>=0&&out->pb->error<0)ret=out->pb->error;av_freep(&out->pb->buffer);avio_context_free(&out->pb);}
