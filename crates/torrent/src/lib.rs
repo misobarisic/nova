@@ -2361,9 +2361,10 @@ pub fn pick_video_file(
     }
 
     // Drop obvious sidecars unless that would leave nothing to play.
+    let largest = videos.iter().map(|v| v.len).max().unwrap_or(0);
     let features: Vec<FileCandidate> = videos
         .iter()
-        .filter(|v| !is_sidecar(&v.name))
+        .filter(|v| !is_sidecar(&v.name, v.len, largest))
         .cloned()
         .collect();
     let candidates = if features.is_empty() {
@@ -2387,10 +2388,12 @@ fn is_video(name: &str) -> bool {
     matches!(ext.as_deref(), Some(e) if VIDEO_EXTS.contains(&e))
 }
 
-/// True for names that mark a sample, trailer or bonus clip rather than the
-/// feature itself. Matched on whole words so a title like "Extraction" is not
-/// mistaken for an "extra".
-fn is_sidecar(name: &str) -> bool {
+/// True for a sample, trailer or bonus clip rather than the feature itself.
+/// Words are matched whole, so a title like "Extraction" is not an "extra".
+/// A folder named for it (`Sample/`, `Extras/`) marks every file inside; in the
+/// file name a word counts only for a small file (under 15 % of the largest
+/// video), since features have titles like "Interview with the Vampire".
+fn is_sidecar(name: &str, len: u64, largest: u64) -> bool {
     const WORDS: &[&str] = &[
         "sample",
         "trailer",
@@ -2402,13 +2405,24 @@ fn is_sidecar(name: &str) -> bool {
         "interview",
         "deleted",
     ];
+    let marked = |text: &str| {
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|tok| !tok.is_empty() && WORDS.contains(&tok))
+    };
     let lower = name.to_ascii_lowercase();
-    let stem = Path::new(&lower)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&lower);
-    stem.split(|c: char| !c.is_alphanumeric())
-        .any(|tok| !tok.is_empty() && WORDS.contains(&tok))
+    let path = Path::new(&lower);
+    let in_marked_folder = path
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .any(|part| part.as_os_str().to_str().is_some_and(marked));
+    let small = u128::from(len) * 100 < u128::from(largest) * 15;
+    in_marked_folder
+        || (small
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(marked))
 }
 
 /// Pick the video whose file name best matches the stream row text.
@@ -3655,6 +3669,28 @@ mod tests {
         let got = pick_video_file(&f, Some(2), "").unwrap();
         assert_eq!(got.idx, 2);
         assert_eq!(got.name, "sample.mp4");
+    }
+
+    #[test]
+    fn sidecars_are_small_files_or_live_in_marked_folders() {
+        // A feature whose title holds a sidecar word stays the feature.
+        let f = files(&[
+            (0, "Interview.with.the.Vampire.1994.1080p.mkv", 12_000),
+            (1, "RARBG.com.mp4", 2),
+        ]);
+        assert_eq!(pick_video_file(&f, None, "").unwrap().idx, 0);
+        // A large bonus file in an Extras folder is not the feature.
+        let f = files(&[
+            (0, "Movie/Extras/Making.of.mkv", 9_000),
+            (1, "Movie/Movie.2020.mkv", 8_000),
+        ]);
+        assert_eq!(pick_video_file(&f, None, "").unwrap().idx, 1);
+        // A small sample still loses to a feature named like the request.
+        let f = files(&[
+            (0, "movie.sample.mkv", 50),
+            (1, "movie.mkv", 9_000),
+        ]);
+        assert_eq!(pick_video_file(&f, None, "movie sample").unwrap().idx, 1);
     }
 
     #[test]
