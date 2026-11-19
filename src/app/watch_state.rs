@@ -254,7 +254,7 @@ impl Bridge {
                 store
                     .lock()
                     .unwrap()
-                    .records(DOMAIN_VIEWING_ACTIVITY)
+                    .records(&sync::profile_domain(DOMAIN_VIEWING_ACTIVITY))
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect()
