@@ -160,20 +160,28 @@ pub(super) fn refresh_owner_metadata(
         return;
     };
     let entries: Vec<LibraryEntry> = load(owner, "library").unwrap_or_default();
-    for sub in subs
-        .values()
-        .filter(|s| {
+    let eligible: Vec<(&String, &Subscription)> = subs
+        .iter()
+        .filter(|(_, s)| {
             entries.iter().any(|e| {
                 e.id == s.title_id
                     && e.type_ == s.type_
                     && e.watch_status.allows_episode_refresh(true)
             })
         })
-        .take(4)
-    {
+        .collect();
+    // Four titles per pass, continuing after the last one refreshed, so every
+    // subscription takes its turn instead of the first four in key order.
+    let cursor = owner.read(REFRESH_CURSOR_KEY).ok().flatten();
+    let start = cursor.as_ref().map_or(0, |last| {
+        eligible.iter().take_while(|(key, _)| *key <= last).count()
+    });
+    let turn = (0..eligible.len().min(4)).map(|i| eligible[(start + i) % eligible.len()]);
+    for (key, sub) in turn {
         if cancel.load(Ordering::Acquire) || started.elapsed() > Duration::from_secs(50) {
             break;
         }
+        let _ = owner.write(REFRESH_CURSOR_KEY, key);
         if !profile_policy::allows_title(owner, &sub.type_, &sub.title_id) {
             continue;
         }
@@ -183,6 +191,10 @@ pub(super) fn refresh_owner_metadata(
         );
     }
 }
+
+/// Device-local position of the background metadata rotation.
+#[cfg(target_os = "android")]
+const REFRESH_CURSOR_KEY: &str = "release_reminders:refresh_cursor:v1";
 pub(super) fn records(raw: &str) -> nova_sync::Result<Vec<(String, String, u64)>> {
     let rows: BTreeMap<String, Subscription> = serde_json::from_str(raw)?;
     rows.into_iter()
