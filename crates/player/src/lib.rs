@@ -1792,6 +1792,11 @@ impl Player {
                             );
                             #[cfg(target_os = "android")]
                             alog("mpv render context created (OpenGL/GLES underlay ready)");
+                            // A renderer exists again, so an earlier transient
+                            // refusal (EGL context switch, failed create during
+                            // a resume) must not keep blocking play(). Errors
+                            // that are permanent never reach this point.
+                            *notifier_state.mpv_error.lock().unwrap() = None;
                             // Android: resolve the GL entry points once for the
                             // state guard. The notifier's `get_proc_address`
                             // misses extension entry points on some drivers, so
