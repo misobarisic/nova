@@ -45,6 +45,10 @@ type TorrentId = usize;
 
 use nova_config::TorrentSettings;
 
+/// How long torrent initialization may go without checking another byte.
+const INIT_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+const INIT_PROGRESS_POLL: Duration = Duration::from_secs(1);
+
 async fn wait_cancelled(cancel: &AtomicBool) {
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -1021,10 +1025,33 @@ impl EngineInner {
         handle: &librqbit::ManagedTorrent,
         cancel: &AtomicBool,
     ) -> Result<(), String> {
+        // A restarted session re-hashes every adopted cache entry; a large
+        // file takes minutes, and failing here pauses the torrent, which
+        // cancels the check so it restarts from zero next time. Only give up
+        // when the check stops making progress.
         self.rt.block_on(async {
-            tokio::select! {
-                _ = wait_cancelled(cancel) => Err("torrent request cancelled".into()),
-                result = tokio::time::timeout(Duration::from_secs(30), handle.wait_until_initialized()) => result.map_err(|_| "timed out initializing torrent".to_string())?.map_err(|e| format!("initializing torrent: {e:#}")),
+            let initialized = handle.wait_until_initialized();
+            tokio::pin!(initialized);
+            let cancelled = wait_cancelled(cancel);
+            tokio::pin!(cancelled);
+            let mut checked = handle.stats().progress_bytes;
+            let mut progressed = tokio::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _ = &mut cancelled => return Err("torrent request cancelled".into()),
+                    result = &mut initialized => {
+                        return result.map_err(|e| format!("initializing torrent: {e:#}"));
+                    }
+                    _ = tokio::time::sleep(INIT_PROGRESS_POLL) => {
+                        let now = handle.stats().progress_bytes;
+                        if now != checked {
+                            checked = now;
+                            progressed = tokio::time::Instant::now();
+                        } else if progressed.elapsed() >= INIT_STALL_TIMEOUT {
+                            return Err("timed out initializing torrent".into());
+                        }
+                    }
+                }
             }
         })
     }
