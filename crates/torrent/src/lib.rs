@@ -564,6 +564,10 @@ impl TorrentEngine {
             requests.retain(|request| request.strong_count() > 0);
             requests.push(Arc::downgrade(&request.0));
         }
+        // Shared so a failed spawn (which drops the closure) can still answer:
+        // otherwise the player would wait on "Resolving stream…" forever.
+        let completion = Arc::new(Mutex::new(Some(cb)));
+        let worker_completion = completion.clone();
         let spawn_result = std::thread::Builder::new()
             .name("torrent-resolve".into())
             .spawn(move || {
@@ -574,11 +578,15 @@ impl TorrentEngine {
                     requested_name,
                     settings,
                 );
-                cb(result);
+                if let Some(cb) = worker_completion.lock().unwrap().take() {
+                    cb(result);
+                }
             });
         if let Err(e) = spawn_result {
-            // Spawn failed (process teardown): report rather than hang.
             eprintln!("nova torrent: could not start worker: {e}");
+            if let Some(cb) = completion.lock().unwrap().take() {
+                cb(Err(format!("could not start torrent worker: {e}")));
+            }
         }
     }
 
