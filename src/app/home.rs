@@ -1429,10 +1429,11 @@ impl Bridge {
                 return;
             }
             artwork.metadata_loading = false;
-            artwork.metadata_retry_at = item
-                .as_ref()
-                .is_none_or(|item| home_showcase_needs_metadata(&item.preview))
-                .then(std::time::Instant::now);
+            // Retry only a failed fetch. Many catalogs (anime ones especially)
+            // never supply a logo or background; an answer without them is
+            // final for this metadata revision, not a reason to refetch on
+            // every carousel turn.
+            artwork.metadata_retry_at = item.is_none().then(std::time::Instant::now);
             if let Some(item) = &item {
                 if let Some(cache) = &mut state.catalog_grouping.home_featured_raw {
                     cache.enrich(&requested, &item.preview);
