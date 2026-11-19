@@ -77,7 +77,7 @@ pub(super) struct PlaybackIntent {
     provider_relay: Option<nova_providers::PlaybackRelayLease>,
     party_guard: Option<party::PlaybackGuard>,
     pub(super) context: PlaybackContext,
-    detached: bool,
+    pub(super) detached: bool,
 }
 
 #[derive(Clone)]

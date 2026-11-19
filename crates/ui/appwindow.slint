@@ -740,6 +740,7 @@ export component AppWindow inherits Window {
         keep_controls_visible_while_paused <=> root.keep_controls_visible_while_paused;
         casting_remux_buffer_index <=> root.casting_remux_buffer_index;
         auto_next_episode <=> root.auto_next_episode;
+        auto_next_episode_remote <=> root.auto_next_episode_remote;
         auto_retry_streams <=> root.auto_retry_streams;
         dialogue_boost <=> root.dialogue_boost;
         loudness_normalization <=> root.loudness_normalization;
@@ -1657,6 +1658,7 @@ export component AppWindow inherits Window {
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
+    in-out property <bool> auto_next_episode_remote: false;
     in-out property <bool> auto_retry_streams: false;
     in-out property <bool> dialogue_boost: false;
     in-out property <bool> loudness_normalization: false;
@@ -1795,9 +1797,9 @@ export component AppWindow inherits Window {
     in-out property <bool> library_view_loading: false;
     in-out property <string> library_query: "";
     in-out property <int> library_sort: 0;
+    in-out property <bool> library_sort_reversed: false;
     in-out property <bool> library_list_view: false;
     in-out property <bool> library_search_open: false;
-    in-out property <bool> library_sort_reversed: false;
     // Category names for the library filter dropdown.
     in-out property <[string]> library_category_names: [];
     // Display text for `library_category_names` (see library.slint): the

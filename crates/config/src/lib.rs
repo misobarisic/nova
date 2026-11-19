@@ -1038,6 +1038,10 @@ cache_settings_type! {
     /// Offer an eight-second automatic successor preview at native EOF.
     #[serde(default)]
     pub auto_next_episode: bool,
+    /// Also auto-advance playback started from another device's remote
+    /// controls. Applies on the playing device; requires `auto_next_episode`.
+    #[serde(default)]
+    pub auto_next_episode_remote: bool,
     /// Intro/recap timing behavior; explicit per-title choices override this.
     #[serde(default)]
     pub intro_skip_mode: IntroSkipMode,
@@ -1235,6 +1239,7 @@ impl Default for CacheSettings {
             show_stream_loading_text: true,
             casting_remux_buffer: CastingRemuxBuffer::default(),
             auto_next_episode: false,
+            auto_next_episode_remote: false,
             animations: true,
             anim_transitions: true,
             anim_hover: true,

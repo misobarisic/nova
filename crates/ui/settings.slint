@@ -190,6 +190,7 @@ export component SettingsPage {
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
+    in-out property <bool> auto_next_episode_remote: false;
     in-out property <int> screenshot_format_index: 0;
     in-out property <float> screenshot_jpeg_quality: 85;
     in-out property <float> screenshot_webp_quality: 85;
@@ -1721,8 +1722,12 @@ export component SettingsPage {
             root.show_chapters = d > 0;
             root.schedule_setting("show_chapters");
         } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() - 3 {
-            root.auto_next_episode = d > 0;
+            // Off, On, Incl. remote: arrows step through the three choices.
+            let index = Math.clamp((!root.auto_next_episode ? 0 : root.auto_next_episode_remote ? 2 : 1) + d, 0, 2);
+            root.auto_next_episode = index > 0;
+            root.auto_next_episode_remote = index == 2;
             root.schedule_setting("auto_next_episode");
+            root.schedule_setting("auto_next_episode_remote");
         } else if (root.kb_pr == root.kb_player_speed_row()) {
             // The backend applies ± a step and re-quantizes; the property
             // comes back with the snapped value.
@@ -2104,8 +2109,11 @@ export component SettingsPage {
                 root.show_chapters = !root.show_chapters;
                 root.schedule_setting("show_chapters");
             } else if root.player_backend_index == 0 && root.kb_pr == SettingsContent.kb_player_paused_controls_row() - 3 {
-                root.auto_next_episode = !root.auto_next_episode;
+                let index = Math.mod((!root.auto_next_episode ? 0 : root.auto_next_episode_remote ? 2 : 1) + 1, 3);
+                root.auto_next_episode = index > 0;
+                root.auto_next_episode_remote = index == 2;
                 root.schedule_setting("auto_next_episode");
+                root.schedule_setting("auto_next_episode_remote");
             } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4) {
                 let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 || root.screenshot_format_index == 4 || root.screenshot_format_index == 6 ? 5 : 4);
                 if index == 5 { SettingsBridge.subtitle_style_changed(5, Math.mod(SettingsBridge.subtitle_style[5] + 1, 3)); }

@@ -505,6 +505,7 @@ impl Bridge {
             app.set_show_stream_loading_text(settings.show_stream_loading_text);
             app.set_casting_remux_buffer_index(settings.casting_remux_buffer.index());
             app.set_auto_next_episode(settings.auto_next_episode);
+            app.set_auto_next_episode_remote(settings.auto_next_episode_remote);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
                 EpisodeStartBehavior::Resume => 1,
@@ -830,6 +831,7 @@ impl Bridge {
                 )
                 .unwrap_or_default(),
                 auto_next_episode: app.get_auto_next_episode(),
+                auto_next_episode_remote: app.get_auto_next_episode_remote(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,
                     2 => EpisodeStartBehavior::Ask,

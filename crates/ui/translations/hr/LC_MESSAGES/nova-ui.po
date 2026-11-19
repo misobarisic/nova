@@ -3221,8 +3221,8 @@ msgstr "Nije moguće učitati titlove iz dodataka. Pokušajte ponovno."
 msgid "Automatically play next episode"
 msgstr "Automatski reproduciraj sljedeću epizodu"
 
-msgid "At the end, preview the recommended source with eight seconds to cancel."
-msgstr "Na kraju prikaži preporučeni izvor uz osam sekundi za odustajanje."
+msgid "At the end, preview the recommended source with eight seconds to cancel. Incl. remote also continues playback started from another device's remote controls."
+msgstr "Na kraju prikaži preporučeni izvor uz osam sekundi za odustajanje. Uklj. daljinsko nastavlja i reprodukciju pokrenutu daljinskim upravljanjem s drugog uređaja."
 
 msgid "Play now"
 msgstr "Reproduciraj odmah"
@@ -5881,6 +5881,9 @@ msgstr "Vratiti zadanu temu? To će je promijeniti i na vašim uparenim uređaji
 
 msgid "Restore defaults"
 msgstr "Vrati zadano"
+
+msgid "Incl. remote"
+msgstr "Uklj. daljinsko"
 
 msgid "Last watched"
 msgstr "Posljednje gledano"

@@ -22,7 +22,9 @@ current end menu until playback leaves the end and reaches EOF again. Watch part
 Settings → Player → Automatically play next episode is off by default and syncs
 with device overrides. When enabled, actual EOF first looks up the immediate
 successor through the ordinary verified stream cache/prefetch path. Movies,
-unknown/future air dates, parties and remote-controlled playback never auto-advance.
+unknown/future air dates and parties never auto-advance. Remote-controlled
+playback auto-advances only when the playing device chooses Incl. remote (the
+third choice of the same setting, `auto_next_episode_remote`).
 All addon replies must finish within the ordinary five-second EOF delay; empty,
 failed or slow discovery falls back to the existing end menu. Nova prefers the
 same release family through its normal recommendation policy, then the first
@@ -67,13 +69,13 @@ Movies show Start/Continue beside the library button and have no Episodes tab.
 The action opens a fullscreen selector; choosing a series episode opens the same
 selector with its episode context. Provider results arrive incrementally, and
 request-specific downloads stay pinned before the remote results.
-Titles whose addons cannot provide an episode list retain their direct stream
-fallback through the same primary action.
 With Play on set to a paired device, the receiver lists its own sources and
 marks its Last used or Recommended source through a suffix of the opaque offer
 ID (the playback wire schema is unchanged; older peers show no badge). Choosing
 a source from the remote controls' next-episode prompt continues that session
 without a separate Replace playback confirmation.
+Titles whose addons cannot provide an episode list retain their direct stream
+fallback through the same primary action.
 
 The selector uses the phone layout below 700 logical pixels, a compact full-width
 list from 700 to 1199 pixels, and a shaded artwork/context column from 1200 pixels

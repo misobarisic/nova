@@ -164,6 +164,7 @@ export global SettingsBridge {
     in-out property <bool> keep_controls_visible_while_paused: self.is_android;
     in-out property <int> casting_remux_buffer_index: self.is_android ? 0 : 1;
     in-out property <bool> auto_next_episode: false;
+    in-out property <bool> auto_next_episode_remote: false;
     // Listening preferences are device-local and shared with the playing OSD.
     in-out property <bool> auto_retry_streams: false;
     in-out property <bool> dialogue_boost: false;

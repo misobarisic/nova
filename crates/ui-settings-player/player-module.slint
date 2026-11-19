@@ -721,17 +721,19 @@ export component SettingsPlayerModule inherits Window {
                 SettingsRow {
                     setting-key: "auto_next_episode";
                     row-title: @tr("Automatically play next episode");
-                    row-desc: @tr("At the end, preview the recommended source with eight seconds to cancel.");
+                    row-desc: @tr("At the end, preview the recommended source with eight seconds to cancel. Incl. remote also continues playback started from another device's remote controls.");
                     Segmented {
-                        labels: [@tr("Off"), @tr("On")];
-                        current_index: SettingsBridge.auto_next_episode ? 1 : 0;
+                        labels: [@tr("Off"), @tr("On"), @tr("Incl. remote")];
+                        current_index: !SettingsBridge.auto_next_episode ? 0 : SettingsBridge.auto_next_episode_remote ? 2 : 1;
                         focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 || SettingsBridge.screenshot_format_index == 4 || SettingsBridge.screenshot_format_index == 6 ? 5 : 4) + 9;
                         picked(i) => {
                             SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                             SettingsBridge.kb_zone = 9;
                             SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 || SettingsBridge.screenshot_format_index == 4 || SettingsBridge.screenshot_format_index == 6 ? 5 : 4) + 9;
-                            SettingsBridge.auto_next_episode = i == 1;
+                            SettingsBridge.auto_next_episode = i > 0;
+                            SettingsBridge.auto_next_episode_remote = i == 2;
                             SettingsContent.schedule_setting("auto_next_episode");
+                            SettingsContent.schedule_setting("auto_next_episode_remote");
                         }
                     }
                 }

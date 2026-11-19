@@ -340,7 +340,9 @@ impl Bridge {
             return false;
         }
         if self.remote_output_selected()
-            || (self.remote_receiver_playback() && automatic.queue_target.is_none())
+            || (self.remote_receiver_playback()
+                && !self.remote_autoplay_allowed()
+                && automatic.queue_target.is_none())
         {
             return false;
         }
@@ -398,7 +400,17 @@ impl Bridge {
             .as_ref()
             .filter(|m| m.id == context.session.title && m.type_ == context.session.type_)
             .map(|m| m.videos.clone())
-            .or_else(|| read_episodes_cache_for(&context.session.type_, &context.session.title))?;
+            .filter(|videos| !videos.is_empty())
+            .or_else(|| read_episodes_cache_for(&context.session.type_, &context.session.title))
+            .or_else(|| {
+                // Remote starts may carry the controller's inventory only.
+                state
+                    .playback_intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.detached)
+                    .then(|| state.remote_playback.receiver_videos.clone())
+                    .filter(|videos| !videos.is_empty())
+            })?;
         // Automatic playback needs positive release evidence; the explicit
         // source picker remains available for dateless provider episodes.
         automatic_successor(&context.session.title, &videos, &context.session.episode)
@@ -558,6 +570,13 @@ impl Bridge {
         true
     }
 
+    /// Playback started from another device's remote controls auto-advances
+    /// only when this (playing) device opts in on top of ordinary autoplay.
+    fn remote_autoplay_allowed(&self) -> bool {
+        let state = self.shared.lock().unwrap();
+        state.cache_settings.auto_next_episode && state.cache_settings.auto_next_episode_remote
+    }
+
     fn begin_automatic_next(&self, context: &Context) {
         let queue_target = self
             .queue_run_active()
@@ -565,7 +584,8 @@ impl Bridge {
             .flatten();
         if self.remote_output_selected()
             || (queue_target.is_none()
-                && (context.session.type_ == "movie" || self.remote_receiver_playback()))
+                && (context.session.type_ == "movie"
+                    || (self.remote_receiver_playback() && !self.remote_autoplay_allowed())))
         {
             return;
         }
