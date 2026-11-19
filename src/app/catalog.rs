@@ -313,6 +313,38 @@ fn reserve_saved_episode_refresh(
     work
 }
 
+/// Fill an entry's empty display name and poster; returns whether it changed.
+fn fill_library_identity(entry: &mut LibraryEntry, item: &MetaItem) -> bool {
+    let mut changed = false;
+    let name = item.preview.title();
+    if entry.name.trim().is_empty() && !name.trim().is_empty() {
+        entry.name = name.trim().to_owned();
+        changed = true;
+    }
+    if entry.poster_url.trim().is_empty()
+        && let Some(poster) = item
+            .preview
+            .poster
+            .as_ref()
+            .filter(|p| !p.trim().is_empty())
+    {
+        entry.poster_url = poster.clone();
+        changed = true;
+    }
+    changed
+}
+
+fn saved_name_present(bridge: &Bridge, type_: &str, id: &str) -> bool {
+    bridge
+        .shared
+        .lock()
+        .unwrap()
+        .entries
+        .iter()
+        .find(|e| e.type_ == type_ && e.id == id)
+        .is_none_or(|e| !e.name.trim().is_empty())
+}
+
 fn reserve_metadata_prefetch(
     state: &mut Shared,
     type_: &str,
@@ -1366,6 +1398,7 @@ impl Bridge {
         }
         let header = meta_header_from_item(item);
         merge_meta_header_for(type_, id, &header);
+        self.fill_saved_library_identity(type_, id, item);
         if !header.background_url.is_empty() {
             self.persist_backdrop_for(type_, id, &header.background_url);
         }
@@ -1381,6 +1414,28 @@ impl Bridge {
             return 0;
         }
         write_episode_meta_cache_for(type_, id, item).len()
+    }
+
+    /// A saved entry without a name or poster renders as a blank card. Fill
+    /// only those empty fields from a confirmed response; never rename.
+    fn fill_saved_library_identity(&self, type_: &str, id: &str, item: &MetaItem) {
+        let changed = {
+            let mut state = self.shared.lock().unwrap();
+            state
+                .entries
+                .iter_mut()
+                .find(|e| e.type_ == type_ && e.id == id)
+                .is_some_and(|entry| fill_library_identity(entry, item))
+        };
+        if !changed {
+            return;
+        }
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
+        self.persist_library();
+        let bridge = self.clone();
+        let _ = profiles::invoke_from_event_loop(move || bridge.apply_library_to_ui());
     }
 
     fn finish_metadata_prefetch(&self, type_: &str, id: &str, success: bool) {
@@ -1415,7 +1470,8 @@ impl Bridge {
                         (
                             e.type_.clone(),
                             e.id.clone(),
-                            !e.description.is_empty() || !e.genres.is_empty(),
+                            (!e.description.is_empty() || !e.genres.is_empty())
+                                && !e.name.trim().is_empty(),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -1430,6 +1486,13 @@ impl Bridge {
                 .enumerate()
                 .map(|(i, key)| (key, i))
                 .collect::<HashMap<_, _>>();
+            // Entries saved without a media type match no meta resource; they
+            // take a separate type-discovery path below.
+            let untyped = entries
+                .iter()
+                .filter(|(type_, id, _)| type_.is_empty() && !id.is_empty())
+                .map(|(_, id, _)| id.clone())
+                .collect::<Vec<_>>();
             let mut entries = entries;
             entries.sort_by_key(|(type_, id, _)| {
                 order
@@ -1443,7 +1506,10 @@ impl Bridge {
                     if !profiles::is_current(&context) || type_.is_empty() || id.is_empty() {
                         return None;
                     }
-                    let has_text = text || header_text_cached(&type_, &id);
+                    // An unnamed entry always refetches: its card has no title.
+                    let has_text = text
+                        || (header_text_cached(&type_, &id)
+                            && saved_name_present(&bridge, &type_, &id));
                     let has_episodes = type_ == "movie"
                         || read_episodes_cache_for(&type_, &id).is_some_and(|v| !v.is_empty());
                     (!(has_text && has_episodes)).then_some((type_, id))
@@ -1461,8 +1527,156 @@ impl Bridge {
             pairs.retain(|key| saved.contains(key));
             if profiles::is_current(&context) {
                 bridge.prefetch_meta_pairs(pairs);
+                bridge.repair_untyped_library_entries(untyped, context.clone());
             }
         });
+    }
+
+    /// Older imports could save an entry with an empty media type (and often
+    /// no name or poster). Such a card stays blank because every metadata
+    /// request is keyed by type. Ask meta addons for the ID as a movie, then as
+    /// a series, and adopt the first response that names that exact ID.
+    pub(super) fn repair_untyped_library_entries(
+        &self,
+        ids: Vec<String>,
+        context: profiles::Context,
+    ) {
+        if ids.is_empty() {
+            return;
+        }
+        let installed: Vec<Installed> = {
+            let state = self.shared.lock().unwrap();
+            state
+                .installed
+                .iter()
+                .filter(|a| a.enabled && a.available && a.manifest.has_meta())
+                .cloned()
+                .collect()
+        };
+        let revision = nova_providers::metadata_revision();
+        let work: VecDeque<(String, Vec<(String, String)>)> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let mut urls = Vec::new();
+                for type_ in ["movie", "series"] {
+                    for addon in installed
+                        .iter()
+                        .filter(|a| a.manifest.accepts("meta", type_, &id))
+                        .filter_map(|a| Addon::new(&a.url).ok())
+                    {
+                        urls.push((type_.to_owned(), addon.meta_url(type_, &id)));
+                    }
+                }
+                (!urls.is_empty()
+                    && reserve_metadata_prefetch(
+                        &mut self.shared.lock().unwrap(),
+                        "",
+                        &id,
+                        revision,
+                        std::time::Instant::now(),
+                    ))
+                .then_some((id, urls))
+            })
+            .collect();
+        fn run(
+            bridge: Bridge,
+            mut work: VecDeque<(String, Vec<(String, String)>)>,
+            context: profiles::Context,
+        ) {
+            let Some((id, mut urls)) = work.pop_front() else {
+                return;
+            };
+            if urls.is_empty() || !profiles::is_current(&context) {
+                bridge.finish_metadata_prefetch("", &id, false);
+                run(bridge, work, context);
+                return;
+            }
+            let (type_, url) = urls.remove(0);
+            let bridge2 = bridge.clone();
+            net::fetch_bytes(url, move |result| {
+                let item = result
+                    .ok()
+                    .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                    .filter(|item| {
+                        meta_matches_request(item, &type_, &id)
+                            && !item.preview.title().trim().is_empty()
+                    });
+                if let Some(item) = item {
+                    bridge2.cache_background_meta(&type_, &id, &item);
+                    bridge2.finish_metadata_prefetch("", &id, true);
+                    let adopt = bridge2.clone();
+                    let adopt_context = context.clone();
+                    let _ = profiles::invoke_from_event_loop(move || {
+                        if profiles::is_current(&adopt_context) {
+                            adopt.adopt_untyped_library_entry(&id, &type_, &item);
+                        }
+                    });
+                } else {
+                    work.push_front((id, urls));
+                }
+                // Post the next request, as the prefetch does, so a large
+                // library cannot recurse through every entry synchronously.
+                let remaining = Arc::new(Mutex::new(Some(work)));
+                let queued = remaining.clone();
+                let next = bridge2.clone();
+                let next_context = context.clone();
+                if profiles::invoke_from_event_loop(move || {
+                    let work = queued.lock().unwrap().take().unwrap_or_default();
+                    run(next, work, next_context);
+                })
+                .is_err()
+                    && let Some(work) = remaining.lock().unwrap().take()
+                {
+                    for (id, _) in work {
+                        bridge2.finish_metadata_prefetch("", &id, false);
+                    }
+                }
+            });
+        }
+        run(self.clone(), work, context);
+    }
+
+    /// Give an untyped entry the confirmed type and fill only empty fields.
+    /// When the typed entry already exists, the untyped duplicate is dropped.
+    fn adopt_untyped_library_entry(&self, id: &str, type_: &str, item: &MetaItem) {
+        let Some(_reservation) = persistence::reserve(1) else {
+            return;
+        };
+        let header = meta_header_from_item(item);
+        let changed = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(index) = state
+                .entries
+                .iter()
+                .position(|e| e.type_.is_empty() && e.id == id)
+            else {
+                return;
+            };
+            if state.entries.iter().any(|e| e.type_ == type_ && e.id == id) {
+                state.entries.remove(index);
+            } else {
+                let entry = &mut state.entries[index];
+                entry.type_ = type_.into();
+                fill_library_identity(entry, item);
+                if entry.year.is_empty() {
+                    entry.year = header.year.clone();
+                }
+                if entry.background_url.is_empty() {
+                    entry.background_url = header.background_url.clone();
+                }
+                if entry.genres.is_empty() {
+                    entry.genres = header.genres.clone();
+                }
+                if entry.description.is_empty() {
+                    entry.description = header.description.clone();
+                }
+            }
+            true
+        };
+        if changed {
+            self.persist_library();
+            self.apply_library_to_ui();
+        }
     }
 
     /// Revalidate watched saved series even when their cache looks complete.
@@ -8602,5 +8816,34 @@ mod poster_range_tests {
             ..Default::default()
         };
         assert_eq!(wide.poster_retry_range(320), 0..=127);
+    }
+}
+
+#[cfg(test)]
+mod library_identity_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_metadata_fills_only_empty_library_names_and_posters() {
+        let item: MetaItem = serde_json::from_value(serde_json::json!({
+            "id": "tt0076759", "type": "movie", "name": "Star Wars",
+            "poster": "https://example.invalid/poster.jpg"
+        }))
+        .unwrap();
+        let mut blank: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id": "tt0076759", "type_": "", "name": ""
+        }))
+        .unwrap();
+        assert!(fill_library_identity(&mut blank, &item));
+        assert_eq!(blank.name, "Star Wars");
+        assert_eq!(blank.poster_url, "https://example.invalid/poster.jpg");
+        assert!(!fill_library_identity(&mut blank, &item), "already filled");
+        let mut named: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id": "tt0076759", "type_": "movie", "name": "My title", "poster_url": "kept"
+        }))
+        .unwrap();
+        assert!(!fill_library_identity(&mut named, &item), "never renames");
+        assert_eq!(named.name, "My title");
+        assert_eq!(named.poster_url, "kept");
     }
 }

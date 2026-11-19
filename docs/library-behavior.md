@@ -56,6 +56,12 @@ evidence; stale or ambiguous alias links are ignored.
   prefetches episode metadata (not gated by the Discover prefetch toggle).
 
 ## Automatic buckets (the filter bar)
+- **Repair**: entries saved without a media type (older imports) match no meta
+  resource and rendered as blank cards. Opening My Library asks meta addons for
+  such an ID as a movie, then as a series; the first response naming that exact
+  ID supplies the type and fills only empty fields. If the typed entry already
+  exists, the untyped duplicate is removed. Metadata responses also fill an
+  entry's empty name or poster, never replacing saved text.
 
 Specials (explicit season 0 metadata) are excluded from viewing progress by
 default, including existing installations. Settings → Display → Include specials
