@@ -245,6 +245,9 @@ struct Entry {
     /// Selected file size in bytes.
     file_len: u64,
     last_used: Instant,
+    /// Wall-clock seconds of the last use. Persisted, so the LRU order
+    /// survives a restart; `last_used` breaks ties within a session.
+    used_secs: u64,
     /// True while the player is presenting this torrent (never LRU-evicted).
     playing: bool,
     owner: Option<PlaybackRequest>,
@@ -924,6 +927,7 @@ impl TorrentEngine {
                                 dir: entry.dir.clone(),
                                 file_len: entry.file_len.unwrap_or(0),
                                 last_used: Instant::now(),
+                                used_secs: nova_config::now_secs(),
                                 playing: true,
                                 owner: Some(request),
                             },
@@ -1180,6 +1184,7 @@ impl EngineInner {
                         entry.playing = false;
                         entry.owner = None;
                         entry.last_used = Instant::now();
+                        entry.used_secs = nova_config::now_secs();
                         Some((hash.clone(), entry.torrent_id, entry.dir.clone()))
                     } else {
                         None
@@ -1827,6 +1832,7 @@ impl EngineInner {
                 dir: dir.clone(),
                 file_len: picked.len,
                 last_used: Instant::now(),
+                used_secs: nova_config::now_secs(),
                 playing: true,
                 owner: Some(request.clone()),
             });
@@ -1835,6 +1841,7 @@ impl EngineInner {
             entry.dir = dir.clone();
             entry.file_len = picked.len;
             entry.last_used = Instant::now();
+            entry.used_secs = nova_config::now_secs();
             entry.playing = true;
             entry.owner = Some(request.clone());
         }
@@ -1941,6 +1948,7 @@ impl EngineInner {
                         dir: t.dir.clone(),
                         file_len: t.file_len,
                         last_used: Instant::now(),
+                        used_secs: t.last_used_secs,
                         playing: false,
                         owner: None,
                     },
@@ -1997,7 +2005,7 @@ impl EngineInner {
                     && !attempted.contains(hash.as_str())
                     && !Self::entry_is_retained(hash, entry, retained)
             })
-            .min_by_key(|(_, entry)| entry.last_used)
+            .min_by_key(|(_, entry)| (entry.used_secs, entry.last_used))
             .map(|(hash, entry)| (hash.clone(), entry.torrent_id))
     }
 
@@ -2634,7 +2642,7 @@ fn save_tracked(active: &HashMap<String, Entry>) {
                     dir: e.dir.clone(),
                     file_len: e.file_len,
                     file_idx: e.file_idx,
-                    last_used_secs: nova_config::now_secs(),
+                    last_used_secs: e.used_secs,
                 },
             )
         })
@@ -3840,6 +3848,7 @@ mod tests {
             dir,
             file_len: 10,
             last_used,
+            used_secs: 0,
             playing,
             owner: None,
         }
