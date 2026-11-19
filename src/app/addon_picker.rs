@@ -11,6 +11,11 @@ pub(super) fn pick_zip() {
         if app.get_addon_zip_import_busy() {
             return;
         }
+        // A package carries provider code, so installing one is inventory
+        // management like adding an addon URL: locked profiles need the PIN.
+        if !bridge.require_profile_management() {
+            return;
+        }
         app.set_addon_zip_import_busy(true);
         app.set_addon_zip_import_status(text::tr("Choose an addon ZIP file…").into());
         launch(bridge.clone());
@@ -28,12 +33,7 @@ fn deliver(bridge: Bridge, result: Result<Option<Vec<u8>>, &'static str>) {
         }
         match result {
             Ok(Some(bytes)) => bridge.import_addon_zip(bytes),
-            Ok(None) => {
-                if let Some(app) = bridge.app() {
-                    app.set_addon_zip_import_busy(false);
-                    app.set_addon_zip_import_status("".into());
-                }
-            }
+            Ok(None) => bridge.addon_zip_import_idle(),
             Err(message) => bridge.addon_zip_import_failed(message),
         }
     });

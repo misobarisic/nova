@@ -757,6 +757,40 @@ fn packaged_addon_registry_is_restored_before_reinstalling_its_profile_rows() {
 }
 
 #[test]
+fn restricted_profile_needs_the_pin_to_import_an_addon_zip() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::restricted_profile_needs_the_pin_to_import_an_addon_zip"
+        ),
+        |fixture| {
+            let child = profiles::create("Child").unwrap();
+            let policy = profile_policy::ProfilePolicy {
+                pin: "0012".into(),
+                restricted: true,
+                ..Default::default()
+            };
+            profiles::ProfileStore::for_profile(&child)
+                .persist_snapshot(
+                    profile_policy::KEY,
+                    &serde_json::to_string(&policy).unwrap(),
+                    false,
+                )
+                .unwrap();
+            select(fixture, &child);
+            fixture.bridge.import_addon_zip(packaged_addon_fixture());
+            assert!(fixture.app.global::<crate::MoreBridge>().get_pin_open());
+            assert!(!fixture.app.get_addon_zip_import_busy());
+            drain_account_queue();
+            assert!(!nova_providers::has_installed_provider(
+                "nova-provider://profilefixture"
+            ));
+            assert!(fixture.bridge.shared.lock().unwrap().installed.is_empty());
+        },
+    );
+}
+
+#[test]
 fn incoming_unsupported_setting_protection_stays_with_its_durable_profile() {
     isolated(
         concat!(

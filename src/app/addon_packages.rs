@@ -747,6 +747,12 @@ pub(super) fn configure_blob_store() {
 }
 
 impl Bridge {
+    pub(super) fn addon_zip_import_idle(&self) {
+        if let Some(app) = self.app() {
+            app.set_addon_zip_import_busy(false);
+            app.set_addon_zip_import_status("".into());
+        }
+    }
     pub(super) fn addon_zip_import_failed(&self, message: &str) {
         tracing::warn!(%message, "addon ZIP import failed");
         if let Some(app) = self.app() {
@@ -761,6 +767,12 @@ impl Bridge {
         }
     }
     pub(super) fn import_addon_zip(&self, bytes: Vec<u8>) {
+        // The picker checked the gate, but the profile may have changed while
+        // it was open.
+        if !self.require_profile_management() {
+            self.addon_zip_import_idle();
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_addon_zip_import_busy(true);
             app.set_addon_zip_import_status(text::tr("Installing addon ZIP…").into());
@@ -783,6 +795,10 @@ impl Bridge {
                 });
             let _ = crate::app::profiles::invoke_from_event_loop(move || {
                 if !current_bridge(&bridge) {
+                    return;
+                }
+                if !bridge.require_profile_management() {
+                    bridge.addon_zip_import_idle();
                     return;
                 }
                 let package = match result {
