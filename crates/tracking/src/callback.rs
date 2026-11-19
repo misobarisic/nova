@@ -73,8 +73,14 @@ impl CallbackReceiver {
         while Instant::now() < deadline && !cancel.load(Ordering::Acquire) {
             match self.listener.accept() {
                 Ok((mut stream, peer)) if peer.ip().is_loopback() => {
+                    // Where the listener's non-blocking mode is inherited
+                    // (Windows, BSDs), reads would fail with WouldBlock until
+                    // the browser's bytes arrive.
+                    if stream.set_nonblocking(false).is_err() {
+                        continue;
+                    }
                     // A stray or malformed local request must not consume the
-                    // authorization session. State is verified after capture.
+                    // authorization session.
                     if let Ok(Some(value)) = self.read_callback(&mut stream) {
                         return Ok(zeroize::Zeroizing::new(value));
                     }
