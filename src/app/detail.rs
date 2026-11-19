@@ -1065,6 +1065,11 @@ impl Bridge {
                             // native inventory, not a merged/sliced canonical cache.
                             // Keep even episodes without native season numbers.
                             item.videos = if scoped {
+                                // Same transaction lock as the reconciled path,
+                                // so a concurrent refresh cannot interleave.
+                                let _guard = EPISODE_RECONCILE
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 write_episodes_cache_for(&modal_type, &id, &item.videos)
                             } else {
                                 write_episode_meta_cache_for(&modal_type, &id, &item)
@@ -5720,8 +5725,18 @@ pub(crate) fn meta_header_key(type_: &str, id: &str) -> String {
 pub(crate) fn read_meta_header_for(type_: &str, id: &str) -> Option<MetaHeader> {
     read_json::<MetaHeader>(&meta_header_key(type_, id))
 }
+/// Header merges run on fetch workers, the Stremio worker and the UI thread.
+/// Read-merge-write must be one step, or one writer drops another's fields.
+static META_HEADER_WRITE: Mutex<()> = Mutex::new(());
+
 pub(crate) fn write_meta_header_for(type_: &str, id: &str, header: &MetaHeader) {
-    write_json(&meta_header_key(type_, id), header);
+    {
+        let _guard = META_HEADER_WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        write_json(&meta_header_key(type_, id), header);
+    }
+    meta_header_changed();
+}
+fn meta_header_changed() {
     if let Some(bridge) = super::bridge::with_global_bridge(Clone::clone) {
         bridge.smart_collection_metadata_changed();
     }
@@ -5774,6 +5789,7 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
     {
         return false;
     }
+    let guard = META_HEADER_WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let mut cached = read_meta_header_for(type_, id).unwrap_or_default();
     let mut touched = false;
     touched |= cached.details.merge(&fresh.details);
@@ -5810,7 +5826,11 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
         touched = true;
     }
     if touched {
-        write_meta_header_for(type_, id, &cached);
+        write_json(&meta_header_key(type_, id), &cached);
+    }
+    drop(guard);
+    if touched {
+        meta_header_changed();
     }
     touched
 }
