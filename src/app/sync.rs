@@ -3834,8 +3834,31 @@ fn detect_device_name() -> String {
     }
     #[cfg(not(target_os = "android"))]
     {
-        std::env::var("HOSTNAME")
-            .ok()
+        // `HOSTNAME` is a shell variable: it is usually not exported to an app
+        // started from a desktop launcher, and Windows never sets it.
+        let os_name = || -> Option<String> {
+            #[cfg(windows)]
+            {
+                std::env::var("COMPUTERNAME").ok()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("scutil")
+                    .args(["--get", "ComputerName"])
+                    .output()
+                    .ok()
+                    .filter(|output| output.status.success())
+                    .and_then(|output| String::from_utf8(output.stdout).ok())
+            }
+            #[cfg(not(any(windows, target_os = "macos")))]
+            {
+                std::fs::read_to_string("/proc/sys/kernel/hostname")
+                    .or_else(|_| std::fs::read_to_string("/etc/hostname"))
+                    .ok()
+            }
+        };
+        os_name()
+            .or_else(|| std::env::var("HOSTNAME").ok())
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "Desktop".to_string())
