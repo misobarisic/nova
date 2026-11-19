@@ -745,7 +745,7 @@ impl Bridge {
                 return; // already installed (duplicate entry or UI add)
             }
         }
-        self.ensure_desired_addon(&base, enabled, configure, label.clone());
+        let generation = self.ensure_desired_addon(&base, enabled, configure, label.clone());
         if base.starts_with("nova-provider://") {
             if let Some(manifest) = nova_providers::configured_provider_manifest(&base) {
                 self.install_ok(base, manifest, enabled, configure, label);
@@ -754,7 +754,9 @@ impl Bridge {
         }
         match read_cached_manifest_for(&base) {
             Some(manifest) => self.install_ok(base, manifest, enabled, configure, label),
-            None => self.install_new(url, enabled, label),
+            // Restoring is not a management action: a restricted profile must
+            // not get a PIN prompt, and the row is already desired.
+            None => self.fetch_desired_addon(base, generation, enabled, label),
         }
     }
 
