@@ -1564,6 +1564,12 @@ impl Player {
                     // PGS/bitmap subtitle decoding is explicitly enabled and
                     // checked by the native build recipe; see SOURCES.
                 }
+                // mpv does not verify HTTPS peers by default; stream URLs and
+                // the addon/debrid headers Nova attaches must not reach a
+                // man-in-the-middle. Desktop FFmpeg checks the platform store
+                // (Schannel on Windows, the system CA bundle on Linux).
+                #[cfg(not(target_os = "android"))]
+                let _ = mpv.set_property("tls-verify", true);
                 #[cfg(not(target_os = "android"))]
                 let _ = configure_desktop_decoder(mpv);
                 None
