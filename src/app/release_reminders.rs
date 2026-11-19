@@ -604,6 +604,10 @@ struct Delivery {
     delivered: BTreeMap<String, i64>,
     proofs: BTreeMap<String, Vec<String>>,
     digest_day: Option<NaiveDate>,
+    /// Local day whose before-09:00 catch-up of yesterday already alerted.
+    /// Kept apart from `digest_day` so that catch-up cannot silence the same
+    /// day's 09:00 digest.
+    catch_up_day: Option<NaiveDate>,
     visible: Vec<Event>,
     dismissed: HashSet<String>,
     last_refreshed: Option<i64>,
@@ -726,9 +730,16 @@ fn reconcile_delivery(
             .proofs
             .insert(event.receipt().to_string(), event.aliases.clone());
     }
-    let alert = state.digest_day != Some(local_day);
+    let alert = if local_seconds >= 9 * 3600 {
+        let alert = state.digest_day != Some(local_day);
+        state.digest_day = Some(local_day);
+        alert
+    } else {
+        let alert = state.catch_up_day != Some(local_day) && state.digest_day != Some(local_day);
+        state.catch_up_day = Some(local_day);
+        alert
+    };
     state.visible.extend(due);
-    state.digest_day = Some(local_day);
     alert
 }
 
@@ -2425,6 +2436,33 @@ mod tests {
         dismiss_native(&mut state, std::slice::from_ref(&b.key));
         assert!(native_events(&state).is_empty());
     }
+    #[test]
+    fn morning_catch_up_does_not_silence_the_nine_oclock_digest() {
+        let today = day().succ_opt().unwrap();
+        let late = event("late", "2026-10-23");
+        let fresh = event("fresh", "2026-10-24");
+        let mut state = Delivery {
+            enabled: true,
+            ..Default::default()
+        };
+        // 07:30: yesterday's undelivered release alerts.
+        assert!(reconcile_delivery(
+            &mut state,
+            &[late.clone(), fresh.clone()],
+            100,
+            today,
+            7 * 3600 + 1800
+        ));
+        // 09:00: today's releases still get their own alert.
+        assert!(reconcile_delivery(
+            &mut state,
+            &[late, fresh],
+            200,
+            today,
+            9 * 3600
+        ));
+    }
+
     #[test]
     fn overdue_digest_stops_at_next_nine_and_overlapping_civil_times_alert_once() {
         let release = event("late", "2026-10-23");
