@@ -357,6 +357,36 @@ fn notice(owner: &Owner, message: &str) {
         .unwrap()
         .insert(serde_json::to_string(owner).unwrap(), message.into());
 }
+/// How long a slot refused by admission (allowance, free-space reserve or an
+/// unsized source) waits before its source is looked up again.
+const REFUSED_RECHECK_SECS: u64 = 15 * 60;
+
+/// Admission refusals are not failures: they keep no attempt count and only
+/// hold the lookup back until the next re-check.
+fn refused(receipt: &mut crate::download::offline::RetryReceipt, now: u64) {
+    receipt.next = Some(now.saturating_add(REFUSED_RECHECK_SECS));
+}
+
+/// Store a slot's retry receipt, restarting it when the inputs changed.
+fn record_receipt(
+    key: String,
+    fingerprint: &str,
+    message: String,
+    update: impl FnOnce(&mut crate::download::offline::RetryReceipt),
+) {
+    let _serial = device_guard();
+    if let Ok(mut latest) = read_device() {
+        let receipt = latest.receipts.entry(key).or_default();
+        if receipt.fingerprint != fingerprint {
+            *receipt = Default::default();
+            receipt.fingerprint = fingerprint.into();
+        }
+        receipt.message = message;
+        update(receipt);
+        let _ = save_device(&latest);
+    }
+}
+
 pub(super) fn pause_text(reason: PauseReason) -> &'static str {
     match reason {
         PauseReason::Network => "Waiting for unmetered Wi-Fi or Ethernet",
@@ -441,9 +471,12 @@ pub(super) fn reconcile(
             continue;
         }
         let signature = frontier_signature(&policy, &store);
+        // The allowance is part of the inputs so raising it re-checks slots
+        // that admission refused.
         let fingerprint = serde_json::to_string(&(
             &policy,
             &signature,
+            device.allowance_bytes,
             store.read("addons").ok(),
             store.read("settings").ok(),
             store.read(plugin_settings::KEY).ok(),
@@ -500,32 +533,48 @@ pub(super) fn reconcile(
                     }
                     match coordinator.smart_admit(request, resolver, owner.clone(), bytes) {
                         Ok(_) => notice(&owner, "Smart downloads ready"),
-                        Err(reason) => notice(&owner, pause_text(reason)),
+                        Err(reason) => {
+                            // A full allowance or reserve is the normal steady
+                            // state; without a receipt every 30 s tick looked
+                            // the episode up at the addon again. Transient
+                            // refusals (background window, network) do not
+                            // hold back the next foreground check.
+                            let lasting = matches!(
+                                reason,
+                                PauseReason::Budget
+                                    | PauseReason::FreeSpace
+                                    | PauseReason::NeedsSource
+                            );
+                            let message = pause_text(reason);
+                            notice(&owner, message);
+                            if lasting {
+                                record_receipt(
+                                    receipt_key,
+                                    &fingerprint,
+                                    message.into(),
+                                    |receipt| {
+                                        refused(receipt, now_secs());
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
                 Err(error) => {
                     notice(&owner, &error);
-                    let _serial = device_guard();
-                    if let Ok(mut latest) = read_device() {
-                        let receipt = latest.receipts.entry(receipt_key).or_default();
-                        if receipt.fingerprint != fingerprint {
-                            *receipt = Default::default();
-                            receipt.fingerprint = fingerprint.clone();
-                        }
-                        let transient = ![
-                            "Choose",
-                            "choose",
-                            "Size unknown",
-                            "No matching",
-                            "not allowed",
-                            "Source removed",
-                        ]
-                        .iter()
-                        .any(|label| error.contains(label));
-                        receipt.message = error;
+                    let transient = ![
+                        "Choose",
+                        "choose",
+                        "Size unknown",
+                        "No matching",
+                        "not allowed",
+                        "Source removed",
+                    ]
+                    .iter()
+                    .any(|label| error.contains(label));
+                    record_receipt(receipt_key, &fingerprint, error, |receipt| {
                         receipt.failure(now_secs(), transient);
-                        let _ = save_device(&latest);
-                    }
+                    });
                 }
             }
         }
@@ -1388,6 +1437,20 @@ mod tests {
         assert!(!default_route_environment(&["unknown".into()], &links).connected);
         assert!(!default_route_environment(&[], &links).connected);
         assert!(default_route_environment(&["local-ethernet".into()], &links).unmetered);
+    }
+
+    #[test]
+    fn refused_slots_wait_for_the_recheck_or_changed_inputs() {
+        let mut receipt = crate::download::offline::RetryReceipt {
+            fingerprint: "inputs".into(),
+            ..Default::default()
+        };
+        refused(&mut receipt, 1_000);
+        refused(&mut receipt, 1_000);
+        assert_eq!(receipt.attempt, 0, "a refusal is not a failed attempt");
+        assert!(receipt.blocked("inputs", 1_000 + REFUSED_RECHECK_SECS - 1));
+        assert!(!receipt.blocked("inputs", 1_000 + REFUSED_RECHECK_SECS));
+        assert!(!receipt.blocked("raised allowance", 1_001));
     }
 
     #[test]

@@ -45,7 +45,9 @@ Windows uses the OS connection-cost API through PowerShell. Missing cost informa
 unattended work. Network, charging and device-policy pauses resume when their
 conditions recover; user pauses remain paused. Budget, free-space and changed-source
 pauses require **Retry / Restore offline** after adjusting storage, the allowance
-or the selected source. Source/settings revisions and profile retirement are
+or the selected source. Until then a refused slot looks its source up again only
+every 15 minutes, or at once when the allowance, rule, source or addon settings
+change. Source/settings revisions and profile retirement are
 revalidated after lookup and before media writes. An enabled owner must authorize
 both the episode and the recorded source revision. Explicit Retry refreshes stale
 ordinary HTTP/torrent sources through bounded lookup; a current user pause is
