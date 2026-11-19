@@ -1712,10 +1712,13 @@ fn seed_stored_profiles() -> nova_sync::Result<()> {
                 ids.insert(id.to_string());
             }
         }
+        // A peer can replicate rows under any profile-shaped domain; one id
+        // this build cannot own must not abort startup on every device.
         ids.retain(|id| {
-            store
-                .record("profile_deletions", id)
-                .is_none_or(|r| r.is_deleted())
+            profiles::valid_id(id)
+                && store
+                    .record("profile_deletions", id)
+                    .is_none_or(|r| r.is_deleted())
         });
         ids
     };
@@ -2610,6 +2613,10 @@ impl Bridge {
         let mut active_domains = Vec::new();
         for domain in domains {
             if let Some((id, base)) = nova_sync::parse_profile_domain(&domain) {
+                if !profiles::valid_id(id) {
+                    // Kept and relayed as an opaque row, never projected.
+                    continue;
+                }
                 if id != active || deleted_profiles.contains(id) || profile_policy::entry_blocked()
                 {
                     if let Err(error) = project_inactive_profile(id, &domain, base) {
