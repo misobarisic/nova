@@ -261,35 +261,48 @@ impl<T: Transport> Client<T> {
         )
     }
     fn graphql(&self, query: String, variables: Value, now: u64) -> Result<Value, ApiError> {
-        let value = self.request(
-            "POST",
-            "https://graphql.anilist.co".into(),
-            Body::Json(json!({"query":query,"variables":variables})),
-            now,
-        )?;
-        if value
+        let response = self.transport.send(Request {
+            method: "POST",
+            url: "https://graphql.anilist.co".into(),
+            bearer: self.token.as_ref().map(Secret::duplicate),
+            body: Body::Json(json!({"query":query,"variables":variables})),
+        })?;
+        // AniList mirrors GraphQL error statuses in the HTTP status (an
+        // expired or revoked token is HTTP 400 "Invalid token"), so read the
+        // errors before the generic status mapping turns them into Rejected.
+        let errors = response
+            .body
             .get("errors")
             .and_then(Value::as_array)
-            .is_some_and(|errors| !errors.is_empty())
-        {
-            let errors = value["errors"]
-                .as_array()
-                .ok_or(ApiError::InvalidResponse)?;
-            if errors.iter().any(|e| e["status"].as_u64() == Some(401)) {
-                return Err(ApiError::Authentication);
-            }
-            if errors.iter().any(|e| e["status"].as_u64() == Some(429)) {
-                return Err(ApiError::RateLimited {
-                    retry_at: now.saturating_add(60),
+            .filter(|errors| !errors.is_empty())
+            .map(|errors| {
+                let status = |code| errors.iter().any(|e| e["status"].as_u64() == Some(code));
+                let invalid_token = errors.iter().any(|e| {
+                    e["message"]
+                        .as_str()
+                        .is_some_and(|m| m.trim().eq_ignore_ascii_case("invalid token"))
                 });
-            }
-            return Err(ApiError::Rejected);
+                (status(401) || status(403) || invalid_token, status(429))
+            });
+        let Some((authentication, rate_limited)) = errors else {
+            return checked(response, now)?
+                .get("data")
+                .filter(|v| v.is_object())
+                .cloned()
+                .ok_or(ApiError::InvalidResponse);
+        };
+        if authentication {
+            return Err(ApiError::Authentication);
         }
-        value
-            .get("data")
-            .filter(|v| v.is_object())
-            .cloned()
-            .ok_or(ApiError::InvalidResponse)
+        if !(200..=299).contains(&response.status) {
+            return checked(response, now).and(Err(ApiError::Rejected));
+        }
+        if rate_limited {
+            return Err(ApiError::RateLimited {
+                retry_at: now.saturating_add(60),
+            });
+        }
+        Err(ApiError::Rejected)
     }
     pub fn verify(&mut self, now: u64) -> Result<Viewer, ApiError> {
         if self.token.is_none() {

@@ -667,3 +667,22 @@ fn upcoming_mushoku_and_apothecary_releases_accept_year_and_month_dates() {
     );
     assert_eq!(kusuriya.media.episodes, None);
 }
+#[test]
+fn anilist_invalid_token_over_http_400_is_an_authentication_failure() {
+    let f = Fixture::new(vec![
+        viewer(),
+        json!({"errors":[{"message":"Invalid token","status":400}],"data":null}),
+        json!({"errors":[{"message":"validation","status":400}],"data":null}),
+    ]);
+    // AniList answers with the GraphQL status mirrored in HTTP.
+    for reply in f.replies.lock().unwrap().iter_mut().take(2) {
+        reply.status = 400;
+    }
+    let mut c = client(&f);
+    c.verify(0).unwrap();
+    assert_eq!(
+        c.read(12.try_into().unwrap(), 0),
+        Err(ApiError::Authentication)
+    );
+    assert_eq!(c.read(12.try_into().unwrap(), 0), Err(ApiError::Rejected));
+}
