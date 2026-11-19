@@ -699,7 +699,7 @@ impl Bridge {
                     let bridge2 = bridge.clone();
                     let _ = crate::app::profiles::invoke_from_event_loop(move || {
                         if failed.load(Ordering::SeqCst) {
-                            bridge2.catalog_page_failed(generation);
+                            bridge2.catalog_page_failed(generation, append);
                         } else {
                             bridge2.apply_catalog(generation, all, append);
                         }
@@ -721,7 +721,7 @@ impl Bridge {
     }
 
     /// Failed batches leave the cursor intact so scrolling can retry the page.
-    fn catalog_page_failed(&self, generation: u64) {
+    fn catalog_page_failed(&self, generation: u64, append: bool) {
         if generation != self.catalog_gen.load(Ordering::Relaxed) {
             return;
         }
@@ -729,6 +729,15 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.loading_more = false;
             state.catalog_page.stop = PageStop::Failed;
+            if !append {
+                // A fresh selection failed: the grid must not keep showing
+                // (and opening) the previous catalog under the new label.
+                state.previews.clear();
+                state.catalog_raw.clear();
+            }
+        }
+        if !append && let Some(app) = self.app() {
+            app.set_catalog(Rc::new(VecModel::<MediaCard>::from(vec![])).into());
         }
         self.refresh_catalog_pagination_ui();
     }
@@ -7420,9 +7429,9 @@ mod tests {
         );
         assert!(app.get_catalog().row_data(0).unwrap().is_loaded);
         bridge.apply_catalog(6, vec![grouping_preview("stale", "tt99", 1, owner)], true);
-        bridge.catalog_page_failed(6);
+        bridge.catalog_page_failed(6, true);
         assert_eq!(bridge.shared.lock().unwrap().next_skip, 4);
-        bridge.catalog_page_failed(7);
+        bridge.catalog_page_failed(7, true);
         assert_eq!(bridge.shared.lock().unwrap().next_skip, 4);
         assert_eq!(
             bridge.shared.lock().unwrap().catalog_page.stop,
@@ -7568,9 +7577,9 @@ mod tests {
         );
         bridge.shared.lock().unwrap().next_skip = 40;
 
-        bridge.catalog_page_failed(4);
+        bridge.catalog_page_failed(4, true);
         assert!(bridge.shared.lock().unwrap().loading_more);
-        bridge.catalog_page_failed(5);
+        bridge.catalog_page_failed(5, true);
         {
             let state = bridge.shared.lock().unwrap();
             assert!(!state.loading_more);
