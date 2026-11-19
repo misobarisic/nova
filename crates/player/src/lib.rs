@@ -1527,6 +1527,11 @@ impl Player {
                 let _ = mpv.set_property("terminal", "no");
                 let _ = mpv.set_property("msg-level", "all=no");
                 let _ = mpv.set_property("vo", "libmpv");
+                // mpv's ytdl hook runs `yt-dlp <url>` when FFmpeg cannot open a
+                // URL, putting a resolved (often tokenised) stream URL on a
+                // process command line and refetching it with another client.
+                // The hook reads this option on every load.
+                let _ = mpv.set_property("ytdl", "no");
                 let _ = configure_render_timing(mpv);
                 // Android: audio out through OpenSL ES (the vendored libmpv
                 // links it) and no config/script discovery — the app owns mpv's
