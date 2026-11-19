@@ -91,6 +91,30 @@ impl Authorization {
         }
         Ok(url.into())
     }
+    /// A check the loopback receiver applies before it hands over a callback:
+    /// whether it carries exactly this session's `state`. Anything else (a
+    /// web page probing the fixed loopback port) is answered and ignored, so
+    /// it cannot end the pending sign-in.
+    pub fn state_check(&self) -> impl Fn(&str) -> bool + Send + 'static {
+        let service = self.service;
+        let expected = zeroize::Zeroizing::new(self.state.expose().to_owned());
+        move |callback| {
+            let Ok(received) = url::Url::parse(callback) else {
+                return false;
+            };
+            let parameters = match service {
+                Service::MyAnimeList => received.query().unwrap_or_default(),
+                Service::AniList => received.fragment().unwrap_or_default(),
+            };
+            let mut states = url::form_urlencoded::parse(parameters.as_bytes())
+                .filter(|(key, _)| key == "state")
+                .map(|(_, value)| value);
+            matches!(
+                (states.next(), states.next()),
+                (Some(state), None) if constant_time_equal(state.as_bytes(), expected.as_bytes())
+            )
+        }
+    }
     /// Full callback URL pasted by the user or captured by the loopback listener.
     /// Consume this session once; cancellation must discard the Authorization.
     pub fn finish<T: Transport>(

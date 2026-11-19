@@ -1139,7 +1139,8 @@ impl Coordinator {
         let receiver = if registration.redirect_uri.starts_with("http://127.0.0.1:") {
             Some(
                 nova_tracking::callback::CallbackReceiver::bind(service, &registration)
-                    .map_err(api_message)?,
+                    .map_err(api_message)?
+                    .accepting(auth.state_check()),
             )
         } else {
             None

@@ -11,10 +11,13 @@ use std::{
     },
     time::{Duration, Instant},
 };
+type StateCheck = Box<dyn Fn(&str) -> bool + Send>;
 pub struct CallbackReceiver {
     listener: TcpListener,
     redirect: url::Url,
     service: Service,
+    /// Whether a captured callback belongs to the pending session.
+    accepts: Option<StateCheck>,
 }
 impl CallbackReceiver {
     pub fn bind(service: Service, registration: &ClientRegistration) -> Result<Self, ApiError> {
@@ -47,7 +50,17 @@ impl CallbackReceiver {
             listener,
             redirect,
             service,
+            accepts: None,
         })
+    }
+    /// Hand over only callbacks that pass `check` (the session's state, see
+    /// `Authorization::state_check`); others are refused and listening goes on.
+    pub fn accepting(mut self, check: impl Fn(&str) -> bool + Send + 'static) -> Self {
+        self.accepts = Some(Box::new(check));
+        self
+    }
+    fn accepted(&self, callback: &str) -> bool {
+        self.accepts.as_ref().is_none_or(|check| check(callback))
     }
     /// On cancellation the caller drops the pending authorization; a late
     /// captured callback must carry its original login generation to the app.
@@ -136,13 +149,17 @@ impl CallbackReceiver {
         }
         if method == "GET" && path.split('?').next() == Some(self.redirect.path()) {
             if self.service == Service::MyAnimeList {
+                let mut callback = self.redirect.clone();
+                callback.set_query(path.split_once('?').map(|(_, query)| query));
+                if !self.accepted(callback.as_str()) {
+                    respond(stream, 400, "Invalid callback")?;
+                    return Ok(None);
+                }
                 respond(
                     stream,
                     200,
                     "<!doctype html><title>Nova</title><p>You can return to Nova.</p>",
                 )?;
-                let mut callback = self.redirect.clone();
-                callback.set_query(path.split_once('?').map(|(_, query)| query));
                 return Ok(Some(callback.into()));
             }
             // Same-origin POST retains the fragment, including OAuth state.
@@ -158,6 +175,10 @@ impl CallbackReceiver {
                 .map_err(|_| ApiError::InvalidInput)?;
             let mut callback = self.redirect.clone();
             callback.set_fragment(Some(fragment));
+            if !self.accepted(callback.as_str()) {
+                respond(stream, 400, "Invalid callback")?;
+                return Ok(None);
+            }
             respond(stream, 200, "OK")?;
             return Ok(Some(callback.into()));
         }
@@ -182,6 +203,7 @@ mod tests {
         .unwrap();
         CallbackReceiver {
             listener,
+            accepts: None,
             redirect,
             service,
         }
@@ -220,6 +242,32 @@ mod tests {
             ),
         );
         assert!(task.join().unwrap().ends_with("?code=sample&state=sample"));
+    }
+    #[test]
+    fn a_callback_without_the_session_state_does_not_end_the_sign_in() {
+        let receiver = receiver(Service::MyAnimeList)
+            .accepting(|callback| callback.ends_with("&state=expected"));
+        let port = receiver.redirect.port().unwrap();
+        let task = std::thread::spawn(move || {
+            receiver
+                .receive(Arc::new(AtomicBool::new(false)), Duration::from_secs(5))
+                .unwrap()
+        });
+        // A page probing the fixed port gets an error, and listening goes on.
+        assert!(
+            send(
+                port,
+                &format!("GET /callback?x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+            )
+            .starts_with("HTTP/1.1 400")
+        );
+        send(
+            port,
+            &format!(
+                "GET /callback?code=c&state=expected HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+            ),
+        );
+        assert!(task.join().unwrap().ends_with("?code=c&state=expected"));
     }
     #[test]
     fn anilist_fragment_stays_in_the_local_callback() {
