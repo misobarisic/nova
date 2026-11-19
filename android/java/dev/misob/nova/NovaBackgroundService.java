@@ -45,18 +45,28 @@ public class NovaBackgroundService extends Service {
     private static boolean promoted;
     /** A stop that arrived before promotion; the service stops itself after. */
     private static boolean stopRequested;
+    /** A start was issued and the instance is not created yet. */
+    private static boolean starting;
 
     /** Start (or bring up) the download foreground service. */
     public static void start(Context context) {
         synchronized (NovaBackgroundService.class) {
             stopRequested = false;
+            starting = true;
         }
         NovaActivity.requestNotificationPermission(0x53);
         Intent intent = new Intent(context, NovaBackgroundService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (RuntimeException error) {
+            synchronized (NovaBackgroundService.class) {
+                starting = false;
+            }
+            throw error;
         }
     }
 
@@ -71,11 +81,17 @@ public class NovaBackgroundService extends Service {
         context.stopService(new Intent(context, NovaBackgroundService.class));
     }
 
-    /** Refresh the notification text; no-op when the service is not running. */
-    public static void update(Context context, String title, String text) {
+    /**
+     * Refresh the notification text. Returns whether the service is running or
+     * about to: false tells Rust that Android stopped it (the Android 15
+     * dataSync time limit, or the system), so it can start it again.
+     */
+    public static boolean update(Context context, String title, String text) {
         NovaBackgroundService service = instance.get();
         if (service == null) {
-            return;
+            synchronized (NovaBackgroundService.class) {
+                return starting;
+            }
         }
         Context app = service.getApplicationContext();
         NotificationManager manager =
@@ -83,12 +99,16 @@ public class NovaBackgroundService extends Service {
         if (manager != null) {
             manager.notify(NOTIFICATION_ID, service.buildNotification(title, text));
         }
+        return true;
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = new WeakReference<>(this);
+        synchronized (NovaBackgroundService.class) {
+            starting = false;
+        }
         createChannel();
         PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (power != null) {
