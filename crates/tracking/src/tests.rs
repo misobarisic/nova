@@ -1976,3 +1976,14 @@ fn completion_groups_split_bindings_but_keeps_services_independent() {
     assert_eq!(state.outbox.edits().len(), 1);
     state.validate().unwrap();
 }
+
+#[test]
+fn projections_report_the_binding_ids_they_stamp() {
+    let storage = MemoryStorage::default();
+    let mut store = delivery_store(&storage);
+    let binding = store.state().bindings[0].id.clone();
+    assert!(!store.state().projections[0].stamps_binding(&binding));
+    watch(&mut store, 1);
+    assert!(store.state().projections[0].stamps_binding(&binding));
+    assert!(!store.state().projections[0].stamps_binding("binding-99"));
+}

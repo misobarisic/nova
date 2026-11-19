@@ -2164,6 +2164,13 @@ impl Coordinator {
                 {
                     state.outbox.cancel_unsent(&binding.target);
                 }
+                // With no link left, the target's projection only describes
+                // the old alignment. A later link may reuse this binding id
+                // with different assignments (rejected as a stale mapping)
+                // and would push the old accepted progress, so start over.
+                if !state.bindings.iter().any(|b| b.target == binding.target) {
+                    state.projections.retain(|p| p.target != binding.target);
+                }
                 self.store.save(state).map_err(|_| storage_message())?;
                 self.notice =
                     text::tr("Unlinked. Local history and remote tracker values are unchanged.")
@@ -3888,10 +3895,16 @@ fn prepare_link_state(
             id
         } else {
             let mut number = state.bindings.len() + 1;
+            // An id still stamped in a projection belongs to a removed link;
+            // reusing it with other assignments reads as a stale mapping.
             while state
                 .bindings
                 .iter()
                 .any(|b| b.id == format!("binding-{number}"))
+                || state
+                    .projections
+                    .iter()
+                    .any(|p| p.stamps_binding(&format!("binding-{number}")))
             {
                 number += 1;
             }

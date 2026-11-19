@@ -47,6 +47,14 @@ pub enum ProjectionError {
 }
 
 impl Projection {
+    /// Whether this projection still records a mapping stamp for a binding
+    /// id. A new binding must not reuse such an id with other assignments.
+    pub fn stamps_binding(&self, binding_id: &str) -> bool {
+        self.mappings
+            .iter()
+            .any(|stamp| stamp.binding_id == binding_id)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), crate::ValidationError> {
         for (index, accepted) in self.accepted_by_source.iter().enumerate() {
             if accepted.progress > i32::MAX as u32
