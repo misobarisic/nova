@@ -419,6 +419,13 @@ impl Bridge {
     }
 
     pub(super) fn open_queue_successor(&self, entry: &Entry, row: StreamUi) {
+        self.open_queue_successor_inner(entry, row);
+        // Every exit ends the hand-off, including the early returns: a flag
+        // left set would make Stop unable to cancel the queue run.
+        self.shared.lock().unwrap().watch_queue.transitioning = false;
+    }
+
+    fn open_queue_successor_inner(&self, entry: &Entry, row: StreamUi) {
         self.open_preview(
             MetaPreview {
                 id: entry.series_id.clone(),
@@ -467,7 +474,6 @@ impl Bridge {
             (entry.type_ != "movie").then(|| entry.video()).as_ref(),
         );
         self.stream_picked(0);
-        self.shared.lock().unwrap().watch_queue.transitioning = false;
     }
     pub(super) fn start_queue(&self, key: Option<&str>) -> Result<(), String> {
         self.start_queue_run(key, false)
