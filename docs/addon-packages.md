@@ -88,7 +88,11 @@ and `crates/providers/src/runtime.rs`.
 
 The parser caps archives at 8 MiB, expanded files at 16 MiB, entries at 256 and
 assembled JavaScript at 2 MiB. It rejects traversal, unsafe paths, duplicates,
-symlinks, encrypted entries, invalid identities and undeclared files.
+symlinks, encrypted entries, invalid identities and undeclared files. Package
+IDs may not name a shared ID namespace (`kitsu`, `mal`, `anilist`, `tmdb`,
+`imdb`, `tvdb`, `stremio`, `nova`, `metadata` and the rest of
+`RESERVED_PACKAGE_IDS` in `crates/providers/src/package.rs`); such a prefix is
+never treated as provider-private, even if an older build recorded it.
 
 ## Local persistence
 

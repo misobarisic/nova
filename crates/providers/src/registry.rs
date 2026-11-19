@@ -292,8 +292,12 @@ pub fn provider_owns_id(provider_url: &str, id: &str) -> bool {
 }
 
 pub fn private_provider_id(id: &str) -> bool {
-    id.split_once(':')
-        .is_some_and(|(provider, _)| known_ids().lock().unwrap().contains(provider))
+    // A reserved namespace stays shared even if an older build accepted (and
+    // persisted or synced) a package with that id.
+    id.split_once(':').is_some_and(|(provider, _)| {
+        !crate::package::reserved_package_id(provider)
+            && known_ids().lock().unwrap().contains(provider)
+    })
 }
 
 pub fn supports_contextual_streams(provider_url: &str) -> bool {

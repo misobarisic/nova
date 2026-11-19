@@ -141,6 +141,7 @@ impl AddonPackage {
         let addon: addons::Manifest = serde_json::from_slice(get("stremio-manifest.json")?)
             .map_err(|_| invalid("invalid Stremio manifest"))?;
         if plugin.format_version != 1
+            || reserved_package_id(&plugin.id)
             || plugin.id.is_empty()
             || plugin.id.len() > 64
             || !plugin
@@ -231,6 +232,41 @@ impl AddonPackage {
     pub(crate) fn asset(&self, path: &str) -> Option<Arc<[u8]>> {
         self.assets.get(path).cloned()
     }
+}
+
+/// Global id namespaces shared across addons, metadata services and Nova.
+/// A package named after one would make every id in that namespace look
+/// provider-private (see `registry::private_provider_id`).
+const RESERVED_PACKAGE_IDS: &[&str] = &[
+    "anidb",
+    "anilist",
+    "anime",
+    "app",
+    "download",
+    "http",
+    "https",
+    "imdb",
+    "kitsu",
+    "local",
+    "magnet",
+    "mal",
+    "metadata",
+    "myanimelist",
+    "nova",
+    "provider",
+    "series",
+    "simkl",
+    "stremio",
+    "tmdb",
+    "trakt",
+    "tt",
+    "tvdb",
+    "youtube",
+    "yt",
+];
+
+pub(crate) fn reserved_package_id(id: &str) -> bool {
+    RESERVED_PACKAGE_IDS.contains(&id)
 }
 
 #[cfg(test)]
@@ -345,6 +381,24 @@ mod tests {
             m[key] = value;
             assert!(AddonPackage::parse(&zip(&fixture(m))).is_err());
         }
+    }
+    #[test]
+    fn global_id_namespaces_cannot_be_package_ids() {
+        for id in ["kitsu", "mal", "tmdb", "imdb", "stremio"] {
+            let mut m = manifest();
+            m["id"] = serde_json::json!(id);
+            let mut files = fixture(m);
+            files
+                .iter_mut()
+                .find(|(n, _)| n == "stremio-manifest.json")
+                .unwrap()
+                .1 =
+                format!(r#"{{"id":"nova.{id}","name":"Fixture","version":"1.0.0"}}"#).into_bytes();
+            assert!(AddonPackage::parse(&zip(&files)).is_err(), "{id}");
+        }
+        // Even a namespace an older build accepted stays shared.
+        crate::registry::mark_known_provider_ids(vec!["kitsu".into()]);
+        assert!(!crate::registry::private_provider_id("kitsu:1"));
     }
     #[test]
     fn enforces_archive_and_assembled_script_limits() {
