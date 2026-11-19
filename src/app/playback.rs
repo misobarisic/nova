@@ -769,7 +769,8 @@ impl Bridge {
                 }),
         });
         let mut context = state.playback_intent.as_ref().unwrap().context.clone();
-        context.subtitle_hints = std::mem::take(&mut state.pending_subtitle_hints);
+        let subtitle_hints = std::mem::take(&mut state.pending_subtitle_hints);
+        context.subtitle_hints = subtitle_hints.clone();
         let modal = state
             .modal_item
             .as_ref()
@@ -867,7 +868,13 @@ impl Bridge {
             context.history_resume = Some(0.0);
         }
         if let Some(retry) = retry {
+            // The retry keeps its timeline, but subtitle lookup and the
+            // downloaded-file source must describe the stream picked now, not
+            // the one that failed.
+            let intro_download = context.intro_download.take();
             context = retry;
+            context.subtitle_hints = subtitle_hints;
+            context.intro_download = intro_download;
         }
         if let Some(bookmark) = bookmark {
             context.history_resume = Some(bookmark.position);
