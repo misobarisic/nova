@@ -1624,24 +1624,27 @@ impl<T: nova_stremio::Transport> Worker<T> {
             let remote_stamp = remote_item.as_ref().map_or(0, LibraryItem::modified_ms);
             let mut remote = title.remote.clone();
             if remote_item.is_some() {
-                remote.observe(&remote_projection, remote_stamp);
+                // `remote_stamp` stays the server revision identity; only the
+                // field clocks derived from it are bounded.
+                remote.observe(&remote_projection, clamp_stamp(remote_stamp));
                 if title.remote.saved.changed_at == 0 {
                     // An explicit remote tombstone is an event even though
                     // the absence baseline also represented false.
                     remote.saved = Stamped {
                         value: remote_projection.saved,
-                        changed_at: remote_stamp,
+                        changed_at: clamp_stamp(remote_stamp),
                     };
                 }
                 // Matching values alone cannot distinguish our export from a
                 // later independent Stremio action. Reuse original action
                 // clocks only for an acknowledged exact server revision.
-                if let Some((_, known)) = acknowledged.filter(|(stamp, _)| *stamp == remote_stamp) {
-                    if known.watched.len() > nova_stremio::MAX_VIDEOS
-                        || max_stamp(&known) > nova_config::now_ms().saturating_add(60 * 60 * 1000)
-                    {
+                if let Some((_, mut known)) =
+                    acknowledged.filter(|(stamp, _)| *stamp == remote_stamp)
+                {
+                    if known.watched.len() > nova_stremio::MAX_VIDEOS {
                         return Err(ApiError::InvalidResponse);
                     }
+                    clamp_stamps(&mut known);
                     if remote_projection.saved == known.saved.value {
                         remote.saved = known.saved;
                     }
@@ -2356,6 +2359,25 @@ fn membership_projection(item: &LibraryItem) -> Projection {
         ..Default::default()
     }
 }
+/// Field clocks come from other Stremio clients (`_mtime`) and from paired
+/// devices, any of which may have a clock set ahead. A stamp beyond the
+/// accepted skew is read as "now" instead of failing the pass: one such title
+/// used to stop every later title from syncing until wall time caught up.
+fn clamp_stamp(stamp: u64) -> u64 {
+    let now = nova_config::now_ms();
+    if stamp > now.saturating_add(60 * 60 * 1000) {
+        now
+    } else {
+        stamp
+    }
+}
+fn clamp_stamps(state: &mut Canonical) {
+    for field in state.watched.values_mut() {
+        field.changed_at = clamp_stamp(field.changed_at);
+    }
+    state.saved.changed_at = clamp_stamp(state.saved.changed_at);
+    state.resume.changed_at = clamp_stamp(state.resume.changed_at);
+}
 fn max_stamp(state: &Canonical) -> u64 {
     state
         .watched
@@ -2475,11 +2497,10 @@ fn read_shared(connection: &Connection, id: &str) -> Result<Canonical, ApiError>
             }
         }
     }
-    if max_stamp(&result) > nova_config::now_ms().saturating_add(60 * 60 * 1000)
-        || result.watched.len() > nova_stremio::MAX_VIDEOS
-    {
+    if result.watched.len() > nova_stremio::MAX_VIDEOS {
         return Err(ApiError::InvalidResponse);
     }
+    clamp_stamps(&mut result);
     Ok(result)
 }
 fn read_shared_for_title(connection: &Connection, title: &Title) -> Result<Canonical, ApiError> {
@@ -2488,11 +2509,10 @@ fn read_shared_for_title(connection: &Connection, title: &Title) -> Result<Canon
     Ok(state)
 }
 fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError> {
-    if max_stamp(&title.desired) > nova_config::now_ms().saturating_add(60 * 60 * 1000)
-        || title.desired.watched.len() > nova_stremio::MAX_VIDEOS
-    {
+    if title.desired.watched.len() > nova_stremio::MAX_VIDEOS {
         return Err(ApiError::InvalidResponse);
     }
+    clamp_stamps(&mut title.desired);
     let owner = nova_sync::local_store().map_err(|_| ApiError::Rejected)?;
     let mut store = owner.lock().unwrap();
     if store
@@ -2641,7 +2661,10 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
     }
     // Publish the source clocks associated with an exact observed revision.
     // A receiver must also compare each field's value before using this ack.
+    // A revision dated beyond the accepted skew cannot be a record version;
+    // skip its ack rather than failing the title (see `clamp_stamp`).
     if let Ok(observed) = title.item.projection(&title.mapping.videos)
+        && clamp_stamp(title.item.modified_ms()) == title.item.modified_ms()
         && observed.saved == title.remote.saved.value
         && observed.resume == title.remote.resume.value
         && observed.watched.iter().all(|(id, value)| {
@@ -2653,9 +2676,6 @@ fn save_title(connection: &Connection, title: &mut Title) -> Result<(), ApiError
         })
     {
         let stamp = title.item.modified_ms();
-        if stamp > nova_config::now_ms().saturating_add(60 * 60 * 1000) {
-            return Err(ApiError::InvalidResponse);
-        }
         let raw = serde_json::to_string(&(stamp, &title.remote))
             .map_err(|_| ApiError::InvalidResponse)?;
         // Refined acknowledgments containing original clocks outrank an

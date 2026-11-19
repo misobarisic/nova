@@ -347,3 +347,30 @@ fn deferred_progress_merge_marker_survives_restart_and_old_rows() {
     let loaded: Title = serde_json::from_str(&serde_json::to_string(&title).unwrap()).unwrap();
     assert!(loaded.progress_merged);
 }
+
+#[test]
+fn future_field_clocks_read_as_now_instead_of_failing_the_pass() {
+    let now = nova_config::now_ms();
+    let two_hours_ahead = now + 2 * 60 * 60 * 1000;
+    let mut state = Canonical::default();
+    state.saved = Stamped {
+        value: true,
+        changed_at: two_hours_ahead,
+    };
+    state.watched.insert(
+        "ep".into(),
+        Stamped {
+            value: true,
+            changed_at: now - 1_000,
+        },
+    );
+    clamp_stamps(&mut state);
+    assert!((now..=nova_config::now_ms()).contains(&state.saved.changed_at));
+    assert_eq!(
+        state.watched["ep"].changed_at,
+        now - 1_000,
+        "valid clocks stay"
+    );
+    // Within the accepted skew a stamp is kept as it is.
+    assert_eq!(clamp_stamp(now + 60_000), now + 60_000);
+}
