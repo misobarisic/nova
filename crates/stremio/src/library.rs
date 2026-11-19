@@ -178,9 +178,15 @@ impl LibraryItem {
             state.insert("watched".into(), json!(encoded));
         }
         // Without episode metadata preserve the opaque bitmap verbatim.
+        // Only a flip changes the counters: a movie Stremio counts as watched
+        // three times stays at three when Nova writes a resume position.
         if let Some(watched) = movie_watched.filter(|_| videos.is_empty()) {
-            state.insert("timesWatched".into(), json!(u32::from(watched)));
-            state.insert("flaggedWatched".into(), json!(u32::from(watched)));
+            for counter in ["timesWatched", "flaggedWatched"] {
+                let current = state.get(counter).and_then(Value::as_u64).unwrap_or(0);
+                if (current > 0) != watched {
+                    state.insert(counter.into(), json!(u32::from(watched)));
+                }
+            }
         }
         match &value.resume {
             Some(resume) => {
