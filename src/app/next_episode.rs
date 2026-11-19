@@ -332,8 +332,20 @@ impl Bridge {
         // Cache the latest values before close resets the player properties.
         // The normal close callback finalizes history and torrent/brightness state.
         self.note_player_progress_from_ui();
+        // Series continuation keeps an armed sleep timer, as automatic next
+        // does. The grant only covers this close; the picker is asynchronous.
+        self.sleep_timer_note_successor(
+            nova_playback_api::MediaIdentity {
+                media_type: "series".into(),
+                title_id: series.clone(),
+                episode_id: episode.clone(),
+                ..Default::default()
+            },
+            0,
+        );
         self.player
             .with_preserved_fullscreen_on_close(|| app.invoke_close_player());
+        self.sleep_timer_finish_successor_close();
         // Stop returns a party participant to the room. A valid Next action
         // continues directly into its local source picker instead.
         app.set_party_page_open(false);
